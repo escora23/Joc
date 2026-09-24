@@ -15,10 +15,14 @@
     "world-atlas": "^2.0.2"
   },
   "devDependencies": {
+    "@types/pngjs": "^6.0.5",
     "@types/three": "^0.186.0",
     "@types/topojson-client": "^3.1.5",
+    "jpeg-js": "^0.4.4",
     "playwright": "^1.56.1",
+    "pngjs": "^7.0.0",
     "three-globe": "^2.45.2",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.1"
   }

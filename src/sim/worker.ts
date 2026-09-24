@@ -1,70 +1,121 @@
 // FRONT ULTRA — sim Web Worker entry (owner: sim-core).
-// Loop: every UPDATE_INTERVAL_MS of wall time, run `speed` ticks and post ONE coalesced TickUpdate.
-// While paused an update (0 ticks) is still posted every 500 ms so the client keeps receiving events.
+// Loop: every UPDATE_INTERVAL_MS of wall time run `speed` ticks (1 during the spawn phase) and post ONE coalesced
+// TickUpdate with transferable typed arrays. While paused, human commands are still applied (plan on a frozen
+// world) and an update is posted whenever something changed, else every ~500 ms.
+// fastForward runs ticks synchronously, streaming 50-tick updates (visual events filtered out) so the client's
+// history and timelapse stay complete, then posts a full resync.
 
 /// <reference lib="webworker" />
 import { UPDATE_INTERVAL_MS } from '../shared/constants';
 import { tickUpdateTransferables, type FromWorker, type ToWorker } from '../shared/protocol';
-import { Game } from './game';
+import { FF_EVENT_TYPES, Game } from './game';
 
 declare const self: DedicatedWorkerGlobalScope;
 
 let game: Game | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let idleCounter = 0;
+let forcePost = false;
+let errorsPosted = 0;
 
 function post(msg: FromWorker, transfer: Transferable[] = []): void {
   self.postMessage(msg, transfer);
 }
 
-function postUpdate(ticks: number, full = false): void {
+function postError(message: string, stack?: string): void {
+  if (errorsPosted++ > 40) return;
+  post({ kind: 'error', message, stack });
+}
+
+function postUpdate(ticks: number, tickMs: number, full = false): void {
   if (!game) return;
-  const t0 = performance.now();
   const u = game.buildUpdate(ticks, full);
-  u.tickMs = performance.now() - t0;
+  u.tickMs = tickMs;
   post({ kind: 'update', u }, tickUpdateTransferables(u));
+}
+
+function runTicks(n: number): number {
+  const g = game!;
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) {
+    try {
+      g.tick1();
+    } catch (err) {
+      const e = err as Error;
+      postError(`tick ${g.tick} failed: ${e?.message ?? String(err)}`, e?.stack);
+    }
+  }
+  return performance.now() - t0;
 }
 
 function loop(): void {
   if (!game) return;
-  const t0 = performance.now();
-  const n = game.phase === 'spawn' ? 1 : game.speed;
-  for (let i = 0; i < n; i++) game.tick1();
-  if (n === 0 && ++idleCounter % 5 !== 0) return;
-  const u = game.buildUpdate(n);
-  u.tickMs = performance.now() - t0;
-  post({ kind: 'update', u }, tickUpdateTransferables(u));
+  const g = game;
+  const n = g.phase === 'spawn' ? (g.speed === 0 ? 0 : 1) : g.phase === 'playing' ? g.speed : 0;
+  let ms = 0;
+  if (n === 0) {
+    const before = g.pendingEventCount;
+    try {
+      g.flushHumanCommands();
+    } catch (err) {
+      postError(String(err));
+    }
+    if (g.pendingEventCount !== before) forcePost = true;
+  } else ms = runTicks(n);
+  if (n === 0 && !forcePost && ++idleCounter % 5 !== 0) return;
+  forcePost = false;
+  postUpdate(n, ms);
 }
 
 self.onmessage = (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
   try {
     switch (msg.kind) {
-      case 'init':
-        game = new Game(msg.config, msg.world);
-        post({ kind: 'ready' });
-        postUpdate(0, true);
+      case 'init': {
         if (timer) clearInterval(timer);
+        game = new Game(msg.config, msg.world);
+        game.onError = postError;
+        post({ kind: 'ready' });
+        postUpdate(0, 0, true);
         timer = setInterval(loop, UPDATE_INTERVAL_MS);
         break;
+      }
       case 'command':
         game?.queueHuman(msg.cmd);
         break;
       case 'debug':
-        game?.applyDebug(msg.action);
+        if (game) {
+          game.applyDebug(msg.action);
+          forcePost = true;
+        }
         break;
       case 'speed':
-        if (game) game.speed = msg.speed;
+        if (game) {
+          game.speed = msg.speed;
+          forcePost = true;
+        }
         break;
       case 'fastForward': {
         if (!game) break;
-        const total = msg.ticks;
+        const g = game;
+        const total = Math.max(0, Math.floor(msg.ticks));
+        const keep = (e: { type: string }) => FF_EVENT_TYPES.has(e.type as never);
+        let chunk = 0, chunkMs = 0;
         for (let i = 0; i < total; i++) {
-          game.tick1();
-          if (i % 250 === 249) post({ kind: 'fastForwardProgress', requestId: msg.requestId, done: i + 1, total });
+          if (g.phase === 'ended') break;
+          chunkMs += runTicks(1);
+          chunk++;
+          if (chunk >= 50) {
+            g.filterEvents(keep);
+            postUpdate(chunk, chunkMs);
+            chunk = 0;
+            chunkMs = 0;
+            post({ kind: 'fastForwardProgress', requestId: msg.requestId, done: i + 1, total });
+          }
         }
-        game.requestFull();
-        postUpdate(total, true);
+        g.filterEvents(keep);
+        g.requestFull();
+        postUpdate(chunk, chunkMs, true);
         post({ kind: 'fastForwardDone', requestId: msg.requestId });
         break;
       }
@@ -77,6 +128,6 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
     }
   } catch (err) {
     const e = err as Error;
-    post({ kind: 'error', message: e.message ?? String(err), stack: e.stack });
+    postError(e?.message ?? String(err), e?.stack);
   }
 };

@@ -1,8 +1,9 @@
 // FRONT ULTRA — main-thread sim client & GameView (owner: sim-core).
 // Owns the worker, buffers its messages and applies them in pump() at the start of each frame, so every
-// subsystem sees one consistent state per frame. Re-emits sim events on the bus.
+// subsystem sees one consistent state per frame. Re-emits sim events on the bus, raises nuke alarms for the
+// human, and records the stats history (every 5 s of game time) and the timelapse (400x200 RLE frames every 10 s).
 
-import { HUMAN_ID, MAP_H, MAP_W, TICK_MS, TILE_COUNT, UNIT_DEFS, UPDATE_INTERVAL_MS, structureCost } from '../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, TICK_MS, TILE_COUNT, UPDATE_INTERVAL_MS, structureCost } from '../shared/constants';
 import type { GameBus } from '../shared/events';
 import type { GameView, ProgressFn, SimClientApi } from '../shared/api';
 import {
@@ -11,12 +12,13 @@ import {
 } from '../shared/protocol';
 import { clamp01 } from '../shared/math';
 import {
-  emptyStats, type AllianceRequestView, type AllianceView, type AttackView, type FrontView, type GameConfig,
+  UnitType, emptyStats, type AllianceRequestView, type AllianceView, type AttackView, type FrontView, type GameConfig,
   type GamePhase, type GameSpeed, type PlayerView, type ScarView, type StatsSample, type StructureType,
-  type StructureView, type Timelapse, type UnitState, type UnitType, type UnitView, type WorldData,
-  type WorldEventView,
+  type StructureView, type Timelapse, type UnitState, type UnitView, type WorldData, type WorldEventView,
 } from '../shared/types';
 import { worldInit } from '../data';
+import { unitPrice } from './balance';
+import './shots';
 
 const TL_W = 400;
 const TL_H = 200;
@@ -27,11 +29,17 @@ class RleTimelapse implements Timelapse {
   readonly width = TL_W;
   readonly height = TL_H;
   private frames: { tick: number; rle: Uint16Array }[] = [];
-  get frameCount(): number { return this.frames.length; }
-  frameTick(i: number): number { return this.frames[i]?.tick ?? 0; }
+  private runs = new Uint16Array(TL_W * TL_H * 2);
+  get frameCount(): number {
+    return this.frames.length;
+  }
+  frameTick(i: number): number {
+    return this.frames[i]?.tick ?? 0;
+  }
   capture(tick: number, owner: Uint16Array): void {
     const sx = MAP_W / TL_W, sy = MAP_H / TL_H;
-    const runs: number[] = [];
+    const runs = this.runs;
+    let n = 0;
     let cur = -1, len = 0;
     for (let y = 0; y < TL_H; y++) {
       const row = Math.floor((y + 0.5) * sy) * MAP_W;
@@ -39,25 +47,34 @@ class RleTimelapse implements Timelapse {
         const v = owner[row + Math.floor((x + 0.5) * sx)];
         if (v === cur && len < 65535) len++;
         else {
-          if (len) runs.push(cur, len);
+          if (len) {
+            runs[n++] = cur;
+            runs[n++] = len;
+          }
           cur = v;
           len = 1;
         }
       }
     }
-    if (len) runs.push(cur, len);
-    this.frames.push({ tick, rle: Uint16Array.from(runs) });
+    if (len) {
+      runs[n++] = cur;
+      runs[n++] = len;
+    }
+    this.frames.push({ tick, rle: runs.slice(0, n) });
   }
   decode(i: number, out: Uint16Array): void {
     const f = this.frames[i];
     if (!f) return;
     let p = 0;
-    for (let k = 0; k < f.rle.length; k += 2) {
-      out.fill(f.rle[k], p, p + f.rle[k + 1]);
-      p += f.rle[k + 1];
+    const r = f.rle;
+    for (let k = 0; k < r.length; k += 2) {
+      out.fill(r[k], p, p + r[k + 1]);
+      p += r[k + 1];
     }
   }
-  clear(): void { this.frames = []; }
+  clear(): void {
+    this.frames = [];
+  }
 }
 
 class ClientView implements GameView {
@@ -87,32 +104,64 @@ class ClientView implements GameView {
   history: StatsSample[] = [];
   timelapse = new RleTimelapse();
   tickMs = 0;
-  ownerAt(tile: number): number { return this.owner[tile]; }
+  /** MIRVs the human launched (MIRV price escalates). */
+  humanMirvs = 0;
+
+  ownerAt(tile: number): number {
+    return this.owner[tile];
+  }
   structureCost(type: StructureType): number {
     let n = 0;
     for (const s of this.structures.values()) if (s.owner === HUMAN_ID && s.type === type) n++;
     return structureCost(type, n);
   }
-  unitCost(type: UnitType): number { return UNIT_DEFS[type].cost; }
+  unitCost(type: UnitType): number {
+    if (type === UnitType.Mirv) return unitPrice(type, this.humanMirvs);
+    let n = 0;
+    for (const u of this.units.values()) if (u.owner === HUMAN_ID && u.type === type && u.state !== 6) n++;
+    return unitPrice(type, n);
+  }
   reset(): void {
-    this.config = null; this.world = null; this.phase = 'none'; this.tick = 0; this.prevTick = 0; this.alpha = 1;
-    this.simTime = 0; this.owner.fill(0); this.players = []; this.playerList = []; this.human = null;
-    this.units.clear(); this.structures.clear(); this.attacks = []; this.fronts = []; this.scars = [];
-    this.worldEvents = []; this.alliances = []; this.allianceRequests = []; this.doomsday = 0; this.winner = 0;
-    this.history = []; this.timelapse.clear();
+    this.config = null;
+    this.world = null;
+    this.phase = 'none';
+    this.tick = 0;
+    this.prevTick = 0;
+    this.alpha = 1;
+    this.simTime = 0;
+    this.owner.fill(0);
+    this.players = [];
+    this.playerList = [];
+    this.human = null;
+    this.units.clear();
+    this.structures.clear();
+    this.attacks = [];
+    this.fronts = [];
+    this.scars = [];
+    this.worldEvents = [];
+    this.alliances = [];
+    this.allianceRequests = [];
+    this.doomsday = 0;
+    this.spawnDeadlineTick = 0;
+    this.winner = 0;
+    this.history = [];
+    this.timelapse.clear();
+    this.tickMs = 0;
+    this.humanMirvs = 0;
   }
 }
-
-type Queued = { kind: 'msg'; msg: FromWorker };
 
 export function createSimClient(bus: GameBus): SimClientApi {
   const view = new ClientView();
   let worker: Worker | null = null;
-  const queue: Queued[] = [];
+  const queue: FromWorker[] = [];
   let lastUpdateAt = 0;
   let readyResolve: (() => void) | null = null;
   let ffSeq = 1;
   const ffWaiters = new Map<number, { resolve: () => void; progress?: ProgressFn }>();
+  let unitGen = 0;
+  const unitSeen = new Map<number, number>();
+  let session = 0;
 
   function postToWorker(m: ToWorker): void {
     worker?.postMessage(m);
@@ -143,22 +192,28 @@ export function createSimClient(bus: GameBus): SimClientApi {
     view.tickMs = u.tickMs ?? 0;
     lastUpdateAt = now;
 
-    // Tiles
+    // Tiles.
     if (u.fullOwners) {
       view.owner.set(u.fullOwners);
       bus.emit('tilesChanged', { packed: new Uint32Array(0), count: 0, full: true });
     } else if (u.owners.length) {
       const o = view.owner;
-      for (let i = 0; i < u.owners.length; i++) o[unpackTile(u.owners[i])] = unpackOwner(u.owners[i]);
-      bus.emit('tilesChanged', { packed: u.owners, count: u.owners.length, full: false });
+      const packed = u.owners;
+      for (let i = 0; i < packed.length; i++) o[unpackTile(packed[i])] = unpackOwner(packed[i]);
+      bus.emit('tilesChanged', { packed, count: packed.length, full: false });
     }
 
-    // Players
+    // Players.
     if (u.playerMeta) {
       for (const m of u.playerMeta) {
         const p = ensurePlayer(m.id);
-        p.name = m.name; p.kind = m.kind; p.personality = m.personality; p.color = m.color;
-        p.countryIndex = m.countryIndex; p.allies = m.allies; p.embargoes = m.embargoes;
+        p.name = m.name;
+        p.kind = m.kind;
+        p.personality = m.personality;
+        p.color = m.color;
+        p.countryIndex = m.countryIndex;
+        p.allies = m.allies;
+        p.embargoes = m.embargoes;
       }
     }
     const P = u.players;
@@ -182,12 +237,12 @@ export function createSimClient(bus: GameBus): SimClientApi {
     }
     if (u.playerStats) for (const s of u.playerStats) ensurePlayer(s.id).stats = s.stats;
 
-    // Units (full list each update; keep objects stable for renderers)
+    // Units: full list each update; objects stay stable for renderers.
     const U = u.units;
-    const seen = new Set<number>();
+    const gen = ++unitGen;
     for (let o = 0; o < U.length; o += UNIT_STRIDE) {
       const id = U[o + UF.id];
-      seen.add(id);
+      unitSeen.set(id, gen);
       let un = view.units.get(id);
       const x = U[o + UF.x], y = U[o + UF.y], h = U[o + UF.heading], alt = U[o + UF.alt];
       if (!un) {
@@ -199,13 +254,31 @@ export function createSimClient(bus: GameBus): SimClientApi {
         };
         view.units.set(id, un);
       } else {
-        un.prevX = un.x; un.prevY = un.y; un.prevHeading = un.heading; un.prevAlt = un.alt;
-        un.x = x; un.y = y; un.heading = h; un.alt = alt;
-        un.owner = U[o + UF.owner]; un.state = U[o + UF.state] as UnitState; un.hp = U[o + UF.hp];
-        un.troops = U[o + UF.troops]; un.targetX = U[o + UF.targetX]; un.targetY = U[o + UF.targetY];
+        un.prevX = un.x;
+        un.prevY = un.y;
+        un.prevHeading = un.heading;
+        un.prevAlt = un.alt;
+        // Keep interpolation continuous across the horizontal wrap.
+        if (x - un.prevX > MAP_W / 2) un.prevX += MAP_W;
+        else if (un.prevX - x > MAP_W / 2) un.prevX -= MAP_W;
+        un.x = x;
+        un.y = y;
+        un.heading = h;
+        un.alt = alt;
+        un.owner = U[o + UF.owner];
+        un.state = U[o + UF.state] as UnitState;
+        un.hp = U[o + UF.hp];
+        un.troops = U[o + UF.troops];
+        un.targetX = U[o + UF.targetX];
+        un.targetY = U[o + UF.targetY];
       }
     }
-    for (const id of view.units.keys()) if (!seen.has(id)) view.units.delete(id);
+    for (const id of view.units.keys()) {
+      if (unitSeen.get(id) !== gen) {
+        view.units.delete(id);
+        unitSeen.delete(id);
+      }
+    }
 
     if (u.structures) {
       view.structures.clear();
@@ -221,19 +294,21 @@ export function createSimClient(bus: GameBus): SimClientApi {
     if (u.spawnDeadlineTick !== undefined) view.spawnDeadlineTick = u.spawnDeadlineTick;
     if (u.winner) view.winner = u.winner;
 
-    // History & timelapse (sampled on the client from the mirrored state)
+    // History & timelapse (sampled from the mirrored state).
     if (view.phase === 'playing' || view.phase === 'ended') {
       const last = view.history[view.history.length - 1];
-      if (!last || u.tick - last.tick >= HISTORY_EVERY_TICKS) {
+      if (!last || u.tick - last.tick >= HISTORY_EVERY_TICKS || (view.phase === 'ended' && last.tick !== u.tick)) {
         const n = view.players.length;
         const s: StatsSample = { tick: u.tick, tiles: new Uint32Array(n), troops: new Float32Array(n), gold: new Float32Array(n) };
         for (const p of view.playerList) {
-          s.tiles[p.id] = p.tiles; s.troops[p.id] = p.troops; s.gold[p.id] = p.gold;
+          s.tiles[p.id] = p.tiles;
+          s.troops[p.id] = p.troops;
+          s.gold[p.id] = p.gold;
         }
         view.history.push(s);
       }
       const lt = view.timelapse.frameCount ? view.timelapse.frameTick(view.timelapse.frameCount - 1) : -Infinity;
-      if (u.tick - lt >= TL_EVERY_TICKS) view.timelapse.capture(u.tick, view.owner);
+      if (u.tick - lt >= TL_EVERY_TICKS || (view.phase === 'ended' && lt !== u.tick)) view.timelapse.capture(u.tick, view.owner);
     }
 
     for (const e of u.events) emitSim(e);
@@ -242,8 +317,11 @@ export function createSimClient(bus: GameBus): SimClientApi {
 
   function emitSim(e: SimEvent): void {
     (bus.emit as (t: string, p: unknown) => void)(e.type, e);
-    if (e.type === 'nukeLaunched' && e.targetOwner === HUMAN_ID) {
-      bus.emit('nukeAlarm', { unitId: e.unitId, targetTile: e.targetTile, etaSec: (e.flightTicks * TICK_MS) / 1000, weapon: e.weapon });
+    if (e.type === 'nukeLaunched') {
+      if (e.owner === HUMAN_ID && e.weapon === UnitType.Mirv) view.humanMirvs++;
+      if (e.targetOwner === HUMAN_ID && e.owner !== HUMAN_ID) {
+        bus.emit('nukeAlarm', { unitId: e.unitId, targetTile: e.targetTile, etaSec: (e.flightTicks * TICK_MS) / 1000, weapon: e.weapon });
+      }
     }
   }
 
@@ -258,8 +336,12 @@ export function createSimClient(bus: GameBus): SimClientApi {
       view.config = config;
       view.world = world;
       view.speed = config.speed;
+      session++;
       worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'front-ultra-sim' });
-      worker.onmessage = (ev: MessageEvent<FromWorker>) => queue.push({ kind: 'msg', msg: ev.data });
+      const mySession = session;
+      worker.onmessage = (ev: MessageEvent<FromWorker>) => {
+        if (mySession === session) queue.push(ev.data);
+      };
       worker.onerror = (ev) => console.error('[sim] worker error', ev.message);
       const p = new Promise<void>((resolve) => (readyResolve = resolve));
       postToWorker({ kind: 'init', config, world: worldInit(world) });
@@ -279,13 +361,17 @@ export function createSimClient(bus: GameBus): SimClientApi {
     fastForward(ticks: number, onProgress?: ProgressFn): Promise<void> {
       const requestId = ffSeq++;
       return new Promise<void>((resolve) => {
+        if (!worker) {
+          resolve();
+          return;
+        }
         ffWaiters.set(requestId, { resolve, progress: onProgress });
         postToWorker({ kind: 'fastForward', ticks, requestId });
       });
     },
     pump(now: number): void {
       while (queue.length) {
-        const { msg } = queue.shift()!;
+        const msg = queue.shift()!;
         switch (msg.kind) {
           case 'update':
             apply(msg.u, now);
@@ -304,14 +390,13 @@ export function createSimClient(bus: GameBus): SimClientApi {
             break;
           }
           case 'error':
-            console.error('[sim] worker error:', msg.message, msg.stack);
+            console.error('[sim] worker error:', msg.message, msg.stack ?? '');
             break;
           case 'ready':
             break;
         }
       }
-      const expected = UPDATE_INTERVAL_MS;
-      view.alpha = view.speed === 0 && view.phase === 'playing' ? 1 : clamp01((now - lastUpdateAt) / expected);
+      view.alpha = view.speed === 0 || view.phase !== 'playing' ? 1 : clamp01((now - lastUpdateAt) / UPDATE_INTERVAL_MS);
       const t = view.prevTick + (view.tick - view.prevTick) * view.alpha;
       view.simTime = (t * TICK_MS) / 1000;
     },
@@ -321,10 +406,12 @@ export function createSimClient(bus: GameBus): SimClientApi {
         worker.terminate();
         worker = null;
       }
+      session++;
       queue.length = 0;
       for (const w of ffWaiters.values()) w.resolve();
       ffWaiters.clear();
       readyResolve = null;
+      unitSeen.clear();
       view.reset();
     },
   };
