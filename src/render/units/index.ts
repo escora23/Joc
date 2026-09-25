@@ -8,7 +8,10 @@
 //   * structures: procedural city skylines that grow with level and light up at night, ports with cranes,
 //     factories with smoking stacks, radars with rotating dishes, silos, SAM sites, airbases, army bases, yards,
 //   * the rail network between stations, selection rings, build ghosts, targeting rings and order paths.
-// Draw calls: one per model kind (~25) + rails + overlays. No per-frame allocations in the update loop.
+// Draw calls: one per model kind (~25) + rails + overlays + 2 icon batches. No per-frame allocations in the update loop.
+// LOD (DESIGN_V2 §10.7, W2): from orbit units and structures are NATO-style 2D icons (icons.ts); 3D models cross-fade
+// in below 1,200 km (units) and 900 km (structures) at a 12 px minimum size instead of the old 16-46 px inflation, and
+// are real-size below 60 km. W4 owns the models, rings and grounding; the hand-off thresholds live in iconLod().
 
 import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
@@ -24,7 +27,9 @@ import { PK } from '../fx/particles';
 import type { Trail, TrailStyleKey } from '../fx/trails';
 import { airHeightKm, ballisticApexKm, env, refreshEnv, unitSizeKm } from './common';
 import { ModelBuilder } from './geom';
-import { createModelMaterial, minPxScale } from './material';
+import { createModelMaterial, minPxScale, structFade, unitFade } from './material';
+import { IconLayer, unitCategory, type IconHit } from './icons';
+import { relationsFor } from '../relations';
 import {
   buildBuilding, buildSpire, buildStructModel, buildUnitModel, STRUCT_MODELS, UNIT_MODELS, type StructModelKey, type UnitModelKey,
 } from './models';
@@ -73,8 +78,33 @@ const STRUCT_MIN_PX: Record<StructModelKey, number> = {
 
 const BUILDING_COLORS = [0xc9c3b6, 0xa9b4bf, 0x8d9aa6, 0xd8d6d0, 0x6f7f8e, 0xb8a58f, 0x9fa9a3, 0x7d8ea1];
 
-const DETAIL_ALT_KM = 5200;
-const HYST_KM = 500;
+/**
+ * Icon / model hand-off by camera altitude (DESIGN_V2 §10.7):
+ *   > 1,500 km       icons only (units 22 px, structures 18 px)
+ *   900-1,500 km     unit models fade in from 1,200 km (min 12 px); structures icons only
+ *   600-900 km       unit icons shrink to 14 px and float above the models; structure models fade in from 900 km
+ *   250-600 km       unit models with a 6 px owner pip above each; structures icons + models
+ *   < 250 km         models only (real size below 60 km); structure level shown on hover/selection by the card
+ */
+export interface IconLod {
+  unitModelFade: number;
+  structModelFade: number;
+  /** 0 full icons, 1 small floating icons, 2 pips. */
+  unitIconMode: 0 | 1 | 2;
+  structIcons: boolean;
+  unitMinPx: number;
+  structMinPxScale: number;
+}
+
+export function iconLod(altKm: number, out: IconLod): IconLod {
+  out.unitModelFade = clamp((1200 - altKm) / 300, 0, 1);
+  out.structModelFade = clamp((900 - altKm) / 250, 0, 1);
+  out.unitIconMode = altKm > 900 ? 0 : altKm > 600 ? 1 : 2;
+  out.structIcons = altKm > 250;
+  out.unitMinPx = altKm > 60 ? 12 : 0;
+  out.structMinPxScale = altKm > 250 ? 0.5 : clamp((altKm - 120) / 130, 0, 1) * 0.5;
+  return out;
+}
 
 interface InstMesh {
   mesh: THREE.InstancedMesh;
@@ -126,7 +156,14 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   let spires: InstMesh | null = null;
   let rails: SurfaceRibbon | null = null;
   let overlays: Overlays | null = null;
+  let icons: IconLayer | null = null;
   let built = false;
+  const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPxScale: 0.5 };
+  const relations = relationsFor(ctx);
+  let structModelsOn = false;
+  let viewW = 1, viewH = 1;
+  const scr = new THREE.Vector3();
+  const scrXY = { x: 0, y: 0 };
 
   const tracks = new Map<number, Track>();
   const trackPool: Track[] = [];
@@ -141,7 +178,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   let railBuiltAt = -10;
   let lastStructFirst: StructureView | undefined;
   let lastStructSize = -1;
-  let detailMode = true;
+  const detailMode = true;
   let seenGen = 0;
   const radarList: RadarInfo[] = [];
   const factoryList: FactoryInfo[] = [];
@@ -192,6 +229,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     preview.order.valid = e.valid;
   });
   ctx.bus.on('simTick', (e) => sampleTrails(e));
+  ctx.bus.on('worldHover', (e) => {
+    if (icons) icons.hoverKey = e.unitId >= 0 ? e.unitId : e.structureId >= 0 ? -e.structureId - 1 : -1;
+  });
   ctx.bus.on('allianceFormed', () => (railDirty = true));
   ctx.bus.on('allianceBroken', () => (railDirty = true));
   ctx.bus.on('allianceExpired', () => (railDirty = true));
@@ -263,6 +303,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     root.add(rails.mesh);
     overlays = new Overlays();
     root.add(overlays.group);
+    icons = new IconLayer();
+    icons.ownerColor = (o) => ctx.sim.view.players[o]?.color ?? 0xcccccc;
+    root.add(icons.group);
     for (const t of Object.keys(STRUCT_INFO)) {
       const type = Number(t) as StructureType;
       const key = STRUCT_INFO[type].key;
@@ -596,6 +639,39 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     }
   }
 
+  /** Screen position (CSS px, canvas-relative) of a world point, false when behind the planet or off screen. */
+  function toScreen(p: THREE.Vector3, margin = 24): boolean {
+    const c = env.camPos;
+    const dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+    const dd = dx * dx + dy * dy + dz * dz;
+    const t = clamp(-(c.x * dx + c.y * dy + c.z * dz) / Math.max(dd, 1e-12), 0, 1);
+    if (t < 0.999) {
+      const qx = c.x + dx * t, qy = c.y + dy * t, qz = c.z + dz * t;
+      if (qx * qx + qy * qy + qz * qz < 0.997) return false;
+    }
+    scr.copy(p).project(ctx.camera);
+    if (scr.z > 1) return false;
+    scrXY.x = (scr.x * 0.5 + 0.5) * viewW;
+    scrXY.y = (0.5 - scr.y * 0.5) * viewH;
+    return scrXY.x > -margin && scrXY.x < viewW + margin && scrXY.y > -margin && scrXY.y < viewH + margin;
+  }
+
+  /** Icon size class of a unit: 0 full, 1 small floating, 2 pip, 3 civilian (trade ships, trains). */
+  function iconSize(t: UnitType): number {
+    if (t === UnitType.Shell || t === UnitType.SamInterceptor) return 2;
+    if (lod.unitIconMode === 2) return 2;
+    if (lod.unitIconMode === 1) return 1;
+    return t === UnitType.TradeShip || t === UnitType.Train ? 3 : 0;
+  }
+
+  function offerUnitIcon(u: UnitView, pos: THREE.Vector3, sel: boolean, dxPx = 0, dyPx = 0): void {
+    if (!icons || !toScreen(pos)) return;
+    const size = iconSize(u.type);
+    // Small icons float above the model; pips sit just above it.
+    const lift = size === 1 ? 16 : size === 2 && lod.unitIconMode === 2 && u.type !== UnitType.Shell && u.type !== UnitType.SamInterceptor ? 11 : 0;
+    icons.add(false, u.id, u.type, u.owner, relations.relationTo(u.owner), scrXY.x + dxPx, scrXY.y + dyPx - lift, u.hp, 0, sel, size, unitCategory(u.type));
+  }
+
   function updateUnits(frame: FrameInfo, fx: FxInternal | undefined): void {
     const view = ctx.sim.view;
     for (const key of UNIT_MODELS) unitMeshes[key].n = 0;
@@ -611,6 +687,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (isAir(u.type) && u.state === UnitState.Docked) {
         t.hasPos = false;
         if (fx) for (let s = 0; s < t.trails.length; s++) stopTrail(fx, t, s);
+        // Docked aircraft: an icon beside their base (they cluster into one badge per owner).
+        tileXYToLatLon(u.x, u.y, ll2);
+        latLonToVec3(ll2.lat, ll2.lon, ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon), T);
+        if (lod.unitIconMode !== 2) offerUnitIcon(u, T, selectedUnits.has(u.id), 15, -12);
         continue;
       }
       const x = lerp(u.prevX, u.x, a), y = lerp(u.prevY, u.y, a);
@@ -628,7 +708,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const isMoving = Math.abs(u.x - u.prevX) + Math.abs(u.y - u.prevY) > 1e-4;
       t.idle = isMoving ? 0 : t.idle + frame.dt;
       if (fx) emitTrails(fx, u, t, s, alt, active, isMoving, true);
-      if (!key) continue;
+      offerUnitIcon(u, P, sel === 1);
+      // Above 1,200 km units are icons only: no model instances at all.
+      if (!key || lod.unitModelFade <= 0) continue;
       const im = unitMeshes[key];
       const seed = (u.id * 0.618) % 1;
       switch (u.type) {
@@ -812,6 +894,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         structAnchor.set(st.id, anchor);
       }
       latLonToVec3(ll.lat, ll.lon, ctx.globe.surfaceRadiusAt(ll.lat, ll.lon), anchor);
+      if (!structModelsOn) continue;
       const col = ownerColor(st.owner);
       const sel = st.id === selectedStructure ? 1 : 0;
       const info = STRUCT_INFO[st.type];
@@ -857,10 +940,20 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     commit(spires!);
   }
 
+  function updateStructureIcons(): void {
+    if (!icons || !lod.structIcons) return;
+    const view = ctx.sim.view;
+    for (const st of view.structures.values()) {
+      const a = structAnchor.get(st.id);
+      if (!a || !toScreen(a)) continue;
+      icons.add(true, st.id, st.type, st.owner, relations.relationTo(st.owner), scrXY.x, scrXY.y, st.hp, st.level, st.id === selectedStructure, 0, st.type);
+    }
+  }
+
   function updateRadarDishes(): void {
     const dish = structMeshes.radarDish;
     dish.n = 0;
-    if (detailMode) {
+    if (detailMode && structModelsOn) {
       for (const r of radarList) {
         const a = env.time * 1.4 + r.id;
         const ca = Math.cos(a), sa = Math.sin(a);
@@ -998,7 +1091,45 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   // -----------------------------------------------------------------------------------------------
   // API
   // -----------------------------------------------------------------------------------------------
-  if (import.meta.env.DEV) (window as unknown as { __units?: unknown }).__units = { tracks, unitMeshes, structMeshes, env };
+  function iconHitAt(clientX: number, clientY: number): IconHit | null {
+    if (!icons) return null;
+    const rect = ctx.canvas.getBoundingClientRect();
+    return icons.pick(clientX - rect.left, clientY - rect.top);
+  }
+
+  /** Debug / measurement hook (DESIGN_V2 §16.3): what is drawn right now. */
+  function stats(): Record<string, unknown> {
+    let unitModels = 0, structureModels = 0;
+    for (const key of UNIT_MODELS) unitModels += unitMeshes[key]?.mesh.count ?? 0;
+    for (const key of STRUCT_MODELS) structureModels += structMeshes[key]?.mesh.count ?? 0;
+    structureModels += (buildings?.mesh.count ?? 0) + (spires?.mesh.count ?? 0);
+    const view = ctx.sim.view;
+    return {
+      altitudeKm: +env.altitudeKm.toFixed(1), lod: { ...lod }, unitModels, structureModels,
+      liveUnits: view.units.size, liveStructures: view.structures.size, ...(icons ? icons.stats : {}),
+    };
+  }
+
+  const debugHook = {
+    stats, tracks, unitMeshes, structMeshes, env,
+    /** Screen position (client px) of a unit's icon or model this frame, for scripted clicks. */
+    screenOf(id: number): { x: number; y: number } | null {
+      const t = tracks.get(id);
+      const u = ctx.sim.view.units.get(id);
+      if (!u) return null;
+      const p = new THREE.Vector3();
+      if (t && t.hasPos) p.copy(t.pos);
+      else {
+        tileXYToLatLon(u.x, u.y, ll2);
+        latLonToVec3(ll2.lat, ll2.lon, ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon), p);
+      }
+      if (!toScreen(p, 0)) return null;
+      const rect = ctx.canvas.getBoundingClientRect();
+      return { x: scrXY.x + rect.left, y: scrXY.y + rect.top };
+    },
+    pick: (x: number, y: number) => iconHitAt(x, y),
+  };
+  (window as unknown as { __units?: unknown }).__units = debugHook;
   const api: UnitsApi = {
     async init(progress) {
       await build(progress);
@@ -1010,6 +1141,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         im.mesh.count = on ? Math.max(1, im.n) : im.n;
       }
       overlays!.warmup(on);
+      icons?.warmup(on);
       if (!on) structDirty = true;
     },
     onGameStart() {
@@ -1027,6 +1159,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       }
       if (buildings) buildings.mesh.count = buildings.n = 0;
       if (spires) spires.mesh.count = spires.n = 0;
+      icons?.clear();
       structAnchor.clear();
       structHeading.clear();
       cityCache.clear();
@@ -1055,14 +1188,22 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const inGame = ctx.sim.running && view.phase !== 'none';
       root.visible = inGame;
       if (!inGame) return;
-      // Altitude LOD for structures.
+      // Icon / model LOD (DESIGN_V2 §10.7).
       const alt = env.altitudeKm;
-      const wantDetail = detailMode ? alt < DETAIL_ALT_KM + HYST_KM : alt < DETAIL_ALT_KM - HYST_KM;
-      if (wantDetail !== detailMode) {
-        detailMode = wantDetail;
+      iconLod(alt, lod);
+      unitFade.value = lod.unitModelFade;
+      structFade.value = lod.structModelFade;
+      env.unitMinPx = lod.unitMinPx;
+      minPxScale.value = lod.structMinPxScale;
+      const wantStructModels = lod.structModelFade > 0;
+      if (wantStructModels !== structModelsOn) {
+        structModelsOn = wantStructModels;
         structDirty = true;
       }
-      minPxScale.value = clamp(1.15 - alt / 9000, 0.55, 1);
+      viewW = Math.max(1, ctx.canvas.clientWidth || ctx.canvas.width);
+      viewH = Math.max(1, ctx.canvas.clientHeight || ctx.canvas.height);
+      relations.refresh(frame.now / 1000);
+      icons?.begin(viewW, viewH);
       // Structure list changed?
       let first: StructureView | undefined;
       for (const s of view.structures.values()) {
@@ -1080,12 +1221,17 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         updateStructures();
       }
       updateRadarDishes();
+      updateStructureIcons();
       updateUnits(frame, fx);
+      icons?.end(frame.now / 1000, { unitPx: 22, smallPx: 14, structPx: 18, pipPx: 6, unitsOn: true, structsOn: lod.structIcons });
       updateRails(frame.time);
       updateOverlays();
       if (fx) updateAmbient(fx, env.fxDt);
     },
     pickUnit(clientX, clientY) {
+      // Icons first (DESIGN_V2 §7.2): what the player sees is what the click picks.
+      const hit = iconHitAt(clientX, clientY);
+      if (hit) return hit.structure ? -1 : hit.id;
       const rect = ctx.canvas.getBoundingClientRect();
       let best = -1, bestD = 18 * 18;
       for (const t of tracks.values()) {
@@ -1099,6 +1245,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       return best;
     },
     pickStructure(clientX, clientY) {
+      const hit = iconHitAt(clientX, clientY);
+      if (hit) return hit.structure ? hit.id : -1;
+      if (lod.structIcons && !structModelsOn) return -1;
       const rect = ctx.canvas.getBoundingClientRect();
       let best = -1, bestD = 20 * 20;
       for (const [id, a] of structAnchor) {
@@ -1109,6 +1258,15 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         }
       }
       return best;
+    },
+    pickIcon(clientX, clientY) {
+      return iconHitAt(clientX, clientY);
+    },
+    openIconFan(hit) {
+      icons?.openFan(hit as IconHit, performance.now() / 1000 + 8);
+    },
+    closeIconFan() {
+      icons?.closeFan();
     },
     getUnitWorldPosition(unitId, out) {
       const t = tracks.get(unitId);

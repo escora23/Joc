@@ -234,6 +234,22 @@ export interface UnitsApi extends Subsystem {
   pickStructure(clientX: number, clientY: number): number;
   /** World position of a unit as rendered this frame (interpolated). false if unknown. */
   getUnitWorldPosition(unitId: number, out: THREE.Vector3): boolean;
+  /**
+   * The 2D icon under a screen point (DESIGN_V2 §10.7): a unit, a structure or a cluster of same-owner icons, null
+   * when none within 14 px.
+   */
+  pickIcon?(clientX: number, clientY: number): IconPick | null;
+  /** Spread a cluster's members around it so each can be clicked (closes on the next click elsewhere or after 8 s). */
+  openIconFan?(hit: IconPick): void;
+  closeIconFan?(): void;
+}
+
+export interface IconPick {
+  kind: 'unit' | 'structure' | 'cluster';
+  id: number;
+  owner: number;
+  members: number[];
+  structure: boolean;
 }
 
 export type ExplosionKind = 'small' | 'medium' | 'large' | 'naval' | 'air';

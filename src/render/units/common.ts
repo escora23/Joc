@@ -21,6 +21,11 @@ export interface RenderEnv {
   /** FX clock: real seconds that stop while the game is paused. */
   fxTime: number;
   fxDt: number;
+  /**
+   * Minimum on-screen size of unit models (px): 12 from 60 km up, real size below (DESIGN_V2 §10.7; above 1,200 km
+   * units are icons only). Caps UNIT_LOOK.minPx.
+   */
+  unitMinPx: number;
 }
 
 export const env: RenderEnv = {
@@ -31,6 +36,7 @@ export const env: RenderEnv = {
   time: 0,
   fxTime: 0,
   fxDt: 0,
+  unitMinPx: 12,
 };
 
 /** Shared uniform objects: every units/fx material references these very objects (one update per frame). */
@@ -114,7 +120,7 @@ export const UNIT_LOOK: Record<UnitType, UnitLook> = {
 /** Drawn length (km) of a unit at distance `distUnits` from the camera. */
 export function unitSizeKm(type: UnitType, distUnits: number): number {
   const l = UNIT_LOOK[type];
-  const px = l.minPx * env.pixelK * distUnits * EARTH_RADIUS_KM;
+  const px = Math.min(l.minPx, env.unitMinPx) * env.pixelK * distUnits * EARTH_RADIUS_KM;
   return Math.min(l.maxKm, Math.max(l.realKm, px));
 }
 

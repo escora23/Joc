@@ -46,7 +46,17 @@ export function createInputRouter(ctx: GameContext): InputRouter {
     if (!enabled || !d || d.button !== e.button) return;
     const moved = Math.hypot(e.clientX - d.x, e.clientY - d.y);
     if (moved > CLICK_SLOP || e.timeStamp - d.t > CLICK_MS) return;
+    if (e.button === 0) {
+      // A cluster of icons (DESIGN_V2 §10.7): the first click fans its members out so each can be picked.
+      const hit = ctx.units.pickIcon?.(e.clientX, e.clientY);
+      if (hit && hit.kind === 'cluster') {
+        ctx.units.openIconFan?.(hit);
+        ctx.bus.emit('uiSound', { kind: 'click' });
+        return;
+      }
+    }
     ctx.bus.emit('worldClick', pick(e.button, e.clientX, e.clientY, e.shiftKey, e.ctrlKey || e.metaKey, e.altKey));
+    if (e.button === 0) ctx.units.closeIconFan?.();
   });
   canvas.addEventListener('pointermove', (e) => {
     hover = { x: e.clientX, y: e.clientY, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey };

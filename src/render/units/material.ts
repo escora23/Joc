@@ -82,6 +82,7 @@ void main() {
 const FRAG = /* glsl */ `
 uniform vec3 uSunDir;
 uniform float uTime;
+uniform float uFade;
 #ifdef GHOST
 uniform vec3 uGhostColor;
 #endif
@@ -116,6 +117,11 @@ void main() {
   vec3 g = uGhostColor * (0.35 + 1.6 * fres) * scan;
   gl_FragColor = vec4(g * 1.6, 0.55 + 0.3 * fres);
 #else
+  // LOD cross-fade with the icon layer (DESIGN_V2 §10.7): screen-door dissolve, no sorting needed.
+  if (uFade < 0.999) {
+    float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    if (n >= uFade) discard;
+  }
   float built = vParams.x;
   float holo = 0.0;
   if (vH > built + 0.002) {
@@ -201,6 +207,7 @@ export function createModelMaterial(o: ModelMaterialOpts = {}): THREE.ShaderMate
     uTime: sharedUniforms.uTime,
     uMinPx: { value: o.minPx ?? 24 },
     uMinPxScale: minPxScale,
+    uFade: o.anchored || o.city || o.beacon ? structFade : unitFade,
   };
   if (o.ghost) uniforms.uGhostColor = { value: new THREE.Color(0.3, 1, 0.5) };
   const m = new THREE.ShaderMaterial({
@@ -219,3 +226,7 @@ export function createModelMaterial(o: ModelMaterialOpts = {}): THREE.ShaderMate
 
 /** Global multiplier for anchored minimum sizes (LOD: shrinks with altitude so orbit views stay clean). */
 export const minPxScale = { value: 1 };
+/** LOD cross-fade of unit models (1 = fully drawn, 0 = gone), set by the units renderer from the camera altitude. */
+export const unitFade = { value: 1 };
+/** LOD cross-fade of structure models. */
+export const structFade = { value: 1 };

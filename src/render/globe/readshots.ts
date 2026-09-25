@@ -53,3 +53,7 @@ registerShot('labels-world', 'globe', 'Nation labels from 20,000 km with the HUD
   await stageReadability(s, { lat: 22, lon: 18, alt: 20_000, sun: 18 });
   await s.wait(1200);
 }, 20);
+
+registerShot('icons-europe', 'units', 'NATO icons over Europe (&alt=6000 default, &alt=1500): frames by relation, glyphs, clusters (DESIGN_V2 §10.7)', async (s) => {
+  await stageReadability(s, { lat: 44, lon: 4, alt: 6000, sun: 5, tilt: 0 });
+}, 20);
