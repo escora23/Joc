@@ -32,9 +32,10 @@ const TERRAIN_BUMP = /* glsl */ `
 {
   // Micro-relief: derivative bump mapping from multi-scale noise (ruts, clods, tussocks) in view space.
   vec2 bp = vWPos.xz;
-  float bh = texture2D(uNoise, bp * 0.11).b * 0.55 + texture2D(uNoise, bp * 0.43).a * 0.3 + texture2D(uNoise, bp * 1.7).g * 0.12;
-  float fade = 1.0 - smoothstep(60.0, 400.0, length(vViewPosition));
-  bh *= 0.9 * fade;
+  float vd = length(vViewPosition);
+  float bh = texture2D(uNoise, bp * 0.11).b * 0.32 + texture2D(uNoise, bp * 1.7).g * 0.016 * (1.0 - smoothstep(6.0, 22.0, vd));
+  float fade = 1.0 - smoothstep(40.0, 260.0, vd);
+  bh *= fade;
   vec3 vp = -vViewPosition;
   vec3 dpdx = dFdx(vp);
   vec3 dpdy = dFdy(vp);
@@ -56,7 +57,7 @@ const TERRAIN_FRAG = /* glsl */ `
   float nC = texture2D(uNoise, wp * 0.11).b;
   float nD = texture2D(uNoise, wp * 0.73).a;
   float micro = nC * 0.55 + nD * 0.45;
-  vec3 sand = mix(vec3(0.50, 0.40, 0.26), vec3(0.64, 0.54, 0.36), nB);
+  vec3 sand = mix(vec3(0.36, 0.285, 0.18), vec3(0.48, 0.39, 0.26), nB);
   vec3 grass = mix(vec3(0.105, 0.15, 0.045), vec3(0.25, 0.27, 0.09), smoothstep(0.25, 0.75, nB * 0.55 + nA * 0.45));
   grass = mix(grass, vec3(0.32, 0.29, 0.14), smoothstep(0.62, 0.8, nC) * 0.45);
   vec3 forest = mix(vec3(0.05, 0.08, 0.03), vec3(0.09, 0.12, 0.05), nC);
@@ -71,7 +72,15 @@ const TERRAIN_FRAG = /* glsl */ `
   float steep = smoothstep(0.62, 0.8, 1.0 - vUp);
   vec3 col = sand * sa.x + grass * sa.y + forest * sa.z + rock * sa.w + snow * sb.x + urban * sb.y + dirt * sb.z + wet * sb.w;
   col = mix(col, rock, steep);
-  col *= 0.74 + micro * 0.5;
+  // Broad patches (moisture / soil) + mid-scale mottling; the finest octave fades with distance so it never
+  // turns into speckle.
+  float dist = length(vViewPosition);
+  float fineK = 1.0 - smoothstep(25.0, 140.0, dist);
+  col *= 0.8 + nA * 0.32;
+  col *= 0.86 + nC * 0.24 + (nD - 0.5) * 0.1 * fineK;
+  // Pebbles and dry litter right around the vehicle.
+  float pebble = texture2D(uNoise, wp * 2.3).g;
+  col *= 1.0 + (pebble - 0.5) * 0.22 * (1.0 - smoothstep(8.0, 30.0, dist));
   vec3 tl = pow(vTint, vec3(2.2));
   float lt = dot(tl, vec3(0.299, 0.587, 0.114));
   float lc = dot(col, vec3(0.299, 0.587, 0.114));

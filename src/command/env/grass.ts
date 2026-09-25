@@ -22,11 +22,11 @@ function bladeTexture(): THREE.Texture {
     s = (s * 16807) % 2147483647;
     return s / 2147483647;
   };
-  for (let i = 0; i < 46; i++) {
-    const x = 6 + r() * (W - 12);
-    const h = H * (0.45 + r() * 0.55);
-    const lean = (r() - 0.5) * 30;
-    const w = 2 + r() * 3;
+  for (let i = 0; i < 30; i++) {
+    const x = 10 + r() * (W - 20);
+    const h = H * (0.4 + r() * 0.6);
+    const lean = (r() - 0.5) * 34;
+    const w = 3 + r() * 4;
     const shade = 150 + Math.floor(r() * 105);
     g.fillStyle = `rgb(${shade},${shade},${shade})`;
     g.beginPath();
@@ -167,7 +167,11 @@ export class Grass {
         const grass = hf.splatA[k * 4 + 1] / 255, forest = hf.splatA[k * 4 + 2] / 255, dirt = hf.splatB[k * 4 + 2] / 255;
         const sand = hf.splatA[k * 4] / 255, rock = hf.splatA[k * 4 + 3] / 255, urban = hf.splatB[k * 4 + 1] / 255, snow = hf.splatB[k * 4] / 255;
         const cover = grass + forest * 0.8 + dirt * 0.35;
-        if (cover < 0.25 + h3 * 0.5 || rock + sand + urban + snow > 0.5) continue;
+        // Semi-arid ground (sand / dirt dominant) still carries sparse dry scrub; rock, snow and towns do not.
+        const arid = sand > 0.45 && rock + urban + snow < 0.3;
+        if (arid) {
+          if (h3 > keep * 0.38) continue;
+        } else if (cover < 0.25 + h3 * 0.5 || rock + sand + urban + snow > 0.5) continue;
         const y = g.heightAt(x, z);
         if (y < 0.6) continue;
         // Fade out at the edge by shrinking.
@@ -190,8 +194,9 @@ export class Grass {
         r += (tr * (lc / lt) - r) * 0.3;
         gg += (tg * (lc / lt) - gg) * 0.3;
         b += (tb * (lc / lt) - b) * 0.3;
-        const v = (1.35 + h2 * 0.5) * 1.45;
-        this.c.setRGB(r * v * 0.92, gg * v * 1.06, b * v * 0.8);
+        const v = (1.05 + h2 * 0.4) * 1.3;
+        if (arid) this.c.setRGB(r * v * 0.95, gg * v * 0.98, b * v * 0.72); // straw
+        else this.c.setRGB(r * v * 0.92, gg * v * 1.06, b * v * 0.8);
         this.mesh.setColorAt(n, this.c);
         n++;
       }

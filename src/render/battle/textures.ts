@@ -161,3 +161,21 @@ function smooth(a: number, b: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 }
+
+/** CPU twin of sampling the detail texture on the GPU (bilinear, repeat): lets scatterers follow the shaders. */
+export type DetailSampler = (u: number, v: number, channel: number) => number;
+export function detailSampler(t: THREE.DataTexture): DetailSampler {
+  const img = t.image as { data: Uint8Array; width: number; height: number };
+  const d = img.data, n = img.width;
+  const inv = 1 / 255;
+  return (u, v, c) => {
+    const x = u * n - 0.5, y = v * n - 0.5;
+    const xf = Math.floor(x), yf = Math.floor(y);
+    const fx = x - xf, fy = y - yf;
+    const x0 = ((xf % n) + n) % n, y0 = ((yf % n) + n) % n;
+    const x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
+    const a = d[(y0 * n + x0) * 4 + c], b = d[(y0 * n + x1) * 4 + c];
+    const e = d[(y1 * n + x0) * 4 + c], f = d[(y1 * n + x1) * 4 + c];
+    return ((a + (b - a) * fx) * (1 - fy) + (e + (f - e) * fx) * fy) * inv;
+  };
+}

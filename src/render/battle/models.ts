@@ -407,6 +407,21 @@ export function broadleafGeometry(): THREE.BufferGeometry {
   return b.build();
 }
 
+/** Distant LOD of the conifer (same parts/materials, ~10 triangles). */
+export function coniferFarGeometry(): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  b.cone(0, 0, 1.2, 12.2, 2.0, 5, 1, 1);
+  return b.build();
+}
+
+/** Distant LOD of the broadleaf tree (~26 triangles). */
+export function broadleafFarGeometry(): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  b.cyl(0, 1.7, 0, 0.3, 3.4, 'y', 3, 0, 0, false);
+  b.blob(0, 6.2, 0, 3.3, 2.9, 3.3, 1, 1, 1, 0);
+  return b.build();
+}
+
 /** Unit quad on the XZ plane (decals). */
 export function decalGeometry(): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();

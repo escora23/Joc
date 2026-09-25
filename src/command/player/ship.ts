@@ -182,7 +182,7 @@ export class ShipController implements Controller {
     T3.z += (c.fx.rand() - 0.5) * 0.004;
     T3.normalize();
     c.world.fireShell(e, 0, T2, T3, SHELL, 55, 11, false, true, 1.8);
-    c.fx.muzzle(T2, T3, 1.9, false);
+    c.fx.muzzle(T2, T3, 3.2, false);
     c.fx.hooks.sound('navalGun', 1);
     c.shake(0.35);
     if (e.rig?.gun) e.rig.gun.position.z += 0.6;

@@ -81,11 +81,13 @@ void main() {
     float f = position.y * 0.5 + 0.5;
     mv = mix(tv, hv, f);
     // Keep a minimum on-screen width (a pixel-ish) so far tracers stay visible.
-    float w = max(aS.x * ms, -mv.z * 0.0011);
+    float wTrue = aS.x * ms, wMin = -mv.z * 0.0011;
+    float w = max(wTrue, wMin);
     mv.xy += n * position.x * w;
     vUv = position.xy;
     vCorner = p;
-    vSize = 1.0;
+    // Sub-pixel streaks are widened to a pixel: dim them by the coverage they really have.
+    vSize = sqrt(clamp(wTrue / max(wMin, 1e-12), 0.0, 1.0));
   } else {
     float growth = 1.0 - (1.0 - lt) * (1.0 - lt);
     float size = mix(aS.x, aS.y, growth);
@@ -163,12 +165,15 @@ void main() {
       vec4 t = texture2D(uPuff, atlas(vUv, vSeed));
       fadeIn = smoothstep(0.0, vKind < 0.5 ? 0.08 : 0.03, vLt);
       fadeOut = 1.0 - smoothstep(0.45, 1.0, vLt);
-      float a = t.r * vCol.a * fadeIn * fadeOut * uFade * groundSoft();
+      // Sprites that swallow the camera fade out instead of filling the screen.
+      float nearF = smoothstep(vSize * 0.5, vSize * 2.2, length(vPos - uCamL));
+      float a = t.r * vCol.a * fadeIn * fadeOut * uFade * groundSoft() * nearF;
       if (a < 0.004) discard;
       vec3 n = normalize(vec3((t.g - 0.5) * 2.0, (t.b - 0.5) * 2.0, 0.6));
-      float lamb = clamp(dot(n, uSunView) * 0.6 + 0.5, 0.0, 1.0);
+      float lamb = clamp(dot(n, uSunView) * 0.4 + 0.55, 0.0, 1.0);
       vec3 V = normalize(vPos - uCamL);
-      float back = pow(max(dot(V, uSunDir), 0.0), 6.0) * (1.0 - t.r) * 1.2;
+      // Forward scattering through the thin parts when backlit (soft, no bright rim ring).
+      float back = pow(max(dot(V, uSunDir), 0.0), 6.0) * (0.35 + 0.65 * (1.0 - t.r)) * smoothstep(0.02, 0.3, t.r) * 0.8;
       vec3 col = vCol.rgb * (uSunCol * (lamb * 0.85 + back) + uSkyCol * 0.8 + uGndCol * 1.2 + min(battleLights(vPos, vec3(0.0, -1.0, 0.0)) * 0.3, vec3(2.0)));
       col = battleAir(col, vPos);
       gl_FragColor = vec4(col * a, a);
@@ -202,13 +207,15 @@ void main() {
       // Streak: bright head, fading tail.
       float across = exp(-vUv.x * vUv.x * 3.0);
       float along = mix(0.15, 1.0, vUv.y * 0.5 + 0.5);
-      e = across * along * (1.0 - smoothstep(0.85, 1.0, vLt));
+      e = across * along * (1.0 - smoothstep(0.85, 1.0, vLt)) * mix(0.3, 1.0, vSize);
       col = vCol.rgb * vCol.a * e;
     } else {
       // Glow (embers, ground glow).
       e = exp(-r2 * 4.0) * (1.0 - vLt);
       col = vCol.rgb * vCol.a * e;
     }
+    // Soft intersection with the ground for the big billboards (no hard horizontal cut through fireballs).
+    if (vKind < 4.5 || vKind > 5.5) col *= groundSoft();
     // Attenuate through the air (no inscatter on additive light).
     vec3 v = vPos - uCamL;
     float k = length(v) / uFogRef;

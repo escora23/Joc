@@ -188,7 +188,7 @@ void main() {
   // Far away: lean toward a bright nation color so the armies read as two colored masses.
   float d = length(vPos - uCamL);
   float boost = smoothstep(uUnitScale.z, uUnitScale.w, d) * (1.0 - vDead * 0.6);
-  alb = mix(alb, team * 0.6 + 0.02, boost * 0.6);
+  alb = mix(alb, team * 0.55 + 0.02, boost * 0.45);
   vec3 N = normalize(vN);
   vec3 col = battleShade(alb, N, vPos, 1.0, 1.0);
   // Rim light keeps silhouettes readable against the ground at dusk.
@@ -221,9 +221,9 @@ export interface Infantry {
   clear(): void;
   update(now: number, front: FrontGeom, intensity: number, casualties: [number, number]): void;
   /** A random firing soldier of a team (for muzzle flashes / tracers). Returns false if none. */
-  pickShooter(team: number, rng: FastRng, now: number, out: THREE.Vector3): boolean;
-  /** A random live soldier position of a team (tracer targets). */
-  pickTarget(team: number, rng: FastRng, out: THREE.Vector3): boolean;
+  pickShooter(team: number, rng: FastRng, now: number, out: THREE.Vector3, focusU?: number): boolean;
+  /** A random live soldier position of a team (tracer targets), favouring squads near focusU when given. */
+  pickTarget(team: number, rng: FastRng, out: THREE.Vector3, focusU?: number): boolean;
   /** Kill soldiers within radius of a point (artillery). Returns kills. */
   blast(x: number, z: number, radius: number, now: number): number;
   setColors(a: number, b: number): void;
@@ -422,6 +422,17 @@ export function createInfantry(uniforms: BattleUniforms, capacity: number): Infa
     markRange(i, 1);
   }
 
+  /** A random squad; with a focus, the nearest of three random ones along the front (effects go where the eye is). */
+  function pickSquad(side: Squad[], r: FastRng, focusU?: number): Squad {
+    let s = side[r.int(side.length)];
+    if (focusU === undefined) return s;
+    for (let k = 0; k < 2; k++) {
+      const q = side[r.int(side.length)];
+      if (Math.abs(q.u - focusU) < Math.abs(s.u - focusU)) s = q;
+    }
+    return s;
+  }
+
   const api: Infantry = {
     mesh,
     get count() {
@@ -462,7 +473,7 @@ export function createInfantry(uniforms: BattleUniforms, capacity: number): Infa
           const roleR = r.next();
           const role = roleR < 0.55 ? 0 : roleR < 0.85 ? 1 : 2;
           // Concentrate the fighting near the anchor (where the camera looks), thinning toward the flanks.
-          const u = Math.max(-1, Math.min(1, r.gauss() * 0.42)) * front.halfLen * 0.9;
+          const u = Math.max(-1, Math.min(1, r.gauss() * 0.3)) * front.halfLen * 0.9;
           const v = role === 0 ? r.range(25, 110) : role === 1 ? r.range(140, 420) : r.range(450, 1100);
           const width = size * r.range(5.5, 8.5);
           const s: Squad = { team, first: n, count: size, u, v, role, nextT: now + r.range(0, 6), bounding: r.chance(0.5), aggression: r.next(), width };
@@ -555,11 +566,11 @@ export function createInfantry(uniforms: BattleUniforms, capacity: number): Infa
       deadCursor = (deadCursor + slice) % n;
       flush();
     },
-    pickShooter(team, r, now, out) {
+    pickShooter(team, r, now, out, focusU) {
       const side = bySide[team];
       if (side.length === 0) return false;
       for (let tries = 0; tries < 6; tries++) {
-        const s = side[r.int(side.length)];
+        const s = pickSquad(side, r, focusU);
         if (s.role === 2 && r.chance(0.7)) continue;
         const i = s.first + r.int(s.count);
         const o = i * 4;
@@ -572,10 +583,10 @@ export function createInfantry(uniforms: BattleUniforms, capacity: number): Infa
       }
       return false;
     },
-    pickTarget(team, r, out) {
+    pickTarget(team, r, out, focusU) {
       const side = bySide[team];
       if (side.length === 0 || !frontRef) return false;
-      const s = side[r.int(side.length)];
+      const s = pickSquad(side, r, focusU);
       const i = s.first + r.int(s.count);
       posAt(i, 1e9, out);
       return true;

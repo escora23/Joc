@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import type { SfxCue } from '../../shared/api';
 import { PK, Particles } from './particles';
+import { Ribbons } from './ribbons';
 
 const MAX_LIGHTS = 4;
 const MAX_DEBRIS = 120;
@@ -112,6 +113,8 @@ class DecalPool {
 export class Effects {
   readonly group = new THREE.Group();
   readonly particles: Particles;
+  /** Wingtip vortices / vapor trails. */
+  readonly ribbons = new Ribbons();
   private readonly lights: LightSlot[] = [];
   private readonly debris: Debris[] = [];
   private readonly debrisMesh: THREE.InstancedMesh;
@@ -138,7 +141,7 @@ export class Effects {
 
   constructor(atlas: THREE.Texture, decalAtlas: THREE.Texture, particleCap: number, decalCap: number, debrisMat: THREE.Material) {
     this.particles = new Particles(atlas, particleCap);
-    this.group.add(this.particles.group);
+    this.group.add(this.particles.group, this.ribbons.mesh);
     for (let i = 0; i < MAX_LIGHTS; i++) {
       const l = new THREE.PointLight(0xffa860, 0, 60, 2);
       l.castShadow = false;
@@ -197,6 +200,7 @@ export class Effects {
 
   setAtmosphere(fog: THREE.Color, density: number, light: THREE.Color): void {
     this.particles.setFog(fog, density, light);
+    this.ribbons.setFog(fog, density, light);
     (this.decalMat.uniforms.uFogColor.value as THREE.Color).copy(fog);
     this.decalMat.uniforms.uFogDensity.value = density;
     (this.decalMat.uniforms.uLight.value as THREE.Color).copy(light);
@@ -204,6 +208,7 @@ export class Effects {
 
   clear(): void {
     this.particles.clear();
+    this.ribbons.clear();
     for (const l of this.lights) {
       l.light.intensity = 0;
       l.age = l.life = 1;
@@ -216,6 +221,7 @@ export class Effects {
 
   warmup(on: boolean): void {
     this.particles.warmup(on);
+    this.ribbons.warmup(on);
     if (on) {
       this.m.makeTranslation(0, 0, -5);
       this.craters.add(this.m, 0, 1);
@@ -443,21 +449,41 @@ export class Effects {
     for (let i = 0; i < 8; i++) P.emit(PK.Flash, p.x + dir.x * 20 + this.sr() * 8, p.y + 2, p.z + dir.z * 20 + this.sr() * 8, 0, 0, 0, 0.2, 2, 4, 4, 3, 2, 1);
   }
 
-  /** Burning wreck: call every frame with dt; intensity fades toward 0. */
-  burn(p: THREE.Vector3, intensity: number, dt: number): void {
+  /** Burning wreck: call every frame with dt; intensity fades toward 0. `size` scales it (1 = tank, 3 = warship). */
+  burn(p: THREE.Vector3, intensity: number, dt: number, size = 1): void {
     const P = this.particles;
     const r = this.rnd;
-    const rate = 22 * intensity;
+    const z = size, zs = Math.sqrt(size);
+    const rate = 22 * intensity * zs;
     let n = rate * dt;
     while (n > 0) {
       if (r() < n) {
-        P.emit(PK.Fire, p.x + this.sr() * 1.2, p.y + r() * 0.8, p.z + this.sr() * 1.2, this.sr() * 0.8, 2 + r() * 3, this.sr() * 0.8, 0.5 + r() * 0.6, 1.0, 2.6, 1, 1, 1, 0.9 * intensity);
+        P.emit(PK.Fire, p.x + this.sr() * 1.2 * z, p.y + r() * 0.8 * z, p.z + this.sr() * 1.2 * z, this.sr() * 0.8, (2 + r() * 3) * zs, this.sr() * 0.8, 0.5 + r() * 0.6, 1.0 * z, 2.6 * z, 1, 1, 1, 0.9 * intensity);
         if (r() < 0.6) {
           const g = 0.06 + r() * 0.06;
-          P.emit(PK.Smoke, p.x + this.sr(), p.y + 1.5, p.z + this.sr(), this.sr() * 0.8 + this.wind.x, 3.5 + r() * 2.5, this.sr() * 0.8 + this.wind.z, 9 + r() * 7, 2.6, 20 + r() * 10, g, g * 0.97, g * 0.94, 0.62);
-          P.setLastGravity(-3.2);
+          P.emit(PK.Smoke, p.x + this.sr() * z, p.y + 1.5 * z, p.z + this.sr() * z, this.sr() * 0.8 + this.wind.x, (3.5 + r() * 2.5) * zs, this.sr() * 0.8 + this.wind.z, 9 + r() * 7, 2.6 * z, (20 + r() * 10) * z, g, g * 0.97, g * 0.94, 0.62);
+          P.setLastGravity(-3.2 * zs);
         }
         if (r() < 0.2) P.emit(PK.Ember, p.x, p.y + 1, p.z, this.sr() * 3, 3 + r() * 5, this.sr() * 3, 1.5 + r(), 0.12, 0.05, 3, 1.5, 0.5, 1);
+      }
+      n -= 1;
+    }
+  }
+
+  /** Burning warship: tall flames and a thick, roiling black smoke plume leaning downwind. Call every frame. */
+  shipFire(p: THREE.Vector3, intensity: number, dt: number, size: number): void {
+    const P = this.particles;
+    const r = this.rnd;
+    let n = 16 * intensity * dt;
+    while (n > 0) {
+      if (r() < n) {
+        P.emit(PK.Fire, p.x + this.sr() * 3 * size, p.y + r() * 2, p.z + this.sr() * 3 * size, this.sr() * 1.5, 4 + r() * 5, this.sr() * 1.5,
+          0.7 + r() * 0.7, 4 * size, 9 * size, 1, 1, 1, 0.95);
+        const g = 0.035 + r() * 0.04;
+        P.emit(PK.Smoke, p.x + this.sr() * 2 * size, p.y + 3 * size, p.z + this.sr() * 2 * size, this.wind.x * 2.5 + this.sr() * 1.5, 8 + r() * 5,
+          this.wind.z * 2.5 + this.sr() * 1.5, 10 + r() * 7, 10 * size, (38 + r() * 18) * size, g, g * 0.96, g * 0.92, 0.85);
+        P.setLastGravity(-2.5);
+        if (r() < 0.3) P.emit(PK.Ember, p.x, p.y + 3, p.z, this.sr() * 6, 6 + r() * 8, this.sr() * 6, 2 + r(), 0.25, 0.1, 3, 1.5, 0.5, 1);
       }
       n -= 1;
     }
@@ -473,11 +499,13 @@ export class Effects {
     if (this.rand() < 0.5) this.particles.emit(PK.Fire, p.x + this.sr() * 3, p.y + 1, p.z + this.sr() * 3, 0, 3, 0, 0.9, 4, 8, 1, 1, 1, 0.8);
   }
 
-  /** Light damage smoke from a hit vehicle. */
-  damageSmoke(p: THREE.Vector3, dt: number, amount: number): void {
-    if (this.rand() > amount * dt * 12) return;
-    const g = 0.12 + this.rand() * 0.08;
-    this.particles.emit(PK.Smoke, p.x + this.sr() * 0.5, p.y, p.z + this.sr() * 0.5, this.sr() * 0.5 + 0.8, 2.5, this.sr() * 0.5 + 0.4, 3 + this.rand() * 3, 0.8, 5, g, g, g, 0.7);
+  /** Damage smoke from a hit vehicle (`size` 1 = tank, 3 = warship). */
+  damageSmoke(p: THREE.Vector3, dt: number, amount: number, size = 1): void {
+    if (this.rand() > amount * dt * 12 * Math.sqrt(size)) return;
+    const g = 0.1 + this.rand() * 0.08;
+    const z = size;
+    this.particles.emit(PK.Smoke, p.x + this.sr() * 0.5 * z, p.y, p.z + this.sr() * 0.5 * z, this.sr() * 0.5 + 0.8 * z, 2.5 * Math.sqrt(z), this.sr() * 0.5 + 0.4 * z,
+      3 + this.rand() * 3 * z, 0.8 * z, 5 * z * (1 + amount), g, g, g, 0.7);
   }
 
   /** Dust kicked up by tracks / wheels. */
@@ -553,6 +581,7 @@ export class Effects {
 
   /** Throw a large piece (e.g. a turret) as debris with an initial velocity. Returns nothing; purely visual. */
   update(dt: number): void {
+    this.ribbons.update(dt);
     // Lights
     for (const l of this.lights) {
       if (l.age >= l.life) {

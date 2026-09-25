@@ -160,26 +160,26 @@ export class Mission {
     for (const [al, side] of [[8, -46], [-6, 52], [-30, -115]]) this.place('tank', 0, al + this.rng.next() * 10, side, 20, yF);
     this.place('ifv', 0, -45, 24, 25, yF);
     for (const [al, side] of [[22, -24], [30, 30], [-10, 95]]) this.squad(0, al, side, 6, side === 30, yF);
-    // Enemy defensive line ~550 m out: sandbags, AT teams, infantry; armor behind it, advancing.
+    // Enemy defensive line ~380 m out: sandbags, AT teams, infantry; armor behind it, advancing.
     const bags: { x: number; z: number; yaw: number }[] = [];
     for (let i = -7; i <= 7; i++) {
-      this.at(540 + this.rng.next() * 30, i * 26 + this.rng.next() * 8, T);
+      this.at(370 + this.rng.next() * 30, i * 26 + this.rng.next() * 8, T);
       bags.push({ x: T.x, z: T.z, yaw: yE + Math.PI / 2 + (this.rng.next() - 0.5) * 0.3 });
     }
     scatter.placeBags(w.ground, bags);
     const tanks: (Ent | null)[] = [];
     const nT = Math.round(5 * m);
-    for (let i = 0; i < nT; i++) tanks.push(this.place('tank', 1, 620 + this.rng.next() * 300, (i - (nT - 1) / 2) * 105 + (this.rng.next() - 0.5) * 50, 40, yE));
+    for (let i = 0; i < nT; i++) tanks.push(this.place('tank', 1, 430 + this.rng.next() * 240, (i - (nT - 1) / 2) * 105 + (this.rng.next() - 0.5) * 50, 40, yE));
     this.link(tanks.slice(0, 3));
     this.link(tanks.slice(3, 6));
-    for (let i = 0; i < Math.round(2 * m); i++) this.place('ifv', 1, 660 + this.rng.next() * 160, (this.rng.next() - 0.5) * 460, 40, yE);
-    this.place('aa', 1, 980, (this.rng.next() - 0.5) * 300, 60, yE);
-    for (let i = 0; i < 2; i++) this.place('truck', 1, 1080 + this.rng.next() * 150, (this.rng.next() - 0.5) * 500, 60, yE);
-    for (let i = 0; i < Math.round(4 * m); i++) this.squad(1, 500 + this.rng.next() * 60, (i - 1.5) * 85, 5, true, yE);
-    for (let i = 0; i < 2; i++) this.squad(1, 430, (i ? 1 : -1) * 150, 2, true, yE);
+    for (let i = 0; i < Math.round(2 * m); i++) this.place('ifv', 1, 460 + this.rng.next() * 140, (this.rng.next() - 0.5) * 460, 40, yE);
+    this.place('aa', 1, 760, (this.rng.next() - 0.5) * 300, 60, yE);
+    for (let i = 0; i < 2; i++) this.place('truck', 1, 860 + this.rng.next() * 150, (this.rng.next() - 0.5) * 500, 60, yE);
+    for (let i = 0; i < Math.round(4 * m); i++) this.squad(1, 340 + this.rng.next() * 50, (i - 1.5) * 85, 5, true, yE);
+    for (let i = 0; i < 2; i++) this.squad(1, 280, (i ? 1 : -1) * 150, 2, true, yE);
     // Aftermath of earlier fighting: burning wrecks and craters between the lines.
     for (let i = 0; i < 4; i++) {
-      const e = this.place(i === 1 ? 'ifv' : 'tank', i >= 2 ? 0 : 1, 140 + i * 95, (this.rng.next() - 0.5) * 360, 50, this.rng.next() * 6);
+      const e = this.place(i === 1 ? 'ifv' : 'tank', i >= 2 ? 0 : 1, 110 + i * 70, (this.rng.next() - 0.5) * 360, 50, this.rng.next() * 6);
       if (e) this.preWreck(e);
     }
     for (let i = 0; i < 6; i++) {
@@ -188,7 +188,7 @@ export class Mission {
       if (h > 1) this.columns.push(new THREE.Vector3(T.x, h, T.z));
     }
     for (let i = 0; i < 46; i++) {
-      this.at(40 + this.rng.next() * 620, (this.rng.next() - 0.5) * 700, T);
+      this.at(40 + this.rng.next() * 480, (this.rng.next() - 0.5) * 700, T);
       w.fx.decal(T.x, T.z, 3 + this.rng.next() * 5, this.rng.next() < 0.6 ? 1 : 0, 0.85);
     }
     return p;
@@ -301,10 +301,10 @@ export class Mission {
         if (vehicles < 7 && this.waves < 6) {
           this.waves++;
           const side = (this.rng.next() - 0.5) * 600;
-          this.place('tank', 1, 1250, side, 120, this.yawTo(true));
-          this.place('tank', 1, 1300, side + 90, 120, this.yawTo(true));
-          this.place('ifv', 1, 1350, side - 80, 120, this.yawTo(true));
-          this.squad(1, 1200, side + 40, 5, true, this.yawTo(true));
+          this.place('tank', 1, 950, side, 120, this.yawTo(true));
+          this.place('tank', 1, 1000, side + 90, 120, this.yawTo(true));
+          this.place('ifv', 1, 1050, side - 80, 120, this.yawTo(true));
+          this.squad(1, 900, side + 40, 5, true, this.yawTo(true));
           this.onNotice('command.wave');
         }
         // Friendly reinforcements keep the line alive too.

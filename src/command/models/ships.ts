@@ -11,7 +11,8 @@ const PAINT_B = 0xdadada;
 const PAINT_C = 0xc6c6c6;
 const DARK = 0x1c1d1f;
 const WINDOW = 0x0f151b;
-const DECK = 0x6c6e70;
+const DECK = 0x4f5357;
+const DECK_B = 0x44484c;
 
 function mesh(g: THREE.BufferGeometry, role: Role, name: string): THREE.Mesh {
   const m = new THREE.Mesh(g);
@@ -68,7 +69,7 @@ export function hullGeometry(o: HullOpts): THREE.BufferGeometry {
   const push = (x: number, y: number, z: number, deck = false) => {
     pos.push(x, y, z);
     const cc = colorAt(y, deck);
-    col.push(cc.r, cc.g, cc.b);
+    col.push(cc.r, cc.g, cc.b, 1);
   };
   const tri = (a: number[], b: number[], d: number[], deck = false) => {
     push(a[0], a[1], a[2], deck);
@@ -120,7 +121,7 @@ export function hullGeometry(o: HullOpts): THREE.BufferGeometry {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
   g.computeVertexNormals();
   return g;
 }
@@ -138,80 +139,103 @@ function ciws(name: string, x: number, y: number, z: number): THREE.Group {
   return g;
 }
 
+/** Rectangle-ish outline (forward, right) from f0 (aft) to f1 (fore), half-width hw, bow corners chamfered by c. */
+function box2(f0: number, f1: number, hw: number, c = 0): Pt[] {
+  return c > 0
+    ? [[f1, hw - c], [f1 - c, hw], [f0, hw], [f0, -hw], [f1 - c, -hw], [f1, -(hw - c)]]
+    : [[f1, hw], [f0, hw], [f0, -hw], [f1, -hw]];
+}
+
+/** Same outline pulled inward by d (sloped stealth faces). */
+function inset(o: Pt[], d: number, df = d): Pt[] {
+  let cf = 0, cr = 0;
+  for (const [f, r] of o) {
+    cf += f;
+    cr += r;
+  }
+  cf /= o.length;
+  cr /= o.length;
+  return o.map(([f, r]) => [f - Math.sign(f - cf) * df, r - Math.sign(r - cr) * d] as Pt);
+}
+
 export function buildDestroyer(): THREE.Group {
   const L = 142, B = 17, F = 7.2;
   const root = new THREE.Group();
   const hull = mesh(hullGeometry({ L, B, draft: 5.6, freeboard: F, stations: 40 }), 'paint', 'hull');
   root.add(hull);
   const s = new GeoBuilder();
-  // Forward superstructure (bridge block): stepped levels.
-  s.planY([[22, 7.2], [4, 7.4], [4, -7.4], [22, -7.2]], 5.5, PAINT, 0, F, 0);
-  s.planY([[19, 6.2], [9, 6.8], [9, -6.8], [19, -6.2]], 3.2, PAINT_B, 0, F + 5.5, 0);
-  s.box(12.2, 1.0, 0.1, WINDOW, 0, F + 7.3, -19.05);
-  for (const sx of [-1, 1]) s.box(0.1, 1.0, 6, WINDOW, sx * 6.55, F + 7.2, -15);
-  // Flat SPY-style radar panels on the bridge corners.
-  for (const sx of [-1, 1]) s.box(0.3, 3.2, 3.2, PAINT_C, sx * 6.9, F + 3.2, -19.5, 0, -sx * 0.6, 0);
-  // Mast: tapered tripod + yards + radar
-  s.cyl(0.35, 0.8, 16, 8, PAINT_C, 0, F + 8.7 + 8, -8);
-  s.cyl(0.15, 0.4, 13, 6, PAINT_C, 2.0, F + 8.7 + 6, -5.5, -0.15, 0, -0.14);
-  s.cyl(0.15, 0.4, 13, 6, PAINT_C, -2.0, F + 8.7 + 6, -5.5, -0.15, 0, 0.14);
-  s.box(9, 0.3, 0.3, PAINT_C, 0, F + 20.5, -8);
-  s.box(6, 0.3, 0.3, PAINT_C, 0, F + 23.5, -8);
-  s.cyl(0.05, 0.08, 6, 4, DARK, 0, F + 27.5, -8);
-  // Funnel(s)
-  s.planY([[-26, 3.2], [-34, 3.6], [-34, -3.6], [-26, -3.2]], 8, PAINT_B, 0, F, 0);
-  s.box(5.8, 0.6, 6.6, DARK, 0, F + 8.2, 30);
-  s.planY([[-44, 3.0], [-50, 3.3], [-50, -3.3], [-44, -3.0]], 6.5, PAINT_B, 0, F, 0);
-  s.box(5.2, 0.6, 5.2, DARK, 0, F + 6.7, 47);
-  // Hangar + flight deck marking
-  s.planY([[-52, 7.0], [-64, 7.2], [-64, -7.2], [-52, -7.0]], 6, PAINT, 0, F, 0);
-  s.box(12.5, 0.05, 12, 0x55575a, 0, F + 0.05, 58 + 6);
-  // VLS block forward
-  s.box(8, 0.35, 7, DARK, 0, F + 0.6, -30);
-  for (let i = 0; i < 4; i++) s.box(8.1, 0.38, 0.12, 0x2d2e30, 0, F + 0.62, -33 + i * 2);
-  // Boats and davits
+  const y0 = F - 0.3;
+  // Forward superstructure: two sloped (stealth) tiers, bridge on top with a raked window band.
+  const t1 = box2(-4, 25, 7.3, 2.2);
+  s.prism(t1, inset(t1, 0.9, 0.7), y0, F + 6, PAINT);
+  const t2 = box2(5, 22.5, 6.2, 2.0);
+  s.prism(t2, inset(t2, 0.7, 0.9), F + 6, F + 9.6, PAINT_B);
+  s.box(9.6, 0.95, 0.12, WINDOW, 0, F + 8.2, -21.95, -0.32);
   for (const sx of [-1, 1]) {
-    s.sphere(1.0, 10, 6, 0xe8e0c8, sx * 7.4, F + 3.4, 38, 1, 0.7, 3.8);
-    s.box(0.3, 3, 0.3, PAINT_C, sx * 7.4, F + 1.6, 35);
-    s.box(0.3, 3, 0.3, PAINT_C, sx * 7.4, F + 1.6, 41);
+    s.box(0.12, 0.9, 11, WINDOW, sx * 5.78, F + 8.1, -13.5, 0, 0, sx * 0.2);
+    // Phased-array radar faces on the tier-1 corners (angled 45°), flush with the sloped faces.
+    s.box(0.25, 3.6, 3.6, PAINT_C, sx * 5.6, F + 3.6, -22.6, 0.12, sx * -0.78, 0);
+    s.box(0.25, 3.6, 3.6, PAINT_C, sx * 6.8, F + 3.6, -1.2, 0.12, sx * 0.78, 0);
+    // Bridge wings
+    s.box(2.0, 0.3, 3.0, PAINT_B, sx * 7.0, F + 6.2, -18.5);
+    // Doors and scuttles on tier 1
+    for (let d = 0; d < 3; d++) s.box(0.1, 1.9, 0.9, 0x5d6166, sx * 6.95, F + 1.1, -6 - d * 5, 0, 0, sx * 0.14);
   }
-  // Harpoon canisters
-  for (let i = 0; i < 4; i++) s.cyl(0.4, 0.4, 5, 8, PAINT_C, -3 + i * 1.6, F + 1.0, -1.5 + 0, Math.PI / 2 - 0.2, 0, 0);
-  // Bridge wings, window bands on every deck level, doors.
+  // Enclosed pyramid mast with the multi-function radar globe on top (the `radar` node spins inside it).
+  const mb = box2(-1, 10, 3.6, 1.2), mt = box2(3, 6.6, 1.3, 0.5);
+  s.prism(mb, mt, F + 9.4, F + 24.5, PAINT_C);
+  s.box(5.8, 0.25, 0.25, PAINT_C, 0, F + 19, -5.2);
+  s.cyl(0.9, 0.9, 1.6, 12, PAINT_B, 0, F + 25.3, -4.8);
+  s.cyl(0.06, 0.1, 7, 4, DARK, 0, F + 33.5, -4.8);
+  for (const sx of [-1, 1]) s.cyl(0.04, 0.07, 4.5, 4, DARK, sx * 2.3, F + 21.5, -5.2);
+  // Funnel: sloped casing with a dark exhaust cap.
+  const fu = box2(-37, -25, 3.7, 1.5);
+  s.prism(fu, inset(fu, 1.0, 1.4), y0, F + 9, PAINT_B);
+  s.box(3.8, 0.5, 7.2, DARK, 0, F + 9.1, 31);
+  // Midships deckhouse between the funnel and the hangar (boats, launchers).
+  const md = box2(-48, -22, 6.6, 0);
+  s.prism(md, inset(md, 0.6, 0.3), y0, F + 3.2, PAINT);
+  // Hangar + flight deck
+  const hg = box2(-62, -48, 7.2, 0);
+  s.prism(hg, inset(hg, 0.8, 0.4), y0, F + 6.5, PAINT);
+  s.box(8, 5, 0.1, 0x5c6066, 0, F + 2.6, 62.05);
+  s.box(13.5, 0.05, 8, DECK_B, 0, F + 0.06, 66);
+  // Aft radar mast on the hangar roof
+  s.prism(box2(-54, -50, 1.6, 0.4), box2(-53, -51, 0.6, 0.2), F + 6.4, F + 12, PAINT_C);
+  s.sphere(1.3, 14, 10, 0xf2f2f2, 0, F + 12.8, 52);
+  // Forward VLS (32 cells) and aft VLS
+  s.box(8.2, 0.5, 7.4, 0x4a4e53, 0, F + 0.45, -33.5);
+  for (let i = 0; i < 5; i++) s.box(8.3, 0.52, 0.1, 0x33363a, 0, F + 0.47, -37.1 + i * 1.8);
+  for (let i = 0; i < 5; i++) s.box(0.1, 0.52, 7.5, 0x33363a, -4 + i * 2, F + 0.47, -33.5);
+  // CIWS pedestal ahead of the bridge
+  s.cyl(1.4, 1.7, 1.2, 14, PAINT_B, 0, F + 0.4, -27.2);
+  s.box(7.4, 0.5, 5.2, 0x4a4e53, 0, F + 3.4, 40);
+  for (let i = 0; i < 4; i++) s.box(7.5, 0.52, 0.1, 0x33363a, 0, F + 3.42, 37.6 + i * 1.6);
+  // Anti-ship missile launchers (angled canisters) behind the funnel
+  for (const sx of [-1, 1]) for (let i = 0; i < 2; i++) s.cyl(0.42, 0.42, 5.2, 10, PAINT_C, sx * (1.2 + i * 1.0), F + 4.3, 26 + i * 0.1, Math.PI / 2 - 0.25, sx * 0.9, 0);
+  // Boats in their recesses
   for (const sx of [-1, 1]) {
-    s.box(2.2, 0.35, 3.2, PAINT_B, sx * 7.9, F + 7.6, -16.5);
-    s.box(0.12, 0.9, 12, WINDOW, sx * 7.25, F + 3.4, -13);
-    s.box(0.12, 0.7, 10, WINDOW, sx * 7.05, F + 2.2, 36);
-    s.box(0.12, 0.7, 11, WINDOW, sx * 7.25, F + 4.3, 58);
-    for (let d = 0; d < 3; d++) s.box(0.1, 1.9, 0.9, 0x55595e, sx * 7.3, F + 1.0, -8 - d * 5);
+    s.sphere(1.0, 12, 6, 0xe6ddc4, sx * 7.0, F + 2.6, 36, 1, 0.75, 3.6);
+    s.box(0.6, 0.6, 7.6, 0x2e2f31, sx * 7.0, F + 2.0, 36);
   }
-  s.box(13.5, 0.8, 0.1, WINDOW, 0, F + 3.4, -22.05);
-  // Deck-edge railings (both sides, full length) and stanchions.
+  // Deck-edge railings (both sides) with stanchions
   for (const sx of [-1, 1]) {
     for (let k = 0; k < 14; k++) {
       const z0 = -60 + k * 9;
       const t = (71 - z0) / 142;
       const hb = (B / 2) * (t < 0.12 ? 0.86 + (t / 0.12) * 0.14 : t < 0.5 ? 1 : Math.max(0.1, Math.sqrt(Math.max(0, 1 - ((t - 0.5) / 0.5) ** 2 * 1.02)) * (1 - ((t - 0.5) / 0.5) * 0.25)));
       const fb = F * (1 + 0.55 * Math.pow(Math.max(0, (t - 0.55) / 0.45), 2));
-      s.box(0.06, 0.06, 9, 0xd8d8d8, sx * (hb - 0.3), fb + 1.05, z0 - 4.5);
-      s.box(0.06, 1.05, 0.06, 0xd8d8d8, sx * (hb - 0.3), fb + 0.52, z0);
+      s.box(0.06, 0.06, 9, 0xd0d0d0, sx * (hb - 0.3), fb + 1.05, z0 - 4.5);
+      s.box(0.06, 1.05, 0.06, 0xd0d0d0, sx * (hb - 0.3), fb + 0.52, z0);
     }
   }
-  // Radomes, satcom domes, whip antennas, yard lights
-  s.sphere(1.1, 12, 8, 0xf4f4f4, 3.2, F + 10.3, -12);
-  s.sphere(1.1, 12, 8, 0xf4f4f4, -3.2, F + 10.3, -12);
-  s.sphere(0.8, 10, 8, 0xf4f4f4, 0, F + 29.5, -8);
-  for (const [x, z, h] of [[5.5, 26, 10], [-5.5, 26, 10], [4.8, 50, 8], [-4.8, 50, 8]] as const) s.cyl(0.05, 0.09, h, 4, DARK, x, F + 6 + h / 2, z);
-  // Anchor hawse, bollards, deck gear on the foredeck
+  // Foredeck gear: breakwater, anchor windlasses, bollards
+  s.prism([[50, 6.2], [54, 0], [50, -6.2], [49.4, -6.2], [53.2, 0], [49.4, 6.2]], [[50, 6.2], [54, 0], [50, -6.2], [49.4, -6.2], [53.2, 0], [49.4, 6.2]], F + 0.1, F + 1.1, PAINT_B);
   for (const sx of [-1, 1]) {
-    s.box(0.5, 0.5, 0.5, DARK, sx * 3.6, F + 0.3, -56);
-    s.cyl(0.3, 0.3, 0.5, 8, DARK, sx * 5.2, F + 0.35, -40);
-    s.cyl(0.3, 0.3, 0.5, 8, DARK, sx * 6.2, F + 0.3, 44);
-    s.cyl(0.55, 0.55, 1.6, 10, 0xe0e0e0, sx * 6.4, F + 1.2, 2, Math.PI / 2);
+    s.cyl(0.5, 0.55, 0.6, 10, DARK, sx * 2.4, F + 0.6, -58);
+    s.cyl(0.25, 0.25, 0.5, 8, DARK, sx * 5.2, F + 0.35, -40);
+    s.cyl(0.25, 0.25, 0.5, 8, DARK, sx * 6.2, F + 0.3, 46);
   }
-  // Funnel caps & exhaust grilles
-  s.box(6.2, 0.25, 7.2, PAINT_C, 0, F + 8.05, 30);
-  s.box(5.4, 0.25, 5.8, PAINT_C, 0, F + 6.55, 47);
   root.add(mesh(s.build(), 'paint', 'superstructure'));
   // Flight deck markings (white): circle + center line.
   const fdm = new GeoBuilder();
@@ -221,45 +245,46 @@ export function buildDestroyer(): THREE.Group {
   fdm.box(0.3, 0.02, 12, 0xf0f0f0, 0, F + 0.11, 64);
   fdm.box(11, 0.02, 0.3, 0xf0f0f0, 0, F + 0.11, 58.4);
   root.add(mesh(fdm.build(), 'paint', 'deckMarks'));
-  // Hull number / flag marking (team color) on both sides of the bow and a stripe on the funnel.
+  // Nation marking: bow panels and a funnel band (team color).
   const m = new GeoBuilder();
   for (const sx of [-1, 1]) {
-    m.box(0.08, 2.4, 6, 0xffffff, sx * 6.0, F - 1.8, -52);
-    m.box(0.1, 1.6, 7.8, 0xffffff, sx * 3.62, F + 6.2, 30);
+    m.box(0.08, 2.2, 6, 0xffffff, sx * 6.0, F - 1.8, -52);
+    m.box(0.1, 1.2, 9, 0xffffff, sx * 3.05, F + 7.2, 31, 0, 0, sx * 0.13);
   }
   root.add(mesh(m.build(), 'mark', 'mark'));
-  // Main gun turret (yaw) + barrel (pitch)
+  // Main gun: faceted stealth gun house (yaw) + long barrel (pitch).
   const t = new GeoBuilder();
-  t.planY([[3.2, 0.8], [1.2, 2.3], [-2.8, 2.3], [-3.2, 1.6], [-3.2, -1.6], [-2.8, -2.3], [1.2, -2.3], [3.2, -0.8]], 2.4, PAINT);
-  t.cyl(2.6, 2.8, 0.6, 16, PAINT_B, 0, -0.1, 0.3);
+  const gh: Pt[] = [[3.4, 0.6], [1.6, 2.2], [-2.6, 2.3], [-3.0, 1.6], [-3.0, -1.6], [-2.6, -2.3], [1.6, -2.2], [3.4, -0.6]];
+  t.prism(gh, gh.map(([f, r]) => [f * 0.72 - 0.4, r * 0.62] as Pt), 0, 2.3, PAINT);
+  t.cyl(2.6, 2.8, 0.5, 18, PAINT_B, 0, -0.15, 0.3);
   const gb = new GeoBuilder();
-  gb.cyl(0.18, 0.24, 7.2, 12, PAINT_C, 0, 0, -3.8, Math.PI / 2);
-  gb.cyl(0.26, 0.26, 0.5, 12, DARK, 0, 0, -7.4, Math.PI / 2);
-  gb.box(1.1, 1.0, 1.0, PAINT_B, 0, 0, -0.2);
+  gb.cyl(0.17, 0.24, 7.4, 14, PAINT_C, 0, 0, -3.9, Math.PI / 2);
+  gb.cyl(0.25, 0.25, 0.45, 14, DARK, 0, 0, -7.55, Math.PI / 2);
+  gb.box(1.0, 0.9, 1.4, PAINT_B, 0, 0, -0.1);
   const gun = new THREE.Group();
   gun.name = 'gun';
   gun.add(mesh(gb.build(), 'paint', 'gunMesh'));
   const mz = new THREE.Object3D();
   mz.name = 'muzzle';
-  mz.position.set(0, 0, -7.8);
+  mz.position.set(0, 0, -7.9);
   gun.add(mz);
-  gun.position.set(0, 1.2, -2.6);
+  gun.position.set(0, 1.1, -2.4);
   const turret = new THREE.Group();
   turret.name = 'turret';
   turret.add(mesh(t.build(), 'paint', 'turretShell'), gun);
-  turret.position.set(0, F + 1.0, -44);
+  turret.position.set(0, F + 0.9, -44);
   root.add(turret);
-  // Spinning air-search radar on the mast.
+  // Multi-function radar globe: a radome with two rotating array faces showing through its equator band.
   const r = new GeoBuilder();
-  r.box(6.5, 1.3, 0.25, PAINT_C, 0, 0, 0, 0.2);
-  r.box(0.4, 0.8, 0.4, DARK, 0, -0.9, 0.2);
+  r.sphere(2.1, 20, 14, 0xf4f4f4, 0, 0, 0);
+  for (const sz of [-1, 1]) r.box(2.6, 1.8, 0.2, 0x3a3f45, 0, 0, sz * 1.95);
   const radar = new THREE.Group();
   radar.name = 'radar';
   radar.add(mesh(r.build(), 'paint', 'radarMesh'));
-  radar.position.set(0, F + 25, -8);
+  radar.position.set(0, F + 27.6, -4.8);
   root.add(radar);
-  root.add(ciws('ciws0', 0, F + 5.5 + 3.2, -4.5));
-  root.add(ciws('ciws1', 0, F + 6, 55.0));
+  root.add(ciws('ciws0', 0, F + 1.0, -27.2));
+  root.add(ciws('ciws1', 0, F + 6.5, 57.5));
   return root;
 }
 

@@ -1,10 +1,11 @@
-// FRONT ULTRA — command mode: procedural ground vehicles (owner: command).
+// FRONT ULTRA — command mode: procedural support vehicles: SPAAG, truck, SAM launcher, coastal battery (owner: command).
 // Every model faces -Z, sits on y = 0 and is built from merged primitives: one mesh per rigid part and material
 // role. Named sub-groups drive animation: `body` (suspension pitch/roll), `turret` (yaw), `gun` (pitch pivot),
 // `muzzle` (empty at the barrel tip), `radar` (spinning dish), `wheels*`.
 
 import * as THREE from 'three';
-import { GeoBuilder, type Pt } from './builder';
+import { bakeDust, GeoBuilder, type Pt } from './builder';
+import { addRunningGear } from './armor';
 
 export type Role = 'paint' | 'mark' | 'glass' | 'flame' | 'ordnance' | 'prop';
 
@@ -64,24 +65,11 @@ function trackedChassis(o: ChassisOpts): THREE.Group {
   b.profileX(prof, W * 0.66, PAINT, 0, 0, 0, 0.1);
   // Fender deck over the tracks.
   b.box(W, 0.1, L - 0.5, PAINT_B, 0, top - 0.12, 0.1);
-  // Tracks + running gear.
-  const tx = W / 2 - W * 0.09;
+  // Tracks + running gear (shared with the MBTs), skirts.
+  addRunningGear(b, L, W, o.wheels, o.wheelR);
   for (const s of [-1, 1]) {
-    b.box(W * 0.18, 0.2, L - 0.5, TRACK, s * tx, 0.1, 0.05);
-    b.box(W * 0.18, 0.18, L - 0.9, TRACK, s * tx, top - 0.32, 0.05);
-    const n = o.wheels;
-    for (let i = 0; i < n; i++) {
-      const z = -hl + 0.95 + (i * (L - 1.9)) / (n - 1);
-      b.cyl(o.wheelR, o.wheelR, W * 0.16, 12, DARK, s * tx, o.wheelR + 0.05, z, 0, 0, Math.PI / 2);
-      b.cyl(o.wheelR * 0.45, o.wheelR * 0.45, W * 0.17, 8, METAL, s * tx, o.wheelR + 0.05, z, 0, 0, Math.PI / 2);
-    }
-    b.cyl(o.wheelR * 1.1, o.wheelR * 1.1, W * 0.17, 12, METAL, s * tx, 0.62, hl - 0.35, 0, 0, Math.PI / 2);
-    b.cyl(o.wheelR, o.wheelR, W * 0.17, 12, METAL, s * tx, 0.62, -hl + 0.35, 0, 0, Math.PI / 2);
-    // Track outer band (visible sides above / below wheels).
-    b.box(W * 0.02, 0.9, L - 0.6, TRACK, s * (tx + W * 0.085), 0.55, 0.05);
     if (o.skirt) {
       b.box(0.07, 0.55, L - 1.0, PAINT_B, s * (W / 2 - 0.02), top - 0.42, -0.1);
-      // skirt panel seams
       for (let k = 0; k < 5; k++) b.box(0.08, 0.5, 0.04, PAINT_C, s * (W / 2 - 0.01), top - 0.42, -hl + 1.2 + k * ((L - 2.2) / 4));
     }
   }
@@ -105,106 +93,8 @@ function trackedChassis(o: ChassisOpts): THREE.Group {
   }
   for (let i = 0; i < 3; i++) b.box(0.48, 0.12, 0.07, TRACK, -W * 0.16 + i * 0.02, 0.9 + i * 0.16, rz + 0.06);
   b.cyl(0.04, 0.04, W * 0.6, 6, DARK, 0, 1.05, rz + 0.1, 0, 0, Math.PI / 2);
-  const body = group('body', mesh(b.build(), 'paint', 'hull'));
+  const body = group('body', mesh(bakeDust(b.build(), 0.25, 1.6, 0.85), 'paint', 'hull'));
   return body;
-}
-
-// -------------------------------------------------------------------------------------------------
-// Main battle tank
-// -------------------------------------------------------------------------------------------------
-
-export function buildTank(): THREE.Group {
-  const root = new THREE.Group();
-  const body = trackedChassis({ length: 7.6, width: 3.6, hullH: 1.0, wheels: 7, wheelR: 0.36, skirt: true, noseRake: 1.25 });
-  root.add(body);
-
-  // Turret ------------------------------------------------------------------------------------
-  const t = new GeoBuilder();
-  const outline: Pt[] = [
-    [2.15, 0.62], [1.2, 1.32], [-1.5, 1.32], [-2.3, 1.08], [-2.3, -1.08], [-1.5, -1.32], [1.2, -1.32], [2.15, -0.62],
-  ];
-  t.planY(outline, 0.82, PAINT, 0, 0, 0, 0, 0, 0, 0.2);
-  // Bustle rack: open frame with stowed gear.
-  for (const yy of [0.25, 0.55]) t.box(2.5, 0.05, 0.05, METAL, 0, yy, 2.95);
-  for (const xx of [-1.2, 1.2]) t.box(0.05, 0.05, 0.75, METAL, xx, 0.55, 2.6);
-  for (const xx of [-1.2, -0.4, 0.4, 1.2]) t.box(0.05, 0.4, 0.05, METAL, xx, 0.38, 2.95);
-  t.box(0.9, 0.35, 0.55, 0x5a5a48, -0.55, 0.32, 2.62);
-  t.box(0.6, 0.3, 0.5, 0x4c5040, 0.5, 0.3, 2.64);
-  t.cyl(0.18, 0.18, 1.2, 8, 0x6a6450, 0.2, 0.62, 2.7, 0, 0, Math.PI / 2);
-  // Side stowage bins
-  for (const s of [-1, 1]) t.box(0.3, 0.42, 1.3, PAINT_B, s * 1.42, 0.38, 1.0);
-  // Commander cupola & sight
-  t.cyl(0.36, 0.4, 0.32, 14, PAINT_B, 0.55, 0.97, 0.3);
-  t.cyl(0.3, 0.3, 0.06, 14, METAL, 0.55, 1.15, 0.3);
-  t.box(0.42, 0.4, 0.46, PAINT_B, 0.55, 1.02, -0.55);
-  t.box(0.3, 0.2, 0.05, 0x10161c, 0.55, 1.08, -0.79);
-  t.box(0.5, 0.28, 0.5, PAINT_B, -0.75, 0.94, -1.15);
-  t.box(0.4, 0.16, 0.05, 0x10161c, -0.75, 0.96, -1.41);
-  // Loader hatch + MG
-  t.cyl(0.3, 0.3, 0.07, 12, PAINT_C, -0.55, 0.86, 0.4);
-  t.cyl(0.035, 0.035, 1.1, 6, DARK, -0.55, 1.12, -0.25, Math.PI / 2);
-  t.box(0.14, 0.18, 0.4, DARK, -0.55, 1.1, 0.25);
-  // Smoke dischargers
-  for (const s of [-1, 1]) {
-    for (let i = 0; i < 4; i++) t.cyl(0.07, 0.07, 0.34, 8, DARK, s * (1.05 + i * 0.07), 0.62 + (i % 2) * 0.1, -1.05 + i * 0.12, 1.1, 0, s * 0.35);
-  }
-  // Antennas
-  t.cyl(0.015, 0.02, 2.4, 4, DARK, 1.0, 1.9, 1.8);
-  t.cyl(0.015, 0.02, 1.7, 4, DARK, -1.0, 1.55, 1.9);
-  const turretMesh = mesh(t.build(), 'paint', 'turretShell');
-  const m = new GeoBuilder();
-  for (const s of [-1, 1]) m.box(0.03, 0.3, 0.48, 0xffffff, s * 1.33, 0.4, -0.45);
-  const markMesh = mesh(m.build(), 'mark', 'mark');
-
-  // Gun ---------------------------------------------------------------------------------------
-  const g = new GeoBuilder();
-  g.box(1.05, 0.62, 0.55, PAINT_B, 0, 0, -0.05);
-  g.cyl(0.13, 0.13, 1.8, 14, PAINT_B, 0, 0, -1.2, Math.PI / 2);
-  g.cyl(0.1, 0.1, 3.3, 14, PAINT_C, 0, 0, -3.6, Math.PI / 2);
-  g.cyl(0.155, 0.155, 0.62, 14, PAINT_B, 0, 0, -3.0, Math.PI / 2);
-  g.cyl(0.115, 0.115, 0.28, 12, DARK, 0, 0, -5.28, Math.PI / 2);
-  g.cyl(0.035, 0.035, 0.7, 6, DARK, 0.32, 0.05, -0.55, Math.PI / 2);
-  const gunMesh = mesh(g.build(), 'paint', 'gunMesh');
-  const gun = group('gun', gunMesh, marker('muzzle', 0, 0, -5.45));
-  gun.position.set(0, 0.42, -2.05);
-  const turret = group('turret', turretMesh, markMesh, gun);
-  turret.position.set(0, 1.47, 0.35);
-  body.add(turret);
-  return root;
-}
-
-// -------------------------------------------------------------------------------------------------
-// IFV (tracked, autocannon + ATGM box)
-// -------------------------------------------------------------------------------------------------
-
-export function buildIfv(): THREE.Group {
-  const root = new THREE.Group();
-  const body = trackedChassis({ length: 6.8, width: 3.2, hullH: 1.35, wheels: 6, wheelR: 0.33, skirt: true, noseRake: 1.6 });
-  // Rear troop door and hull roof hatches
-  const hb = new GeoBuilder();
-  hb.box(1.3, 1.0, 0.06, PAINT_B, 0, 1.25, 3.42);
-  for (const s of [-1, 1]) hb.cyl(0.28, 0.28, 0.06, 10, PAINT_C, s * 0.6, 1.88, 2.1);
-  body.add(mesh(hb.build(), 'paint', 'hullExtra'));
-  root.add(body);
-  const t = new GeoBuilder();
-  const outline: Pt[] = [[1.1, 0.5], [0.6, 0.95], [-1.0, 0.95], [-1.25, 0.7], [-1.25, -0.7], [-1.0, -0.95], [0.6, -0.95], [1.1, -0.5]];
-  t.planY(outline, 0.6, PAINT);
-  t.box(0.5, 0.35, 1.1, PAINT_B, 1.2, 0.5, 0.1);
-  for (let i = 0; i < 2; i++) t.cyl(0.07, 0.07, 1.0, 8, DARK, 1.2 + (i - 0.5) * 0.18, 0.55, -0.2, Math.PI / 2);
-  t.box(0.36, 0.3, 0.36, PAINT_B, -0.45, 0.72, -0.2);
-  t.cyl(0.015, 0.02, 2.0, 4, DARK, -0.7, 1.5, 1.0);
-  const m = new GeoBuilder();
-  for (const s of [-1, 1]) m.box(0.03, 0.16, 0.8, 0xffffff, s * 0.97, 0.35, 0);
-  const g = new GeoBuilder();
-  g.box(0.5, 0.36, 0.5, PAINT_B, 0, 0, 0);
-  g.cyl(0.05, 0.05, 2.6, 8, DARK, 0, 0, -1.5, Math.PI / 2);
-  g.cyl(0.08, 0.08, 0.3, 8, DARK, 0, 0, -2.75, Math.PI / 2);
-  const gun = group('gun', mesh(g.build(), 'paint', 'gunMesh'), marker('muzzle', 0, 0, -2.95));
-  gun.position.set(0, 0.35, -1.05);
-  const turret = group('turret', mesh(t.build(), 'paint', 'turretShell'), mesh(m.build(), 'mark', 'mark'), gun);
-  turret.position.set(0, 1.85, -0.2);
-  body.add(turret);
-  return root;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -266,7 +156,7 @@ export function buildTruck(): THREE.Group {
   b.box(2.55, 0.15, 4.8, PAINT_B, 0, 1.2, 1.1);
   b.box(2.5, 1.9, 4.6, PAINT_C, 0, 2.2, 1.15);
   for (let i = 0; i < 5; i++) b.box(2.56, 0.05, 0.08, METAL, 0, 3.15, -1.0 + i * 1.08);
-  const body = group('body', mesh(b.build(), 'paint', 'hull'));
+  const body = group('body', mesh(bakeDust(b.build(), 0.25, 1.6, 0.85), 'paint', 'hull'));
   const m = new GeoBuilder();
   for (const s of [-1, 1]) m.box(0.03, 0.4, 0.6, 0xffffff, s * 1.27, 2.0, -2.55);
   body.add(mesh(m.build(), 'mark', 'mark'));
@@ -282,7 +172,7 @@ export function buildSam(): THREE.Group {
   b.box(2.6, 0.55, 0.05, 0x121820, 0, 2.35, -4.21);
   b.box(2.7, 0.3, 5.8, PAINT_B, 0, 1.3, 0.9);
   for (const s of [-1, 1]) b.box(0.25, 0.25, 0.25, METAL, s * 1.25, 1.2, 3.9);
-  const body = group('body', mesh(b.build(), 'paint', 'hull'));
+  const body = group('body', mesh(bakeDust(b.build(), 0.25, 1.6, 0.85), 'paint', 'hull'));
   const m = new GeoBuilder();
   for (const s of [-1, 1]) m.box(0.03, 0.45, 0.7, 0xffffff, s * 1.37, 2.1, -3.3);
   body.add(mesh(m.build(), 'mark', 'mark'));

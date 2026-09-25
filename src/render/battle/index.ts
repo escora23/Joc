@@ -1,12 +1,14 @@
 // FRONT ULTRA — ground war near active fronts (owner: battle).
 //
 // When the camera descends toward an active front, a local battlefield streams in, anchored on the contact line
-// under the view: real-relief terrain with a splatted war-torn ground (./terrain), roads, villages, forests
+// under the view: real-relief terrain with a splatted war-torn ground (./terrain) over a farmland patchwork shared by
+// the ground shader and the scatterers (./fields), roads, villages, woods, hedgerows and woodlots with two tree LODs
 // (./props), thousands of GPU-animated soldiers fighting by fire-and-maneuver (./infantry), tank platoons,
 // APCs, howitzer batteries, SPAAGs, attack helicopters, armored columns and trucks (./vehicles), and the whole
 // catalogue of combat effects (./effects, ./particles): muzzle flashes, tracers, shells on ballistic arcs,
 // explosions, craters, burning villages and wrecks with smoke columns, drifting battle haze and local lights.
-// Density follows the sim's FrontView (troops on each side, intensity) and the quality preset.
+// Density follows the sim's FrontView (troops on each side, intensity) and the quality preset; small-arms fire,
+// mortar and artillery impacts concentrate along the stretch of front the camera is looking at.
 // Above ~20 km the individual war is invisible, so ./far paints artillery flashes, fires and smoke columns
 // along every front in view up to BATTLE_LAYER_ALT_KM.
 //
@@ -25,7 +27,7 @@ import { hashString } from '../../shared/rng';
 import { UnitType, type FrontView, type LatLon } from '../../shared/types';
 import { Biome, getWorldAux } from '../../data';
 import { updateAir, type AirState } from './atmo';
-import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant } from './common';
+import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, separateTeamColors } from './common';
 import { createEffects, type Effects } from './effects';
 import { createFarLayer, gcKm, type FarLayer } from './far';
 import { FrontGeom } from './front';
@@ -126,6 +128,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   const rng = new FastRng(12345);
   const splat = new Float32Array(8);
   let shotAcc = 0, mortarAcc = 0, heavyAcc = 0, hazeAcc = 0;
+  /** Along-front coordinate of the camera's target point: effects concentrate where the player looks. */
+  let focusU = 0;
+  const focusUV = new THREE.Vector2();
   const surfaceAt = (la: number, lo: number) => ctx.globe.surfaceRadiusAt(la, lo);
 
   // ---------------------------------------------------------------------------------------------------------
@@ -353,7 +358,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     front.apply(uniforms);
     const view = ctx.sim.view;
     const pa = view.players[an.frontA], pb = view.players[an.frontB];
-    const colA = pa?.color ?? 0x3d7eff, colB = pb?.color ?? 0xe04040;
+    const colA = pa?.color ?? 0x3d7eff, colB = separateTeamColors(colA, pb?.color ?? 0xe04040);
     infantry.setColors(colA, colB);
     vehicles.setColors(colA, colB);
     const st = frontStats(an.frontA, an.frontB);
@@ -366,9 +371,12 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     uniforms.uBelt.value = 45 + 45 * st.intensity;
     patch.setWarScar(1);
     const conifer = tileBiome === Biome.Taiga || tileBiome === Biome.Tundra || tileBiome === Biome.Snow ? 0.9 : tileBiome === Biome.Rainforest || tileBiome === Biome.Savanna ? 0 : 0.35;
+    // Farmland grid: roughly aligned with the front (fields run toward it), a little off-axis.
+    const fieldAngle = Math.atan2(front.nz, front.nx) + ((an.seed % 1000) / 1000 - 0.5) * 0.6;
+    uniforms.uFieldRot.value.set(Math.cos(fieldAngle), Math.sin(fieldAngle));
     props = buildProps(patch, front, propsShared, {
-      treeBudget: Math.round(quality.battleInfantry * 0.55), buildingBudget: Math.round(300 + quality.battleVehicles * 1.2),
-      conifer, seed: an.seed,
+      treeBudget: Math.round(quality.battleInfantry * 1.1), buildingBudget: Math.round(300 + quality.battleVehicles * 1.2),
+      conifer, seed: an.seed, fieldAngle,
     });
     near.add(props.group);
     yield;
@@ -447,7 +455,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     while (shotAcc >= 1 && guard++ < 60) {
       shotAcc -= 1;
       const team = rng.chance(0.5) ? 0 : 1;
-      if (!infantry.pickShooter(team, rng, now, tmp)) continue;
+      if (!infantry.pickShooter(team, rng, now, tmp, focusU)) continue;
       const fx = team === 0 ? front.nx : -front.nx, fz = team === 0 ? front.nz : -front.nz;
       const gy = heightAt(tmp.x, tmp.z);
       const d = Math.hypot(tmp.x - camL.x, gy - camL.y, tmp.z - camL.z);
@@ -457,7 +465,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       const t0 = now + rng.range(0, dt);
       if (team === 0) effects.muzzle(mx, my, mz, fx, fz, 0.7 * ex, 1, 0.62, 0.3, t0);
       else effects.muzzle(mx, my, mz, fx, fz, 0.7 * ex, 1, 0.8, 0.45, t0);
-      if (rng.chance(0.22) && infantry.pickTarget(1 - team, rng, tmp2)) {
+      if (rng.chance(0.22) && infantry.pickTarget(1 - team, rng, tmp2, focusU)) {
         const ty = heightAt(tmp2.x, tmp2.z) + rng.range(0.3, 2.5);
         if (team === 0) effects.tracer(mx, my, mz, tmp2.x + rng.range(-6, 6), ty, tmp2.z + rng.range(-6, 6), 880, 1, 0.35, 0.12, 0.09, t0);
         else effects.tracer(mx, my, mz, tmp2.x + rng.range(-6, 6), ty, tmp2.z + rng.range(-6, 6), 880, 0.45, 1, 0.3, 0.09, t0);
@@ -468,7 +476,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     while (mortarAcc >= 1) {
       mortarAcc -= 1;
       const team = rng.int(2);
-      if (!infantry.pickTarget(team, rng, tmp)) continue;
+      if (!infantry.pickTarget(team, rng, tmp, focusU)) continue;
       effects.explosion(tmp.x + rng.range(-25, 25), tmp.z + rng.range(-25, 25), rng.chance(0.75) ? 0 : 1, now + rng.range(0, dt));
     }
     // Heavy off-map artillery: shells come in on steep arcs from far behind each line.
@@ -476,25 +484,28 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     while (heavyAcc >= 1) {
       heavyAcc -= 1;
       const team = rng.int(2); // side being shelled
-      const u = rng.gauss() * 0.35 * front.halfLen;
+      const u = rng.chance(0.6) ? focusU + rng.gauss() * 450 : rng.gauss() * 0.35 * front.halfLen;
       const v = rng.range(-20, 350) * (team === 0 ? -1 : 1);
       front.toXZ(u, v, tmp);
       if (isWater(tmp.x, tmp.z) && rng.chance(0.7)) continue;
-      front.toXZ(u + rng.range(-800, 800), (team === 0 ? 1 : -1) * 7000, tmp2);
+      // Only the last stretch of the arc is drawn: a faint glowing shell dropping in from far behind the enemy.
       const ty = heightAt(tmp.x, tmp.z);
-      const flight = rng.range(2.5, 3.5);
+      const flight = rng.range(1.2, 1.8);
       const g = -9.81 * 6;
-      const sy = ty + 600;
+      const back = rng.range(1400, 2200);
+      const lat = rng.range(-300, 300);
+      front.toXZ(u + lat, (team === 0 ? 1 : -1) * back + v, tmp2);
+      const sy = ty + rng.range(350, 500);
       const vx = (tmp.x - tmp2.x) / flight, vz = (tmp.z - tmp2.z) / flight;
       const vy = (ty - sy - 0.5 * g * flight * flight) / flight;
-      effects.add.emit(tmp2.x, sy, tmp2.z, vx, vy, vz, flight, 0.12, 0.03, 0, g, 1, 0.6, 0.3, 1.2, PK.Streak, 0, 0, now);
+      effects.add.emit(tmp2.x, sy, tmp2.z, vx, vy, vz, flight, 0.1, 0.025, 0, g, 1, 0.55, 0.25, 0.6, PK.Streak, 0, 0, now);
       effects.schedule(now + flight, tmp.x, tmp.z, rng.chance(0.15) ? 3 : 2);
     }
     // Drifting battle haze along no-man's-land.
     hazeAcc += dt * (1.2 + 2.4 * act);
     while (hazeAcc >= 1) {
       hazeAcc -= 1;
-      front.toXZ(rng.gauss() * 0.4 * front.halfLen, rng.gauss() * 220, tmp);
+      front.toXZ(rng.chance(0.5) ? focusU + rng.gauss() * 700 : rng.gauss() * 0.4 * front.halfLen, rng.gauss() * 220, tmp);
       if (Math.hypot(tmp.x, tmp.z) > 7000) continue;
       effects.haze(tmp.x, tmp.z, rng.range(60, 140), now);
     }
@@ -525,10 +536,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     // Battle smoke thickens the air a little around the fighting.
     uniforms.uSmoke.value.set(front.cx, front.cz, 5500, 0.00002 + 0.00005 * activity);
     // Units grow on screen from altitude so the armies stay readable.
-    uniforms.uUnitScale.value.set(170, 3 + 3 * smoothstep(2, 14, altKm), 700, 3000);
+    uniforms.uUnitScale.value.set(170, 3 + 3 * smoothstep(2, 14, altKm), 900, 3200);
   }
 
-  let shadowLog = 0;
   const focusW = new THREE.Vector3();
   const focusL = new THREE.Vector3();
   const sunL = new THREE.Vector3();
@@ -546,13 +556,6 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const extent = Math.min(4200, Math.max(700, d * 2.6));
     sunL.copy(uniforms.uSunDir.value);
     shadow.render(ctx.renderer, ctx.scene, near, focusL, sunL, extent);
-    if (ctx.app.isShot && (shadowLog++ % 60) === 0) {
-      const si = uniforms.uShadowInfo.value;
-      const pc = focusL.clone().applyMatrix4(uniforms.uShadowMat.value);
-      const cam = shadow.camera;
-      console.info(`[battle] shadow focus clip=${pc.x.toFixed(3)},${pc.y.toFixed(3)},${pc.z.toFixed(3)} camPos=${cam.position.x.toFixed(0)},${cam.position.y.toFixed(0)},${cam.position.z.toFixed(0)} parent=${cam.parent?.name} proj00=${cam.projectionMatrix.elements[0].toExponential(2)} proj10=${cam.projectionMatrix.elements[10].toExponential(2)} proj14=${cam.projectionMatrix.elements[14].toExponential(2)}`);
-      console.info(`[battle] shadow on=${si.x} texel=${si.y.toFixed(5)} bias=${si.z.toExponential(2)} extent=${extent.toFixed(0)} sun=${sunL.x.toFixed(2)},${sunL.y.toFixed(2)},${sunL.z.toFixed(2)} focus=${focusL.x.toFixed(0)},${focusL.y.toFixed(0)},${focusL.z.toFixed(0)} ${shadowStats()}`);
-    }
   }
 
   function updateFar(dt: number): void {
@@ -743,7 +746,16 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       near.updateMatrixWorld();
       invNear.copy(near.matrixWorld).invert();
       camL.copy(ctx.camera.position).applyMatrix4(invNear);
+      // A camera this low sees its horizon well inside the patch: the rim (past the horizon) stays solid.
+      // (The coarsest globe mesh sags well below the true sphere between its vertices: there the rim stays solid so no
+      // sky shows through its dissolve at grazing angles.)
+      uniforms.uRimK.value = quality.globeDetail <= 0 ? 0 : smoothstep(250, 900, camL.y - heightAt(camL.x, camL.z));
+      latLonToVec3(camState.lat, camState.lon, 1, focusW);
+      focusL.copy(focusW).applyMatrix4(invNear);
+      front.coords(focusL.x, focusL.z, focusUV);
+      focusU = Math.max(-front.halfLen * 0.8, Math.min(front.halfLen * 0.8, focusUV.x));
       updateLighting(alt);
+      props?.updateLod(camL.x, camL.z);
       renderShadows();
       // The fight follows the sim: intensity and who is winning.
       if (frame.frame % 30 === 0) {

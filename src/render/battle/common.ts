@@ -28,9 +28,10 @@ export const FINE_SIZE_M = 5120;
 /** Coarse (outer ring) terrain grid. */
 export const COARSE_RES = 201;
 export const COARSE_SIZE_M = 16000;
-/** Outermost ring (400 m cells) that carries the battlefield's ground out to ~36 km and melts into the globe. */
-export const OUTER_RES = 181;
-export const OUTER_SIZE_M = 72000;
+/** Outermost ring (640 m cells, aligned with the coarse grid) that carries the battlefield's ground out to ~56 km (past the horizon of a low camera)
+ *  and melts into the globe. */
+export const OUTER_RES = 176;
+export const OUTER_SIZE_M = 112000;
 
 export interface BattleUniforms {
   [k: string]: THREE.IUniform;
@@ -69,6 +70,10 @@ export interface BattleUniforms {
   uShadowInfo: THREE.IUniform<THREE.Vector4>;
   /** 1: fade sprites where they cut into the battlefield ground (near layer), 0: off (far layer). */
   uGroundSoft: THREE.IUniform<number>;
+  /** cos, sin of the farmland grid rotation (./fields). */
+  uFieldRot: THREE.IUniform<THREE.Vector2>;
+  /** 0..1 strength of the outer rim dissolve (0 while the camera is so low that the rim is beyond the horizon). */
+  uRimK: THREE.IUniform<number>;
 }
 
 export function createBattleUniforms(): BattleUniforms {
@@ -116,6 +121,8 @@ export function createBattleUniforms(): BattleUniforms {
     uShadowMat: { value: new THREE.Matrix4() },
     uShadowInfo: { value: new THREE.Vector4(0, 1 / 2048, 0.0004, 0) },
     uGroundSoft: { value: 1 },
+    uFieldRot: { value: new THREE.Vector2(1, 0) },
+    uRimK: { value: 1 },
   };
 }
 
@@ -206,7 +213,7 @@ vec4 pullMV(vec4 mv) {
   float d = length(mv.xyz);
   // d is in world units; the model matrix scales meters -> units, so convert to meters.
   float dm = d * ${R_M.toFixed(1)};
-  float pullM = min(dm * 0.5, 150.0) + dm * 0.02;
+  float pullM = min(dm * 0.5, 150.0) + dm * 0.2;
   mv.xyz *= (dm - pullM) / max(dm, 1e-3);
   return mv;
 }
@@ -462,4 +469,37 @@ export function noise1(x: number, seed = 0): number {
   };
   const u = f * f * (3 - 2 * f);
   return h(i) * (1 - u) + h(i + 1) * u;
+}
+
+/**
+ * Two nations' colors as the battlefield shows them: if they are too alike to tell the armies apart (two reds), the
+ * second one is pushed around the hue wheel (and in lightness) until they separate. 0xRRGGBB in and out.
+ */
+export function separateTeamColors(a: number, b: number): number {
+  const rgb = (c: number) => [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255];
+  const toHsl = ([r, g, bl]: number[]) => {
+    const mx = Math.max(r, g, bl), mn = Math.min(r, g, bl), l = (mx + mn) / 2;
+    if (mx === mn) return [0, 0, l];
+    const d = mx - mn;
+    const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    const h = mx === r ? (g - bl) / d + (g < bl ? 6 : 0) : mx === g ? (bl - r) / d + 2 : (r - g) / d + 4;
+    return [h / 6, s, l];
+  };
+  const [ha, sa, la] = toHsl(rgb(a));
+  let [hb, sb, lb] = toHsl(rgb(b));
+  const hueD = (x: number, y: number) => Math.min(Math.abs(x - y), 1 - Math.abs(x - y));
+  const dist = () => hueD(ha, hb) * 2 * Math.min(sa, sb) + Math.abs(la - lb) * 0.8 + Math.abs(sa - sb) * 0.4;
+  if (dist() >= 0.3) return b;
+  // Rotate b's hue away from a (toward the far side), keep it saturated.
+  const dir = ((hb - ha + 1.5) % 1) - 0.5 >= 0 ? 1 : -1;
+  for (let k = 0; k < 12 && dist() < 0.3; k++) hb = (hb + dir * 0.04 + 1) % 1;
+  sb = Math.max(sb, 0.55);
+  if (dist() < 0.3) lb = la > 0.5 ? Math.max(0.2, la - 0.35) : Math.min(0.8, la + 0.35);
+  const f = (n: number) => {
+    const k = (n + hb * 12) % 12;
+    const aa = sb * Math.min(lb, 1 - lb);
+    return lb - aa * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  const to = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255);
+  return (to(f(0)) << 16) | (to(f(8)) << 8) | to(f(4));
 }

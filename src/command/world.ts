@@ -10,7 +10,8 @@ import type { Rng } from '../shared/rng';
 import type { Effects } from './fx/effects';
 import type { Ground } from './env/ground';
 import type { CmdMaterials, Team } from './models/materials';
-import { buildAa, buildBattery, buildIfv, buildSam, buildTank, buildTruck } from './models/vehicles';
+import { buildAa, buildBattery, buildSam, buildTruck } from './models/vehicles';
+import { buildArmorIfv, buildArmorTank } from './models/armor';
 import { buildBombGeometry, buildJet, buildMissileGeometry } from './models/aircraft';
 import { buildDestroyer, buildPatrolBoat } from './models/ships';
 import { soldierGeometry } from './models/props';
@@ -158,6 +159,11 @@ const TMP3 = new THREE.Vector3();
 const FWD = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
+/** Effect size multiplier for fires and damage smoke on big hulls. */
+function fxSize(kind: EntKind): number {
+  return kind === 'ship' ? 3 : kind === 'boat' ? 1.8 : kind === 'battery' ? 1.5 : 1;
+}
+
 export function forwardOf(yaw: number, out: THREE.Vector3): THREE.Vector3 {
   return out.set(-Math.sin(yaw), 0, -Math.cos(yaw));
 }
@@ -207,8 +213,11 @@ export class World {
     public rng: Rng,
   ) {
     this.group.name = 'cmd-world';
-    this.templates.set('tank', buildTank());
-    this.templates.set('ifv', buildIfv());
+    // Two design families: the player's side fields western armor, the enemy eastern armor.
+    this.templates.set('tank:0', buildArmorTank('west'));
+    this.templates.set('tank:1', buildArmorTank('east'));
+    this.templates.set('ifv:0', buildArmorIfv('west'));
+    this.templates.set('ifv:1', buildArmorIfv('east'));
     this.templates.set('aa', buildAa());
     this.templates.set('sam', buildSam());
     this.templates.set('truck', buildTruck());
@@ -281,7 +290,8 @@ export class World {
   // Rigs
   // ---------------------------------------------------------------------------------------------
   makeRig(kind: EntKind, team: Team): Rig {
-    const tpl = this.templates.get(kind === 'at' || kind === 'soldier' ? 'truck' : kind)!;
+    const k = kind === 'at' || kind === 'soldier' ? 'truck' : kind;
+    const tpl = (this.templates.get(`${k}:${team}`) ?? this.templates.get(k))!;
     const root = tpl.clone(true);
     const meshes: THREE.Mesh[] = [];
     const fam = kind === 'jet' ? this.mats.jetPaint : kind === 'ship' || kind === 'boat' ? this.mats.shipPaint : this.mats.paint;
@@ -384,8 +394,9 @@ export class World {
 
   setTeamTints(friendly: number, enemy: number): void {
     const f = new THREE.Color(friendly), en = new THREE.Color(enemy);
-    this.friendlyTint.setRGB(0.52, 0.58, 0.42).lerp(f, 0.25);
-    this.enemyTint.setRGB(0.66, 0.6, 0.46).lerp(en, 0.3);
+    // Uniform shades (multiplying the figures' vertex colors): olive for ours, khaki for theirs, a hint of nation color.
+    this.friendlyTint.setRGB(0.36, 0.4, 0.26).lerp(f, 0.12);
+    this.enemyTint.setRGB(0.55, 0.47, 0.32).lerp(en, 0.15);
   }
 
   /** Remove every entity / projectile (session end). */
@@ -888,7 +899,11 @@ export class World {
         if (e.rig && e.hp < e.maxHp * 0.5 && ENT_DEFS[e.kind].vehicle) {
           this.center(e, TMP);
           TMP.y += e.height * 0.4;
-          fx.damageSmoke(TMP, dt, 1 - e.hp / e.maxHp);
+          fx.damageSmoke(TMP, dt, 1 - e.hp / e.maxHp, fxSize(e.kind));
+          // Warships burn visibly when badly hit.
+          if (ENT_DEFS[e.kind].naval && e.hp < e.maxHp * 0.35) {
+            fx.shipFire(TMP, 1 - e.hp / e.maxHp, dt, fxSize(e.kind) * 0.7);
+          }
         }
         if (e.threatT > 0) e.threatT -= dt;
         continue;
@@ -923,8 +938,9 @@ export class World {
         e.rig.root.rotation.x = -k * 0.08;
         if (e.burnT > 0) {
           e.burnT -= dt;
-          fx.burn(TMP.set(e.pos.x, e.rig.root.position.y + 8, e.pos.z), Math.min(1, e.burnT / 20) * 1.4, dt);
-          fx.burn(TMP.set(e.pos.x + Math.sin(e.yaw) * 20, e.rig.root.position.y + 6, e.pos.z + Math.cos(e.yaw) * 20), Math.min(1, e.burnT / 20), dt);
+          const z = fxSize(e.kind);
+          fx.shipFire(TMP.set(e.pos.x, e.rig.root.position.y + 8, e.pos.z), Math.min(1, e.burnT / 20), dt, z * 0.7);
+          fx.burn(TMP.set(e.pos.x + Math.sin(e.yaw) * 20, e.rig.root.position.y + 6, e.pos.z + Math.cos(e.yaw) * 20), Math.min(1, e.burnT / 20), dt, z * 0.7);
         }
         if (k >= 1) e.rig.root.visible = false;
         continue;

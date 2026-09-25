@@ -22,8 +22,14 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: 
 }
 
 const CARDINAL = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+/** Unit kinds whose Spanish name is feminine (fragata, patrullera, batería, infantería). */
+const FEMININE = new Set<EntKind>(['ship', 'boat', 'battery', 'soldier']);
 const TMP = new THREE.Vector3();
 const TMP2 = new THREE.Vector3();
+const LAD_F = new THREE.Vector3();
+const LAD_R = new THREE.Vector3();
+const LAD_D = new THREE.Vector3();
+const LAD_P = new THREE.Vector3();
 
 interface FeedEntry {
   el: HTMLElement;
@@ -253,7 +259,8 @@ export class CommandHud {
   }
 
   killConfirm(kind: EntKind, troops: number): void {
-    this.killTxt.innerHTML = `${t(`command.type.${kind}`)} ${t('command.kill')}<b>+${formatNumber(troops)}</b>`;
+    // Spanish agreement: the feminine unit names take DESTRUIDA.
+    this.killTxt.innerHTML = `${t(`command.type.${kind}`)} ${t(FEMININE.has(kind) ? 'command.killF' : 'command.kill')}<b>+${formatNumber(troops)}</b>`;
     this.killTxt.classList.add('show');
     this.killTxtT = this.time + 1.8;
   }
@@ -477,16 +484,35 @@ export class CommandHud {
       if (!e.alive || e.player) continue;
       const d = camera.position.distanceTo(e.pos);
       const inf = e.kind === 'soldier' || e.kind === 'at';
-      if (d > (inf ? (e.kind === 'at' ? 480 : 300) : maxD)) continue;
-      if (e.team === 0 && d > (this.kind === 'tank' ? 900 : maxD * 0.5)) continue;
+      // Infantry only gets a marker up close (it would carpet the screen otherwise); friendlies are quieter.
+      if (d > (inf ? (e.kind === 'at' ? 260 : 190) : maxD)) continue;
+      if (e.team === 0 && d > (this.kind === 'tank' ? 700 : maxD * 0.5)) continue;
+      if (e.team === 0 && inf && d > 90) continue;
       TMP.copy(e.pos);
-      TMP.y += ENT_DEFS[e.kind].air ? 12 : e.height + (inf ? 1.2 : 3.5);
+      TMP.y += ENT_DEFS[e.kind].air ? 12 : e.height + (inf ? 1.0 : 3.2);
       TMP2.copy(TMP).project(camera);
       if (TMP2.z > 1 || TMP2.z < -1) continue;
       const x = (TMP2.x * 0.5 + 0.5) * W, y = (-TMP2.y * 0.5 + 0.5) * H;
       if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
       if (e.team === 1) {
-        const sz = inf ? 4 : 7;
+        if (inf) {
+          // Small diamond; AT teams (a real threat to armor) are brighter and tagged.
+          const sz = e.kind === 'at' ? 3.6 : 2.6;
+          g.fillStyle = e.kind === 'at' ? 'rgba(255,90,60,0.95)' : 'rgba(255,80,60,0.75)';
+          g.beginPath();
+          g.moveTo(x, y - sz);
+          g.lineTo(x + sz, y);
+          g.lineTo(x, y + sz);
+          g.lineTo(x - sz, y);
+          g.closePath();
+          g.fill();
+          if (e.kind === 'at' && d < 170) {
+            g.fillStyle = 'rgba(255,150,140,0.9)';
+            g.fillText('AT', x, y - 6);
+          }
+          continue;
+        }
+        const sz = d < 250 ? 7 : d < 700 ? 6 : 5;
         g.fillStyle = 'rgba(255,70,55,0.95)';
         g.strokeStyle = 'rgba(40,0,0,0.8)';
         g.lineWidth = 1.5;
@@ -497,11 +523,11 @@ export class CommandHud {
         g.closePath();
         g.stroke();
         g.fill();
-        const near = Math.abs(x - cx) < 170 && Math.abs(y - cy) < 120;
-        if (!inf && (near || d < (this.kind === 'tank' ? 700 : this.kind === 'jet' ? 3000 : 5000))) {
+        const near = Math.abs(x - cx) < 150 && Math.abs(y - cy) < 110;
+        if (near || d < (this.kind === 'tank' ? 420 : this.kind === 'jet' ? 2500 : 4000)) {
           const txt = `${t(`command.type.${e.kind}`)}  ${d >= 1000 ? (d / 1000).toFixed(1) + ' km' : Math.round(d) + ' m'}`;
           const wTxt = g.measureText(txt).width;
-          const score = Math.hypot(x - cx, y - cy) + d * 0.02;
+          const score = Math.hypot(x - cx, y - cy) + d * 0.05;
           if (this.labels.length < this.labelPool.length) {
             const L = this.labelPool[this.labels.length];
             L.x = x;
@@ -511,12 +537,9 @@ export class CommandHud {
             L.score = score;
             this.labels.push(L);
           }
-        } else if (e.kind === 'at') {
-          g.fillStyle = 'rgba(255,150,140,0.95)';
-          g.fillText('AT', x, y - 8);
         }
       } else {
-        const sz = inf ? 3 : 5;
+        const sz = inf ? 2.5 : 5;
         g.fillStyle = 'rgba(80,190,255,0.85)';
         g.beginPath();
         g.moveTo(x, y + sz);
@@ -529,7 +552,7 @@ export class CommandHud {
     // Labels: closest to the crosshair first, skip any that would overlap a placed one.
     this.labels.sort(byScore);
     let placed = 0;
-    for (let i = 0; i < this.labels.length && placed < 5; i++) {
+    for (let i = 0; i < this.labels.length && placed < 3; i++) {
       const L = this.labels[i];
       let clash = false;
       for (let j = 0; j < placed; j++) {
@@ -688,10 +711,11 @@ export class CommandHud {
     g.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, s.reload));
     g.stroke();
     if (s.reload < 1) {
+      // Beside the ring (not under it): the target usually sits just below the crosshair.
       g.font = '700 10px "Barlow Condensed", sans-serif';
-      g.textAlign = 'center';
+      g.textAlign = 'left';
       g.fillStyle = 'rgba(255,181,61,0.95)';
-      g.fillText(t('command.reload'), cx, cy + R + 16);
+      g.fillText(t('command.reload'), cx + R + 8, cy - R + 10);
     }
     // Gun indicator (where the shell will actually land)
     if (s.gun.visible) {
@@ -728,48 +752,61 @@ export class CommandHud {
     g.moveTo(cx + 2, cy);
     g.arc(cx, cy, 2, 0, Math.PI * 2);
     g.stroke();
-    // Pitch ladder around the nose marker, rotated with roll.
-    const pxPerRad = this.h / ((camera.fov * Math.PI) / 180);
-    const ox = s.gun.visible ? s.gun.x : cx, oy = s.gun.visible ? s.gun.y : cy;
+    // Pitch ladder, world-stabilized: each rung is the projection of a real direction at that elevation along the
+    // view heading, so the horizon bar lies on the actual horizon in this third-person view.
+    camera.getWorldDirection(LAD_F);
+    LAD_F.y = 0;
+    if (LAD_F.lengthSq() < 1e-6) LAD_F.set(0, 0, -1);
+    LAD_F.normalize();
+    LAD_R.set(-LAD_F.z, 0, LAD_F.x);
     g.save();
     g.beginPath();
-    g.rect(cx - 200, cy - 170, 400, 340);
+    g.rect(cx - 230, cy - 190, 460, 380);
     g.clip();
-    g.translate(ox, oy);
-    g.rotate(-s.roll);
     g.font = '600 11px "JetBrains Mono", monospace';
-    g.lineWidth = 1.3;
-    g.strokeStyle = dim;
-    g.fillStyle = dim;
-    for (let p = -80; p <= 80; p += 10) {
-      if (p === 0) continue;
-      const y = -((p * Math.PI) / 180 - s.pitch) * pxPerRad;
-      if (Math.abs(y) > 260) continue;
-      g.setLineDash(p < 0 ? [6, 5] : []);
-      g.beginPath();
-      g.moveTo(-95, y);
-      g.lineTo(-40, y);
-      g.lineTo(-40, y + (p > 0 ? 7 : -7));
-      g.moveTo(95, y);
-      g.lineTo(40, y);
-      g.lineTo(40, y + (p > 0 ? 7 : -7));
-      g.stroke();
-      g.setLineDash([]);
-      g.textAlign = 'right';
-      g.fillText(String(Math.abs(p)), -116, y + 4);
-      g.textAlign = 'left';
-      g.fillText(String(Math.abs(p)), 116, y + 4);
+    for (let p = -60; p <= 60; p += 10) {
+      const pr = (p * Math.PI) / 180;
+      LAD_D.copy(LAD_F).multiplyScalar(Math.cos(pr));
+      LAD_D.y = Math.sin(pr);
+      LAD_P.copy(camera.position).addScaledVector(LAD_D, 1000).project(camera);
+      if (LAD_P.z > 1 || LAD_P.z < -1) continue;
+      const x = (LAD_P.x * 0.5 + 0.5) * this.w, y = (-LAD_P.y * 0.5 + 0.5) * this.h;
+      if (Math.abs(x - cx) > 260 || Math.abs(y - cy) > 230) continue;
+      LAD_P.copy(camera.position).addScaledVector(LAD_D, 1000).addScaledVector(LAD_R, 20).project(camera);
+      const ang = Math.atan2(-LAD_P.y * 0.5 * this.h - (y - this.h * 0.5), (LAD_P.x * 0.5 + 0.5) * this.w - x);
+      g.save();
+      g.translate(x, y);
+      g.rotate(ang);
+      if (p === 0) {
+        g.strokeStyle = col;
+        g.lineWidth = 1.6;
+        g.beginPath();
+        g.moveTo(-210, 0);
+        g.lineTo(-34, 0);
+        g.moveTo(34, 0);
+        g.lineTo(210, 0);
+        g.stroke();
+      } else {
+        g.strokeStyle = dim;
+        g.fillStyle = dim;
+        g.lineWidth = 1.3;
+        g.setLineDash(p < 0 ? [6, 5] : []);
+        g.beginPath();
+        g.moveTo(-88, 0);
+        g.lineTo(-38, 0);
+        g.lineTo(-38, p > 0 ? 7 : -7);
+        g.moveTo(88, 0);
+        g.lineTo(38, 0);
+        g.lineTo(38, p > 0 ? 7 : -7);
+        g.stroke();
+        g.setLineDash([]);
+        g.textAlign = 'right';
+        g.fillText(String(Math.abs(p)), -94, 4);
+        g.textAlign = 'left';
+        g.fillText(String(Math.abs(p)), 94, 4);
+      }
+      g.restore();
     }
-    // Horizon line
-    const hy = s.pitch * pxPerRad;
-    g.strokeStyle = col;
-    g.lineWidth = 1.6;
-    g.beginPath();
-    g.moveTo(-190, hy);
-    g.lineTo(-30, hy);
-    g.moveTo(30, hy);
-    g.lineTo(190, hy);
-    g.stroke();
     g.restore();
     // Nose marker (W)
     if (s.gun.visible) {

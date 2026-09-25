@@ -1,15 +1,18 @@
 // FRONT ULTRA — ground battle shots (owner: battle).
-//   front        low, dramatic view across a large battle at golden hour (explosions, tracers, burning village)
-//   front-wide   higher view over the whole local front line: both armies, artillery, smoke columns
-//   front-high   ~250 km over the front: the battle layer fading in (artillery flashes, fires, smoke along the line)
+//   front        low, dramatic view across a large battle at golden hour (explosions, tracers, burning hamlet)
+//   front-wide   higher view over the whole local front line: both armies, armor, artillery and smoke columns
+//   front-high   ~250 km over the front: artillery flashes, fires and smoke along the line (battle layer fading in)
 //   front-night  the same battle after dusk: tracers, fires and muzzle flashes light the field
-// A fixed two-nation theatre is staged over Champagne (whatever the AI did before), the human attacks, and the
-// battle is anchored on the resulting contact line. Lighting is set to the requested sun elevation there.
-// Extra params: &elev=<deg> sun elevation, &alt=<km>, &tilt=<rad>, &hdg=<rad offset>, &lat= &lon= theatre centre,
-// &warm=<s> battle time simulated before capture.
+//   front-auto   unstaged: the camera descends over the hottest front of a running war (the real streaming path)
+// A fixed two-nation theatre is staged over Champagne (whatever the AI did before): the human holds the land behind
+// the contact line, the nearest AI nation the land ahead, the advance heading is chosen relative to the sun so the
+// light is always dramatic, and the battle is anchored on the contact line.
+// Extra params: &elev=<deg> sun elevation, &alt=<km>, &tilt=<rad>, &hdg=<rad> camera heading offset, &adv=<rad>
+// advance heading from the sun azimuth, &shift=<km> target shift, &lat= &lon= theatre centre, &warm=<s> battle time
+// simulated before capture, &bsplat=1|2 ground land-cover debug view.
 
 import { DAY_LENGTH_SEC, HUMAN_ID } from '../../shared/constants';
-import { latLonToTile, latLonToVec3, sunDirection, tileXYToLatLon, wrapDX } from '../../shared/geo';
+import { latLonToTile, latLonToVec3, sunDirection, tileXYToLatLon } from '../../shared/geo';
 import { registerShot, type ShotContext } from '../../shared/shots';
 import type { FrontView, GameConfig } from '../../shared/types';
 import { battleDebug } from './index';
@@ -40,151 +43,173 @@ function worldTimeForSunElevation(lat: number, lon: number, elevDeg: number, eve
 interface Staged {
   lat: number;
   lon: number;
-  f: FrontView | null;
+  enemy: number;
 }
 
-async function stageTheatre(s: ShotContext): Promise<Staged> {
+/**
+ * A fixed two-nation theatre over Champagne (whatever the AI did before): the human holds the land behind the
+ * contact line, the enemy the land ahead of it along the advance heading (compass, radians), and the human
+ * attacks across it.
+ */
+async function stageTheatre(s: ShotContext, advHeading: number): Promise<Staged> {
   const { ctx, params } = s;
   const cLat = Number(params.get('lat') ?? 48.95);
   const cLon = Number(params.get('lon') ?? 4.35);
-  console.info('[battle] staging: starting scripted game');
   await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 300), speed: 1, headStart: 10 });
-  console.info('[battle] staging: game started');
   const view = ctx.sim.view;
   const T = (la: number, lo: number) => latLonToTile(la, lo);
-  const enemy = view.playerList.find((p) => p.alive && p.kind === 'nation' && p.id !== HUMAN_ID)?.id ?? 2;
-  // Human holds the south-west, the enemy the north-east; the enemy disc (conquered last) has its edge exactly on
-  // the theatre centre, so the contact line runs NW-SE through it.
-  const k = 0.225 / Math.SQRT2; // degrees per tile along the diagonal
+  // The enemy: the living AI nation whose capital is closest to the theatre (a plausible neighbour).
+  let enemy = 2, bestD = Infinity;
+  for (const p of view.playerList) {
+    if (!p.alive || p.kind !== 'nation' || p.id === HUMAN_ID || p.capitalTile < 0) continue;
+    const q = tileXYToLatLon((p.capitalTile % 1600) + 0.5, Math.floor(p.capitalTile / 1600) + 0.5);
+    const d = Math.hypot(q.lat - cLat, (q.lon - cLon) * Math.cos((cLat * Math.PI) / 180));
+    if (d < bestD) {
+      bestD = d;
+      enemy = p.id;
+    }
+  }
   const cosL = Math.cos((cLat * Math.PI) / 180);
-  ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: T(cLat - 16 * k, cLon - (16 * k) / cosL * cosL), radius: 20 });
-  ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: T(cLat + 20 * k, cLon + 20 * k), radius: 20 });
+  const dLat = Math.cos(advHeading), dLon = Math.sin(advHeading) / cosL;
+  const deg = 0.225;
+  ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: T(cLat - dLat * 18 * deg, cLon - dLon * 18 * deg), radius: 19 });
+  ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: T(cLat + dLat * 19 * deg, cLon + dLon * 19 * deg), radius: 19 });
   ctx.sim.debug({ type: 'addTroops', playerId: HUMAN_ID, amount: 900_000 });
   ctx.sim.debug({ type: 'addTroops', playerId: enemy, amount: 700_000 });
   ctx.sim.setSpeed(1);
-  const off = ctx.bus.on('message', (e) => console.info(`[battle] sim message ${e.key} for ${e.playerId}`));
-  await s.waitFrames(4);
-  let f: FrontView | null = null;
-  console.info('[battle] staging: waiting for the front');
-  // The contact line between the two staged nations closest to the theatre centre.
-  const cx = ((cLon + 180) / 360) * 1600, cy = ((90 - cLat) / 180) * 800;
-  let bd = Infinity, bx = 0, by = 0;
-  for (let i = 0; i < 24 && bd > 2.5; i++) {
-    // (Re)issue the attack until the sim has registered the new border and the front record appears.
-    if (i % 6 === 0) ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.5, tile: T(cLat + 0.3, cLon + 0.3) });
-    await s.waitFrames(2);
-    for (const q of view.fronts) {
-      if (!((q.a === HUMAN_ID && q.b === enemy) || (q.a === enemy && q.b === HUMAN_ID))) continue;
-      for (let k = 0; k < q.samples.length; k += 2) {
-        const dx = wrapDX(cx, q.samples[k]), dy = q.samples[k + 1] - cy;
-        const d = Math.hypot(dx, dy);
-        if (d < bd) {
-          bd = d;
-          bx = q.samples[k];
-          by = q.samples[k + 1];
-          f = q;
-        }
-      }
-    }
+  await s.waitFrames(2);
+  // Attack across the line and freeze the sim as soon as the contact line shows up as a front (the globe's hot front
+  // and the far layer read it), re-issuing the attack if the first wave dies out.
+  const hasFront = () => view.fronts.some((f) => (f.a === HUMAN_ID && f.b === enemy) || (f.a === enemy && f.b === HUMAN_ID));
+  for (let i = 0; i < 48 && !hasFront(); i++) {
+    if (i % 8 === 0) ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.6, tile: T(cLat + dLat * 0.3, cLon + dLon * 0.3) });
+    await s.waitFrames(1);
   }
-  off();
-  console.info(`[battle] fronts: ${view.fronts.map((q) => `${q.a}->${q.b}@${q.x.toFixed(0)},${q.y.toFixed(0)}`).join(' ')} enemy=${enemy} best=${bd.toFixed(1)}`);
-  // The battle is always staged on the theatre centre (deterministic framing); the sim's contact line, when it
-  // runs close by, gives the orientation.
-  if (f && bd > 3) f = null;
-  const lat = cLat, lon = cLon;
-  return { lat, lon, f };
+  ctx.sim.setSpeed(0);
+  console.info(`[battle] theatre front ${hasFront() ? 'live' : 'missing'} (enemy ${enemy})`);
+  return { lat: cLat, lon: cLon, enemy };
 }
 
 /** Compass heading (0 = north, clockwise) of the sun seen from lat/lon at a world time. */
 function sunHeading(lat: number, lon: number, worldTime: number): number {
-  const up = latLonToVec3(lat, lon, 1, { x: 0, y: 0, z: 0 });
   const sun = sunDirection(worldTime, { x: 0, y: 0, z: 0 });
   const la = (lat * Math.PI) / 180, lo = (lon * Math.PI) / 180;
   const east = { x: -Math.sin(lo), y: 0, z: -Math.cos(lo) };
   const north = { x: -Math.sin(la) * Math.cos(lo), y: Math.cos(la), z: Math.sin(la) * Math.sin(lo) };
-  void up;
   const e = sun.x * east.x + sun.y * east.y + sun.z * east.z;
   const n = sun.x * north.x + sun.y * north.y + sun.z * north.z;
   return Math.atan2(e, n);
 }
 
-/**
- * headingOffset: camera heading relative to the advance direction, or (sunRelative) relative to the sun's azimuth
- * (0 = looking straight into the low sun: backlit smoke, long shadows toward the camera).
- */
-async function stageBattle(s: ShotContext, altKm: number, tilt: number, headingOffset: number, sunElev: number, evening = true, sunRelative = false): Promise<void> {
+interface BattleFraming {
+  altKm: number;
+  tilt: number;
+  /** Sun elevation (deg) at the battle. */
+  elev: number;
+  evening: boolean;
+  /** Advance direction relative to the sun azimuth (rad): 0 = attacking straight into the sun. */
+  advFromSun: number;
+  /** Camera heading relative to the advance direction (rad). */
+  camFromAdv: number;
+  /** Camera target offset along the advance direction (km, negative = on the attacker's side). */
+  targetShiftKm: number;
+}
+
+async function stageBattle(s: ShotContext, fr: BattleFraming): Promise<void> {
   const { ctx, params } = s;
   s.setUiVisible(params.get('hud') === '1');
-  const st = await stageTheatre(s);
-  const dirX = st.f ? st.f.dirX : 0.7, dirY = st.f ? st.f.dirY : -0.7;
-  const a = st.f ? st.f.a : HUMAN_ID, b = st.f ? st.f.b : 2;
-  battleDebug()?.stageAt(st.lat, st.lon, a, b, dirX, dirY);
-  // Wait for the battlefield to stream in.
-  for (let i = 0; i < 120 && !battleDebug()?.built; i++) await s.waitFrames(1);
-  console.info(`[battle] staged at ${st.lat.toFixed(3)}, ${st.lon.toFixed(3)} front ${a}->${b} dir ${dirX.toFixed(2)},${dirY.toFixed(2)} found=${!!st.f}`);
-  // Advance direction as a compass heading (0 = north, clockwise): tile +x = east, +y = south.
+  const lat0 = Number(params.get('lat') ?? 48.95);
+  const lon0 = Number(params.get('lon') ?? 4.35);
+  const elev = Number(params.get('elev') ?? fr.elev);
+  const wt = worldTimeForSunElevation(lat0, lon0, elev, fr.evening);
+  const advHeading = sunHeading(lat0, lon0, wt) + Number(params.get('adv') ?? fr.advFromSun);
+  const st = await stageTheatre(s, advHeading);
   const cl = Math.cos((st.lat * Math.PI) / 180);
-  const advHeading = Math.atan2(dirX * cl, -dirY);
-  const alt = Number(params.get('alt') ?? altKm);
-  const tl = Number(params.get('tilt') ?? tilt);
-  const elev = Number(params.get('elev') ?? sunElev);
-  const wt = worldTimeForSunElevation(st.lat, st.lon, elev, evening);
-  const hdg = (sunRelative ? sunHeading(st.lat, st.lon, wt) : advHeading) + Number(params.get('hdg') ?? headingOffset);
-  ctx.cameraRig.setState({ lat: st.lat, lon: st.lon, altitudeKm: alt, tilt: tl, heading: hdg });
-  await s.waitFrames(6);
+  // Tile-space advance direction (+x east, +y south).
+  const dirX = Math.sin(advHeading) / cl, dirY = -Math.cos(advHeading);
+  battleDebug()?.stageAt(st.lat, st.lon, HUMAN_ID, st.enemy, dirX, dirY);
+  for (let i = 0; i < 120 && !battleDebug()?.built; i++) await s.waitFrames(1);
+  const alt = Number(params.get('alt') ?? fr.altKm);
+  const tl = Number(params.get('tilt') ?? fr.tilt);
+  const hdg = advHeading + Number(params.get('hdg') ?? fr.camFromAdv);
+  const shift = Number(params.get('shift') ?? fr.targetShiftKm) / 6371 * (180 / Math.PI);
+  const tLat = st.lat + Math.cos(advHeading) * shift, tLon = st.lon + (Math.sin(advHeading) * shift) / cl;
+  console.info(`[battle] staged at ${st.lat.toFixed(3)}, ${st.lon.toFixed(3)} enemy ${st.enemy} advance ${advHeading.toFixed(2)}`);
   // Freeze the sim and set the lighting (sun elevation at the battle).
   ctx.sim.setSpeed(0);
-  await s.waitFrames(3);
   const cfg = ctx.sim.view.config as GameConfig | null;
   if (cfg) (cfg as { startWorldTimeSec: number }).startWorldTimeSec = wt - ctx.sim.view.simTime;
-  ctx.cameraRig.setState({ lat: st.lat, lon: st.lon, altitudeKm: alt, tilt: tl, heading: hdg });
-  await s.waitFrames(4);
+  ctx.cameraRig.setState({ lat: tLat, lon: tLon, altitudeKm: alt, tilt: tl, heading: hdg });
+  await s.waitFrames(3);
   // Let the battle rage a while (battle time) so shells, smoke and fires are in full swing at capture.
   battleDebug()?.prewarm(Number(params.get('warm') ?? 24));
-  await s.waitFrames(4);
-  console.info(`[battle] shadow coverage ${battleDebug()?.shadowCoverage().toFixed(3)}`);
+  ctx.cameraRig.setState({ lat: tLat, lon: tLon, altitudeKm: alt, tilt: tl, heading: hdg });
+  await s.waitFrames(3);
 }
 
 registerShot('front', 'battle', 'Low, dramatic view across a large battle at golden hour: infantry, tanks, artillery, explosions, tracers', async (s) => {
-  await stageBattle(s, 0.42, 1.45, 0.45, 6, true, true);
-}, 12);
+  await stageBattle(s, { altKm: 0.5, tilt: 1.45, elev: 6, evening: true, advFromSun: 0.62, camFromAdv: -0.45, targetShiftKm: -0.05 });
+}, 8);
 
 registerShot('front-wide', 'battle', 'Higher view over the local front line: both armies, armor, artillery and smoke columns', async (s) => {
-  await stageBattle(s, 2.2, 1.27, 0.8, 8, true, true);
-}, 12);
+  await stageBattle(s, { altKm: 2.4, tilt: 1.25, elev: 9, evening: true, advFromSun: 1.1, camFromAdv: 2.3, targetShiftKm: 0 });
+}, 8);
 
-registerShot('front-high', 'battle', '~250 km over the hottest front: artillery flashes, fires and smoke columns along the line (battle layer fading in)', async (s) => {
+registerShot('front-high', 'battle', '~250 km over the front: artillery flashes, fires and smoke columns along the line (battle layer fading in)', async (s) => {
   const { ctx, params } = s;
   s.setUiVisible(params.get('hud') === '1');
-  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 1200), speed: 1 });
-  await s.waitFrames(10);
+  const lat0 = Number(params.get('lat') ?? 48.95), lon0 = Number(params.get('lon') ?? 4.35);
+  const wt = worldTimeForSunElevation(lat0, lon0, Number(params.get('elev') ?? 12), true);
+  const adv = sunHeading(lat0, lon0, wt) + 1.3;
+  const st = await stageTheatre(s, adv);
+  // Look at the middle of the staged war's front (the far layer lights every front in view).
+  const f = ctx.sim.view.fronts.find((q) => (q.a === HUMAN_ID && q.b === st.enemy) || (q.a === st.enemy && q.b === HUMAN_ID));
+  const ll = f ? tileXYToLatLon(f.x + f.dirX * 0.5, f.y + f.dirY * 0.5) : { lat: st.lat, lon: st.lon };
+  const cl = Math.cos((ll.lat * Math.PI) / 180);
+  const hdg = (f ? Math.atan2(f.dirX * cl, -f.dirY) : adv) + Number(params.get('hdg') ?? 0.9);
+  const cfg = ctx.sim.view.config as GameConfig | null;
+  if (cfg) (cfg as { startWorldTimeSec: number }).startWorldTimeSec = wt - ctx.sim.view.simTime;
+  const alt = Number(params.get('alt') ?? 250), tilt = Number(params.get('tilt') ?? 0.85);
+  ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: alt, tilt, heading: hdg });
+  await s.waitFrames(3);
+  battleDebug()?.prewarm(Number(params.get('warm') ?? 30));
+  ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: alt, tilt, heading: hdg });
+  await s.waitFrames(3);
+  console.info(`[battle] front-high over ${ll.lat.toFixed(2)}, ${ll.lon.toFixed(2)} front=${!!f}`);
+}, 8);
+
+registerShot('front-night', 'battle', 'The same battle after dusk: tracers, fires and muzzle flashes light the field', async (s) => {
+  await stageBattle(s, { altKm: 0.5, tilt: 1.45, elev: -7, evening: true, advFromSun: 0.62, camFromAdv: -0.45, targetShiftKm: -0.05 });
+}, 8);
+
+registerShot('front-auto', 'battle', 'Unstaged: the camera simply descends over the hottest front of a running war and the battlefield streams in by itself', async (s) => {
+  const { ctx, params } = s;
+  s.setUiVisible(params.get('hud') === '1');
+  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 1500), speed: 1 });
+  await s.waitFrames(6);
   // The hottest, longest land front of the running war.
   let best: FrontView | null = null, bestScore = -1;
   for (const f of ctx.sim.view.fronts) {
+    if (f.b === 0) continue;
     const score = (0.3 + f.intensity) * Math.sqrt(Math.max(1, f.length));
     if (score > bestScore) {
       bestScore = score;
       best = f;
     }
   }
+  ctx.sim.setSpeed(0);
   const ll = best ? tileXYToLatLon(best.x + best.dirX * 0.5, best.y + best.dirY * 0.5) : { lat: 48.9, lon: 4.3 };
   const cl = Math.cos((ll.lat * Math.PI) / 180);
-  const hdg = best ? Math.atan2(best.dirX * cl, -best.dirY) + 0.5 : 0.4;
-  const alt = Number(params.get('alt') ?? 250);
-  ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.8), heading: hdg });
-  await s.waitFrames(8);
-  ctx.sim.setSpeed(0);
-  await s.waitFrames(3);
-  const wt = worldTimeForSunElevation(ll.lat, ll.lon, Number(params.get('elev') ?? 14), true);
+  const hdg = (best ? Math.atan2(best.dirX * cl, -best.dirY) : 0.4) + Number(params.get('hdg') ?? 0.6);
+  const wt = worldTimeForSunElevation(ll.lat, ll.lon, Number(params.get('elev') ?? 20), false);
   const cfg = ctx.sim.view.config as GameConfig | null;
   if (cfg) (cfg as { startWorldTimeSec: number }).startWorldTimeSec = wt - ctx.sim.view.simTime;
-  console.info(`[battle] front-high over ${ll.lat.toFixed(2)}, ${ll.lon.toFixed(2)} fronts=${ctx.sim.view.fronts.length}`);
-  // The far layer accumulates activity over (battle) time: let it run a little with the sim frozen.
-  battleDebug()?.prewarm(Number(params.get('warm') ?? 30));
-  await s.waitFrames(6);
-}, 12);
-
-registerShot('front-night', 'battle', 'The same battle after dusk: tracers, fires and muzzle flashes light the field', async (s) => {
-  await stageBattle(s, 0.5, 1.42, 0.95, -7);
-}, 12);
+  const alt = Number(params.get('alt') ?? 1.6), tilt = Number(params.get('tilt') ?? 1.25);
+  ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: alt, tilt, heading: hdg });
+  // Stream in (the battle layer finds the front by itself).
+  for (let i = 0; i < 150 && !battleDebug()?.built; i++) await s.waitFrames(1);
+  await s.waitFrames(4);
+  battleDebug()?.prewarm(Number(params.get('warm') ?? 16));
+  await s.waitFrames(4);
+  console.info(`[battle] front-auto over ${ll.lat.toFixed(2)}, ${ll.lon.toFixed(2)} front ${best ? `${best.a}->${best.b}` : 'none'} built=${battleDebug()?.built}`);
+}, 8);

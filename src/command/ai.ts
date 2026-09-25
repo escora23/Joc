@@ -452,6 +452,12 @@ export class Brain {
     e.quat.multiply(Q);
     e.yaw = Math.atan2(-f.x, -f.z);
     if (e.rig?.flame) e.rig.flame.scale.z = 2.5 + (e.speed / 300) * 3;
+    // Wingtip vapor in hard turns.
+    const vap = Math.max(0, Math.min(1, (Math.abs(e.bank) - 0.75) * 1.6)) * 0.5;
+    T4.set(-5.55, -0.1, 3.3).applyQuaternion(e.quat).add(e.pos);
+    w.fx.ribbons.push(e.id * 2, T4.x, T4.y, T4.z, vap, 0.2, 1.6, 5);
+    T4.set(5.55, -0.1, 3.3).applyQuaternion(e.quat).add(e.pos);
+    w.fx.ribbons.push(e.id * 2 + 1, T4.x, T4.y, T4.z, vap, 0.2, 1.6, 5);
   }
 
   private jet(e: Ent, dt: number): void {

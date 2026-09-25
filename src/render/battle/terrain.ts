@@ -7,8 +7,10 @@
 //     dissolves with organic noise.
 // Displayed height = local fine height + (RELIEF_EXAGGERATION - 1) * coarse real elevation, minus the Earth-curvature
 // drop, so at large scale the patch sits exactly on the globe's exaggerated relief (same formula as surfaceRadius).
-// Splatted ground material: sand, grass (with farmland patchwork), forest floor, rock, snow, urban, dirt, wet mud,
-// plus the no-man's-land belt along the contact line (churned mud, shell-hole field, trenches, scorch).
+// Splatted ground material: sand, grass, woods and clearings (canopy relief), rock, snow, urban, dirt, wet mud; open
+// ground becomes the field patchwork of ./fields (wheat, green cereal, ploughed soil, pasture, vineyards, mustard,
+// margins and hedgerow bases), plus the no-man's-land belt along the contact line (churned mud, shell-hole field,
+// trenches, scorch).
 
 import * as THREE from 'three';
 import { getLocalHeightfield, sampleElevation, type LocalHeightfield } from '../../data';
@@ -17,6 +19,7 @@ import {
   COARSE_RES, COARSE_SIZE_M, EXAG, FINE_RES, FINE_SIZE_M, GLSL_BATTLE_ATMO, GLSL_BATTLE_FRAG, GLSL_BATTLE_HEAD, GLSL_BATTLE_VERT,
   GLSL_TAIL, M_PER_DEG, OUTER_RES, OUTER_SIZE_M, R_M, srgbToLinear, type BattleUniforms,
 } from './common';
+import { GLSL_FIELDS } from './fields';
 
 const FINE_CELL = FINE_SIZE_M / (FINE_RES - 1);
 const COARSE_CELL = COARSE_SIZE_M / (COARSE_RES - 1);
@@ -55,6 +58,7 @@ void main() {
 const frag = /* glsl */ `
 ${GLSL_BATTLE_HEAD}
 ${GLSL_BATTLE_FRAG}
+${GLSL_FIELDS}
 uniform sampler2D uSplatA;
 uniform sampler2D uSplatB;
 uniform sampler2D uTint;
@@ -68,6 +72,8 @@ uniform sampler2D uSplatA2;
 uniform sampler2D uSplatB2;
 uniform vec4 uSplatInfo2;
 uniform float uHalf;
+uniform float uDebugSplat;
+uniform float uRimK;
 varying vec3 vPos;
 varying vec3 vNrm;
 varying float vRim;
@@ -95,7 +101,7 @@ void main() {
   vec4 dC = texture2D(uDetail, xz / 480.0 + 0.71);
   if (vRim > 0.001) {
     float n = dC.g * 0.6 + dB.r * 0.4;
-    if (n < vRim * 1.05 - 0.02) discard;
+    if (n < vRim * uRimK * 1.05 - 0.02) discard;
   }
   vec2 suv = ((xz - uSplatInfo.xy) / uSplatInfo.z + 0.5) / uSplatInfo.w;
   vec4 sa = texture2D(uSplatA, suv);
@@ -123,30 +129,7 @@ void main() {
   float macro = dC.r;
   vec3 grass = mix(C_GRASS, vec3(0.16, 0.19, 0.06), smoothstep(0.35, 0.7, dB.g));
   grass = mix(grass, vec3(0.26, 0.23, 0.11), smoothstep(0.55, 0.85, macro) * 0.7);
-  // Farmland patchwork: rotated field grid with per-field crops and dark hedgerows.
-  float farmK = uFarmland * (1.0 - smoothstep(6.0, 14.0, px)) * (1.0 - smoothstep(1800.0, 3600.0, camDist));
-  float fieldK = 0.0;
-  if (farmK > 0.01) {
-    float ang = 0.35 + dC.a * 0.3;
-    mat2 R = mat2(cos(ang), -sin(ang), sin(ang), cos(ang));
-    vec2 fp = R * xz;
-    vec2 fsz = vec2(210.0, 130.0);
-    float row = floor(fp.y / fsz.y);
-    fp.x += row * 73.0;
-    vec2 cell = floor(fp / fsz);
-    vec2 inCell = fract(fp / fsz);
-    float h = bHash12(cell + 17.0);
-    vec3 crop = h < 0.18 ? vec3(0.25, 0.225, 0.11) : h < 0.55 ? vec3(0.1, 0.15, 0.048) : h < 0.68 ? vec3(0.17, 0.125, 0.075) : h < 0.88 ? vec3(0.15, 0.19, 0.07) : vec3(0.21, 0.2, 0.1);
-    // Furrows (only where they are resolved: no moire).
-    float fur = 0.92 + 0.08 * sin(fp.x * (h > 0.5 ? 2.2 : 1.4)) * (1.0 - smoothstep(0.35, 1.2, px));
-    crop *= fur * (0.85 + 0.3 * dA.r);
-    vec2 edge = min(inCell, 1.0 - inCell) * fsz;
-    float hedge = 1.0 - smoothstep(1.0, 3.0, min(edge.x, edge.y) + dA.g * 2.5);
-    crop = mix(crop, vec3(0.05, 0.07, 0.03), hedge * midK * 0.55);
-    fieldK = farmK * smoothstep(0.25, 0.45, ra.g + rb.b * 0.6 + 0.15 * dC.b);
-    grass = mix(grass, crop, fieldK);
-  }
-  vec3 forest = C_FOREST * (0.8 + 0.4 * dB.r);
+  vec3 forest = C_FOREST * (0.6 + 0.8 * dB.r) * (0.75 + 0.5 * dA.b);
   vec3 rock = C_ROCK * (0.7 + 0.6 * dA.a) * (0.85 + 0.3 * dB.g);
   vec3 sand = C_SAND * (0.9 + 0.2 * dA.r);
   vec3 snow = C_SNOW * (0.95 + 0.08 * dA.r);
@@ -155,10 +138,74 @@ void main() {
   vec3 wet = C_WET * (0.9 + 0.2 * dA.r);
 
   float wsum = sa.r + sa.g + sa.b + sa.a + sb.r + sb.g + sb.b + sb.a + 1e-4;
-  vec3 alb = (sand * sa.r + grass * sa.g + forest * sa.b + rock * sa.a + snow * sb.r + urban * sb.g + dirt * sb.b + wet * sb.a) / wsum;
+  // Woodland: the forest share of the land cover becomes woods and clearings (thresholded noise), not a tint.
+  float fw = sa.b / wsum;
+  float canopyN = dB.r * 0.55 + dC.g * 0.45 + (dA.b - 0.5) * 0.12;
+  float canopy = fw < 0.02 ? 0.0 : smoothstep(0.02, 0.1, fw - (canopyN - 0.25) * 1.4);
+  float owsum = wsum - sa.b + 1e-4;
+  vec3 open = (sand * sa.r + grass * sa.g + rock * sa.a + snow * sb.r + urban * sb.g + dirt * sb.b + wet * sb.a + grass * 1e-4) / owsum;
+  vec4 crown = texture2D(uDetail, xz / 9.0 + 0.23);
+  vec3 canopyCol = forest * (0.55 + 0.9 * crown.r) * mix(vec3(1.0), vec3(1.25, 1.1, 0.8), smoothstep(0.7, 0.95, crown.g) * 0.6);
+  vec3 alb = mix(open, mix(forest, canopyCol, fineK), canopy);
+
+  // --- farmland: the field patchwork (./fields), crops with furrows, margins, hedgerow bases, woodlots ------
+  float farmK = uFarmland * (1.0 - smoothstep(14.0, 40.0, px));
+  float fieldK = 0.0;
+  float hedgeAo = 1.0;
+  if (farmK > 0.01) {
+    Field F = fieldAt(xz);
+    float h = F.crop;
+    // Across-the-furrow coordinate (furrows run along the long side of the field).
+    float across = F.size.x > F.size.y ? F.uv.y * F.size.y : F.uv.x * F.size.x;
+    float along = F.size.x > F.size.y ? F.uv.x * F.size.x : F.uv.y * F.size.y;
+    float v1 = fHash(F.id.x, F.id.y, 11);
+    vec3 crop;
+    if (F.wood > 0.5) {
+      crop = vec3(0.035, 0.05, 0.022) * (0.8 + 0.4 * dA.r);
+    } else if (h < 0.3) {
+      // Ripe wheat / stubble: gold, with combine swaths.
+      crop = mix(vec3(0.3, 0.235, 0.105), vec3(0.36, 0.3, 0.15), v1) * (0.9 + 0.2 * dA.r);
+      float sw = abs(fract(across / 6.0) - 0.5);
+      crop *= mix(1.0, 0.9 + 0.1 * smoothstep(0.1, 0.25, sw), 1.0 - smoothstep(1.5, 4.0, px));
+    } else if (h < 0.5) {
+      // Green cereal with tramlines.
+      crop = mix(vec3(0.07, 0.115, 0.03), vec3(0.1, 0.14, 0.04), v1) * (0.85 + 0.3 * dB.g);
+      float tl = 1.0 - smoothstep(0.25, 0.6, abs(fract(across / 24.0) - 0.5) * 24.0);
+      crop = mix(crop, vec3(0.13, 0.11, 0.07), tl * 0.6 * (1.0 - smoothstep(1.0, 3.0, px)));
+    } else if (h < 0.66) {
+      // Ploughed soil: furrows.
+      crop = mix(vec3(0.12, 0.078, 0.046), vec3(0.16, 0.11, 0.065), v1) * (0.85 + 0.3 * dA.g);
+      float fu = sin(across * 6.2832 / 0.9);
+      crop *= 1.0 + 0.18 * fu * (1.0 - smoothstep(0.15, 0.5, px));
+    } else if (h < 0.8) {
+      // Pasture / meadow, mottled.
+      crop = mix(vec3(0.085, 0.13, 0.04), vec3(0.13, 0.15, 0.055), smoothstep(0.3, 0.7, dB.r)) * (0.85 + 0.3 * dA.r);
+    } else if (h < 0.88) {
+      // Vineyard rows.
+      float rowv = abs(fract(across / 2.2) - 0.5) * 2.0;
+      vec3 vine = vec3(0.03, 0.055, 0.018), soil = vec3(0.17, 0.13, 0.085);
+      float rk = 1.0 - smoothstep(0.35, 1.6, px);
+      crop = mix(mix(vine, soil, 0.45), mix(vine, soil, smoothstep(0.35, 0.6, rowv)), rk);
+    } else {
+      // Mustard / sunflower / fallow.
+      crop = mix(vec3(0.22, 0.2, 0.055), vec3(0.18, 0.16, 0.08), v1) * (0.9 + 0.2 * dB.r);
+    }
+    // Field margins (grass strips) and hedgerow bases.
+    float edgeD = min(min(F.uv.x, 1.0 - F.uv.x) * F.size.x, min(F.uv.y, 1.0 - F.uv.y) * F.size.y);
+    crop = mix(crop, vec3(0.08, 0.11, 0.035) * (0.8 + 0.4 * dA.g), (1.0 - smoothstep(1.2, 2.6, edgeD + dA.r)) * 0.8 * (1.0 - F.wood));
+    // Hedgerow base: a broken strip of scrub (the trees themselves are instanced on the same lines).
+    float hedge = (1.0 - smoothstep(1.2, 3.2, F.hedge + dA.g * 1.5)) * smoothstep(0.3, 0.55, dB.b + dA.r * 0.3);
+    crop = mix(crop, vec3(0.045, 0.06, 0.025) * (0.7 + 0.6 * dA.b), hedge * 0.8);
+    hedgeAo = 1.0 - hedge * 0.25;
+    // Only where the land cover is open ground (not forest, town, rock, snow or water).
+    // Organic edge where the fields give way to woods, towns or rock.
+    float wild = (sa.a + sb.r + sb.g) / owsum + (dC.b - 0.5) * 0.35 + (dB.a - 0.5) * 0.15;
+    fieldK = farmK * (1.0 - smoothstep(0.35, 0.75, wild)) * (1.0 - smoothstep(0.1, 0.35, waterK)) * (1.0 - canopy);
+    alb = mix(alb, crop, fieldK);
+  }
   // Regional tint normalisation: the ground color averaged over ~300 m (a coarse mip of this grid's own splat) is
   // matched to the globe's Blue Marble tint, while the finer splat variation (fields, woods, dirt) survives on top.
-  vec3 grassMean = mix(C_GRASS * 1.2, vec3(0.145, 0.168, 0.07), uFarmland * 0.75);
+  vec3 grassMean = mix(C_GRASS * 1.2, vec3(0.155, 0.15, 0.062), uFarmland * 0.85);
   vec3 mean = (C_SAND * ra.r + grassMean * ra.g + C_FOREST * ra.b + C_ROCK * ra.a + C_SNOW * rb.r + C_URBAN * rb.g + C_DIRT * rb.b + C_WET * rb.a)
     / (ra.r + ra.g + ra.b + ra.a + rb.r + rb.g + rb.b + rb.a + 1e-4);
 
@@ -168,11 +215,11 @@ void main() {
   tint = max(mix(vec3(lt), tint, 1.25), 0.0) * 1.2;
   vec3 ratio = clamp(tint / max(mean, vec3(0.01)), vec3(0.3), vec3(3.0));
   // Keep the land-cover patches from the data within a believable contrast of each other.
-  alb = mix(alb, mean, 0.3);
-  alb *= mix(vec3(1.0), ratio, mix(0.8, 1.0, farK));
+  alb = mix(alb, mean, 0.3 * (1.0 - fieldK));
+  alb *= mix(vec3(1.0), ratio, mix(0.55, 1.0, farK));
   // With distance the ground converges to its regional average (like the globe's own texture): identical for every
   // grid, so the fine/coarse/outer seams disappear.
-  alb = mix(alb, mean * ratio, smoothstep(1500.0, 7000.0, camDist) * 0.75);
+  alb = mix(alb, mean * ratio, smoothstep(2500.0, 14000.0, camDist) * 0.75);
 
   // --- detail normal --------------------------------------------------------------------------------------
   vec3 N = normalize(vNrm);
@@ -184,6 +231,12 @@ void main() {
   float hx2 = texture2D(uDetail, xz / 97.0 + 0.37 + vec2(e, 0.0)).g - dB.g;
   float hz2 = texture2D(uDetail, xz / 97.0 + 0.37 + vec2(0.0, e)).g - dB.g;
   N = normalize(N + vec3(-hx2, 0.0, -hz2) * midK * 3.0);
+  // Tree crowns: lumpy canopy relief.
+  if (canopy > 0.01) {
+    float cx = texture2D(uDetail, xz / 9.0 + 0.23 + vec2(e, 0.0)).r - crown.r;
+    float cz = texture2D(uDetail, xz / 9.0 + 0.23 + vec2(0.0, e)).r - crown.r;
+    N = normalize(N + vec3(-cx, 0.0, -cz) * canopy * midK * 14.0);
+  }
 
   // --- no-man's-land: churned earth, shell holes, trenches, scorch ----------------------------------------
   vec2 fc = frontCoords(xz);
@@ -223,10 +276,10 @@ void main() {
       float tv = side * (uBelt * 1.3 + 24.0) + zz * 6.0 + (dC.r - 0.5) * 8.0;
       float dtr = abs(fc.y - tv);
       float present = smoothstep(0.35, 0.5, texture2D(uDetail, vec2(fc.x / 900.0, float(s) * 0.5)).g);
-      float trench = (1.0 - smoothstep(0.6, 1.1, dtr)) * present;
-      float parapet = (1.0 - smoothstep(1.1, 2.6, dtr)) * (1.0 - trench) * present;
-      alb = mix(alb, vec3(0.03, 0.024, 0.018), trench * trK * 0.9);
-      alb = mix(alb, vec3(0.2, 0.16, 0.11), parapet * trK * 0.45);
+      float trench = (1.0 - smoothstep(0.5, 0.9, dtr)) * present;
+      float parapet = (1.0 - smoothstep(1.0, 3.2, dtr + dA.r)) * (1.0 - trench) * present;
+      alb = mix(alb, vec3(0.2, 0.155, 0.1) * (0.8 + 0.4 * dA.g), parapet * trK * 0.75);
+      alb = mix(alb, vec3(0.035, 0.028, 0.02), trench * trK * 0.75);
     }
   }
 
@@ -244,11 +297,12 @@ void main() {
   }
 
   // Crude slope/cavity occlusion from the macro noise.
-  ao *= 0.8 + 0.2 * dB.r;
+  ao *= (0.8 + 0.2 * dB.r) * hedgeAo;
   // The globe shades with a smoothed relief normal: converge to it with distance (no darker 'stain' far out).
   N = normalize(mix(N, normalize(vec3(vNrm.x, vNrm.y * 2.5, vNrm.z)), farK));
   vec3 col = battleShade(alb, N, vPos, ao, 2.5);
   col = battleSmoke(col * vTrans + vIns, vPos);
+  if (uDebugSplat > 0.5) col = uDebugSplat < 1.5 ? vec3(sa.b, sa.g, sb.g + sa.a) / wsum : vec3(sb.b, sa.r, sb.a) / wsum;
   gl_FragColor = vec4(col, 1.0);
   ${GLSL_TAIL}
 }`;
@@ -303,6 +357,7 @@ function makeMat(shared: BattleUniforms, detail: THREE.Texture, info: THREE.Vect
       uSplatB2: { value: dummy },
       uSplatInfo2: { value: new THREE.Vector4(0, 0, 1, 1) },
       uHalf: { value: 1e9 },
+      uDebugSplat: { value: typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('bsplat') ?? 0) : 0 },
     },
   });
   m.name = 'battle-terrain';
@@ -328,6 +383,7 @@ const waterFrag = /* glsl */ `
 ${GLSL_BATTLE_HEAD}
 ${GLSL_BATTLE_FRAG}
 uniform sampler2D uDetail;
+uniform float uRimK;
 varying vec3 vPos;
 varying float vDepth;
 varying float vRim;
@@ -335,7 +391,7 @@ void main() {
   battleFadeDiscard();
   if (vDepth < 0.0) discard;
   vec4 dC = texture2D(uDetail, vPos.xz / 480.0 + 0.71);
-  if (vRim > 0.001 && dC.g < vRim) discard;
+  if (vRim > 0.001 && dC.g < vRim * uRimK) discard;
   vec2 w1 = texture2D(uDetail, vPos.xz / 41.0 + vec2(uTime * 0.013, uTime * 0.007)).rg - 0.5;
   vec2 w2 = texture2D(uDetail, vPos.xz / 13.0 - vec2(uTime * 0.021, -uTime * 0.017)).rg - 0.5;
   vec3 N = normalize(vec3((w1.x + w2.x * 0.6) * 0.22, 1.0, (w1.y + w2.y * 0.6) * 0.22));
@@ -591,7 +647,7 @@ export function buildTerrain(world: WorldData, lat0: number, lon0: number, share
   // --- water ------------------------------------------------------------------------------------------------
   let hasWater = false;
   for (let k = 0; k < outer.water.length; k++) if (outer.water[k] > 100 && outer.heights[k] < 0) { hasWater = true; break; }
-  if (hasWater) {
+  if (hasWater && !(typeof location !== 'undefined' && location.search.includes('bnowater'))) {
     const n = 181;
     const cell = (halfO * 2) / (n - 1);
     const pos = new Float32Array(n * n * 3);

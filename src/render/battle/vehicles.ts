@@ -375,10 +375,13 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
         const yaw0 = faceYaw(front, team);
         // Tank platoons in the fighting zone.
         let left = counts.tanks[team];
+        let first = true;
         while (left > 0) {
           const pl = Math.min(left, 3 + r.int(2));
-          const u = Math.max(-1, Math.min(1, r.gauss() * 0.45)) * front.halfLen * 0.85;
-          const v = r.range(90, 380);
+          // The first platoon of each side fights right where the battlefield is centred (under the camera).
+          const u = first ? r.range(-220, 220) : Math.max(-1, Math.min(1, r.gauss() * 0.3)) * front.halfLen * 0.85;
+          const v = first ? r.range(75, 150) : r.range(90, 380);
+          first = false;
           for (let k = 0; k < pl; k++) {
             place(front, team, u + (k - pl / 2) * r.range(35, 60), v + r.range(-15, 25), tmp);
             const veh = newVehicle(VehicleKind.Tank, team, tmp.x, tmp.z, yaw0 + r.range(-0.3, 0.3), 0);
@@ -391,7 +394,7 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
           left -= pl;
         }
         for (let k = 0; k < counts.apcs[team]; k++) {
-          const u = Math.max(-1, Math.min(1, r.gauss() * 0.5)) * front.halfLen * 0.85;
+          const u = Math.max(-1, Math.min(1, r.gauss() * 0.35)) * front.halfLen * 0.85;
           const v = r.range(220, 700);
           place(front, team, u, v, tmp);
           const veh = newVehicle(VehicleKind.Apc, team, tmp.x, tmp.z, yaw0 + r.range(-0.5, 0.5), 0);

@@ -170,6 +170,25 @@ export class Scatter {
     }
   }
 
+  /** Does any tree trunk / crown stand within `r` m of the XZ segment a-b? (staging and line-of-sight polish) */
+  treeBlocks(ax: number, az: number, bx: number, bz: number, r: number): boolean {
+    const dx = bx - ax, dz = bz - az;
+    const L2 = dx * dx + dz * dz || 1;
+    for (const im of [this.conifers, this.broadleaf]) {
+      const a = im.instanceMatrix.array as Float32Array;
+      for (let i = 0; i < im.count; i++) {
+        const x = a[i * 16 + 12], z = a[i * 16 + 14];
+        let t = ((x - ax) * dx + (z - az) * dz) / L2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = ax + dx * t - x, ez = az + dz * t - z;
+        const sc = a[i * 16 + 0] ** 2 + a[i * 16 + 1] ** 2 + a[i * 16 + 2] ** 2;
+        const rr = r + 3 * Math.sqrt(sc);
+        if (ex * ex + ez * ez < rr * rr) return true;
+      }
+    }
+    return false;
+  }
+
   /** Sandbag positions (field fortifications) along a front line. */
   placeBags(ground: Ground, list: { x: number; z: number; yaw: number }[]): void {
     let n = 0;

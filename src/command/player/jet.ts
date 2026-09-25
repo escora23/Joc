@@ -173,13 +173,12 @@ export class JetController implements Controller {
       e.rig.flame.scale.set(this.ab ? 1.15 : 0.9, this.ab ? 1.15 : 0.9, f);
       e.rig.flame.visible = true;
     }
-    // Vapor at high G
-    if (this.gl > 5.5 && c.fx.rand() < dt * 30) {
-      for (const s of [-1, 1]) {
-        T2.set(s * 5.4, 0, 3.4).applyQuaternion(e.quat).add(e.pos);
-        c.fx.particles.emit(1, T2.x, T2.y, T2.z, e.vel.x * 0.9, e.vel.y * 0.9, e.vel.z * 0.9, 0.35, 0.3, 1.2, 0.9, 0.92, 0.95, 0.4);
-      }
-    }
+    // Wingtip vortices: vapor ribbons stream off the tips when pulling G.
+    const vap = Math.max(0, Math.min(1, (this.gl - 3.2) / 4)) * 0.45;
+    T2.set(-5.55, -0.1, 3.3).applyQuaternion(e.quat).add(e.pos);
+    c.fx.ribbons.push(e.id * 2, T2.x, T2.y, T2.z, vap, 0.2, 1.8, 5);
+    T2.set(5.55, -0.1, 3.3).applyQuaternion(e.quat).add(e.pos);
+    c.fx.ribbons.push(e.id * 2 + 1, T2.x, T2.y, T2.z, vap, 0.2, 1.8, 5);
     // --- Weapons --------------------------------------------------------------------------------
     this.gunCd -= dt;
     this.msCd -= dt;

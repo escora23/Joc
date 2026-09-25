@@ -2,6 +2,7 @@
 // geometries meant for InstancedMesh (instance color tints them: team for soldiers, variety for props).
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GeoBuilder } from './builder';
 
 const UNIFORM = 0xb8b8a4;
@@ -38,22 +39,99 @@ export function soldierGeometry(variant: 0 | 1): THREE.BufferGeometry {
   return b.build();
 }
 
+/** Cheap deterministic 3D hash noise for vertex displacement. */
+function hn(x: number, y: number, z: number): number {
+  const v = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+/**
+ * Foliage pass on a merged canopy geometry: soft normals pointing away from the crown center (so the crown reads as
+ * one lit volume instead of facets) and baked occlusion (dark inside and underneath, bright on the outer top).
+ */
+function foliage(g: THREE.BufferGeometry, cx: number, cy: number, cz: number, rx: number, ry: number, soft: number): THREE.BufferGeometry {
+  const p = g.attributes.position as THREE.BufferAttribute;
+  const n = g.attributes.normal as THREE.BufferAttribute;
+  const c = g.attributes.color as THREE.BufferAttribute;
+  const v = new THREE.Vector3(), fn = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.set((p.getX(i) - cx) / rx, (p.getY(i) - cy) / ry, (p.getZ(i) - cz) / rx);
+    const r = v.length();
+    v.normalize();
+    fn.set(n.getX(i), n.getY(i), n.getZ(i));
+    fn.lerp(v, soft).normalize();
+    n.setXYZ(i, fn.x, fn.y, fn.z);
+    const ao = Math.max(0.28, Math.min(1.15, 0.45 + 0.4 * Math.min(1, r) + 0.3 * v.y));
+    c.setXYZ(i, c.getX(i) * ao, c.getY(i) * ao, c.getZ(i) * ao);
+  }
+  return g;
+}
+
+function lumpySphere(r: number, detail: number, seed: number, amp: number): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(r, detail);
+  const p = g.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const k = 1 + (hn(x * 1.7 + seed, y * 1.7, z * 1.7) - 0.5) * amp + (hn(x * 4.1, y * 4.1 + seed, z * 4.1) - 0.5) * amp * 0.5;
+    p.setXYZ(i, x * k, y * k, z * k);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 export function coniferGeometry(): THREE.BufferGeometry {
-  const b = new GeoBuilder();
-  b.cyl(0.18, 0.28, 3, 6, 0x5a4330, 0, 1.5, 0);
-  b.add(new THREE.ConeGeometry(2.6, 5.0, 8), 0x2f4a26, 0, 4.2, 0);
-  b.add(new THREE.ConeGeometry(2.1, 4.2, 8), 0x345228, 0, 6.3, 0, 0, 0.4);
-  b.add(new THREE.ConeGeometry(1.4, 3.4, 8), 0x3a5a2c, 0, 8.4, 0, 0, 0.8);
-  return b.build();
+  const trunk = new GeoBuilder();
+  trunk.cyl(0.14, 0.3, 4.2, 7, 0x4a3626, 0, 2.1, 0);
+  const crown = new GeoBuilder();
+  const tiers = 6;
+  for (let i = 0; i < tiers; i++) {
+    const t = i / (tiers - 1);
+    const r = 2.9 * (1 - t * 0.78);
+    const h = 3.1 * (1 - t * 0.45);
+    const y = 2.4 + i * 1.45;
+    const cone = new THREE.ConeGeometry(r, h, 11, 2, true);
+    // Jagged, drooping branch tips.
+    const p = cone.attributes.position as THREE.BufferAttribute;
+    for (let k = 0; k < p.count; k++) {
+      const x = p.getX(k), yy = p.getY(k), z = p.getZ(k);
+      const rad = Math.hypot(x, z);
+      if (rad < 1e-3) continue;
+      const a = Math.atan2(z, x);
+      const jag = 1 + (Math.sin(a * 11 + i * 1.3) * 0.5 + 0.5) * 0.28 * (rad / r) + (hn(x, yy + i, z) - 0.5) * 0.18;
+      p.setXYZ(k, x * jag, yy - (rad / r) * 0.35, z * jag);
+    }
+    cone.computeVertexNormals();
+    const shadeK = 0.8 + t * 0.35;
+    const col = (Math.round(0x27 * shadeK) << 16) | (Math.round(0x3e * shadeK) << 8) | Math.round(0x22 * shadeK);
+    crown.add(cone, col, 0, y, 0, 0, i * 0.7, 0);
+  }
+  const cg = foliage(crown.build(), 0, 5.5, 0, 3.0, 6.0, 0.7);
+  const tg = trunk.build();
+  const g = mergeGeometries([tg, cg], false);
+  tg.dispose();
+  cg.dispose();
+  g.computeBoundingSphere();
+  return g;
 }
 
 export function broadleafGeometry(): THREE.BufferGeometry {
-  const b = new GeoBuilder();
-  b.cyl(0.22, 0.35, 3.6, 6, 0x5b4632, 0, 1.8, 0);
-  b.add(new THREE.IcosahedronGeometry(2.8, 1), 0x3f5a2a, 0, 5.4, 0, 0, 0, 0, 1.1, 0.85, 1.05);
-  b.add(new THREE.IcosahedronGeometry(2.0, 1), 0x48632e, 1.3, 6.4, 0.6);
-  b.add(new THREE.IcosahedronGeometry(1.9, 1), 0x3b5527, -1.2, 6.0, -0.7);
-  return b.build();
+  const trunk = new GeoBuilder();
+  trunk.cyl(0.2, 0.36, 3.8, 7, 0x4d3b2a, 0, 1.9, 0);
+  trunk.cyl(0.09, 0.16, 2.4, 5, 0x4d3b2a, 0.7, 4.0, 0.2, 0.25, 0, -0.55);
+  trunk.cyl(0.08, 0.15, 2.2, 5, 0x4d3b2a, -0.6, 4.0, -0.3, -0.3, 0, 0.5);
+  const crown = new GeoBuilder();
+  const lobes: [number, number, number, number, number][] = [
+    [0, 6.1, 0, 2.7, 0x34462a], [1.6, 5.4, 0.6, 1.9, 0x384c2c], [-1.5, 5.6, -0.5, 2.0, 0x314328], [0.3, 7.4, -0.4, 1.9, 0x3e5230],
+    [-0.4, 5.0, 1.5, 1.7, 0x324429], [0.6, 5.2, -1.6, 1.7, 0x36492b], [-1.1, 6.9, 0.8, 1.5, 0x3b4f2e],
+  ];
+  lobes.forEach(([x, y, z, r, col], i) => crown.add(lumpySphere(r, 1, i * 3.1, 0.4), col, x, y, z, 0, 0, 0, 1, 0.82, 1));
+  const cg = foliage(crown.build(), 0, 6.0, 0, 3.2, 2.6, 0.88);
+  const tg = trunk.build();
+  const g = mergeGeometries([tg, cg], false);
+  tg.dispose();
+  cg.dispose();
+  g.computeBoundingSphere();
+  return g;
 }
 
 export function rockGeometry(): THREE.BufferGeometry {

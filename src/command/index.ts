@@ -51,6 +51,8 @@ export interface CommandInternals {
   readonly world: World;
   readonly fx: Effects;
   readonly hud: CommandHud;
+  readonly scatter: Scatter;
+  readonly input: CommandInput;
   controller: Controller | null;
   mission: Mission | null;
   brain: Brain | null;
@@ -59,6 +61,13 @@ export interface CommandInternals {
   /** Freeze simulation time (renders keep going): shots. */
   freeze: boolean;
   skipIntro(): void;
+  /** Hold the current phase (intro / debrief) at its present time: staging. */
+  hold: boolean;
+  readonly phase: string;
+  /** Stage: jump `t` seconds into the current phase (intro camera move, debrief climb); use with hold = true. */
+  setPhaseTime(t: number): void;
+  /** Open the after-action report as if the player pressed Esc. */
+  debrief(): void;
   /** Shots: pin the next battle's seed and front bearing (compass degrees toward the enemy). */
   pin: { seed: number; bearingDeg: number } | null;
   readonly camera: THREE.PerspectiveCamera;
@@ -480,6 +489,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     async init(progress) {
       progress(0.05);
       const noise = makeNoiseTexture(256);
+      // Sharp ground detail at grazing angles without shimmer.
+      noise.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
       progress(0.25);
       const atlas = makeParticleAtlas();
       const decals = makeDecalAtlas();
@@ -507,7 +518,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       }
       const w = world, f = fx, hh = hud;
       internals = {
-        world: w, fx: f, hud: hh, controller: null, mission: null, brain: null, camera, pin: null,
+        world: w, fx: f, hud: hh, scatter, input, controller: null, mission: null, brain: null, camera, pin: null,
         atmos: () => atmos,
         get freeze() {
           return freeze;
@@ -518,10 +529,21 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         simulate(steps, dt, before) {
           for (let i = 0; i < steps; i++) {
             before?.(i);
+            if (phase === 'play') battleTime += dt;
             step(dt, false);
             controller?.updateCamera(dt);
             f.flush();
           }
+        },
+        hold: false,
+        get phase() {
+          return `${phase}:${phaseT.toFixed(2)}:${active}`;
+        },
+        setPhaseTime(tt: number) {
+          phaseT = tt;
+        },
+        debrief() {
+          if (phase === 'play' || phase === 'intro') beginDebrief(false);
         },
         skipIntro() {
           phase = 'play';
@@ -530,6 +552,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           if (missionInfo) hh.showIntro(missionInfo, false);
         },
       };
+      // Shot / test sessions: expose the internals for inspection from the browser console.
+      if (ctx.app.isShot) (window as unknown as { __cmd?: CommandInternals }).__cmd = internals;
       progress(1);
     },
     warmup(on) {
@@ -642,7 +666,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (!active || !controller || !world || !fx || !hud) return;
       const tStart = performance.now();
       const realDt = frame.dt;
-      phaseT += realDt;
+      if (!internals?.hold) phaseT += realDt;
       let dt = freeze ? 0 : realDt;
       let allowInput = false;
       if (phase === 'intro') {
@@ -698,6 +722,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       grass?.update(controller.ent.pos, frame.time);
       placeShadowCamera();
       fx.flush();
+      fx.ribbons.build(camera);
       lockBeeps(realDt);
       hud.update(freeze ? 0 : realDt, controller.hud, camera, world, localClock, battleTime, input.locked, realDt);
       input.endFrame();

@@ -143,7 +143,11 @@ export function updateAir(
 
   // Aerial perspective at a reference distance toward / away from the sun.
   const haze = 0.3 + 0.7 * smoothstep(80, 3000, altKm);
-  const ref = u.uFogRef.value / (EARTH_RADIUS_KM * 1000);
+  // Reference points 8 km from the anchor toward / away from the sun; uFogRef becomes the camera's distance to them,
+  // so shaders scale the reference transmittance by (distance / uFogRef) along the real viewing path (from orbit the
+  // path to the ground is short in air mass, not 30x an 8 km ground-level path).
+  const ref = 8000 / (EARTH_RADIUS_KM * 1000);
+  let lenSum = 0;
   let hx = sx, hz = sz;
   const hl = Math.hypot(hx, hz);
   if (hl < 1e-4) { hx = 1; hz = 0; } else { hx /= hl; hz /= hl; }
@@ -154,10 +158,12 @@ export function updateAir(
     pt.copy(up).addScaledVector(az, ref);
     rd.copy(pt).sub(camW);
     const len = rd.length();
+    lenSum += len;
     rd.multiplyScalar(1 / Math.max(len, 1e-9));
     if (side === 0) integrate(camW, rd, len, sunW, insS, trS);
     else integrate(camW, rd, len, sunW, insA, trA);
   }
+  u.uFogRef.value = Math.max(1000, lenSum * 0.5 * EARTH_RADIUS_KM * 1000);
   u.uSunW.value.copy(sunW);
   u.uHazeK.value = haze;
   const k = SKY_E * haze;

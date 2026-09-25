@@ -249,16 +249,17 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
     },
     tankShot(x, y, z, dx, dy, dz, tx, tz, now, hit) {
       // Muzzle blast: flash, flame tongue, dust kicked off the ground, lingering smoke.
-      add.emit(x, y, z, dx * 30, dy * 30, dz * 30, 0.08, 2.2, 4.5, 8, 0, 1, 0.75, 0.4, 14, PK.Flash, 0, 0, now);
+      add.emit(x, y, z, dx * 30, dy * 30, dz * 30, 0.08, 2.2, 4.5, 8, 0, 1, 0.75, 0.4, 6, PK.Flash, 0, 0, now);
       for (let k = 0; k < 4; k++) {
         const s = rng.range(10, 35);
         add.emit(x, y, z, dx * s, dy * s + rng.range(-1, 2), dz * s, rng.range(0.12, 0.25), 1.2, 3.2, 5, 1, 1, 0.9, 0.7, 5, PK.Fire, rng.range(0, 6), 0, now);
       }
       const gy = host.heightAt(x, z);
-      for (let k = 0; k < 10; k++) {
+      // Blast-kicked dust: a low, wide, thin sheet rather than a ball.
+      for (let k = 0; k < 7; k++) {
         const a = rng.range(0, Math.PI * 2);
-        const s = rng.range(6, 14);
-        alpha.emit(x + Math.cos(a) * 2, gy + 0.6, z + Math.sin(a) * 2, Math.cos(a) * s + dx * 6, rng.range(0.5, 2), Math.sin(a) * s + dz * 6, rng.range(2.5, 4.5), 2.5, 10, 1.2, 0.3, 0.16, 0.135, 0.105, 0.32, PK.Dust, rng.range(0, 6), rng.range(-0.3, 0.3), now);
+        const s = rng.range(7, 15);
+        alpha.emit(x + Math.cos(a) * 2, gy + 0.4, z + Math.sin(a) * 2, Math.cos(a) * s + dx * 6, rng.range(0.2, 0.9), Math.sin(a) * s + dz * 6, rng.range(2.5, 4.5), 2, 9, 1.4, 0.1, 0.16, 0.135, 0.105, 0.2, PK.Dust, rng.range(0, 6), rng.range(-0.3, 0.3), now);
       }
       for (let k = 0; k < 3; k++) {
         alpha.emit(x + dx * 3, y, z + dz * 3, dx * 4, rng.range(0.5, 1.5), dz * 4, rng.range(4, 7), 2.5, 10, 0.8, 0.4, 0.15, 0.145, 0.14, 0.28, PK.Smoke, rng.range(0, 6), 0.1, now);
@@ -273,7 +274,7 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       violenceAcc += 0.15;
     },
     artilleryShot(x, y, z, dx, dy, dz, tx, tz, now) {
-      add.emit(x, y, z, dx * 20, dy * 20, dz * 20, 0.1, 3.5, 8, 6, 0, 1, 0.72, 0.38, 16, PK.Flash, 0, 0, now);
+      add.emit(x, y, z, dx * 20, dy * 20, dz * 20, 0.1, 3.5, 8, 6, 0, 1, 0.72, 0.38, 6, PK.Flash, 0, 0, now);
       for (let k = 0; k < 6; k++) {
         const s = rng.range(12, 40);
         add.emit(x, y, z, dx * s, dy * s, dz * s, rng.range(0.15, 0.3), 2, 5, 4, 2, 1, 0.85, 0.6, 6, PK.Fire, rng.range(0, 6), 0, now);
@@ -295,7 +296,7 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       const g = -9.81 * 6;
       const vx = (tx - x) / flight, vz = (tz - z) / flight;
       const vy = (ty - y - 0.5 * g * flight * flight) / flight;
-      add.emit(x + dx * 6, y + dy * 6, z + dz * 6, vx, vy, vz, flight, 0.15, 0.03, 0, g, 1, 0.6, 0.3, 1.5, PK.Streak, 0, 0, now);
+      add.emit(x + dx * 6, y + dy * 6, z + dz * 6, vx, vy, vz, flight, 0.1, 0.02, 0, g, 1, 0.55, 0.25, 0.45, PK.Streak, 0, 0, now);
       fx.schedule(now + flight, tx, tz, 2);
       violenceAcc += 0.25;
     },
@@ -317,18 +318,18 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       violenceAcc += 0.1;
     },
     aaBurst(x, y, z, dx, dy, dz, now, r) {
-      const n = 6 + r.int(8);
+      const n = 4 + r.int(6);
       for (let k = 0; k < n; k++) {
         const t0 = now + k * 0.07;
         const sp = 950;
         const jx = dx + r.range(-0.04, 0.04), jy = dy + r.range(-0.03, 0.03), jz = dz + r.range(-0.04, 0.04);
-        const life = r.range(1.6, 2.4);
-        add.emit(x, y, z, jx * sp, jy * sp, jz * sp, life, 0.35, 0.05, 0.05, -9.81, 1, 0.45, 0.2, 14, PK.Streak, 0, 0, t0);
-        if (k % 2 === 0) add.emit(x + dx * 3, y + dy * 3, z + dz * 3, 0, 0, 0, 0.05, 0.9, 1.4, 0, 0, 1, 0.8, 0.5, 18, PK.Flash, 0, 0, t0);
+        const life = r.range(0.8, 1.3);
+        add.emit(x, y, z, jx * sp, jy * sp, jz * sp, life, 0.1, 0.03, 0.05, -9.81, 1, 0.45, 0.2, 1.2, PK.Streak, 0, 0, t0);
+        if (k % 2 === 0) add.emit(x + dx * 3, y + dy * 3, z + dz * 3, 0, 0, 0, 0.05, 0.9, 1.4, 0, 0, 1, 0.8, 0.5, 8, PK.Flash, 0, 0, t0);
         // Airburst puffs where the rounds self-destruct.
-        if (r.chance(0.35)) {
+        if (r.chance(0.25)) {
           const f = life * 0.9;
-          alpha.emit(x + jx * sp * f * 0.88, y + jy * sp * f * 0.88 - 9.81 * f * f * 0.5, z + jz * sp * f * 0.88, 0, 0.2, 0, 3, 3, 8, 0.4, 0, 0.08, 0.08, 0.08, 0.6, PK.Smoke, 0, 0, t0 + f);
+          alpha.emit(x + jx * sp * f * 0.88, y + jy * sp * f * 0.88 - 9.81 * f * f * 0.5, z + jz * sp * f * 0.88, 0, 0.2, 0, 3, 3, 8, 0.4, 0, 0.06, 0.06, 0.06, 0.35, PK.Smoke, 0, 0, t0 + f);
           add.emit(x + jx * sp * f * 0.88, y + jy * sp * f * 0.88 - 9.81 * f * f * 0.5, z + jz * sp * f * 0.88, 0, 0, 0, 0.12, 2, 4, 0, 0, 1, 0.75, 0.4, 10, PK.Flash, 0, 0, t0 + f);
         }
       }
@@ -341,8 +342,8 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       const S = [1.7, 3.2, 5.5, 10][size];
       const detail = Math.max(0.35, lod);
       // Flash + light.
-      add.emit(x, y + S * 0.6, z, 0, 0, 0, 0.12 + size * 0.03, S * 1.6, S * 2.4, 0, 0, 1, 0.78, 0.45, 9, PK.Flash, 0, 0, now);
-      addLight(x, y + S * 1.4, z, 1, 0.62, 0.28, 6 + size * 7, 12 + S * 5, now, 5 - size * 0.8, 1.2 + size * 0.4);
+      add.emit(x, y + S * 0.6, z, 0, 0, 0, 0.12 + size * 0.03, S * 1.6, S * 2.4, 0, 0, 1, 0.78, 0.45, 1.3 + size * 0.2, PK.Flash, 0, 0, now);
+      addLight(x, y + S * 1.4, z, 1, 0.62, 0.28, 3 + size * 3.5, 12 + S * 5, now, 5 - size * 0.8, 1.2 + size * 0.4);
       if (water) {
         // Water spout.
         const nW = Math.ceil((14 + size * 8) * detail);
@@ -355,10 +356,10 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
         return;
       }
       // Fireball.
-      const nF = Math.ceil((5 + size * 5) * detail);
+      const nF = Math.ceil((4 + size * 3) * detail);
       for (let k = 0; k < nF; k++) {
         const a = rng.range(0, Math.PI * 2), sp = rng.range(2, 9) * S * 0.35;
-        add.emit(x, y + S * 0.4, z, Math.cos(a) * sp, rng.range(3, 10) * S * 0.3, Math.sin(a) * sp, rng.range(0.45, 0.9) + size * 0.15, S * 0.9, S * 2.1, 2.2, 3, 1, 0.9, 0.75, 7 + size, PK.Fire, rng.range(0, 6), rng.range(-1, 1), now + rng.range(0, 0.05));
+        add.emit(x, y + S * 0.4, z, Math.cos(a) * sp, rng.range(3, 10) * S * 0.3, Math.sin(a) * sp, rng.range(0.45, 0.9) + size * 0.15, S * 0.9, S * 2.1, 2.2, 3, 1, 0.9, 0.75, 1.0 + size * 0.15, PK.Fire, rng.range(0, 6), rng.range(-1, 1), now + rng.range(0, 0.05));
       }
       // Dirt plume + clods (the column of earth thrown up by a shell).
       // The iconic shell burst: a column of earth thrown straight up, then collapsing.
@@ -389,7 +390,8 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       // Lingering smoke.
       const nK = Math.ceil((5 + size * 4) * detail);
       for (let k = 0; k < nK; k++) {
-        alpha.emit(x + rng.range(-S, S) * 1.5, y + S * rng.range(0.5, 2), z + rng.range(-S, S) * 1.5, rng.range(-1.5, 1.5), rng.range(1, 4), rng.range(-1.5, 1.5), rng.range(8, 16) + size * 4, S * 1.2, S * 4.5, 0.35, 0.6, 0.1, 0.095, 0.09, 0.3, PK.Smoke, rng.range(0, 6), rng.range(-0.1, 0.1), now + rng.range(0.2, 0.6));
+        const g = rng.range(0.1, 0.15);
+        alpha.emit(x + rng.range(-S, S) * 1.5, y + S * rng.range(0.5, 2), z + rng.range(-S, S) * 1.5, rng.range(-1.5, 1.5), rng.range(1, 4), rng.range(-1.5, 1.5), rng.range(8, 16) + size * 4, S * 1.5, Math.min(S * 5.5, 34), 0.35, 0.6, g, g * 0.9, g * 0.78, 0.17, PK.Smoke, rng.range(0, 6), rng.range(-0.1, 0.1), now + rng.range(0.2, 0.6));
       }
       if (crater) {
         host.normalAt(x, z, nrm);
@@ -405,7 +407,7 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
     },
     haze(x, z, size, now) {
       const y = host.heightAt(x, z);
-      alpha.emit(x, y + size * 0.25, z, rng.range(-0.5, 0.5), rng.range(0.05, 0.3), rng.range(-0.5, 0.5), rng.range(25, 50), size * 1.2, size * 2.2, 0.05, 0.02, 0.3, 0.28, 0.26, 0.1, PK.Haze, rng.range(0, 6), rng.range(-0.02, 0.02), now);
+      alpha.emit(x, y + size * 0.25, z, rng.range(-0.5, 0.5), rng.range(0.05, 0.3), rng.range(-0.5, 0.5), rng.range(25, 50), size * 1.2, size * 2.2, 0.05, 0.02, 0.3, 0.28, 0.26, 0.06, PK.Haze, rng.range(0, 6), rng.range(-0.02, 0.02), now);
     },
     schedule(t, x, z, size) {
       if (impacts.length > 200) return;
@@ -438,14 +440,16 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
         while (f.acc > 1) {
           f.acc -= 1;
           const a = rng.range(0, Math.PI * 2), r = rng.range(0, f.radius);
-          add.emit(f.x + Math.cos(a) * r, f.y + rng.range(0, f.radius * 0.3), f.z + Math.sin(a) * r, rng.range(-0.3, 0.3), rng.range(1.5, 4), rng.range(-0.3, 0.3), rng.range(0.6, 1.3), f.radius * 0.7, f.radius * 1.1, 0.5, 2.5, 1, 0.85, 0.7, 4.5 * f.intensity, PK.Fire, rng.range(0, 6), rng.range(-0.5, 0.5), now);
+          add.emit(f.x + Math.cos(a) * r, f.y + rng.range(0, f.radius * 0.3), f.z + Math.sin(a) * r, rng.range(-0.3, 0.3), rng.range(1.5, 4), rng.range(-0.3, 0.3), rng.range(0.6, 1.3), f.radius * 0.7, f.radius * 1.1, 0.5, 2.5, 1, 0.85, 0.7, 2.4 * f.intensity, PK.Fire, rng.range(0, 6), rng.range(-0.5, 0.5), now);
           if (rng.chance(0.15)) add.emit(f.x + rng.range(-f.radius, f.radius), f.y + f.radius * 0.5, f.z + rng.range(-f.radius, f.radius), rng.range(-1, 1), rng.range(3, 8), rng.range(-1, 1), rng.range(1, 2.5), 0.08, 0.04, 0.8, 1, 1, 0.55, 0.2, 10, PK.Streak, 0, 0, now);
         }
         f.accS += dt * f.smoke * 2.2 * life * Math.max(0.35, lod);
         while (f.accS > 1) {
           f.accS -= 1;
-          const g = rng.range(0.035, 0.07);
-          alpha.emit(f.x + rng.range(-f.radius, f.radius) * 0.5, f.y + f.radius, f.z + rng.range(-f.radius, f.radius) * 0.5, rng.range(-0.4, 0.4), rng.range(3, 6), rng.range(-0.4, 0.4), rng.range(14, 24), f.radius * 1.2, f.radius * 7, 0.12, 0.35, g, g * 0.95, g * 0.9, 0.75, PK.Smoke, rng.range(0, 6), rng.range(-0.08, 0.08), now);
+          // Black oily smoke at the foot, greying as it climbs and spreads into a leaning column.
+          const g = rng.range(0.035, 0.075);
+          const r0 = Math.min(f.radius, 6);
+          alpha.emit(f.x + rng.range(-r0, r0) * 0.5, f.y + r0, f.z + rng.range(-r0, r0) * 0.5, rng.range(-0.4, 0.4), rng.range(3.5, 6.5), rng.range(-0.4, 0.4), rng.range(16, 26), r0 * 1.3, Math.min(r0 * 6, 26) + 6, 0.1, 0.4, g, g * 0.95, g * 0.9, 0.6, PK.Smoke, rng.range(0, 6), rng.range(-0.08, 0.08), now);
         }
       }
       // Violence meter.

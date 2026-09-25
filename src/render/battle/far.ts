@@ -85,7 +85,7 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
       }
       const range = Math.min(2600, Math.max(250, altKm * 3.5));
       // Sizes grow a little with altitude so the flashes stay legible.
-      const sizeK = Math.min(3, Math.max(1, altKm / 120));
+      const sizeK = Math.min(6, Math.max(1, altKm / 55));
       let act = 0;
       for (const f of fronts) {
         const s = f.samples;
@@ -102,8 +102,8 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
           a = { flash: 0, smoke: 0 };
           acc.set(f.id, a);
         }
-        a.flash += dt * fade * heat * (2 + Math.sqrt(lenKm) * 1.1);
-        a.smoke += dt * fade * heat * (0.05 + Math.sqrt(lenKm) * 0.015);
+        a.flash += dt * fade * heat * (3 + Math.sqrt(lenKm) * 1.6);
+        a.smoke += dt * fade * heat * (0.03 + Math.sqrt(lenKm) * 0.008);
         // Border normal (tile space): the advance direction.
         const nx = f.dirX, ny = f.dirY;
         let guard = 0;
@@ -129,16 +129,20 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
             const big = rng.chance(0.2);
             const t0 = now + rng.range(0, 0.3);
             add.emit(p.x, p.y, p.z, 0, 0, 0, rng.range(0.18, 0.4), (big ? 900 : 450) * sizeK, (big ? 1500 : 700) * sizeK, 0, 0, 1, 0.72, 0.4, big ? 60 : 30, PK.Flash, 0, 0, t0);
-            if (rng.chance(0.35)) {
-              add.emit(p.x, p.y, p.z, 0, 0, 0, rng.range(4, 9), 600 * sizeK, 900 * sizeK, 0, 0, 1, 0.42, 0.12, rng.range(3, 7), PK.Glow, 0, 0, t0);
+            if (rng.chance(0.45)) {
+              // Burning ground left by the shell: a fading ember glow.
+              add.emit(p.x, p.y, p.z, 0, 0, 0, rng.range(5, 12), 450 * sizeK, 700 * sizeK, 0, 0, 1, 0.42, 0.12, rng.range(2, 4), PK.Glow, 0, 0, t0);
             }
           } else {
             a.smoke -= 1;
-            local(ll.lat, ll.lon, 400, surf, p);
-            const g = rng.range(0.05, 0.12);
-            alpha.emit(p.x, p.y, p.z, rng.range(-4, 4), rng.range(18, 34), rng.range(-4, 4), rng.range(40, 70), 700, rng.range(2000, 3500), 0.02, 0.2, g, g * 0.96, g * 0.92, 0.45, PK.Smoke, rng.range(0, 6), rng.range(-0.01, 0.01), now);
-            // A fire at the plume's foot.
-            add.emit(p.x, p.y - 250, p.z, 0, 0, 0, rng.range(20, 40), 700 * sizeK, 900 * sizeK, 0, 0, 1, 0.45, 0.14, 3.5, PK.Glow, 0, 0, now);
+            // A burning town or depot: a thin smoke column leaning downwind, a fire glowing at its foot.
+            local(ll.lat, ll.lon, 300, surf, p);
+            const g = rng.range(0.2, 0.3);
+            const life = rng.range(40, 70);
+            for (let k = 0; k < 3; k++) {
+              alpha.emit(p.x, p.y + k * 350, p.z, rng.range(-3, 3), rng.range(14, 26), rng.range(-3, 3), life, 450 + k * 150, rng.range(1100, 1700), 0.02, 0.2, g, g * 0.96, g * 0.9, 0.32, PK.Smoke, rng.range(0, 6), rng.range(-0.01, 0.01), now + k * 1.5);
+            }
+            add.emit(p.x, p.y - 200, p.z, 0, 0, 0, rng.range(20, 40), 500 * sizeK, 700 * sizeK, 0, 0, 1, 0.45, 0.14, 3.5, PK.Glow, 0, 0, now);
           }
         }
         if (a.flash > 5) a.flash = 5;

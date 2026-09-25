@@ -13,6 +13,10 @@ import { newHudState, project, raycast, type Controller, type ControllerCtx, typ
 const AP_SPEED = 950;
 const HE_SPEED = 620;
 const RELOAD = 4.6;
+/** Chase camera: orbit pivot height above the hull, distance behind, extra lift (tank framed below the crosshair). */
+const CAM_PIVOT = 3.1;
+const CAM_DIST = 14;
+const CAM_LIFT = 1.9;
 const T1 = new THREE.Vector3();
 const T2 = new THREE.Vector3();
 const T3 = new THREE.Vector3();
@@ -317,7 +321,7 @@ export class TankController implements Controller {
     if (this.zoom !== this.lastZoom) {
       // Keep looking at the same point when switching between the chase camera and the gunner's sight.
       this.lastZoom = this.zoom;
-      const from = this.zoom ? this.sightPos(T1) : T1.copy(e.pos).setY(e.pos.y + 3.8 + 2.9);
+      const from = this.zoom ? this.sightPos(T1) : T1.copy(e.pos).setY(e.pos.y + CAM_PIVOT + CAM_LIFT);
       T2.subVectors(this.aimPoint, from);
       const hd = Math.hypot(T2.x, T2.z);
       if (hd > 1) {
@@ -336,10 +340,9 @@ export class TankController implements Controller {
       cam.position.copy(T1);
     } else {
       T1.copy(e.pos);
-      T1.y += 3.8;
-      const dist = 15.5;
-      cam.position.copy(T1).addScaledVector(DIR, -dist);
-      cam.position.y += 2.9;
+      T1.y += CAM_PIVOT;
+      cam.position.copy(T1).addScaledVector(DIR, -CAM_DIST);
+      cam.position.y += CAM_LIFT;
       const gh = this.c.ground.surfaceAt(cam.position.x, cam.position.z) + 1.4;
       if (cam.position.y < gh) cam.position.y = gh;
     }

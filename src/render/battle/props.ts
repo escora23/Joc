@@ -12,9 +12,11 @@ import {
   COARSE_SIZE_M, FINE_SIZE_M, FastRng, GLSL_BATTLE_FRAG, GLSL_BATTLE_HEAD, GLSL_BATTLE_VERT, GLSL_ROT, GLSL_TAIL, noise1,
   type BattleUniforms,
 } from './common';
+import { FIELD_ROW, FieldFrame, HEDGE_SEG, colHedge, isWoodlot, rowHedge, rowShift, rowWidth } from './fields';
 import type { FrontGeom } from './front';
-import { broadleafGeometry, coniferGeometry, houseGeometry } from './models';
+import { broadleafFarGeometry, broadleafGeometry, coniferFarGeometry, coniferGeometry, houseGeometry } from './models';
 import type { TerrainPatch } from './terrain';
+import { detailSampler, type DetailSampler } from './textures';
 import type { Path } from './vehicles';
 
 // ------------------------------------------------------------------------------------------------------------
@@ -240,12 +242,16 @@ export interface PropsShared {
   houseGeo: THREE.BufferGeometry;
   coniferGeo: THREE.BufferGeometry;
   broadGeo: THREE.BufferGeometry;
+  coniferFarGeo: THREE.BufferGeometry;
+  broadFarGeo: THREE.BufferGeometry;
+  /** CPU sampler of the ground detail texture (woods follow the ground shader's canopy mask). */
+  detailAt: DetailSampler;
 }
 
-export function createPropsShared(uniforms: BattleUniforms, detail: THREE.Texture): PropsShared {
+export function createPropsShared(uniforms: BattleUniforms, detail: THREE.DataTexture): PropsShared {
   const roadMat = new THREE.ShaderMaterial({
     vertexShader: roadVert, fragmentShader: roadFrag, uniforms: { ...uniforms, uDetail: { value: detail } },
-    transparent: true, depthWrite: false,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
     blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
   });
   roadMat.name = 'battle-roads';
@@ -257,7 +263,11 @@ export function createPropsShared(uniforms: BattleUniforms, detail: THREE.Textur
   coniferMat.name = 'battle-trees';
   const broadMat = new THREE.ShaderMaterial({ vertexShader: treeVert, fragmentShader: treeFrag, uniforms: { ...uniforms, uFoliage: foliageB } });
   broadMat.name = 'battle-trees';
-  return { roadMat, houseMat, coniferMat, broadMat, houseGeo: houseGeometry(), coniferGeo: coniferGeometry(), broadGeo: broadleafGeometry() };
+  return {
+    roadMat, houseMat, coniferMat, broadMat, houseGeo: houseGeometry(), coniferGeo: coniferGeometry(), broadGeo: broadleafGeometry(),
+    coniferFarGeo: coniferFarGeometry(), broadFarGeo: broadleafFarGeometry(),
+    detailAt: detailSampler(detail),
+  };
 }
 
 export interface BuildingInfo {
@@ -272,6 +282,8 @@ export interface PropsResult {
   paths: Path[];
   buildings: BuildingInfo[];
   treeCount: number;
+  /** Re-sort the trees into the full-detail (near the camera) and low-poly (far) instanced meshes. */
+  updateLod(camX: number, camZ: number): void;
   dispose(): void;
 }
 
@@ -280,6 +292,8 @@ export interface PropsOptions {
   buildingBudget: number;
   conifer: number; // 0..1 share of conifers
   seed: number;
+  /** Rotation of the farmland grid (./fields), same as the ground shader's uFieldRot. */
+  fieldAngle: number;
 }
 
 function smooth(a: number, b: number, x: number): number {
@@ -526,76 +540,223 @@ export function buildProps(terrain: TerrainPatch, front: FrontGeom, shared: Prop
   };
   const tC: number[] = [], uC: number[] = [], tB: number[] = [], uB: number[] = [];
   let trees = 0;
-  // Stratified scattering on 26 m cells: expected trees per cell = forest cover x density(distance), the density
-  // falling off away from the battle centre (the terrain's forest color carries the far woods). One pass to
-  // estimate the total, then the density is scaled to fit the budget, so there is never a visible density seam.
+  // Trees come from three sources, all thinned by one distance falloff and scaled to fit the budget (two passes:
+  // estimate, then place), so the density never shows a seam:
+  //   * forests of the land-cover data (stratified on 26 m cells, in groves with clearings),
+  //   * hedgerows along the field boundaries of ./fields (exactly where the ground shader paints hedge bases),
+  //   * woodlots (whole fields of trees).
   const CELL = 26;
   const Rt = R * 0.82;
-  const dens0 = 1 / 110;
-  // Woods come in groves and copses with clearings between them.
-  const clump = (x: number, z: number) => {
-    const n = noise1(x / 310 + 17.3, opts.seed) * 0.6 + noise1(z / 290 - 4.1, opts.seed + 7) * 0.6 + noise1((x + z) / 120, opts.seed + 13) * 0.35;
-    return smooth(-0.15, 0.45, n);
+  const dens0 = 1 / 70;
+  const HEDGE_STEP = 8.5;
+  const WOOD_AREA = 55;
+  // Same woods/clearings mask as the ground shader (canopy from the forest share + thresholded detail noise).
+  const D = shared.detailAt;
+  const canopyAt = (x: number, z: number) => {
+    let sum = 1e-4;
+    for (let c = 0; c < 8; c++) sum += splat[c];
+    const fw = splat[2] / sum;
+    if (fw < 0.02) return 0;
+    const n = D(x / 97 + 0.37, z / 97 + 0.37, 0) * 0.55 + D(x / 480 + 0.71, z / 480 + 0.71, 1) * 0.45 + (D(x / 23, z / 23, 2) - 0.5) * 0.12;
+    return smooth(0.02, 0.1, fw - (n - 0.25) * 1.4);
   };
-  const falloff = (d: number) => Math.pow(650 / (650 + d), 2);
-  let expected = 0;
+  const falloff = (d: number) => Math.pow(600 / (600 + d), 2);
+  const openGround = (x: number, z: number) => {
+    if (terrain.splatAt(x, z, splat) > 0.15) return 0;
+    let sum = 1e-4;
+    for (let c = 0; c < 8; c++) sum += splat[c];
+    return 1 - smooth(0.4, 0.7, (splat[2] + splat[3] + splat[4] + splat[5]) / sum);
+  };
+  const ff = new FieldFrame();
+  ff.setAngle(opts.fieldAngle);
+  const pt = { x: 0, y: 0 };
+  const farm = terrain.farmland;
+  const rows0 = Math.floor(-Rt / FIELD_ROW) - 1, rows1 = Math.ceil(Rt / FIELD_ROW) + 1;
+  /** Visit hedge segments / woodlots: cb(kind, fx0, fy0, fx1, fy1) in field space. kind 0 hedge line, 1 woodlot rect. */
+  const visitFarm = (cb: (kind: number, ax: number, ay: number, bx: number, by: number) => void) => {
+    if (farm < 0.05) return;
+    for (let r = rows0; r <= rows1; r++) {
+      const fy = r * FIELD_ROW;
+      // Row boundary hedges, by segment.
+      const s0 = Math.floor(-Rt / HEDGE_SEG) - 1, s1 = Math.ceil(Rt / HEDGE_SEG);
+      for (let sg = s0; sg <= s1; sg++) if (rowHedge(r, (sg + 0.5) * HEDGE_SEG)) cb(0, sg * HEDGE_SEG, fy, (sg + 1) * HEDGE_SEG, fy);
+      // Field-end hedges and woodlots in this row.
+      const w = rowWidth(r), sh = rowShift(r);
+      const c0 = Math.floor((-Rt + sh) / w) - 1, c1 = Math.ceil((Rt + sh) / w) + 1;
+      for (let c = c0; c <= c1; c++) {
+        const fx = c * w - sh;
+        if (colHedge(c, r)) cb(0, fx, fy, fx, fy + FIELD_ROW);
+        if (isWoodlot(c, r)) cb(1, fx, fy, fx + w, fy + FIELD_ROW);
+      }
+    }
+  };
+  // Pass 1: candidate counts and their distance falloff. Then solve for the density gain K so that
+  // sum(n * min(1, K * falloff)) fits the budget: full density near the battle centre, thinning with distance.
+  const candN: number[] = [], candF: number[] = [];
   for (let z = -Rt; z < Rt; z += CELL) {
     for (let x = -Rt; x < Rt; x += CELL) {
       const d = Math.hypot(x, z);
       if (d > Rt) continue;
       terrain.splatAt(x, z, splat);
-      expected += (splat[2] + splat[1] * 0.03) * clump(x, z) * dens0 * falloff(d) * CELL * CELL;
+      candN.push((canopyAt(x, z) + 0.02) * dens0 * CELL * CELL);
+      candF.push(falloff(d));
     }
   }
-  const scale = expected > opts.treeBudget ? opts.treeBudget / expected : 1;
+  visitFarm((kind, ax, ay, bx, by) => {
+    ff.toLocal((ax + bx) * 0.5, (ay + by) * 0.5, pt);
+    const d = Math.hypot(pt.x, pt.y);
+    if (d > Rt) return;
+    const n = kind === 0 ? Math.hypot(bx - ax, by - ay) / HEDGE_STEP * 0.8 : ((bx - ax) * (by - ay)) / WOOD_AREA;
+    candN.push(n * farm * 0.8);
+    candF.push(falloff(d));
+  });
+  const total = (K: number) => {
+    let t = 0;
+    for (let i = 0; i < candN.length; i++) t += candN[i] * Math.min(1, K * candF[i]);
+    return t;
+  };
+  let lo = 0, hi = 1;
+  while (total(hi) < opts.treeBudget && hi < 1e5) hi *= 4;
+  if (total(hi) <= opts.treeBudget) lo = hi;
+  else for (let it = 0; it < 30; it++) {
+    const mid = (lo + hi) * 0.5;
+    if (total(mid) > opts.treeBudget) hi = mid;
+    else lo = mid;
+  }
+  const K = lo;
+  const accept = (d: number) => Math.min(1, K * falloff(d));
+  const plant = (tx: number, tz: number, conifer: boolean, sc: number) => {
+    if (trees >= opts.treeBudget) return;
+    if (Math.hypot(tx, tz) > Rt || occupied(tx, tz)) return;
+    front.coords(tx, tz, uv);
+    const inBelt = Math.abs(uv.y) < 150 && Math.abs(uv.x) < front.halfLen * 0.9;
+    const broken = inBelt && rng.chance(0.85) ? 1 : 0;
+    const y = terrain.heightAt(tx, tz) - 0.3;
+    const arrT = conifer ? tC : tB, arrU = conifer ? uC : uB;
+    arrT.push(tx, y, tz, sc);
+    arrU.push(rng.next(), rng.next(), broken, rng.range(0, Math.PI * 2));
+    trees++;
+  };
   for (let z = -Rt; z < Rt; z += CELL) {
     for (let x = -Rt; x < Rt; x += CELL) {
       const d = Math.hypot(x, z);
       if (d > Rt) continue;
       terrain.splatAt(x, z, splat);
-      const forest = (splat[2] + splat[1] * 0.03) * clump(x, z);
-      let nExp = forest * dens0 * falloff(d) * CELL * CELL * scale;
+      const forest = canopyAt(x, z) + 0.02;
+      let nExp = forest * dens0 * CELL * CELL * accept(d);
       while (nExp > 0 && trees < opts.treeBudget) {
         if (nExp < 1 && rng.next() > nExp) break;
         nExp -= 1;
         const tx = x + rng.next() * CELL, tz = z + rng.next() * CELL;
-        if (terrain.splatAt(tx, tz, splat) > 0.2 || splat[2] < 0.15 && rng.chance(0.7)) continue;
-        if (occupied(tx, tz)) continue;
-        front.coords(tx, tz, uv);
-        const inBelt = Math.abs(uv.y) < 150 && Math.abs(uv.x) < front.halfLen * 0.9;
-        const broken = inBelt && rng.chance(0.85) ? 1 : 0;
-        const y = terrain.heightAt(tx, tz) - 0.3;
-        const conifer = rng.next() < opts.conifer + splat[4] * 0.5;
-        const sc = rng.range(0.7, 1.45);
-        const arrT = conifer ? tC : tB, arrU = conifer ? uC : uB;
-        arrT.push(tx, y, tz, sc);
-        arrU.push(rng.next(), rng.next(), broken, rng.range(0, Math.PI * 2));
-        trees++;
+        if (terrain.splatAt(tx, tz, splat) > 0.2) continue;
+        const c = canopyAt(tx, tz);
+        // Inside the woods, or a lone tree in the open now and then.
+        if (c < 0.5 && !rng.chance(0.04)) continue;
+        plant(tx, tz, rng.next() < opts.conifer + splat[4] * 0.5, rng.range(0.7, 1.45));
       }
     }
   }
+  visitFarm((kind, ax, ay, bx, by) => {
+    ff.toLocal((ax + bx) * 0.5, (ay + by) * 0.5, pt);
+    const d = Math.hypot(pt.x, pt.y);
+    if (d > Rt + 200) return;
+    const k = accept(d) * farm;
+    if (kind === 0) {
+      const len = Math.hypot(bx - ax, by - ay);
+      const n = Math.floor(len / HEDGE_STEP);
+      for (let i = 0; i < n; i++) {
+        if (rng.next() > k) continue;
+        const f = (i + rng.range(0.2, 0.8)) / n;
+        const fx = ax + (bx - ax) * f + (ax === bx ? rng.range(-1.2, 1.2) : 0);
+        const fy = ay + (by - ay) * f + (ay === by ? rng.range(-1.2, 1.2) : 0);
+        ff.toLocal(fx, fy, pt);
+        if (openGround(pt.x, pt.y) < 0.5) continue;
+        // Gaps in the hedge.
+        if (noise1(f * len / 60 + ax * 0.01 + ay * 0.013, opts.seed + 21) < -0.45) continue;
+        plant(pt.x, pt.y, rng.chance(opts.conifer * 0.3), rng.range(0.75, 1.5));
+      }
+    } else {
+      const n = ((bx - ax) * (by - ay)) / WOOD_AREA;
+      let nExp = n * k;
+      while (nExp > 0 && trees < opts.treeBudget) {
+        if (nExp < 1 && rng.next() > nExp) break;
+        nExp -= 1;
+        ff.toLocal(rng.range(ax + 3, bx - 3), rng.range(ay + 3, by - 3), pt);
+        if (openGround(pt.x, pt.y) < 0.5) continue;
+        plant(pt.x, pt.y, rng.next() < opts.conifer, rng.range(0.8, 1.6));
+      }
+    }
+  });
+  // Two LODs per tree kind (full model within TREE_LOD_M of the camera, a ~20-triangle stand-in beyond), re-sorted
+  // on the CPU only when the camera has moved: 4 draw calls for every tree on the battlefield.
+  const TREE_LOD_M = 650;
+  interface TreeSet { T: Float32Array; U: Float32Array; n: number; near: THREE.InstancedBufferGeometry; far: THREE.InstancedBufferGeometry }
+  const treeSets: TreeSet[] = [];
   const treeMeshes: THREE.Mesh[] = [];
-  const mkTrees = (T: number[], U: number[], geoSrc: THREE.BufferGeometry, mat: THREE.ShaderMaterial, name: string) => {
-    if (T.length === 0) return;
-    const geo = new THREE.InstancedBufferGeometry();
-    geo.setAttribute('position', geoSrc.getAttribute('position'));
-    geo.setAttribute('normal', geoSrc.getAttribute('normal'));
-    geo.setAttribute('aPart', geoSrc.getAttribute('aPart'));
-    geo.setAttribute('iT', new THREE.InstancedBufferAttribute(Float32Array.from(T), 4));
-    geo.setAttribute('iU', new THREE.InstancedBufferAttribute(Float32Array.from(U), 4));
-    geo.instanceCount = T.length / 4;
-    const m = new THREE.Mesh(geo, mat);
-    m.frustumCulled = false;
-    m.renderOrder = 20;
-    m.name = name;
-    group.add(m);
-    treeMeshes.push(m);
+  const mkTrees = (T: number[], U: number[], geoNear: THREE.BufferGeometry, geoFar: THREE.BufferGeometry, mat: THREE.ShaderMaterial, name: string) => {
+    const n = T.length / 4;
+    if (n === 0) return;
+    const mk = (src: THREE.BufferGeometry, suffix: string) => {
+      const geo = new THREE.InstancedBufferGeometry();
+      geo.setAttribute('position', src.getAttribute('position'));
+      geo.setAttribute('normal', src.getAttribute('normal'));
+      geo.setAttribute('aPart', src.getAttribute('aPart'));
+      const iT = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4);
+      const iU = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4);
+      iT.setUsage(THREE.DynamicDrawUsage);
+      iU.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('iT', iT);
+      geo.setAttribute('iU', iU);
+      geo.instanceCount = 0;
+      const m = new THREE.Mesh(geo, mat);
+      m.frustumCulled = false;
+      m.renderOrder = 20;
+      m.name = name + suffix;
+      group.add(m);
+      treeMeshes.push(m);
+      return geo;
+    };
+    treeSets.push({ T: Float32Array.from(T), U: Float32Array.from(U), n, near: mk(geoNear, '-near'), far: mk(geoFar, '-far') });
   };
-  mkTrees(tC, uC, shared.coniferGeo, shared.coniferMat, 'battle-conifers');
-  mkTrees(tB, uB, shared.broadGeo, shared.broadMat, 'battle-broadleaf');
+  mkTrees(tC, uC, shared.coniferGeo, shared.coniferFarGeo, shared.coniferMat, 'battle-conifers');
+  mkTrees(tB, uB, shared.broadGeo, shared.broadFarGeo, shared.broadMat, 'battle-broadleaf');
+  let lodX = Infinity, lodZ = Infinity;
+  const updateLod = (camX: number, camZ: number) => {
+    if (Math.hypot(camX - lodX, camZ - lodZ) < 45) return;
+    lodX = camX;
+    lodZ = camZ;
+    const r2 = TREE_LOD_M * TREE_LOD_M;
+    for (const ts of treeSets) {
+      const nT = ts.near.getAttribute('iT') as THREE.InstancedBufferAttribute, nU = ts.near.getAttribute('iU') as THREE.InstancedBufferAttribute;
+      const fT = ts.far.getAttribute('iT') as THREE.InstancedBufferAttribute, fU = ts.far.getAttribute('iU') as THREE.InstancedBufferAttribute;
+      const NT = nT.array as Float32Array, NU = nU.array as Float32Array, FT = fT.array as Float32Array, FU = fU.array as Float32Array;
+      let a = 0, b = 0;
+      for (let i = 0; i < ts.n; i++) {
+        const o = i * 4;
+        const dx = ts.T[o] - camX, dz = ts.T[o + 2] - camZ;
+        if (dx * dx + dz * dz < r2) {
+          const q = a * 4;
+          for (let k = 0; k < 4; k++) { NT[q + k] = ts.T[o + k]; NU[q + k] = ts.U[o + k]; }
+          a++;
+        } else {
+          const q = b * 4;
+          for (let k = 0; k < 4; k++) { FT[q + k] = ts.T[o + k]; FU[q + k] = ts.U[o + k]; }
+          b++;
+        }
+      }
+      ts.near.instanceCount = a;
+      ts.far.instanceCount = b;
+      for (const [attr, c] of [[nT, a], [nU, a], [fT, b], [fU, b]] as const) {
+        attr.clearUpdateRanges();
+        attr.addUpdateRange(0, Math.max(1, c) * 4);
+        attr.needsUpdate = true;
+      }
+    }
+  };
+  updateLod(0, 0);
 
   return {
-    group, paths, buildings, treeCount: trees,
+    group, paths, buildings, treeCount: trees, updateLod,
     dispose() {
       roadGeo.dispose();
       houseMesh?.geometry.dispose();
