@@ -153,8 +153,13 @@ async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt:
   const p = s.params;
   // 9,000 ticks: the land rush is over, so the human borders other nations (v2 pacing, 1 tick = 6 game minutes).
   await s.ctx.app.startScriptedGame({ ticks: num(p, 'tick', 9000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(p, 'sun', 0)) });
+  // Let the view settle on the final tick (capitulations and transfers of the last ticks) before choosing the spot.
+  await s.waitFrames(10);
   const tile = humanBorderTile(s, peaceful);
   const ll = tileToLatLon(tile);
+  // Mid-afternoon light at the border (subsolar point 45 degrees west of it) so the relief reads; &sun= overrides.
+  const cfg = s.ctx.sim.view.config as { startWorldTimeSec: number } | null;
+  if (cfg) cfg.startWorldTimeSec = worldTimeForSubsolarLon(num(p, 'sun', ll.lon - 45)) - s.ctx.sim.view.simTime;
   s.ctx.cameraRig.setMode('game');
   s.ctx.cameraRig.setState({
     lat: num(p, 'lat', ll.lat), lon: num(p, 'lon', ll.lon), altitudeKm: num(p, 'alt', alt),

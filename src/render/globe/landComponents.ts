@@ -4,7 +4,7 @@
 // the ground shader (territory flag) and a hover line. Pure data, no three.js.
 
 import { MAP_H, MAP_W, TILE_COUNT } from '../../shared/constants';
-import { isPlayableTerrain } from '../../shared/terrain';
+import { isNavigableTerrain, isPlayableTerrain } from '../../shared/terrain';
 import type { WorldData } from '../../shared/types';
 
 /** Components up to this many tiles are "small islands". */
@@ -29,7 +29,7 @@ export interface LandComponents {
   /** Component id per tile (-1 = not playable land). */
   compOf: Int32Array;
   list: LandComponent[];
-  /** Small components only (size ≤ SMALL_ISLAND_TILES). */
+  /** Small islands: components of ≤ SMALL_ISLAND_TILES tiles in the sea (see the filter below). */
   small: LandComponent[];
 }
 
@@ -92,6 +92,30 @@ export function landComponents(world: WorldData): LandComponents {
     list.push(c);
     if (n <= SMALL_ISLAND_TILES) small.push(c);
   }
+  // A small component is an island (marker, shoreline) only when it lies in the sea: it touches ocean water and is not
+  // a fragment of a larger coast cut off only diagonally. Land specks enclosed by lake tiles (salt pans and dry lakes
+  // in the water mask across the Sahara, Arabia and the Sahel) and diagonal coastal crumbs would otherwise scatter
+  // hundreds of meaningless rings over the continents.
+  const islands = small.filter((c) => {
+    let sea = false;
+    for (const t of c.tiles!) {
+      const x = t % MAP_W, y = (t / MAP_W) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= MAP_H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nt = yy * MAP_W + ((x + dx + MAP_W) % MAP_W);
+          const o = compOf[nt];
+          if (o >= 0 && o !== c.id && list[o].size > SMALL_ISLAND_TILES) return false;
+          if ((dx === 0 || dy === 0) && isNavigableTerrain(terrain[nt])) sea = true;
+        }
+      }
+    }
+    return sea;
+  });
+  small.length = 0;
+  small.push(...islands);
   const res = { compOf, list, small };
   cache.set(world, res);
   return res;

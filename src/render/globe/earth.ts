@@ -346,6 +346,15 @@ void main() {
       albedo *= 1.0 + fieldK * 0.12 * (hv3 - 0.5);
       albedo = mix(albedo, albedo * vec3(0.55, 0.66, 0.5), hedge * fieldK * 0.7);
     }
+    // Woods and scrub: dark irregular stands at ~400 m-2 km on vegetated ground, denser on hills (fields take the
+    // flat land), so hilly country below 50 km is not a uniform blur either.
+    float greenK = smoothstep(0.95, 1.25, albedo.g / max(albedo.r, 1e-3));
+    float woodFade = clamp((1.0 / 9000.0) / max(pxWorld, 1e-9) / 4.0 - 1.0, 0.0, 1.0);
+    if (woodFade > 0.001 && greenK > 0.001) {
+      float wn = fbm3(vWorld * 9000.0 + 3.1) + 0.35 * fbm3(vWorld * 2300.0 - 1.7);
+      float wood = smoothstep(0.02, 0.16, wn - 0.12 + 0.25 * rugged);
+      albedo = mix(albedo, albedo * vec3(0.5, 0.62, 0.45), wood * greenK * woodFade * landK * 0.85);
+    }
     // Rock on steep ground, snow on the high crests (the 10 km albedo is too soft this close).
     float steep = clamp(length(slope) * 1.1, 0.0, 1.0);
     albedo = mix(albedo, vec3(0.19, 0.175, 0.16), landK * steep * 0.45);
@@ -529,8 +538,9 @@ void main() {
       float fillA = (uFill + (isHuman ? 0.05 : 0.0) + 0.08 * hoverO) * (alive ? 1.0 : 0.5);
       // Occupied land: a dot stipple in the owner's colour over 70 % fill (§10.1).
       fillA *= mix(1.0, 0.7, occ);
-      // The similar-colour boost is for orbit; up close (uCloseK) the ground detail must read through the fill.
-      fillA += territoryFillBoost(albedo, natO) * (1.0 - 0.75 * uCloseK);
+      // Every nation reads against its ground (§16.3: ΔE >= 15 from orbit); up close (uCloseK) the ground detail must
+      // read through the fill, so the floor drops.
+      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.14, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
       fillA *= terr * landK;
       vec3 ground = albedo;
       albedo = territoryFill(albedo, natO, fillA);
@@ -554,21 +564,32 @@ void main() {
         albedo = mix(albedo, natO * 0.35, st * 0.55 * terr * landK);
       }
       if (occ > 0.01) {
-        vec2 g = tp0 * 2.5;
-        g.x += 0.5 * mod(floor(g.y), 2.0);
-        vec2 f = fract(g) - 0.5;
-        float aa = max(fwidth(g.x), 1e-4) * 0.8;
-        float dotm = smoothstep(0.24 + aa, 0.24 - aa, length(f));
+        // Dots stay ~9 px apart at every zoom: the lattice doubles its density per octave of zoom and crossfades
+        // between two octaves (no giant blobs up close, no moire from orbit).
+        float octv = log2(max(1.0, (1.0 / pxT) / (9.0 * 2.5)));
+        float o0 = floor(octv), ofr = fract(octv);
+        float dotm = 0.0;
+        for (int k = 0; k < 2; k++) {
+          vec2 g = tp0 * 2.5 * exp2(o0 + float(k));
+          g.x += 0.5 * mod(floor(g.y), 2.0);
+          vec2 f = fract(g) - 0.5;
+          float aa = max(fwidth(g.x), 1e-4) * 0.8;
+          float dm = smoothstep(0.24 + aa, 0.24 - aa, length(f));
+          float w1 = smoothstep(0.3, 0.7, ofr);
+          dotm += dm * (k == 0 ? 1.0 - w1 : w1);
+        }
+        // Up close the stipple steps back (the land under it matters more than the pattern).
+        dotm *= mix(1.0, 0.55, smoothstep(0.5, 3.0, octv));
         float vis = smoothstep(3.0, 6.0, 0.4 / pxT);
         albedo = mix(albedo, natO * 1.15, mix(0.3, dotm, vis) * occ * 0.9 * terr * landK);
       }
       // Conquest flash in the attacker's (new owner's) colour, 2 s.
       emissive += mix(natO, vec3(1.0), 0.25) * 1.7 * flash * terr * landK;
     } else if (landK > 0.0 && playableHere) {
-      // Neutral land: desaturated 50 % and darkened 18 % from orbit, so owned land stands out (the design's 35 % / 10 %
+      // Neutral land: desaturated 50 % and darkened 24 % from orbit, so owned land stands out (the design's 35 % / 10 %
       // measured ΔE 2.9 against the plain globe at 3,000 km; the readability target is ≥ 5).
       float l = luma(albedo);
-      albedo = mix(albedo, mix(vec3(l), albedo, 0.5) * 0.82, uNeutralK * terr * landK * (1.0 - uSpawn));
+      albedo = mix(albedo, mix(vec3(l), albedo, 0.5) * 0.76, uNeutralK * terr * landK * (1.0 - uSpawn));
       // Spawn phase: free land (where a capital can be founded) is brightened with a slow pulse.
       albedo *= 1.0 + uSpawn * terr * landK * (0.22 + 0.14 * sin(uTime * 1.7));
     }
@@ -723,7 +744,9 @@ void main() {
     // Coastal foam / surf close up.
     float coast = water * (1.0 - smoothstep(0.55, 0.95, texture2D(uWater, uv).r));
     float foamN = vnoise(vWorld * 26000.0 + vec3(0.0, uTime * 0.6, 0.0));
-    ocean += vec3(0.8) * coast * smoothstep(0.2, 0.8, foamN) * closeK * sunLight * max(muS, 0.0) * 0.35;
+    // Only once the ~250 m foam cells span a few pixels (from ~300 km they alias into white speckle).
+    float foamVis = 1.0 - smoothstep(0.6e-5, 1.6e-5, pxWorld);
+    ocean += vec3(0.8) * coast * smoothstep(0.2, 0.8, foamN) * closeK * foamVis * sunLight * max(muS, 0.0) * 0.35;
 #endif
   }
   col = mix(land, ocean, water);

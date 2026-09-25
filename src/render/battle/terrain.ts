@@ -292,7 +292,7 @@ void main() {
   alb = mix(alb, tint, smoothstep(0.0, 0.6, vRim));
   // Territory: the globe's own fill function (DESIGN_V2 §10.1 / §10.11), so the rim meets the globe without a seam.
   if (vTerr.a > 0.001) {
-    float fa = vTerr.a + territoryFillBoost(alb, vTerr.rgb) * min(1.0, vTerr.a * 4.0);
+    float fa = max(vTerr.a, territoryMinFill(alb, vTerr.rgb, 0.07) * min(1.0, vTerr.a * 4.0));
     alb = territoryFill(alb, vTerr.rgb, fa);
   }
 

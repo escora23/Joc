@@ -200,11 +200,13 @@ vec3 territoryTarget(vec3 ground, vec3 owner) {
 vec3 territoryFill(vec3 ground, vec3 owner, float fill) {
   return mix(ground, territoryTarget(ground, owner), fill);
 }
-// Extra fill where the owner colour is close to the ground it covers (a light nation over desert, a green one
-// over forest), so every nation keeps a clearly visible tint: up to +0.18.
-float territoryFillBoost(vec3 ground, vec3 owner) {
+// The smallest fill that still changes the ground by a perceptual step \`t\` (measured in sqrt-linear RGB, close to a
+// gamma-encoded difference; t = 0.14 is about 18 CIELAB ΔE after tone mapping). Where the owner colour is close to the
+// ground it covers (a sand-coloured nation over desert, a green one over forest, a muted independent territory) the
+// base fill would barely show, so the fill rises until the nation reads (capped at 0.75: relief stays visible).
+float territoryMinFill(vec3 ground, vec3 owner, float t) {
   vec3 d = sqrt(max(territoryTarget(ground, owner), 0.0)) - sqrt(max(ground, 0.0));
-  return 0.18 * (1.0 - clamp(length(d) * 2.5, 0.0, 1.0));
+  return min(0.75, t / max(length(d), 1e-3));
 }
 `;
 

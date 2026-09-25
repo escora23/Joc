@@ -984,7 +984,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     for (const st of view.structures.values()) {
       const a = structAnchor.get(st.id);
       if (!a || !toScreen(a)) continue;
-      icons.add(true, st.id, st.type, st.owner, relations.relationTo(st.owner), scrXY.x, scrXY.y, st.hp, st.level, st.id === selectedStructure, 0, st.type);
+      // Once the 3D model fades in (below 900 km) the icon floats above it instead of covering it: the model is what
+      // the player looks at up close (owner feedback), the icon stays as a readable tag.
+      icons.add(true, st.id, st.type, st.owner, relations.relationTo(st.owner), scrXY.x, scrXY.y - 22 * lod.structModelFade, st.hp, st.level, st.id === selectedStructure, 0, st.type);
     }
   }
 
@@ -1284,7 +1286,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       updateRadarDishes();
       updateStructureIcons();
       updateUnits(frame, fx);
-      icons?.end(frame.now / 1000, { unitPx: 22, smallPx: 14, structPx: 18, pipPx: 6, unitsOn: true, structsOn: lod.structIcons });
+      icons?.end(frame.now / 1000, { unitPx: 22, smallPx: 14, structPx: 18 - 4 * lod.structModelFade, pipPx: 6, unitsOn: true, structsOn: lod.structIcons });
       updateRails(frame.time);
       updateOverlays();
       if (fx) updateAmbient(fx, env.fxDt);
