@@ -17,6 +17,7 @@ import { en } from './i18n/en';
 import { es } from './i18n/es';
 import { createLoadingScreen } from './loading';
 import { createMainMenu, createSetup } from './menu';
+import { createOcclusionTracker } from './occlusion';
 import { closeAllModals, initModals } from './modal';
 import { retranslate } from './tx';
 import type { AppState, FrameInfo, GameContext, LoadingHandle, UiApi } from '../shared/api';
@@ -47,6 +48,7 @@ export function createUi(ctx: GameContext): UiApi {
   // Screens first in DOM order (keyboard/tab order and automation start with the active screen).
   root.append(screens, hud.el, fps);
 
+  const occlusion = createOcclusionTracker(root);
   let state: AppState = 'boot';
   let screen: HTMLElement | null = null;
   let end: EndScreen | null = null;
@@ -108,8 +110,12 @@ export function createUi(ctx: GameContext): UiApi {
     showLoading(): LoadingHandle {
       return createLoadingScreen(root);
     },
+    getOccludedRects() {
+      return occlusion.rects();
+    },
     setState(next: AppState) {
       state = next;
+      occlusion.invalidate();
       document.body.dataset.state = next;
       renderState(next);
     },

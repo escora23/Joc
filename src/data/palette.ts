@@ -286,11 +286,37 @@ export function nationNeighbors(world: CountryRaster, nations: readonly NationCo
 }
 
 /**
- * Hues for `n` nations given their neighbour lists: bordering nations ≥ 30° apart, every hue ≥ 30° from the human's
- * hue, signature hues kept when possible, neighbours-of-neighbours spread softly. DSATUR order, 2° candidate grid,
- * then a repair pass. Deterministic.
+ * Likely future neighbours: nations whose home countries both touch the same country that no nation starts in (the
+ * land between them that both will expand into). Used as a soft constraint.
  */
-export function assignHues(n: number, neighbors: readonly (readonly number[])[], humanHue: number | null, preferredHue: (i: number) => number | undefined): number[] {
+export function nationSoftNeighbors(world: CountryRaster, nations: readonly NationColorInput[], hard: readonly (readonly number[])[]): number[][] {
+  const adj = countryAdjacency(world);
+  const home = new Set(nations.map((n) => n.country));
+  const touching = new Map<number, number[]>();
+  nations.forEach((n, i) => {
+    for (const k of adj.get(n.country) ?? []) {
+      if (home.has(k)) continue;
+      let l = touching.get(k);
+      if (!l) touching.set(k, (l = []));
+      l.push(i);
+    }
+  });
+  const out: Set<number>[] = nations.map(() => new Set());
+  for (const l of touching.values()) {
+    for (const i of l) for (const j of l) if (i !== j && !hard[i].includes(j)) out[i].add(j);
+  }
+  return out.map((s) => [...s]);
+}
+
+/**
+ * Hues for `n` nations given their neighbour lists: bordering nations ≥ 30° apart, every hue ≥ 30° from the human's
+ * hue, signature hues kept when possible, likely future neighbours (`soft`) and neighbours-of-neighbours spread
+ * softly. DSATUR order, 2° candidate grid, then a repair pass. Deterministic.
+ */
+export function assignHues(
+  n: number, neighbors: readonly (readonly number[])[], humanHue: number | null, preferredHue: (i: number) => number | undefined,
+  soft: readonly (readonly number[])[] = [],
+): number[] {
   const hue = new Array<number>(n).fill(NaN);
   const gap = HUE_GAP + HUE_MARGIN;
   const allowed = (h: number) => humanHue === null || hueDistance(h, humanHue) >= gap;
@@ -313,11 +339,17 @@ export function assignHues(n: number, neighbors: readonly (readonly number[])[],
         if (d < gap) conflicts++;
         minNb = Math.min(minNb, d);
       }
-      let min2 = 180;
+      let min2 = 180, softConf = 0, minSoft = 180;
       for (const j of neighbors[i]) for (const k of neighbors[j]) if (k !== i && coloured[k]) min2 = Math.min(min2, hueDistance(h, hue[k]));
+      for (const j of soft[i] ?? []) {
+        if (!coloured[j]) continue;
+        const d = hueDistance(h, hue[j]);
+        if (d < gap) softConf++;
+        minSoft = Math.min(minSoft, d);
+      }
       let same = 0;
       for (let k = 0; k < n; k++) if (coloured[k] && hueDistance(h, hue[k]) < 8) same++;
-      let score = -conflicts * 100 + Math.min(minNb, 90) / 90 + (Math.min(min2, 40) / 40) * 0.6 - same * 0.04;
+      let score = -conflicts * 100 - softConf * 3 + Math.min(minNb, 90) / 90 + (Math.min(min2, 40) / 40) * 0.6 + (Math.min(minSoft, 45) / 45) * 0.8 - same * 0.04;
       if (pref !== undefined) score -= (hueDistance(h, pref) / 180) * 1.6;
       // Cyan-to-azure fills read as water from orbit (AUDIT-1 D08): used only when nothing else fits.
       if (h >= 192 && h <= 250) score -= 0.9;
@@ -366,11 +398,12 @@ export function assignHues(n: number, neighbors: readonly (readonly number[])[],
  */
 export function planNationColors(world: CountryRaster, nations: readonly NationColorInput[], humanColor: number | null): number[] {
   const neighbors = nationNeighbors(world, nations);
+  const soft = nationSoftNeighbors(world, nations, neighbors);
   const humanHue = humanColor === null ? null : hexToOklch(humanColor).h;
   const hues = assignHues(nations.length, neighbors, humanHue, (i) => {
     const p = nations[i].preferred;
     return p === undefined ? undefined : hexToOklch(p).h;
-  });
+  }, soft);
   // Lightness: spread neighbours whose hues are close, starting from each hue's natural level.
   const L: number[] = hues.map((h) => colourForHue(h).L);
   for (let pass = 0; pass < 2; pass++) {

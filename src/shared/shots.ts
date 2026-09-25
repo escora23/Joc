@@ -76,9 +76,10 @@ export function shotParams(): URLSearchParams {
 //   &territory=0    the ground shows no territory overlay (fills, borders, stripes); labels and icons stay
 //   &clouds=hidden|strategic|realistic   force a cloud mode
 //   &mask=owner     the same frame as flat owner-id false colour (see OWNER_MASK below), nothing else drawn
+//   &mask=cloud     the cloud layer's thinning factor (R, 0..255) and raw cover (G) where there is cloud (B = 255)
 // =================================================================================================
 
-export type ShotMask = 'owner' | null;
+export type ShotMask = 'owner' | 'cloud' | null;
 
 export interface ShotView {
   freeze: boolean;
@@ -113,7 +114,8 @@ function parseShotView(): ShotView {
     v.territory = q.get('territory') !== '0';
     const c = q.get('clouds');
     if (c === 'hidden' || c === 'strategic' || c === 'realistic') v.clouds = c;
-    if (q.get('mask') === 'owner') v.mask = 'owner';
+    const m = q.get('mask');
+    if (m === 'owner' || m === 'cloud') v.mask = m;
   } catch {
     /* no location (worker/tests) */
   }

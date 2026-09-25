@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import type { GameContext } from '../shared/api';
 import { HUMAN_ID, MAP_W, UNIT_DEFS } from '../shared/constants';
+import { UNIT_STRIDE } from '../shared/protocol';
 import { greatCircleKm, latLonToTile, tileXYToLatLon } from '../shared/geo';
 import { StructureType, UnitType, type UnitView } from '../shared/types';
 
@@ -47,6 +48,52 @@ function renderLatLon(u: UnitView, alpha: number): { lat: number; lon: number } 
 export function installProbes(ctx: GameContext, target: Record<string, unknown>): void {
   target.clock = () => ({ ...ctx.sim.view.clock, tick: ctx.sim.view.tick, gameHours: ctx.sim.view.gameHours });
 
+  // Arrival log: what the worker sent and when it arrived (independent of the frame rate).
+  const arrivals: { at: number; tick: number; ticks: number; mode: string; rate: number; events: { type: string; unitId?: number }[] }[] = [];
+  ctx.sim.onArrival = (u, at) => {
+    arrivals.push({
+      at, tick: u.tick, ticks: u.ticks, mode: u.clock?.mode ?? '', rate: u.clock?.rate ?? 0,
+      events: u.events.filter((e) => e.type === 'nukeLaunched' || e.type === 'nukeDetonated' || e.type === 'nukeIntercepted' || e.type === 'clockChanged')
+        .map((e) => ({ type: e.type, unitId: 'unitId' in e ? (e as { unitId: number }).unitId : undefined })),
+    });
+    if (arrivals.length > 4000) arrivals.splice(0, 1000);
+  };
+  target.arrivals = arrivals;
+
+  /**
+   * T28: launch a debug atom bomb (default Madrid -> Paris, by an AI nation) and time the clock from the worker's
+   * updates as they arrive: crisis during the flight, flight duration, strategic again after the impact.
+   */
+  target.crisisProbe = async (opts: { from?: [number, number]; to?: [number, number]; owner?: number; weapon?: number; timeoutSec?: number } = {}) => {
+    const from = opts.from ?? [40.42, -3.7], to = opts.to ?? [48.85, 2.35];
+    const start = arrivals.length;
+    const t0 = performance.now();
+    ctx.sim.debug({ type: 'launchNuke', weapon: (opts.weapon ?? UnitType.AtomBomb) as 8, owner: opts.owner ?? 2, fromTile: latLonToTile(...from), targetTile: latLonToTile(...to) });
+    let launch = -1, unitId = -1, det = -1, strategic = -1;
+    const modesInFlight = new Set<string>();
+    while (performance.now() - t0 < (opts.timeoutSec ?? 60) * 1000) {
+      await wait(50);
+      for (let i = start; i < arrivals.length; i++) {
+        const a = arrivals[i];
+        for (const e of a.events) {
+          if (e.type === 'nukeLaunched' && launch < 0) {
+            launch = a.at;
+            unitId = e.unitId ?? -1;
+          }
+          if ((e.type === 'nukeDetonated' || e.type === 'nukeIntercepted') && e.unitId === unitId && det < 0) det = a.at;
+        }
+        if (launch >= 0 && det < 0 && a.at >= launch) modesInFlight.add(a.mode);
+        if (det >= 0 && strategic < 0 && a.at >= det && a.mode === 'strategic') strategic = a.at;
+      }
+      if (strategic >= 0) break;
+    }
+    return {
+      flightSec: det >= 0 && launch >= 0 ? (det - launch) / 1000 : -1,
+      backSec: strategic >= 0 ? (strategic - det) / 1000 : -1,
+      modesInFlight: [...modesInFlight],
+    };
+  };
+
   /**
    * Stage one unit of each class for the human (a land strip Madrid→Barcelona, an airbase, ships west of Lisbon),
    * then sample the rendered positions every frame for `seconds` real seconds.
@@ -75,27 +122,41 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       // Let the spawns reach the client and paths get planned.
       await wait(1200);
     }
-    const probe = new Map<number, { type: UnitType; km: number; last: { lat: number; lon: number } | null }>();
+    // Sim positions as the updates ARRIVE (the render interpolates between exactly these samples, so the on-screen
+    // speed is km per tick × ticks per real second; sampling arrivals keeps a slow renderer from skewing it).
+    const probe = new Map<number, { type: UnitType; km: number; ticks: number; last: { lat: number; lon: number } | null }>();
     for (const u of view.units.values()) {
       if (opts.stage !== false && before.has(u.id)) continue;
       if (u.owner !== HUMAN_ID && opts.stage !== false) continue;
       if (!staged.some((s) => s.type === u.type) && !V1_LIMIT[u.type]) continue;
-      probe.set(u.id, { type: u.type, km: 0, last: null });
+      probe.set(u.id, { type: u.type, km: 0, ticks: 0, last: null });
     }
-    const t0 = performance.now(), tick0 = view.gameHours * 10;
-    let now = t0;
-    while (now - t0 < seconds * 1000) {
-      now = await nextFrame();
-      for (const [id, p] of probe) {
-        const u = view.units.get(id);
-        if (!u) continue;
-        const ll = renderLatLon(u, view.alpha);
-        if (p.last) p.km += greatCircleKm(p.last.lat, p.last.lon, ll.lat, ll.lon);
+    const t0 = performance.now();
+    let ticks = 0;
+    const prevHook = ctx.sim.onArrival;
+    const UFX = 3, UFY = 4, STRIDE = UNIT_STRIDE;
+    ctx.sim.onArrival = (u, at) => {
+      prevHook?.(u, at);
+      if (u.ticks <= 0 || u.fullOwners) return;
+      ticks += u.ticks;
+      const a = u.units;
+      for (let o = 0; o < a.length; o += STRIDE) {
+        const p = probe.get(a[o]);
+        if (!p) continue;
+        const ll = tileXYToLatLon(a[o + UFX], a[o + UFY]);
+        if (p.last) {
+          const d = greatCircleKm(p.last.lat, p.last.lon, ll.lat, ll.lon);
+          if (d > 1e-6) {
+            p.km += d;
+            p.ticks += u.ticks;
+          }
+        }
         p.last = ll;
       }
-    }
+    };
+    await wait(seconds * 1000);
+    ctx.sim.onArrival = prevHook;
     const realSec = (performance.now() - t0) / 1000;
-    const ticks = view.gameHours * 10 - tick0;
     const ticksPerSec = ticks / realSec;
     // Front depth: the fastest measured offensive (km per game hour = km per real s at 1x).
     let front = 0;
@@ -103,14 +164,16 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
     const rows: ProbeRow[] = [];
     const byType = new Map<UnitType, { km: number; n: number }>();
     for (const p of probe.values()) {
+      if (p.ticks === 0) continue;
       const r = byType.get(p.type) ?? { km: 0, n: 0 };
       r.km += p.km;
-      r.n++;
+      r.n += p.ticks;
       byType.set(p.type, r);
     }
     for (const [type, r] of byType) {
-      const kmPerRealSec = r.km / r.n / realSec;
-      const kmPerTick = ticksPerSec > 0 ? kmPerRealSec / ticksPerSec : 0;
+      // km per tick while moving; on screen at 1x that is × 10 ticks per real second.
+      const kmPerTick = r.n > 0 ? r.km / r.n : 0;
+      const kmPerRealSec = kmPerTick * ticksPerSec;
       const at1x = kmPerTick * 10;
       const def = UNIT_DEFS[type];
       const limit = V1_LIMIT[type];

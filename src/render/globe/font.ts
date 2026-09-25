@@ -32,8 +32,85 @@ export interface SdfFont {
   glyph(ch: string): GlyphInfo;
 }
 
+/** Private-use code points for the label icons drawn by code (DESIGN_V2 §10.10). */
+export const GLYPH_STAR = '\uE000';
+export const GLYPH_SWORDS = '\uE001';
+export const GLYPH_HANDSHAKE = '\uE002';
+
 const CHARSET =
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ÁÉÍÓÚÜÑÇÀÈÌÒÙÂÊÎÔÛÄËÏÖÃÕÅØÆŒ .,-\'()&/:+%·#!?"';
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ÁÉÍÓÚÜÑÇÀÈÌÒÙÂÊÎÔÛÄËÏÖÃÕÅØÆŒ .,-\'()&/:+%·#!?"' + GLYPH_STAR + GLYPH_SWORDS + GLYPH_HANDSHAKE;
+
+/** Draw one of the icon glyphs (white on black) into a CELL canvas; returns its advance in px. */
+function drawIcon(g: CanvasRenderingContext2D, ch: string, penX: number, baseline: number): number {
+  const em = FONT_PX;
+  const cx = penX + em * 0.42, cy = baseline - em * 0.36;
+  g.save();
+  g.fillStyle = '#fff';
+  g.strokeStyle = '#fff';
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  if (ch === GLYPH_STAR) {
+    const R = em * 0.4, r = R * 0.45;
+    g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 5;
+      const rr = i % 2 === 0 ? R : r;
+      g.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+    }
+    g.closePath();
+    g.fill();
+  } else if (ch === GLYPH_SWORDS) {
+    // Two crossed swords: blades, cross-guards and pommels.
+    const L = em * 0.38;
+    for (const s of [-1, 1]) {
+      const dx = s * L * 0.72, dy = L * 0.72;
+      g.lineWidth = em * 0.085;
+      g.beginPath();
+      g.moveTo(cx - dx, cy - dy);
+      g.lineTo(cx + dx * 0.55, cy + dy * 0.55);
+      g.stroke();
+      // Guard (perpendicular), grip and pommel near the lower end.
+      const gx = cx + dx * 0.55, gy = cy + dy * 0.55;
+      const px = -dy / L, py = dx / L;
+      g.lineWidth = em * 0.07;
+      g.beginPath();
+      g.moveTo(gx - px * em * 0.13, gy - py * em * 0.13);
+      g.lineTo(gx + px * em * 0.13, gy + py * em * 0.13);
+      g.stroke();
+      g.lineWidth = em * 0.06;
+      g.beginPath();
+      g.moveTo(gx, gy);
+      g.lineTo(cx + dx * 0.85, cy + dy * 0.85);
+      g.stroke();
+      g.beginPath();
+      g.arc(cx + dx * 0.92, cy + dy * 0.92, em * 0.05, 0, Math.PI * 2);
+      g.fill();
+    }
+  } else if (ch === GLYPH_HANDSHAKE) {
+    // Two forearms meeting in a clasp.
+    g.lineWidth = em * 0.13;
+    g.beginPath();
+    g.moveTo(cx - em * 0.42, cy + em * 0.16);
+    g.lineTo(cx - em * 0.12, cy - em * 0.06);
+    g.moveTo(cx + em * 0.42, cy + em * 0.16);
+    g.lineTo(cx + em * 0.12, cy - em * 0.06);
+    g.stroke();
+    g.beginPath();
+    g.ellipse(cx, cy - em * 0.02, em * 0.2, em * 0.13, 0, 0, Math.PI * 2);
+    g.fill();
+    // Knuckles: short strokes over the clasp.
+    g.lineWidth = em * 0.045;
+    g.strokeStyle = '#000';
+    for (let i = -1; i <= 1; i++) {
+      g.beginPath();
+      g.moveTo(cx + i * em * 0.08, cy - em * 0.12);
+      g.lineTo(cx + i * em * 0.08 + em * 0.04, cy + em * 0.05);
+      g.stroke();
+    }
+  }
+  g.restore();
+  return em * 0.9;
+}
 const FONT_PX = 48;
 const SPREAD = 8;
 const CELL = 72;
@@ -118,8 +195,13 @@ export async function buildSdfFont(): Promise<SdfFont> {
     g.fillStyle = '#000';
     g.fillRect(0, 0, CELL, CELL);
     g.fillStyle = '#fff';
-    g.fillText(ch, penX, baseline);
-    const m = g.measureText(ch);
+    const isIcon = ch === GLYPH_STAR || ch === GLYPH_SWORDS || ch === GLYPH_HANDSHAKE;
+    let advPx: number;
+    if (isIcon) advPx = drawIcon(g, ch, penX, baseline);
+    else {
+      g.fillText(ch, penX, baseline);
+      advPx = g.measureText(ch).width;
+    }
     const img = g.getImageData(0, 0, CELL, CELL).data;
     for (let i = 0; i < CELL * CELL; i++) {
       const a = img[i * 4] / 255;
@@ -146,7 +228,7 @@ export async function buildSdfFont(): Promise<SdfFont> {
         atlas[(cy + y) * atlasW + cx + x] = Math.max(0, Math.min(255, Math.round(val * 255)));
       }
     }
-    const adv = m.width / FONT_PX;
+    const adv = advPx / FONT_PX;
     glyphs.set(ch, {
       adv,
       x0: -penX / FONT_PX,

@@ -214,8 +214,10 @@ export function createSimClient(bus: GameBus): SimClientApi {
   function onWorkerMessage(msg: FromWorker, mySession: number): void {
     if (mySession !== session) return;
     // The clock is metadata: expose it as soon as it arrives (a stalled frame must not delay "what clock runs now").
+    const at = performance.now();
     if (msg.kind === 'update' && msg.u.clock) view.clock = msg.u.clock;
-    queue.push({ msg, at: performance.now() });
+    if (msg.kind === 'update' && api.onArrival) api.onArrival(msg.u, at);
+    queue.push({ msg, at });
   }
 
   function segmentAlpha(now: number): number {
@@ -494,7 +496,8 @@ export function createSimClient(bus: GameBus): SimClientApi {
     }
   }
 
-  return {
+  const api: SimClientApi = {
+    onArrival: null,
     view,
     get running() {
       return worker !== null;
@@ -634,4 +637,5 @@ export function createSimClient(bus: GameBus): SimClientApi {
       view.reset();
     },
   };
+  return api;
 }

@@ -268,7 +268,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       setMeter('hp', u.hp, `${Math.round(u.hp * 100)}%`);
       if (live.troops) setText(live.troops, u.troops > 0 ? formatCompact(u.troops) : formatNumber(Math.round(def.maxHp * u.hp)));
       if (live.state) setText(live.state, t(stateKey(u)));
-      if (live.speed) setText(live.speed, `${Math.round(def.speed * 25 * 36)} km/h`);
+      if (live.speed) setText(live.speed, `${def.cruiseKmh} km/h`);
       if (live.order) toggleClass(live.order, 'is-on', hs.mode.kind === 'order');
       if (live.tc) toggleClass(live.tc, 'is-disabled', u.state === UnitState.Controlled);
     } else if (sel.kind === 'structure') {

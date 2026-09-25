@@ -116,6 +116,7 @@ ${GLSL_CLOUD_THIN}
 uniform sampler2D uClouds;
 uniform sampler2D uCloudMask;
 uniform vec4 uCloudK;
+uniform float uMaskMode;
 uniform vec2 uCloudOffset;
 uniform vec3 uSunDir;
 uniform float uSunE;
@@ -142,7 +143,14 @@ void main() {
   }
   c = smoothstep(0.02, 0.85, c);
   // The one extra texture sample: the territory cloud mask at the ground point under this fragment.
-  c *= cloudThin(texture2D(uCloudMask, vec2(vUv.x, 1.0 - vUv.y)), uCloudK);
+  float thin = cloudThin(texture2D(uCloudMask, vec2(vUv.x, 1.0 - vUv.y)), uCloudK);
+  if (uMaskMode > 1.5) {
+    // &mask=cloud measurement: the thinning factor and the raw cover, written raw.
+    if (c < 0.004) discard;
+    gl_FragColor = vec4(thin, c, 1.0, 1.0);
+    return;
+  }
+  c *= thin;
   if (c < 0.004) discard;
   float muS = dot(up, L);
   vec3 sunT = vSunT;
@@ -204,6 +212,7 @@ export function createAtmosphereLayers(
       uClouds: { value: clouds },
       uCloudMask: cloudMask,
       uCloudK: planet.uCloudK,
+      uMaskMode: planet.uMaskMode,
       uCloudOffset: planet.uCloudOffset,
       uSunDir: planet.uSunDir,
       uSunE: planet.uSunE,

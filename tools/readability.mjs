@@ -11,12 +11,16 @@
 //   mask       &mask=owner: flat owner-id false colour (decoded with shared/shots.ts OWNER_MASK)
 //   hidden     &clouds=hidden
 //   realistic  &clouds=realistic
+//   cloudmask  &mask=cloud: the cloud layer's own thinning factor per pixel (R) and raw cover (G)
 // Report:
 //   owners[]   per owner in view: pixels, mean CIELAB ΔE76 and ΔE2000 base vs territory=0 (day / night split)
 //   neutral    the same over neutral land
 //   borders    per pair of neighbouring regions: WCAG contrast of the border line against both fills
-//   clouds     ΔE base vs hidden over the human's land, and the cloud factor (ΔE base/hidden ÷ ΔE realistic/hidden
-//              over cloudy pixels) over other land and ocean; the texture samples in the cloud fragment shader
+//   clouds     ΔE base vs hidden over the human's land; the cloud factor over the human's land, other land and ocean:
+//              the mean thinning multiplier the cloud shader applied where there is cloud (from cloudmask), and the
+//              perceptual ratio ΔE(base, hidden) / ΔE(realistic, hidden) over cloudy pixels (Lab and tone mapping
+//              compress large changes, so it reads higher than the opacity factor); the texture samples in the cloud
+//              fragment shader
 //   repro      with --repeat 2: per-owner ΔE differences between two independent page loads
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
@@ -109,6 +113,7 @@ const VIEW = {
   mask: { territory: true, mask: 'owner', clouds: null },
   hidden: { territory: true, mask: null, clouds: 'hidden' },
   realistic: { territory: true, mask: null, clouds: 'realistic' },
+  cloudmask: { territory: true, mask: 'cloud', clouds: null },
 };
 
 async function settle(page, ms) {
@@ -327,9 +332,26 @@ function analyse(run) {
         if (er > 8) { a.cloudy++; a.num += e; a.den += er; }
       }
     }
+    // Direct factor from the cloud shader (cloudmask): mean thinning where the raw cover is > 0.1.
+    const fac = { human: [0, 0], other: [0, 0], ocean: [0, 0] };
+    if (images.cloudmask) {
+      const cm = images.cloudmask.data;
+      for (let i = 0; i < n; i++) {
+        if (cm[i * 4 + 2] !== 255 || cm[i * 4 + 1] < 26) continue;
+        const c = mask.cls[i];
+        const k = c === CLS.owned && mask.id[i] === 1 ? 'human' : c === CLS.owned || c === CLS.neutral ? 'other' : c === CLS.water ? 'ocean' : null;
+        if (!k) continue;
+        fac[k][0] += cm[i * 4] / 255;
+        fac[k][1]++;
+      }
+    }
     report.clouds = { shaderTextureSamples: meta.cloudSamples };
     for (const [k, a] of Object.entries(cls)) {
-      report.clouds[k] = { pixels: a.px, deltaEvsHidden: a.px ? +(a.e / a.px).toFixed(2) : null, cloudyPixels: a.cloudy, cloudFactor: a.den > 0 ? +(a.num / a.den).toFixed(3) : null };
+      report.clouds[k] = {
+        pixels: a.px, deltaEvsHidden: a.px ? +(a.e / a.px).toFixed(2) : null,
+        cloudFactor: fac[k][1] ? +(fac[k][0] / fac[k][1]).toFixed(3) : null, cloudyPixels: fac[k][1],
+        perceptualRatio: a.den > 0 ? +(a.num / a.den).toFixed(3) : null,
+      };
     }
   }
   return report;

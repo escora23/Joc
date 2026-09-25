@@ -33,6 +33,8 @@ export function setGlobeWorldTimeOverride(t: number | null): void {
 const RELIEF_TOP = 1 + (TOPO_MAX_METERS * RELIEF_EXAGGERATION) / (EARTH_RADIUS_KM * 1000);
 /** Camera layer holding only the ground (the &mask=owner measurement renders just that). */
 export const MASK_LAYER = 30;
+/** Camera layer of the cloud deck in the &mask=cloud measurement. */
+export const CLOUD_MASK_LAYER = 29;
 /** Cloud drift offset while frozen (&freeze=1). */
 const FROZEN_CLOUD_U = 0.37;
 
@@ -145,6 +147,8 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       earth.patch.layers.enable(MASK_LAYER);
       root.add(earth.sphere, earth.patch);
       layers = createAtmosphereLayers(planet, t.clouds, quality.atmosphere, quality.globeDetail, territory.uniforms.uCloudMask);
+      layers.clouds.layers.enable(CLOUD_MASK_LAYER);
+      layers.cloudsInner.layers.enable(CLOUD_MASK_LAYER);
       root.add(layers.clouds, layers.cloudsInner, layers.atmosphere);
       labels = createNationLabels(ctx, font);
       root.add(labels.mesh);
@@ -197,8 +201,9 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       planet.uBorderNoise.value = 0.16 * (1 - smoothstep(600, 1500, zoomKm));
       planet.uShoreK.value = smoothstep(1200, 1500, zoomKm);
       planet.uCloseK.value = 1 - smoothstep(150, 300, zoomKm);
-      planet.uMaskMode.value = shotView.mask === 'owner' ? 1 : 0;
-      cam.layers.set(shotView.mask === 'owner' ? MASK_LAYER : 0);
+      planet.uMaskMode.value = shotView.mask === 'owner' ? 1 : shotView.mask === 'cloud' ? 2 : 0;
+      cam.layers.set(shotView.mask ? MASK_LAYER : 0);
+      if (shotView.mask === 'cloud') cam.layers.enable(CLOUD_MASK_LAYER);
 
       territoryOpacity = damp(territoryOpacity, territoryTarget, 5, dt);
       if (Math.abs(territoryOpacity - territoryTarget) < 0.002) territoryOpacity = territoryTarget;

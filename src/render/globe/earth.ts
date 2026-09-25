@@ -576,7 +576,7 @@ void main() {
       float s = distPx;
       float cO = bandCov(s, 0.0, hO), cQ = bandCov(s, -hQ, 0.0);
       float nightL = 1.0 - smoothstep(-0.12, 0.06, muS);
-      float E = mix(1.5, 2.4, nightL);
+      float E = mix(1.5, 3.0, nightL);
       vec3 colO = mix(natO, vec3(1.0), 0.35) * E * (1.0 + 0.25 * float(O == HUMAN_ID) + 0.5 * hoverO);
       vec3 colQ = mix(natQ, vec3(1.0), 0.35) * E * (1.0 + 0.25 * float(Q == HUMAN_ID) + 0.5 * hoverQ);
       if ((flagsO & PAL_TRAITOR) != 0) colO = mix(colO, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));
@@ -716,11 +716,12 @@ void main() {
   }
 
   // Night side (DESIGN_V2 §10.4): a bluish floor light so land, coasts and islands stay readable, and the territory
-  // fill re-emitted at 70 % of its day brightness so nations keep their colours in the dark.
+  // fill re-emitted at 50 % of its day brightness so nations keep their colours in the dark (70 % made the fills so
+  // bright that the emissive borders fell below 3:1 contrast against them).
   float nightK = 1.0 - smoothstep(-0.12, 0.06, muS);
   if (nightK > 0.0) {
     col += albedo * vec3(0.55, 0.72, 1.0) * uNightFloor * nightK * (0.45 + 0.55 * landK);
-    emissive += nightFill * uSunE * 0.75 * 0.7 * nightK;
+    emissive += nightFill * uSunE * 0.75 * 0.5 * nightK;
   }
   col += emissive;
 
@@ -740,6 +741,11 @@ void main() {
   col = mix(col, vec3(0.3, 0.55, 1.0) * dayK * 0.8, rim * 0.6);
 #endif
 
+  if (uMaskMode > 1.5) {
+    // &mask=cloud: the ground is black, only the cloud deck writes values.
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
   if (uMaskMode > 0.5) {
     // Flat owner-id false colour for tools/readability.mjs (shared/shots.ts OWNER_MASK), written raw.
     float nightB = muS < -0.02 ? ${OWNER_MASK.night}.0 : 0.0;

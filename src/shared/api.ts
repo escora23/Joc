@@ -6,7 +6,7 @@
 
 import type * as THREE from 'three';
 import type { GameBus } from './events';
-import type { PlayerCommand, SimDebugAction } from './protocol';
+import type { PlayerCommand, SimDebugAction, TickUpdate } from './protocol';
 import type { QualityProfile } from './quality';
 import type { SettingsStore } from './settings';
 import type {
@@ -157,6 +157,8 @@ export interface SimClientApi {
    * coords), 'tactical' / 'travel' from command mode with a rate in game s per real s. Crisis is decided by the worker.
    */
   setClock(mode: 'strategic' | 'observation' | 'tactical' | 'travel', rate?: number, focus?: { x: number; y: number }, throttled?: boolean): void;
+  /** Debug/measurement hook: called when an update ARRIVES from the worker (before the frame applies it). */
+  onArrival: ((u: TickUpdate, atMs: number) => void) | null;
   /** The player's crisis / observation settings (the worker decides crisis time from them, §8.5). Kept across sessions. */
   setClockSettings(crisisTime: 'always' | 'mine' | 'off', observationTime: boolean): void;
   /** Serialise the running game (§12.8); resolves with the save blob. */
@@ -316,6 +318,11 @@ export interface UiApi extends Subsystem {
   showLoading(): LoadingHandle;
   /** App state changed: show the matching screen (menu, setup, spawn HUD, HUD, command, end). */
   setState(state: AppState, prev: AppState): void;
+  /**
+   * Screen rectangles (client px) covered by visible HUD panels right now, so world overlays (nation labels) can stay
+   * clear of them (DESIGN_V2 §10.10). Cheap to call every frame (refreshed at most 4 times a second).
+   */
+  getOccludedRects(): readonly DOMRect[];
 }
 
 export type SfxCue =

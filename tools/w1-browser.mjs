@@ -86,8 +86,12 @@ if (want('topbar')) {
   await page.screenshot({ path: path.join(out, 'topbar-1x.png'), clip: { x: 1100, y: 0, width: 500, height: 140 } });
   for (const [sp, want] of [[0.5, '0,5× · 1 s = 30 min'], [2, '2× · 1 s = 2 h'], [4, '4× · 1 s = 4 h']]) {
     await setSpeed(sp);
-    await sleep(1200);
-    const chip = await ev(() => document.querySelector('.fu-clockchip')?.textContent ?? '');
+    // The HUD text refreshes with the frames (a software renderer draws a frame every 1-2 s here).
+    let chip = '';
+    for (let i = 0; i < 40 && chip !== want; i++) {
+      await sleep(250);
+      chip = await ev(() => document.querySelector('.fu-clockchip')?.textContent ?? '');
+    }
     row('§2.7', `scale chip at ${sp}x`, chip, want, chip === want);
   }
   await setSpeed(1);
@@ -98,13 +102,17 @@ if (want('obs')) {
   await look(40.4, -3.7, 40);
   let c = null;
   const tIn = Date.now();
-  for (let i = 0; i < 30; i++) {
-    await sleep(200);
+  for (let i = 0; i < 40; i++) {
+    await sleep(100);
     c = await clock();
-    if (c.mode === 'observation' && c.rate === 60) break;
+    if (c.mode === 'observation' && Math.abs(c.rate - 60) < 0.5) break;
   }
   row('T41', 'camera 40 km: clock', `${c.mode} rate ${c.rate.toFixed(0)} after ${((Date.now() - tIn) / 1000).toFixed(1)} s`, "observation, rate 60", c.mode === 'observation' && Math.abs(c.rate - 60) < 0.5);
-  const chip = await ev(() => document.querySelector('.fu-clockchip')?.textContent ?? '');
+  let chip = '';
+  for (let i = 0; i < 40 && chip !== 'OBSERVACIÓN · 1 s = 1 min'; i++) {
+    await sleep(250);
+    chip = await ev(() => document.querySelector('.fu-clockchip')?.textContent ?? '');
+  }
   row('§2.7', 'scale chip in observation', chip, 'OBSERVACIÓN · 1 s = 1 min', chip === 'OBSERVACIÓN · 1 s = 1 min');
   await page.screenshot({ path: path.join(out, 'topbar-observation.png'), clip: { x: 1100, y: 0, width: 500, height: 140 } });
   await look(40.4, -3.7, 70);
@@ -128,40 +136,12 @@ async function crisisRun(speed) {
   await look(45, 0, 3000);
   await setSpeed(speed);
   await sleep(1500);
-  const n0 = await ev(() => window.__w1.det.length);
-  const r = await ev(async () => {
-    const { ctx } = window.__front;
-    const tile = (lat, lon) => Math.min(799, Math.max(0, Math.floor(((90 - lat) / 180) * 800))) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
-    // An AI nation launches (owner 2) from Madrid at Paris: crisisTime 'always' engages for any nuclear flight.
-    ctx.sim.debug({ type: 'launchNuke', weapon: 8, owner: 2, fromTile: tile(40.42, -3.7), targetTile: tile(48.85, 2.35) });
-    const t = performance.now();
-    return t;
-  });
-  // Poll the clock until the detonation, then until strategic.
-  let crisisSeen = false, crisisAll = true, detAt = -1, backAt = -1, launchAt = -1;
-  const tEnd = Date.now() + 60000;
-  const samples = [];
-  while (Date.now() < tEnd) {
-    await sleep(100);
-    const s = await ev((n0) => ({ c: window.__front.clock(), now: performance.now(), det: window.__w1.det.slice(n0), launch: window.__w1.launch.slice(-1)[0] }), n0);
-    if (launchAt < 0 && s.launch && s.launch.t >= r - 50) launchAt = s.launch.t;
-    if (s.det.length === 0) {
-      if (s.c.mode === 'crisis') crisisSeen = true;
-      else if (launchAt > 0 && s.now - launchAt > 300) crisisAll = false;
-      samples.push(s.c.mode);
-    } else {
-      if (detAt < 0) detAt = s.det[0].t;
-      if (s.c.mode === 'strategic') {
-        backAt = s.now;
-        break;
-      }
-    }
-  }
-  const flight = detAt > 0 && launchAt > 0 ? (detAt - launchAt) / 1000 : -1;
-  const back = backAt > 0 ? (backAt - detAt) / 1000 : -1;
-  row('T28', `${speed}x: clock during the flight`, crisisSeen && crisisAll ? 'crisis' : samples.join(','), 'crisis', crisisSeen && crisisAll);
-  row('T28', `${speed}x: flight Madrid->Paris`, `${flight.toFixed(1)} real s`, '10–20 real s', flight >= 10 && flight <= 20);
-  row('T28', `${speed}x: strategic again after impact`, `${back.toFixed(1)} real s`, '<= 4 real s', back >= 0 && back <= 4);
+  // Timed from the worker updates as they ARRIVE (the frame rate of a software renderer must not skew it).
+  const r = await ev(() => window.__front.crisisProbe({}));
+  const crisisOnly = r.modesInFlight.length > 0 && r.modesInFlight.every((m) => m === 'crisis');
+  row('T28', `${speed}x: clock during the flight`, r.modesInFlight.join(','), 'crisis', crisisOnly);
+  row('T28', `${speed}x: flight Madrid->Paris`, `${r.flightSec.toFixed(1)} real s`, '10–20 real s', r.flightSec >= 10 && r.flightSec <= 20);
+  row('T28', `${speed}x: strategic again after impact`, `${r.backSec.toFixed(1)} real s`, '<= 4 real s', r.backSec >= 0 && r.backSec <= 4);
   await setSpeed(1);
 }
 if (want('crisis')) {
