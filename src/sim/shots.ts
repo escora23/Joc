@@ -433,6 +433,8 @@ registerShot('sim-war', 'sim-core', 'Staged total war over western Europe: nukes
   dbg({ type: 'spawnUnit', unit: UnitType.TradeShip, owner: HUMAN_ID, tile: T(43.8, -8.5), targetTile: T(50.0, -5.0) });
   dbg({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: HUMAN_ID, tile: T(42.6, -1.8), targetTile: T(44.8, 0.0) });
   dbg({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: HUMAN_ID, tile: T(42.3, 1.2), targetTile: T(44.5, 2.5) });
+  // v2: offensives need a declared war (staged without mobilization).
+  dbg({ type: 'war', a: HUMAN_ID, b: enemy });
   ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.35, tile: T(45.0, 1.0) });
   // Let the exchange play out (flight times are ~6-9 s of game time), then freeze with the MIRV in the air.
   ctx.sim.setSpeed(4);

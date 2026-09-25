@@ -2,7 +2,10 @@
 // fighter squadrons, bombers, drone swarms and trains. Owner: sim-core. Worker-only.
 // Missiles, nukes, SAM interceptors and shells are flown by weapons.ts (they share the unit maps).
 
-import { HUMAN_ID, MAP_H, MAP_W, TILE_COUNT, TILE_KM, UNIT_DEFS, kmhToKmPerTick } from '../shared/constants';
+import {
+  EMBARK_PORT_RANGE_KM, EMBARK_PORT_TICKS, EMBARK_SHORE_TICKS, HUMAN_ID, INVASION_DETECT_TILES, MAP_H, MAP_W, TILE_COUNT,
+  TILE_KM, UNIT_DEFS, kmhToKmPerTick,
+} from '../shared/constants';
 import { StructureType, UnitState, UnitType, type BuildableUnit } from '../shared/types';
 import {
   AIRBASE_CAPACITY, AIRBASE_INTERCEPT_RANGE, AIRCRAFT_FUEL_TICKS, AIRCRAFT_STRIKE_RANGE, ARMY_BASE_CAPACITY, MAX_BOATS,
@@ -11,7 +14,7 @@ import {
 } from './balance';
 import type { Game } from './game';
 import { Attack, Mode, Player, Structure, Unit } from './state';
-import { advanceKm, dist2, latCos, wdx, wrapXf } from './spatial';
+import { advanceKm, dist2, distKm, latCos, wdx, wrapXf } from './spatial';
 
 const AIR_TYPES = new Set<number>([UnitType.FighterSquadron, UnitType.Bomber, UnitType.DroneSwarm]);
 const PROJECTILES = new Set<number>([
@@ -148,6 +151,20 @@ export class UnitSystem {
       g.message(p.id, 'msg.cannotAttackAlly');
       return false;
     }
+    // v2 (§4.1, §4.2): a nation must be at war with us; while we still mobilize, the landing is queued.
+    const D = g.playerById[o];
+    if (o !== 0 && D && D.kind !== 'tribe') {
+      if (p.kind === 'tribe') return false;
+      if (!g.war.atWar(p.id, o)) {
+        g.message(p.id, 'msg.notAtWar');
+        return false;
+      }
+      if (g.war.mobilizingUntil(p.id, o) > 0) {
+        g.war.queue(p.id, o, targetTile, ratio, true);
+        g.message(p.id, 'msg.mobilizing', 'info');
+        return true;
+      }
+    }
     // Departure: our coastal tile on the same sea, closest to the landing.
     g.nav.coastComponents(landing, this.comps);
     if (this.comps.length === 0) {
@@ -190,6 +207,16 @@ export class UnitSystem {
     p.boats++;
     const u = this.spawn(UnitType.TransportShip, p.id, (start % MAP_W) + 0.5, ((start / MAP_W) | 0) + 0.5, false);
     u.troops = troops;
+    // Embarkation (§4.11): 6 h at an own port within 600 km of the departure coast, else 12 h on the open shore.
+    const bx = (best % MAP_W) + 0.5, by = ((best / MAP_W) | 0) + 0.5;
+    let embark = EMBARK_SHORE_TICKS;
+    for (const s of g.structByOwner.get(p.id) ?? []) {
+      if (s.type === StructureType.Port && s.operational && distKm(s.x, s.y, bx, by) <= EMBARK_PORT_RANGE_KM) {
+        embark = EMBARK_PORT_TICKS;
+        break;
+      }
+    }
+    u.embarkUntil = g.tick + embark;
     u.targetTile = landing;
     u.toX = lx;
     u.toY = ly;
@@ -204,7 +231,53 @@ export class UnitSystem {
     g.emit({ type: 'unitSpawned', tick: g.tick, unitId: u.id, unit: u.type, owner: p.id, x: u.x, y: u.y });
     g.emit({ type: 'boatLaunched', tick: g.tick, unitId: u.id, owner: p.id, fromTile: best, toTile: landing, troops });
     g.emit({ type: 'attackStarted', tick: g.tick, attackId: a.id, attacker: p.id, defender: o, troops, tile: landing, naval: true });
+    g.invariants?.onHostileLaunch(p.id, o, 'invasion');
+    // Detection at embarkation (§4.11): the departure inside the target's radar coverage (v2-stub(W1→W4): v1 radar
+    // range), or a neighbour across ≤ 400 km of water. Otherwise the coast sees the convoy 16 tiles out.
+    if (o !== 0) {
+      let by: 'radar' | 'neighbour' | null = null;
+      for (const s of g.structByOwner.get(o) ?? []) {
+        if (s.type === StructureType.Radar && s.operational && dist2(s.x, s.y, bx, by0(best)) <= RADAR_RANGE * RADAR_RANGE) {
+          by = 'radar';
+          break;
+        }
+      }
+      if (!by && distKm(bx, by0(best), lx, ly) <= 400) by = 'neighbour';
+      if (by) this.detect(u, by);
+    }
     return true;
+  }
+
+  /** The target learns of an invasion convoy (once): invasionDetected with the ETA of the landing. */
+  private detect(u: Unit, by: 'radar' | 'coast' | 'neighbour'): void {
+    const g = this.g;
+    if (u.detected) return;
+    u.detected = true;
+    const target = g.owner[u.targetTile];
+    if (target === 0) return;
+    const a = g.attackList.find((x) => x.id === u.attackId && !x.ended);
+    g.emit({
+      type: 'invasionDetected', tick: g.tick, unitId: u.id, owner: u.owner, target, toTile: u.targetTile,
+      etaTicks: this.convoyEta(u), troops: Math.floor(a ? a.troops : u.troops), by,
+    });
+  }
+
+  /** Ticks until a transport convoy lands: the rest of its embarkation plus the remaining water path at 35 km/h. */
+  convoyEta(u: Unit): number {
+    const g = this.g;
+    let km = 0;
+    const path = u.path;
+    if (path) {
+      let px = u.x, py = u.y;
+      for (let i = u.pathI; i < path.length; i++) {
+        const t = path[i];
+        const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
+        km += kmBetween(px, py, tx, ty);
+        px = tx;
+        py = ty;
+      }
+    } else km = kmBetween(u.x, u.y, u.toX, u.toY);
+    return Math.max(0, u.embarkUntil - g.tick) + Math.ceil(km / KM_PER_TICK[UnitType.TransportShip]);
   }
 
   /** Nearest coastal playable tile to a target (the target itself when coastal). */
@@ -619,6 +692,13 @@ export class UnitSystem {
   // --- transport ships --------------------------------------------------------------------------------
   private stepTransport(u: Unit): void {
     const g = this.g;
+    // Embarking in port / on the shore (§4.11): the convoy waits, visible, until its troops are aboard.
+    if (g.tick < u.embarkUntil && u.mode !== Mode.Return && !u.pathFailed) {
+      u.state = UnitState.Launching;
+      const a0 = g.attackList.find((x) => x.id === u.attackId && !x.ended);
+      if (a0) a0.state = 'embarking';
+      return;
+    }
     if (u.pathFailed) {
       // No route: troops go back to the reserve.
       const p = g.playerById[u.owner];
@@ -633,7 +713,17 @@ export class UnitSystem {
     }
     if (!u.path) return;
     u.state = u.mode === Mode.Return ? UnitState.Returning : UnitState.Moving;
-    if (!this.followPath(u, KM_PER_TICK[UnitType.TransportShip])) return;
+    const sailing = g.attackList.find((x) => x.id === u.attackId && !x.ended);
+    if (sailing && sailing.state === 'embarking') {
+      sailing.state = 'sailing';
+      g.attacksDirty = true;
+    }
+    const done = this.followPath(u, KM_PER_TICK[UnitType.TransportShip]);
+    if (!u.detected && u.mode !== Mode.Return && u.targetTile >= 0) {
+      const tx = (u.targetTile % MAP_W) + 0.5, ty = ((u.targetTile / MAP_W) | 0) + 0.5;
+      if (dist2(u.x, u.y, tx, ty) <= INVASION_DETECT_TILES * INVASION_DETECT_TILES) this.detect(u, 'coast');
+    }
+    if (!done) return;
     const a = g.attackList.find((x) => x.id === u.attackId && !x.ended);
     const p = g.playerById[u.owner];
     if (u.mode === Mode.Return || u.aux < 0) {
@@ -1234,3 +1324,8 @@ function kmBetween(ax: number, ay: number, bx: number, by: number): number {
 }
 
 export { AIR_TYPES, PROJECTILES, RADAR_RANGE };
+
+/** Tile-centre y of a tile index (continuous tile coords). */
+function by0(t: number): number {
+  return ((t / MAP_W) | 0) + 0.5;
+}

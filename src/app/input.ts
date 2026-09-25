@@ -5,7 +5,7 @@
 
 import type { GameContext } from '../shared/api';
 import type { WorldPointerEvent } from '../shared/events';
-import { latLonToTile } from '../shared/geo';
+import { latLonToTile, tileToLatLon } from '../shared/geo';
 import type { LatLon } from '../shared/types';
 
 const CLICK_SLOP = 6;
@@ -29,6 +29,15 @@ export function createInputRouter(ctx: GameContext): InputRouter {
     const tile = hit ? latLonToTile(hit.lat, hit.lon) : -1;
     const unitId = ctx.units.pickUnit(x, y);
     const structureId = unitId >= 0 ? -1 : ctx.units.pickStructure(x, y);
+    // A small-island marker stands for its island: hover and clicks act on the island's tile (DESIGN_V2 §10.6).
+    const island = unitId < 0 && structureId < 0 ? ctx.globe.pickIsland?.(x, y) ?? null : null;
+    if (island) {
+      const ill = tileToLatLon(island.tile);
+      return {
+        button, tile: island.tile, lat: ill.lat, lon: ill.lon, unitId, structureId,
+        clientX: x, clientY: y, shift, ctrl, alt, islandLabel: island.label,
+      };
+    }
     return {
       button, tile, lat: hit ? hit.lat : 0, lon: hit ? hit.lon : 0, unitId, structureId,
       clientX: x, clientY: y, shift, ctrl, alt,

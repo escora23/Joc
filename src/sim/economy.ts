@@ -2,7 +2,9 @@
 // capture/destruction, the rail network (factories send gold trains to cities & ports) and maritime trade.
 // Owner: sim-core. Worker-only.
 
-import { BALANCE, HUMAN_ID, MAP_W, STRUCTURE_DEFS, TILE_COUNT, structureCost } from '../shared/constants';
+import {
+  BALANCE, HUMAN_ID, MAP_W, STRUCTURE_DEFS, TILE_COUNT, TROOP_REGROWTH_SCALE, WAR_GROWTH_MUL, structureCost,
+} from '../shared/constants';
 import { STRUCTURE_TYPES, StructureType, UnitType } from '../shared/types';
 import {
   CIVILIANS_PER_CITY_LEVEL, CIVILIANS_PER_TILE, DEMOLISH_REFUND, GOLD_BASE_PER_TICK, GOLD_PER_CITY_LEVEL_PER_TICK,
@@ -23,6 +25,8 @@ export class EconomySystem {
   private readonly ports: Structure[] = [];
   private readonly comps: number[] = [];
   private readonly comps2: number[] = [];
+
+  private readonly atWarSet = new Set<number>();
 
   constructor(private readonly g: Game) {}
 
@@ -234,9 +238,19 @@ export class EconomySystem {
     const g = this.g;
     const tick = g.tick;
     const diff = g.difficulty;
+    // Players at war with anyone regrow at half rate (§4.6).
+    const atWar = this.atWarSet;
+    atWar.clear();
+    for (const w of g.war.list()) {
+      atWar.add(w.a);
+      atWar.add(w.b);
+    }
     for (const p of g.playerArr) {
       if (!p.alive || !p.spawned) continue;
-      const eff = Math.max(0, p.tiles - p.falloutTiles * 0.8);
+      // v2 (§4.13, §6.7): occupied tiles count 50 % for the troop cap and 25 % for taxes; fallout 20 % / 0 %.
+      const occ = Math.min(p.occupied, p.tiles);
+      const eff = Math.max(0, p.tiles - p.falloutTiles * 0.8 - occ * 0.5);
+      const effTax = Math.max(0, p.tiles - p.falloutTiles - occ * 0.75);
       const cityLv = p.structLevels[StructureType.City];
       const armyLv = p.structLevels[StructureType.ArmyBase];
       const facLv = p.structLevels[StructureType.Factory];
@@ -244,16 +258,30 @@ export class EconomySystem {
       const max = baseMaxTroops(eff, cityLv, armyLv) * kindCapMul(p.kind, diff) * p.mod('maxTroops', tick);
       p.maxTroops = max;
       let growth = troopGrowthPerTick(p.troops, max);
+      // Recruitment (§6.7): occupied land recruits at 50 %. v2-stub(W1→W1c): × f_pop once population moves with land.
+      p.recruitment = p.tiles > 0 ? 1 - 0.5 * (occ / p.tiles) : 1;
       if (growth > 0) {
         const falloutFrac = p.tiles > 0 ? p.falloutTiles / p.tiles : 0;
-        growth *= kindGrowthMul(p.kind, diff) * p.mod('troopGrowth', tick) * (1 - 0.75 * falloutFrac);
+        growth *= TROOP_REGROWTH_SCALE * p.recruitment * kindGrowthMul(p.kind, diff) * p.mod('troopGrowth', tick)
+          * (1 - 0.75 * falloutFrac) * (atWar.has(p.id) ? WAR_GROWTH_MUL : 1);
       }
       p.troopGrowth = growth;
       p.troops = Math.max(0, p.troops + growth);
       // Gold.
       const base = p.kind === 'tribe' ? GOLD_BASE_PER_TICK * 0.5 : GOLD_BASE_PER_TICK;
-      const income = (base + GOLD_PER_TILE_PER_TICK * eff + GOLD_PER_CITY_LEVEL_PER_TICK * cityLv
+      let income = (base + GOLD_PER_TILE_PER_TICK * effTax + GOLD_PER_CITY_LEVEL_PER_TICK * cityLv
         + (facLv * BALANCE.goldPerFactoryPerSec) / 10) * kindGoldMul(p.kind, diff) * p.mod('goldIncome', tick);
+      // Tribute after a lost war (§4.15): a share of the income goes to the winner.
+      if (p.tributeTo && tick < p.tributeUntil) {
+        const w = g.playerById[p.tributeTo];
+        const due = income * p.tributeShare;
+        if (w && w.alive) {
+          income -= due;
+          w.gold += due;
+          w.stats.goldEarned += due;
+          w.goldGainedThisTick += due;
+        }
+      } else if (p.tributeTo) p.tributeTo = 0;
       p.income = income;
       p.gold += income;
       p.stats.goldEarned += income;

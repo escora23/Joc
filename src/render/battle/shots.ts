@@ -76,11 +76,14 @@ async function stageTheatre(s: ShotContext, advHeading: number): Promise<Staged>
   ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: T(cLat + dLat * 19 * deg, cLon + dLon * 19 * deg), radius: 19 });
   ctx.sim.debug({ type: 'addTroops', playerId: HUMAN_ID, amount: 900_000 });
   ctx.sim.debug({ type: 'addTroops', playerId: enemy, amount: 700_000 });
+  // v2: offensives need a declared war (staged without mobilization).
+  ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: enemy });
   ctx.sim.setSpeed(1);
   await s.waitFrames(2);
   // Attack across the line and freeze the sim as soon as the contact line shows up as a front (the globe's hot front
   // and the far layer read it), re-issuing the attack if the first wave dies out.
-  const hasFront = () => view.fronts.some((f) => (f.a === HUMAN_ID && f.b === enemy) || (f.a === enemy && f.b === HUMAN_ID));
+  // v2: every war has quiet fronts; wait for one with an offensive on it.
+  const hasFront = () => view.fronts.some((f) => ((f.a === HUMAN_ID && f.b === enemy) || (f.a === enemy && f.b === HUMAN_ID)) && !f.quiet);
   // The sim worker ticks on wall-clock time, so poll by time (software-rendered frames can take seconds each).
   // The near battlefield does not depend on it (it falls back to the nations' troops), so the wait is bounded.
   const t0 = performance.now();

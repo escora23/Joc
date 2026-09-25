@@ -153,6 +153,63 @@ export function wireNews(hs: HudShared, ticker: Ticker, toasts: Toasts, alarm: N
   bus.on('structureCaptured', (e) => {
     if (e.to === HUMAN_ID) toasts.push(t('toast.captured', { s: t(`structure.${STRUCTURE_DEFS[e.structure].id}`) }), 'success', 3500, 'flag');
   });
+  // ---- v2 (W1): war, peace, sieges, offensives, invasions (§4, §8.2). v2-stub(W1→W3): W3 routes these through
+  // the alert API; until then they are ticker news and toasts.
+  const reason = (key: string) => t(key);
+  bus.on('warDeclared', (e) => {
+    if (!isMajor(e.aggressor) && !isMajor(e.target)) return;
+    const involved = e.aggressor === HUMAN_ID || e.target === HUMAN_ID;
+    const key = e.parentWar ? 'news.warJoined' : e.betrayal ? 'news.warDeclaredBetrayal' : 'news.warDeclared';
+    const tile = ctx.sim.view.players[e.target]?.capitalTile ?? -1;
+    news(t(key, { a: name(e.aggressor), b: name(e.target), reason: reason(e.reasonKey) }), involved ? 'critical' : 'warning', tile >= 0 ? tile : undefined);
+    const hours = Math.max(0, Math.round((e.mobilizeUntilTick - e.tick) / 10));
+    if (e.target === HUMAN_ID) {
+      toasts.push(t('toast.warOnUs', { name: name(e.aggressor), reason: reason(e.reasonKey), hours }), 'danger', 8000, 'attack');
+      hs.sound('error');
+    } else if (e.aggressor === HUMAN_ID) toasts.push(t('toast.warByUs', { name: name(e.target), hours }), 'warning', 5000, 'attack');
+    else if (e.parentWar && ctx.sim.view.human?.allies.includes(e.aggressor)) toasts.push(t('toast.allyJoined', { name: name(e.aggressor) }), 'success', 5000, 'alliance');
+  });
+  bus.on('warEnded', (e) => {
+    if (!isMajor(e.a) && !isMajor(e.b)) return;
+    if (e.terms.kind === 'capitulation') return; // the capitulation event tells it
+    const loser = e.winner ? (e.winner === e.a ? e.b : e.a) : 0;
+    news(t(`news.warEnded.${e.terms.kind}`, { a: name(e.a), b: name(e.b), loser: loser ? name(loser) : '', winner: e.winner ? name(e.winner) : '', tiles: e.terms.tiles ?? 0 }), e.a === HUMAN_ID || e.b === HUMAN_ID ? 'critical' : 'info');
+    if (e.a === HUMAN_ID || e.b === HUMAN_ID) toasts.push(t('toast.peace', { name: name(e.a === HUMAN_ID ? e.b : e.a) }), 'info', 5000, 'alliance');
+  });
+  bus.on('capitulation', (e) => {
+    news(t('news.capitulation', { loser: name(e.loser), winner: name(e.winner), tiles: e.tiles }), e.loser === HUMAN_ID || e.winner === HUMAN_ID ? 'critical' : 'warning');
+    if (e.winner === HUMAN_ID) toasts.push(t('toast.capitulationUs', { name: name(e.loser), tiles: e.tiles }), 'success', 6000, 'flag');
+  });
+  bus.on('tension', (e) => {
+    if (e.to !== HUMAN_ID) return;
+    toasts.push(t(e.reasonKey, { name: name(e.from) }), 'warning', 7000, 'attack');
+  });
+  bus.on('siege', (e) => {
+    if (!isMajor(e.owner)) return;
+    const by = e.by.filter((x) => x > 0);
+    if (e.stage === 'start') {
+      newsXY(t('news.siegeStart', { a: name(e.owner), b: by.map(name).join(', '), tiles: e.tiles }), e.owner === HUMAN_ID || by.includes(HUMAN_ID) ? 'critical' : 'warning', e.x, e.y);
+      if (e.owner === HUMAN_ID) toasts.push(t('toast.besieged', { tiles: e.tiles }), 'danger', 7000, 'attack');
+      else if (by.includes(HUMAN_ID)) toasts.push(t('toast.besieging', { name: name(e.owner), tiles: e.tiles }), 'success', 5000, 'attack');
+    } else if (e.owner === HUMAN_ID || by.includes(HUMAN_ID)) newsXY(t('news.siegeEnd', { a: name(e.owner) }), 'info', e.x, e.y);
+  });
+  bus.on('offensive', (e) => {
+    if (e.attacker === HUMAN_ID) {
+      if (e.stage === 'stalled') toasts.push(t('toast.offensiveStalled', { name: name(e.defender), ratio: e.ratio.toFixed(1) }), 'warning', 5000, 'attack');
+      else if (e.stage === 'retreating') toasts.push(t('toast.offensiveEnded', { name: name(e.defender) }), 'warning', 5000, 'attack');
+    } else if (e.defender === HUMAN_ID && e.stage === 'retreating') toasts.push(t('toast.offensiveRetreat', { name: name(e.attacker) }), 'success', 4500, 'attack');
+  });
+  bus.on('invasionDetected', (e) => {
+    if (e.target !== HUMAN_ID) return;
+    toasts.push(t('toast.invasionDetected', { name: name(e.owner), troops: formatCompact(e.troops), hours: Math.max(1, Math.round(e.etaTicks / 10)) }), 'danger', 8000, 'boat');
+    hs.sound('error');
+  });
+  bus.on('escalation', (e) => {
+    if (!isMajor(e.by)) return;
+    news(t('news.escalation', { a: name(e.by), b: name(e.against), level: t(`escalation.${e.level}`) }), e.against === HUMAN_ID || e.level >= 3 ? 'critical' : 'warning');
+    if (e.against === HUMAN_ID) toasts.push(t('toast.escalation', { name: name(e.by), level: t(`escalation.${e.level}`) }), 'danger', 6000, 'attack');
+  });
+
   bus.on('gameTornDown', () => {
     ticker.clear();
     toasts.clear();

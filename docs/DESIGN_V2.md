@@ -198,7 +198,7 @@ Purely visual projectiles (shells, SAM streaks, tracers from `combat` events) ge
 | Aircraft rearm: fighter / bomber / drone | 2 / 6 / 4 h | 20 / 60 / 40 | |
 | Troop regrowth 10 % → 90 % of the cap, at peace, recruitment factor 1 | **10–20 days** (v1's logistic × `TROOP_REGROWTH_SCALE`, §4.6); ×0.5 while at war | 2,400–4,800 | 4–8 min |
 | Defender mobilization ramp (`mob_f` 0.5 → 1) | 6 h from the war declaration for every front of that war; from the front's creation for a front opened later (landing, new contact) | 60 | 6 s |
-| Garrison redeployment between fronts (§4.4) | 63 % of the gap closed in 6 h (1/60 of it per tick) | 60 | 6 s |
+| Garrison redeployment between fronts (§4.4) | 63 % of the gap closed in 4.5 h (1/45 of it per tick; W1 retune for T34, was 1/60) | 45 | 4.5 s |
 | AI mobilization after declaring war (Easy/Normal/Hard/Insane) | 12 / 8 / 6 / 4 h | 120 / 80 / 60 / 40 | |
 | **Human** mobilization after declaring war (Easy/Normal/Hard/Insane) | 4 / 6 / 8 / 8 h | 40 / 60 / 80 / 80 | |
 | Mobilization of an ally joining through a call to arms, and of a rebel movement | 6 h | 60 | |
@@ -280,7 +280,7 @@ does. A target that measures a time which never happens (e.g. `t_half` of a stal
 
 | # | Measurement | Target | Design estimate (§4.5) | v1 (audit) |
 |---|---|---|---|---|
-| T1 | `conquest --mult 2`: 1,288-tile nation around Madrid, attacker gets 2× its troops and commits 100 %; the audit re-aims the axis at the defender's largest remaining region every 200 ticks, as an AI war plan does | first tile lost ≥ **20 ticks** after the offensive starts; capital in **[600, 1,800]** ticks; half the land in **[900, 2,400]**; 90 % ≥ 1,300 and reached within 5,000 | ~55 / ~900 / ~1,300 / ~2,200 | 1 / 13 / 16 / 19 ticks |
+| T1 | `conquest --mult 2`: the Iberian nation around Madrid (Spain, Portugal, Andorra, Gibraltar: 1,216 tiles; W1's staging, v1's audit used a 1,288-tile disc) against a staged metropolitan France, attacker gets 2× its troops and commits 100 %; the audit re-aims the axis at the defender's largest remaining region every 200 ticks, as an AI war plan does | first tile lost ≥ **20 ticks** after the offensive starts; capital in **[600, 1,800]** ticks; half the land in **[900, 2,400]**; 90 % ≥ 1,300 and reached within 5,000 | ~55 / ~900 / ~1,300 / ~2,200 | 1 / 13 / 16 / 19 ticks |
 | T2 | `conquest --mult 10` | half in **[600, 1,200]** ticks | ~870 (logistics backstop) | 16 ticks |
 | T3 | `conquest --mult 1` | the defender keeps ≥ 70 % of its land after 3,000 ticks | ~89 % | falls in 1.3 s |
 | T4 | Odds matter: `t_half` exists (≤ 3,000 ticks) for mult 2, 4 and 10, and `t_half(mult 4) / t_half(mult 2)` | ratio between 0.4 and 0.85 | ~0.67 | 1.0 (identical) |
@@ -422,7 +422,8 @@ For an offensive `a` of attacker A against defender D on front `f`:
   * target share `target_f = w_f·L_f / Σ_g(w_g·L_g)`, where `L` is the front length in contact tiles and `w_f =
     priority_f × (2 while an enemy offensive is active on f)`; priority is set by D per front: baja 0.5, normal 1,
     alta 2 (§11.3). One front → share 1.
-  * `s_f` moves toward `target_f` by 1/60 of the gap per tick (`DEFENSE_REDEPLOY_TICKS = 60`: 63 % in 6 h). Troops do
+  * `s_f` moves toward `target_f` by 1/45 of the gap per tick (`DEFENSE_REDEPLOY_TICKS = 45`: 63 % in 4.5 h; W1 retune, 60
+    gave 1.44× in T34). Troops do
     not teleport to the front that is hit: a defender who read the enemy's mobilization and raised that front to *alta*
     in time has its troops already there (T34).
   * A front that exists when the war is declared starts at its target share; a front created later (a landing, new
@@ -470,8 +471,9 @@ For an offensive `a` of attacker A against defender D on front `f`:
   threshold (T5). Every offensive begins with a **contact phase** of `OFFENSIVE_CONTACT_TICKS = 10` (1 h, "las tropas
   avanzan hacia la línea") before pressure starts. `mopUp` of notches stays, inside the corridor and under the same
   caps. Armor spearheads no longer take free tiles.
-* **Logistics backstop, per war.** The defender of a war loses at most `LOGISTICS_BUDGET = max(0.9 % of its land when
-  the war began, 45 tiles)` per 60 ticks to the enemies of that war, enforced as a token bucket that refills
+* **Logistics backstop, per war.** The defender of a war loses at most `LOGISTICS_BUDGET = max(0.9 % of its current
+  land, 45 tiles)` per 60 ticks (W1: the budget follows the defender's current land, so a shrinking empire never loses a
+  growing share per 1,200-tick window, T19; "land when the war began" let a 6,800-tile empire lose 21.7 %) to the enemies of that war, enforced as a token bucket that refills
   `LOGISTICS_BUDGET / 60` tiles per tick and holds at most `LOGISTICS_BUDGET / 6`. When the bucket is empty, tiles
   that reach their threshold wait; the offensive's card and badge say «consolidando (logística)». This is the supply
   limit of real offensives, which outran their fuel and rail; it only binds for overwhelming forces (T2, T19).
@@ -1920,7 +1922,7 @@ export const LOGISTICS_SHARE = 0.009, LOGISTICS_FLOOR = 45, LOGISTICS_WINDOW = 6
 export const THRESHOLD_JITTER = 0.3;                // θ = 1 + 0.3 (u − 0.5), speed-neutral (§4.5)
 export const ENGAGEMENT_RATE = 0.0005;              // (number change) §4.6
 export const TROOP_REGROWTH_SCALE = 0.14, WAR_GROWTH_MUL = 0.5;                           // §4.6
-export const DEFENSE_REAR_SHARE = 0.15, DEFENSE_MOBILIZE_TICKS = 60, DEFENSE_REDEPLOY_TICKS = 60;
+export const DEFENSE_REAR_SHARE = 0.15, DEFENSE_MOBILIZE_TICKS = 60, DEFENSE_REDEPLOY_TICKS = 45;
 export const FRONT_PRIORITY_WEIGHT = [0.5, 1, 2] as const, ATTACKED_FRONT_WEIGHT = 2;      // §4.4
 export const UNREST_TICKS = 480;                    // §5.12
 export const HUMAN_MOBILIZE_TICKS = [40, 60, 80, 80] as const;       // Easy..Insane, §2.4

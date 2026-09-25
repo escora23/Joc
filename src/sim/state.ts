@@ -5,10 +5,9 @@
 import { MAP_W } from '../shared/constants';
 import type { ModifierKey, SimAttack, SimPlayer, SimStructure, SimUnit } from '../shared/simapi';
 import {
-  STRUCTURE_TYPES, UNIT_TYPES, UnitState, emptyStats, type Personality, type PlayerKind, type PlayerStatsCounters,
-  type StructureType, type UnitType,
+  STRUCTURE_TYPES, UNIT_TYPES, UnitState, emptyStats, type AttackState, type Personality, type PlayerKind,
+  type PlayerStatsCounters, type StructureType, type UnitType,
 } from '../shared/types';
-import { TileHeap } from './heap';
 
 export class Player implements SimPlayer {
   alive = true;
@@ -67,6 +66,18 @@ export class Player implements SimPlayer {
   tempEmbargo = new Map<number, number>();
   targetPlayer = 0;
   startTroops = 0;
+  // --- v2 (W1) ---
+  /** Tiles of this player still under occupation (captured < 72 h ago, §4.13). */
+  occupied = 0;
+  /** Real population (§6.7) and its target (sum of the per-tile target weights). */
+  pop = 0;
+  popTarget = 0;
+  /** Recruitment factor of the last economy step (f_pop × occupation), for the tooltips. */
+  recruitment = 1;
+  /** Tribute owed: share of income paid to `tributeTo` until tick. */
+  tributeTo = 0;
+  tributeShare = 0;
+  tributeUntil = 0;
 
   constructor(
     readonly id: number,
@@ -133,6 +144,8 @@ export const Mode = {
   Docked: 13,
   WaitPath: 14,
   Retreat: 15,
+  /** v2: a transport convoy embarking troops in port before sailing (§4.11). */
+  Embark: 16,
 } as const;
 export type Mode = (typeof Mode)[keyof typeof Mode];
 
@@ -191,6 +204,9 @@ export class Unit implements SimUnit {
   aux2To = 0;
   /** Player credited with the kill. */
   killedBy = 0;
+  /** v2 (W1): transport convoy embarking until this tick (§4.11); the target already detected it. */
+  embarkUntil = 0;
+  detected = false;
   readonly maxHp: number;
 
   constructor(
@@ -210,34 +226,72 @@ export class Unit implements SimUnit {
   }
 }
 
+/**
+ * An offensive (DESIGN_V2 §4.3–§4.9): troops committed by one side to push one front toward an axis point. Every
+ * frontier tile inside its corridor accumulates pressure each tick and falls when the pressure passes its threshold.
+ */
 export class Attack implements SimAttack {
   troops: number;
-  readonly heap = new TileHeap(128);
-  /** Approximate number of frontier tiles queued (drives the per-tick conquest budget). */
-  frontierSize = 0;
-  /** Stamp used in Game.frontStamp to dedupe queued tiles. */
-  readonly stamp: number;
+  /** Troops committed so far (launch + reinforcements). */
+  committed: number;
+  /** Axis point (the click), continuous tile coords. */
   clickX: number;
   clickY: number;
-  /** Naval attack: tile where the troops landed (frontier seeded from there), -1 until landed. */
+  /** Corridor origin (centroid of the contact where the axis was set) and unit direction, tile space. */
+  originX = 0;
+  originY = 0;
+  dirX = 0;
+  dirY = 1;
+  /** Corridor width in tiles (clamp(committed / troops per tile, 3, 40)). */
+  frontage = 3;
+  /** Frontier tiles of the corridor -> accumulated pressure, and their thresholds θ. */
+  readonly pressure = new Map<number, number>();
+  readonly theta = new Map<number, number>();
+  /** The frontier needs a full rebuild (axis moved, corridor width changed, periodic refresh). */
+  frontierDirty = true;
+  lastRebuildTick = -1_000_000;
+  state: AttackState = 'contact';
+  /** Pressure starts after the contact phase. */
+  contactUntil: number;
+  /** Stable key of the front it pushes on (0 = none / unclaimed land). */
+  frontKey = 0;
+  /** Naval attack: tile where the troops landed (-1 until landed) and the transport carrying them (0 once ashore). */
   sourceTile = -1;
-  /** Naval attack in transit: transport ship unit id (0 once landed). */
   boatId = 0;
-  /** Ring buffer of recently conquered tiles (fronts, enclave checks). */
+  /** Landing: storm progress of the beach tile (0..1). */
+  storm = 0;
+  /** Ring buffer of recently conquered tiles (fronts, sieges). */
   readonly recent = new Int32Array(128);
   recentN = 0;
-  /** Tiles conquered this tick. */
   conqueredThisTick = 0;
-  /** EMAs (per tick) of conquest rate and total casualties, for front intensity. */
+  /** EMAs (per tick) of conquest and casualties (front intensity for the renderers). */
   conquestEma = 0;
   lossEma = 0;
   lossThisTick = 0;
-  /** Attacker troops lost so far (stats / news). */
   attackerLosses = 0;
   defenderLosses = 0;
-  refreshedAtTick = -1;
+  tilesTaken = 0;
+  tilesLost = 0;
+  /** Last force ratio and powers. */
+  ratio = 0;
+  pa = 0;
+  pd = 0;
+  /** Measured depth speed, km per game hour (EMA α = 0.1 per tick of what actually fell). */
+  advanceKmh = 0;
+  /** Terrain defense of the tiles taken recently (casualties), EMA. */
+  terrainDefense = 1;
+  /** Consecutive ticks with R < 1 (stall) and R < 0.5 (break). */
+  lowTicks = 0;
+  breakTicks = 0;
+  stalled = false;
+  /** Tiles ready to fall but held by the war's logistics bucket this tick. */
+  consolidating = false;
+  /** Retreat: troops are back home at this tick (-1 = not retreating). */
+  returnAt = -1;
   ended = false;
   lastActiveTick: number;
+  /** The id of the opposing offensive on the same front (two-sided battle), 0 = none. */
+  counterId = 0;
 
   constructor(
     readonly id: number,
@@ -245,14 +299,15 @@ export class Attack implements SimAttack {
     public defender: number,
     troops: number,
     readonly naval: boolean,
-    readonly startTick: number,
+    public startTick: number,
     clickTile: number,
   ) {
     this.troops = troops;
-    this.stamp = id;
+    this.committed = troops;
     this.clickX = clickTile >= 0 ? (clickTile % MAP_W) + 0.5 : -1;
     this.clickY = clickTile >= 0 ? Math.floor(clickTile / MAP_W) + 0.5 : -1;
     this.lastActiveTick = startTick;
+    this.contactUntil = startTick;
   }
 
   pushRecent(tile: number): void {

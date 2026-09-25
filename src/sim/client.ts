@@ -418,6 +418,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
     }
     if (u.wars) view.wars = u.wars;
     if (u.sieges) view.sieges = u.sieges;
+    if (u.truces) view.truces = u.truces;
     if (u.occupiedFull) {
       view.occupied.fill(0);
       view.occupiedTiles.clear();

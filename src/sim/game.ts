@@ -10,7 +10,8 @@
 // Everything random comes from `rng` (seeded from GameConfig.seed) or its forks. No Date / Math.random here.
 
 import {
-  BALANCE, HUMAN_ID, MAP_H, MAP_W, MAX_PLAYER_ID, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, WIN_LAND_SHARE, structureCost,
+  BALANCE, HUMAN_ID, MAP_H, MAP_W, MAX_PLAYER_ID, OCCUPATION_TICKS, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, WIN_LAND_SHARE,
+  structureCost,
 } from '../shared/constants';
 import {
   PF, PLAYER_STRIDE, UF, UNIT_STRIDE, packTileOwner, type PlayerCommand, type PlayerMeta, type SimDebugAction,
@@ -23,8 +24,8 @@ import type {
 import { isPlayableTerrain, isShoreTerrain, isWaterTerrain } from '../shared/terrain';
 import {
   StructureType, UnitState, UnitType, type AttackView, type Difficulty, type GameConfig, type GameOverReason,
-  type GamePhase, type GameSpeed, type ScarView, type StructureView, type WorldEventKind, type WorldEventView,
-  type WorldInit,
+  type GamePhase, type GameSpeed, type PairState, type ScarView, type StructureView, type WorldEventKind,
+  type WorldEventView, type WorldInit,
 } from '../shared/types';
 import { createAiDirector } from './ai';
 import { createWorldEventDirector } from './events';
@@ -38,19 +39,29 @@ import { EconomySystem } from './economy';
 import { EnclaveSystem } from './enclaves';
 import { createFallbackAi } from './fallbackAi';
 import { FrontTracker } from './fronts';
+import { InvariantChecker } from './invariants';
 import { LabelPlacer } from './labels';
 import { DynamicGrid, StaticGrid, dist2 } from './spatial';
 import { Attack, Player, Structure, Unit } from './state';
 import { UnitSystem } from './units';
 import { WaterNav } from './water';
+import { WarSystem } from './war';
 import { WeaponSystem, type Scar } from './weapons';
 import { SaveError, type SaveReader, type SaveWriter } from './save';
 
 /** Event types kept in intermediate fast-forward updates (the rest are visual/audio noise when skipping time). */
 export const FF_EVENT_TYPES = new Set<SimEvent['type']>([
   'phaseChanged', 'playerSpawned', 'nationEliminated', 'capitalCaptured', 'allianceFormed', 'allianceBroken',
-  'allianceExpired', 'embargoChanged', 'gameOver',
+  'allianceExpired', 'embargoChanged', 'gameOver', 'warDeclared', 'warEnded', 'capitulation', 'escalation', 'siege',
+  'hegemony', 'unrest',
 ]);
+
+/**
+ * Why a tile is changing owner (Game.transferContext while setOwner runs): the invariant checker (§4.17) and the
+ * occupation rule (§4.13) read it. 'attack' = an offensive, 'treaty' = cession / capitulation, 'rebellion', 'cleanup'
+ * (neutral specks, eliminated players), 'staging' = debug/shots, 'none' = anything else (spawn, neutral expansion).
+ */
+export type TransferContext = 'none' | 'attack' | 'treaty' | 'rebellion' | 'cleanup' | 'staging';
 
 export class Game implements SimGame {
   readonly rng: Rng;
@@ -137,11 +148,30 @@ export class Game implements SimGame {
   private spawnDeadline: number;
   private humanSpawnTick = -1;
   private pendingHuman: PlayerCommand[] = [];
-  private lastFrontsTick = -1;
   /** Rng streams for the systems (forked once, in a fixed order). */
   readonly rngCombat: Rng;
   readonly rngUnits: Rng;
   readonly rngEconomy: Rng;
+  /** v2 (W1): offensive thresholds (§4.5) and war decisions (calls to arms), forked after the v1 streams. */
+  readonly rngFront: Rng;
+  readonly rngWar: Rng;
+  /** v2 (W1): pair states, wars, peace (§4.1–§4.2, §4.13–§4.16). */
+  readonly war: WarSystem;
+  /** v2 (W1): the §4.17 checker (harness only, see Game.checkInvariants). */
+  invariants: InvariantChecker | null = null;
+  /** Why the tile being transferred right now changes owner. */
+  transferContext: TransferContext = 'none';
+  /** v2 (W1): tick a tile was last captured from another player (-1 = never), §4.13. */
+  readonly captureTick: Int32Array;
+  /** 1 while a tile is occupied (captured < OCCUPATION_TICKS ago). */
+  readonly occupiedFlag: Uint8Array;
+  /** Occupation expiry queue (captures in tick order): tiles and their capture ticks. */
+  private occTiles: number[] = [];
+  private occTicks: number[] = [];
+  private occHead = 0;
+  /** Occupation delta for the next update (tile + 1 / -(tile + 1)). */
+  private occDelta: number[] = [];
+  private occOverflow = false;
   private readonly nb = new Int32Array(4);
   private readonly nb2 = new Int32Array(4);
 
@@ -150,6 +180,8 @@ export class Game implements SimGame {
     this.rngCombat = this.rng.fork('sim-combat');
     this.rngUnits = this.rng.fork('sim-units');
     this.rngEconomy = this.rng.fork('sim-economy');
+    this.rngFront = this.rng.fork('sim-front');
+    this.rngWar = this.rng.fork('sim-war');
     this.difficulty = config.difficulty;
     this.speed = config.speed;
     this.owner = new Uint16Array(TILE_COUNT);
@@ -168,9 +200,13 @@ export class Game implements SimGame {
     this.falloutUntil = new Uint32Array(TILE_COUNT);
     this.structAt = new Int32Array(TILE_COUNT);
     this.frontStamp = new Uint32Array(TILE_COUNT);
+    this.captureTick = new Int32Array(TILE_COUNT).fill(-1);
+    this.occupiedFlag = new Uint8Array(TILE_COUNT);
     this.contact = new Int32Array(this.contactCap * this.contactCap);
     this.spawnDeadline = config.spawnTimeoutTicks;
 
+    this.war = new WarSystem(this);
+    if (Game.checkInvariants) this.invariants = new InvariantChecker(this);
     this.attacks = new AttackSystem(this);
     this.unitSys = new UnitSystem(this);
     this.weapons = new WeaponSystem(this);
@@ -225,6 +261,8 @@ export class Game implements SimGame {
 
   /** Tests / harness: replace the AI director by the sim-core fallback AI before setup. */
   static withFallbackAi = false;
+  /** Harness / pace-audit: run the §4.17 invariant checker (off in the browser build). */
+  static checkInvariants = false;
 
   /** v2 (W1c): serialise the whole game state (§12.8). */
   serialize(_w: SaveWriter): void {
@@ -318,9 +356,16 @@ export class Game implements SimGame {
   outgoingAttacks(id: number): readonly SimAttack[] { return this.attackList.filter((a) => a.attacker === id && !a.ended); }
   incomingAttacks(id: number): readonly SimAttack[] { return this.attackList.filter((a) => a.defender === id && !a.ended); }
   isAllied(a: number, b: number): boolean { return a !== b && (this.playerById[a]?.allies.has(b) ?? false); }
+  /** v2 (W1): the state between two players (§4.1). */
+  pairState(a: number, b: number): PairState { return this.war.pairState(a, b); }
+  atWar(a: number, b: number): boolean { return this.war.atWar(a, b); }
+  /** v2 (W1): an occupied tile (captured < 72 h ago, §4.13). */
+  isOccupied(tile: number): boolean { return this.occupiedFlag[tile] === 1; }
   hasEmbargo(from: number, to: number): boolean {
     const p = this.playerById[from];
     if (!p) return false;
+    // v2: trade stops between players at war (§4.2).
+    if (this.war.atWar(from, to)) return true;
     if (p.embargoes.has(to)) return true;
     const t = p.tempEmbargo.get(to);
     return t !== undefined && t > this.tick;
@@ -351,6 +396,7 @@ export class Game implements SimGame {
     if (STRUCTURE_DEFS[type].coastal && !this.nav.coastal[tile]) return 'msg.buildCoastal';
     if (this.falloutUntil[tile] > this.tick) return 'msg.buildFallout';
     if (this.structAt[tile] !== 0) return 'msg.buildOccupied';
+    if (this.enclaves.isBesieged(tile)) return 'msg.buildBesieged';
     const x = (tile % MAP_W) + 0.5, y = ((tile / MAP_W) | 0) + 0.5;
     let crowded = false;
     this.structGrid.query(x, y, Math.sqrt(STRUCTURE_MIN_DIST2) - 0.01, () => {
@@ -428,6 +474,10 @@ export class Game implements SimGame {
         return this.spawn(p, cmd.tile);
       case 'attack':
         return this.attacks.command(p, cmd.target, cmd.ratio, cmd.tile);
+      case 'declareWar':
+        return this.declareWarCommand(p, cmd);
+      case 'setFrontPriority':
+        return this.fronts.setPriority(p.id, cmd.frontKey, cmd.priority);
       case 'retreat':
         return this.attacks.retreat(p, cmd.attackId);
       case 'boatAttack':
@@ -470,12 +520,38 @@ export class Game implements SimGame {
     return false;
   }
 
-  transferTiles(tiles: Iterable<number>, newOwner: number): void {
+  /**
+   * v2 (W1): the human's or an AI's declaration. A queued offensive (land when the pair shares a border, else a naval
+   * landing at the tile) starts by itself when the aggressor's mobilization ends.
+   */
+  private declareWarCommand(p: Player, cmd: Extract<PlayerCommand, { type: 'declareWar' }>): boolean {
+    if (this.phase !== 'playing' || !p.spawned) {
+      this.message(p.id, 'msg.notYet');
+      return false;
+    }
+    const q = cmd.queuedAttack;
+    const naval = !!q && q.tile >= 0 && !this.sharesBorder(p.id, cmd.target);
+    const goal = cmd.goal ?? (p.kind === 'human' ? 'border' : 'conquest');
+    const reasonKey = cmd.reasonKey ?? (p.kind === 'human' ? 'war.reason.player' : 'war.reason.border');
+    const w = this.war.declare(p.id, cmd.target, goal, reasonKey, {
+      queuedAttack: q && q.tile >= 0 ? { tile: q.tile, ratio: q.ratio, naval } : undefined,
+    });
+    return !!w;
+  }
+
+  /**
+   * Privileged transfer (world events: rebellions). v2: `reason` tells the invariant checker why land changes hands
+   * without a war (§4.17: rebellions, treaties).
+   */
+  transferTiles(tiles: Iterable<number>, newOwner: number, reason: 'rebellion' | 'treaty' | 'cleanup' = 'rebellion'): void {
     const np = this.playerById[newOwner];
+    const ctx = this.transferContext;
+    this.transferContext = reason;
     for (const t of tiles) {
       if (t < 0 || t >= TILE_COUNT || !this.playable[t]) continue;
       this.setOwner(t, newOwner);
     }
+    this.transferContext = ctx;
     if (np && !np.spawned && np.tiles > 0) {
       np.spawned = true;
       if (np.capitalTile < 0) {
@@ -607,6 +683,7 @@ export class Game implements SimGame {
   isHostile(a: number, b: number): boolean {
     if (a === b || a <= 0 || b <= 0) return false;
     if (this.isAllied(a, b)) return false;
+    if (this.war.atWar(a, b)) return true;
     const last = this.hostility.get(this.pairKey(a, b));
     if (last !== undefined && this.tick - last < HOSTILITY_TICKS) return true;
     const pa = this.playerById[a], pb = this.playerById[b];
@@ -636,6 +713,7 @@ export class Game implements SimGame {
     const owner = this.owner;
     const prev = owner[tile];
     if (prev === newOwner) return;
+    this.invariants?.onTransfer(tile, prev, newOwner, this.transferContext);
     owner[tile] = newOwner;
     if (!this.changedOverflow) {
       this.changed.push(packTileOwner(tile, newOwner));
@@ -689,8 +767,74 @@ export class Game implements SimGame {
     // Structure standing on the tile changes hands (or is razed).
     const sid = this.structAt[tile];
     if (sid !== 0) this.economy.onTileCaptured(sid, prev, newOwner);
+    // v2 (W1): war accounting and occupation (§4.13, §4.15).
+    if (prev !== 0 && newOwner !== 0) this.war.onTileTransfer(prev, newOwner);
+    this.occupy(tile, pp, np);
     // Capital lost?
     if (pp && pp.capitalTile === tile) this.onCapitalLost(pp, newOwner, tile);
+  }
+
+  /** Treaty transfers (cessions, capitulations): legal at peace and between former enemies (§4.13, §4.15). */
+  transferByTreaty(tiles: Iterable<number>, to: number): void {
+    const np = this.playerById[to];
+    if (!np || !np.alive) return;
+    const ctx = this.transferContext;
+    this.transferContext = 'treaty';
+    for (const t of tiles) if (this.playable[t]) this.setOwner(t, to);
+    this.transferContext = ctx;
+  }
+
+  /**
+   * Occupation (§4.13): a tile captured from another player (offensive or treaty) is occupied for OCCUPATION_TICKS.
+   * Neutral expansion, rebellions and staging never occupy; a tile that goes back to nobody stops being occupied.
+   */
+  private occupy(tile: number, pp: Player | undefined, np: Player | undefined): void {
+    const was = this.occupiedFlag[tile] === 1;
+    if (was && pp) pp.occupied = Math.max(0, pp.occupied - 1);
+    const ctx = this.transferContext;
+    const capture = !!pp && !!np && this.phase === 'playing' && (ctx === 'attack' || ctx === 'treaty' || ctx === 'none');
+    if (capture) {
+      this.captureTick[tile] = this.tick;
+      this.occupiedFlag[tile] = 1;
+      np!.occupied++;
+      this.occTiles.push(tile);
+      this.occTicks.push(this.tick);
+      if (!was) this.pushOcc(tile + 1);
+    } else if (was) {
+      this.occupiedFlag[tile] = 0;
+      this.pushOcc(-(tile + 1));
+    }
+  }
+
+  private pushOcc(v: number): void {
+    if (this.occOverflow) return;
+    this.occDelta.push(v);
+    if (this.occDelta.length > TILE_COUNT / 8) {
+      this.occOverflow = true;
+      this.occDelta.length = 0;
+    }
+  }
+
+  /** Occupation ends 720 ticks after the capture (the queue is in capture order). */
+  private expireOccupation(): void {
+    const limit = this.tick - OCCUPATION_TICKS;
+    const tiles = this.occTiles, ticks = this.occTicks;
+    let h = this.occHead;
+    while (h < tiles.length && ticks[h] <= limit) {
+      const t = tiles[h], at = ticks[h];
+      h++;
+      if (this.occupiedFlag[t] !== 1 || this.captureTick[t] !== at) continue;
+      this.occupiedFlag[t] = 0;
+      const p = this.playerById[this.owner[t]];
+      if (p) p.occupied = Math.max(0, p.occupied - 1);
+      this.pushOcc(-(t + 1));
+    }
+    if (h > 65_536 && h * 2 > tiles.length) {
+      this.occTiles = tiles.slice(h);
+      this.occTicks = ticks.slice(h);
+      h = 0;
+    }
+    this.occHead = h;
   }
 
   private refreshBorder(tile: number): void {
@@ -714,12 +858,14 @@ export class Game implements SimGame {
 
   private onCapitalLost(p: Player, by: number, tile: number): void {
     const captor = this.playerById[by];
+    if (by !== 0) this.war.onCapitalLost(p.id, by);
     if (captor && p.tiles > 0 && this.phase === 'playing') {
       const loot = p.gold * CAPITAL_LOOT;
       p.gold -= loot;
       this.addGold(by, loot);
       this.emit({ type: 'goldBonus', tick: this.tick, playerId: by, gold: Math.round(loot), tile, reason: 'conquest' });
-      const lost = p.troops * 0.1;
+      // v2 (§4.13): home troops −5 % (was 10 %).
+      const lost = p.troops * 0.05;
       p.troops -= lost;
       p.stats.troopsLost += lost;
     }
@@ -880,9 +1026,11 @@ export class Game implements SimGame {
       case 'conquer': {
         const p = this.playerById[a.playerId];
         if (!p) break;
+        this.transferContext = 'staging';
         this.forDisc(a.centerTile, a.radius, (t) => {
           if (this.playable[t]) this.setOwner(t, a.playerId);
         });
+        this.transferContext = 'none';
         if (!p.spawned && p.tiles > 0) {
           p.spawned = true;
           p.capitalTile = this.playable[a.centerTile] ? a.centerTile : (p.border.values().next().value ?? -1);
@@ -898,6 +1046,14 @@ export class Game implements SimGame {
       case 'spawnUnit':
         this.unitSys.debugSpawn(a.unit, a.owner, a.tile, a.targetTile);
         break;
+      case 'war': {
+        if (a.peace) {
+          this.war.makePeace(a.a, a.b, { kind: 'white' }, 'peace.reason.treaty');
+          break;
+        }
+        this.war.declare(a.a, a.b, a.goal ?? 'conquest', 'war.reason.debug', { mobilizeTicks: a.mobilizeTicks ?? 0, force: true });
+        break;
+      }
       case 'removeUnit': {
         const u = this.unitMap.get(a.unitId);
         if (u) this.unitSys.remove(u, false);
@@ -953,23 +1109,23 @@ export class Game implements SimGame {
       return;
     }
     if (this.phase !== 'playing') return;
-    // 4. attacks & expansion (+ encirclements)
+    // 4. wars (logistics, queued offensives, calls to arms, treaties), garrisons, offensives, sieges
+    this.war.step();
+    this.fronts.step();
     this.attacks.step();
+    this.fronts.endTick();
     this.enclaves.step();
     // 5. units & projectiles
     this.unitSys.step();
     this.weapons.step();
     // 6. economy
     this.economy.step();
-    // 7. alliances & timers
+    // 7. alliances & timers, occupation
     this.diplomacy.step();
+    this.expireOccupation();
     // periodic derived data
     const lt = this.tick % 10;
     if (lt < 3) this.labels.stage(lt);
-    if (this.tick - this.lastFrontsTick >= 5) {
-      this.lastFrontsTick = this.tick;
-      this.fronts.update();
-    }
     // 8. eliminations & win check
     this.checkEliminations();
     this.checkWin();
@@ -1040,6 +1196,7 @@ export class Game implements SimGame {
     p.gold = 0;
     p.troops = 0;
     this.attacks.cancelAllOf(p.id);
+    this.war.dropPlayer(p.id);
     this.unitSys.removeAllOf(p.id, by);
     this.diplomacy.dropPlayer(p.id);
     this.emit({ type: 'nationEliminated', tick: this.tick, playerId: p.id, by });
@@ -1160,14 +1317,32 @@ export class Game implements SimGame {
     if (this.attacksDirty || full || ticks > 0) {
       this.attacksDirty = false;
       const list: AttackView[] = [];
-      for (const a of this.attackList) {
-        if (!a.ended) list.push({
-          id: a.id, attacker: a.attacker, defender: a.defender, troops: Math.floor(a.troops), naval: a.naval, startTick: a.startTick,
-          x: a.clickX, y: a.clickY, originX: a.clickX, originY: a.clickY, frontKey: 0, frontageTiles: 0, tilesTaken: 0, tilesLost: 0,
-          ratio: 0, advanceKmh: 0, committed: Math.floor(a.troops), etaTicks: -1, state: 'advancing', defensePower: 0, attackPower: 0,
-        });
-      }
+      for (const a of this.attackList) if (!a.ended) list.push(this.attacks.view(a));
+      for (const q of this.attacks.queuedViews()) list.push(q);
       u.attacks = list;
+    }
+    if (this.war.dirty || full) {
+      this.war.dirty = false;
+      u.wars = this.war.views();
+    }
+    if (this.war.trucesDirty || full) {
+      this.war.trucesDirty = false;
+      u.truces = this.war.truceViews();
+    }
+    if (this.enclaves.siegesDirty || full) {
+      this.enclaves.siegesDirty = false;
+      u.sieges = this.enclaves.views();
+    }
+    if (full || this.occOverflow) {
+      const all: number[] = [];
+      const f = this.occupiedFlag;
+      for (let t = 0; t < TILE_COUNT; t++) if (f[t]) all.push(t);
+      u.occupiedFull = Int32Array.from(all);
+      this.occDelta.length = 0;
+      this.occOverflow = false;
+    } else if (this.occDelta.length) {
+      u.occupied = Int32Array.from(this.occDelta);
+      this.occDelta.length = 0;
     }
     if (this.fronts.dirty || full) u.fronts = this.fronts.take();
     if (this.scarsDirty || full || (this.scars.length > 0 && this.tick % 20 === 0)) {

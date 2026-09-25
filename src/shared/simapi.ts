@@ -17,8 +17,8 @@
 import type { PlayerCommand, SimEvent } from './protocol';
 import type { Rng } from './rng';
 import type {
-  Difficulty, GameConfig, GamePhase, Personality, PlayerKind, PlayerStatsCounters, StructureType, UnitState, UnitType,
-  WorldEventKind, WorldInit,
+  Difficulty, GameConfig, GamePhase, PairState, PeaceTerms, Personality, PlayerKind, PlayerStatsCounters, StructureType,
+  UnitState, UnitType, WarGoal, WorldEventKind, WorldInit,
 } from './types';
 
 export interface SimPlayer {
@@ -91,8 +91,71 @@ export interface NewPlayerDef {
 /** Temporary multipliers applied by world events. 1 = neutral. */
 export type ModifierKey = 'troopGrowth' | 'goldIncome' | 'attackPower' | 'defensePower' | 'maxTroops';
 
+/** v2 (W1): one war as the AI sees it (DESIGN_V2 §4.1, §4.15). Side a declared the war. */
+export interface SimWar {
+  readonly id: number;
+  readonly a: number;
+  readonly b: number;
+  readonly parentWar: number;
+  readonly startTick: number;
+  readonly goal: WarGoal;
+  readonly reasonKey: string;
+  readonly mobilizeUntilTick: number;
+  readonly joined: boolean;
+  /** Net tiles side a took from side b in this war. */
+  readonly net: number;
+  readonly tilesAtStart: readonly [number, number];
+  readonly capitalLost: readonly [boolean, boolean];
+  readonly escalation: readonly [number, number];
+}
+
+/** v2 (W1): the war system (src/sim/war.ts) seen from sim-ai and the world events. */
+export interface SimWarApi {
+  pairState(a: number, b: number): PairState;
+  atWar(a: number, b: number): boolean;
+  between(a: number, b: number): SimWar | undefined;
+  warsOf(p: number): SimWar[];
+  enemiesOf(p: number): number[];
+  /** Tick until which `attacker` may not start an offensive on `target` (0 = free). */
+  mobilizingUntil(attacker: number, target: number): number;
+  /** War score of p against q (-100..100) and a player's exhaustion (0..100), §4.15. */
+  warScore(p: number, q: number): number;
+  exhaustion(p: number): number;
+  escalation(p: number, q: number): number;
+  /** Why `aggressor` may not declare on `target` now (i18n key) or null. */
+  declareError(aggressor: number, target: number): string | null;
+  /** An AI states a grievance toward the human (the tension lead of §2.4 starts here). */
+  recordTension(from: number, to: number): void;
+  lastTension(from: number): number;
+  makePeace(a: number, b: number, terms: PeaceTerms, reasonKey?: string, loser?: number): boolean;
+  raiseEscalation(p: number, q: number, level: number, reasonKey: string): boolean;
+  /** Declare without the command path (world events: rebellions, §5.12). */
+  declare(aggressor: number, target: number, goal: WarGoal, reasonKey: string, opts?: { force?: boolean; mobilizeTicks?: number }): unknown;
+}
+
+/** v2 (W1): a front as the AI sees it (src/sim/fronts.ts). */
+export interface SimFront {
+  readonly key: number;
+  readonly a: number;
+  readonly b: number;
+  readonly x: number;
+  readonly y: number;
+  readonly length: number;
+  readonly priority: readonly [number, number];
+  readonly offensive: readonly [number, number];
+}
+
+export interface SimFrontApi {
+  frontsOf(p: number): SimFront[];
+  frontsOfPair(a: number, b: number): readonly SimFront[];
+  garrison(f: SimFront, p: number): number;
+}
+
 export interface SimGame {
   readonly config: GameConfig;
+  /** v2 (W1): wars, truces, peace (§4). */
+  readonly war: SimWarApi;
+  readonly fronts: SimFrontApi;
   readonly world: WorldInit;
   readonly difficulty: Difficulty;
   readonly tick: number;
@@ -136,7 +199,10 @@ export interface SimGame {
   addPlayer(def: NewPlayerDef): number;
 
   // --- privileged mutations (world events only) ---------------------------------------------------
-  transferTiles(tiles: Iterable<number>, newOwner: number): void;
+  /** v2: `reason` tells the invariant checker why land changes hands without a war (§4.17). */
+  transferTiles(tiles: Iterable<number>, newOwner: number, reason?: 'rebellion' | 'treaty' | 'cleanup'): void;
+  /** v2 (W1): occupied tile (captured < 72 h ago, §4.13). */
+  isOccupied(tile: number): boolean;
   destroyStructure(structureId: number, by: number): void;
   damageUnit(unitId: number, amount: number, by: number): void;
   addGold(playerId: number, amount: number): void;

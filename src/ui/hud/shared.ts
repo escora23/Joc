@@ -29,6 +29,8 @@ export interface HoverInfo {
   clientX: number;
   clientY: number;
   shift: boolean;
+  /** Small-island marker line under the pointer (DESIGN_V2 §10.6), when any. */
+  islandLabel?: string;
 }
 
 export class HudShared {
@@ -93,6 +95,7 @@ export class HudShared {
     hv.clientX = e.clientX;
     hv.clientY = e.clientY;
     hv.shift = e.shift;
+    hv.islandLabel = e.islandLabel;
   }
 
   // ---- queries ----------------------------------------------------------------------------------

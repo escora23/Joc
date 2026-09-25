@@ -4,7 +4,7 @@
 // grudges, the current war target, cached front analysis, pending reactions, plus a global "world model" shared
 // by every brain (who betrayed whom, who nuked whom, who is running away with the game).
 
-import type { Personality } from '../../shared/types';
+import type { Personality, WarGoal } from '../../shared/types';
 import type { DifficultyProfile, PersonalityProfile } from './profiles';
 
 /** How a brain feels about another player. */
@@ -98,6 +98,13 @@ export interface Brain {
   homeCheckTick: number;
   /** Per-brain scratch to avoid allocations. */
   scratch: number[];
+  // --- v2 (W1): the war pipeline (warplan.ts) ---
+  /** Tension stated toward a target; the declaration follows after the tension lead (§5.7 step 3). */
+  tension: { target: number; goal: WarGoal; reasonKey: string; tick: number } | null;
+  lastDeclareTick: number;
+  /** War id -> next war-plan tick. */
+  plans: Map<number, number>;
+  nextPeace: number;
 }
 
 export function emptyFront(): FrontInfo {
@@ -134,6 +141,8 @@ export interface WorldModel {
   rushUntil: number;
   /** Players infected by a pandemic (quarantine embargoes), until tick. */
   infected: Map<number, number>;
+  /** v2 (W1): tick of the last AI declaration worldwide (§5.7 step 7). */
+  lastAiWarTick: number;
 }
 
 export function pairKey(a: number, b: number): number {

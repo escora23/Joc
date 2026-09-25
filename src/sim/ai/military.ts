@@ -53,7 +53,8 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
     }
   }
   const rich = (type: UnitType, k: number) => p.gold > g.unitCost(p.id, type) * k;
-  const atWar = b.enemy > 0 && alive(g.player(b.enemy)) && !g.isAllied(p.id, b.enemy);
+  // v2: only a declared war makes an enemy (strikes, missiles and armor act on it alone).
+  const atWar = b.enemy > 0 && alive(g.player(b.enemy)) && g.war.atWar(p.id, b.enemy);
   const reserveGold = atWar ? 1.2 : 1.8;
 
   // --- production -----------------------------------------------------------------------------------

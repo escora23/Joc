@@ -7,6 +7,8 @@ import { tx } from './tx';
 
 export interface ModalOptions {
   titleKey: string;
+  /** i18n parameters of the title (v2: «¿Declarar la guerra a {name}?»). */
+  titleParams?: Record<string, string | number>;
   kickerKey?: string;
   body: Child | Child[];
   foot?: Child[];
@@ -58,7 +60,7 @@ export function openModal(opts: ModalOptions): ModalHandle {
   const head = h('div', { class: 'fu-modal-head' },
     h('div', { style: 'flex:1;display:flex;flex-direction:column;gap:.45rem' },
       opts.kickerKey ? kicker(opts.kickerKey) : null,
-      h('h2', null, tx(opts.titleKey)),
+      h('h2', null, tx(opts.titleKey, opts.titleParams)),
     ),
     closeBtn,
   );

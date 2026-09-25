@@ -2,6 +2,7 @@
 // Everything goes through ctx.sim.send(cmd); the sim validates and answers with 'message' events.
 
 import type { HudShared } from './shared';
+import { needsDeclaration, openDeclareWar } from './declare';
 import { HUMAN_ID } from '../../shared/constants';
 import { tileXYToLatLon, tileToLatLon } from '../../shared/geo';
 import { t } from '../../shared/i18n';
@@ -16,6 +17,7 @@ export function nationRelation(hs: HudShared, id: number): 'self' | 'ally' | 'em
   if (me.allies.includes(id)) return 'ally';
   if (me.embargoes.includes(id)) return 'embargoed';
   if (p.traitorTicks > 0) return 'traitor';
+  if (view.pairState(HUMAN_ID, id) === 'war') return 'hostile';
   for (const a of view.attacks) if ((a.attacker === id && a.defender === HUMAN_ID) || (a.attacker === HUMAN_ID && a.defender === id)) return 'hostile';
   return 'neutral';
 }
@@ -42,6 +44,14 @@ export function attackNation(hs: HudShared, target: number, tile = -1): boolean 
   if (aim < 0) {
     const p = view.players[target];
     aim = p && p.capitalTile >= 0 ? p.capitalTile : -1;
+  }
+  // v2 (§4.2): a nation at peace needs a declaration first; the offensive is queued behind the mobilization.
+  if (needsDeclaration(hs, target)) {
+    const naval = !hs.borders(target);
+    const shore = naval && aim >= 0 ? hs.nearestShoreOf(target, aim, 30) : -1;
+    openDeclareWar(hs, target, naval ? shore : aim, naval);
+    hs.sound('open');
+    return true;
   }
   if (hs.borders(target)) {
     ctx.sim.send({ type: 'attack', target, ratio: hs.attackRatio, tile: aim });

@@ -35,6 +35,7 @@ export function createAiDirector(game: SimGame): AiDirector {
   const world: WorldModel = {
     betrayals: new Map(), nukesBy: new Map(), detonations: 0, leader: 0, leaderShare: 0, secondShare: 0, leaderTick: -1,
     wars: new Map(), doomsday: 0, rushTile: -1, rushUntil: 0, infected: sharedEventState(game).infected,
+    lastAiWarTick: -1_000_000,
   };
   const brains = new Map<number, Brain>();
   let ctx: AiContext | null = null;
@@ -60,6 +61,7 @@ export function createAiDirector(game: SimGame): AiDirector {
       relations: new Map(), front: emptyFront(), pending: [], lastTiles: 0, idleTicks: 0, rushTile: -1, rushUntil: 0,
       allyTarget: 0, allyTargetUntil: 0, buildFails: 0, lastBoatTick: -1_000_000, lastNukeTick: -1_000_000,
       nukesLaunched: 0, coalitionAnnounced: false, homeTile: p.capitalTile, homeCheckTick: -1_000_000, scratch: [],
+      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240),
     };
     if (kind === 'rebel' && b.parent > 0) {
       b.enemy = b.parent;

@@ -15,6 +15,7 @@ import type { CloudMode } from '../../shared/settings';
 import { sampleElevation } from '../../data';
 import { createEarth, createPlanetUniforms, earthDefines, PATCH_RES, PATCH_WARP, type Earth } from './earth';
 import { buildSdfFont, type SdfFont } from './font';
+import { createIslandMarkers, type IslandMarkers } from './islands';
 import { createNationLabels, type NationLabels } from './labels';
 import { createAtmosphereLayers, type AtmosphereLayers } from './layers';
 import { territoryFillAmount } from './glsl';
@@ -63,6 +64,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
   let earth: Earth | null = null;
   let layers: AtmosphereLayers | null = null;
   let labels: NationLabels | null = null;
+  let islands: IslandMarkers | null = null;
   let font: SdfFont | null = null;
   let territoryOpacity = 0;
   let territoryTarget = 0;
@@ -152,6 +154,10 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       root.add(layers.clouds, layers.cloudsInner, layers.atmosphere);
       labels = createNationLabels(ctx, font);
       root.add(labels.mesh);
+      islands = createIslandMarkers(ctx);
+      root.add(islands.mesh);
+      const isl = islands;
+      (window as unknown as { __islands?: unknown }).__islands = { visible: () => isl.visible(), details: () => isl.details() };
       progress(1);
     },
     warmup(on) {
@@ -161,10 +167,12 @@ export function createGlobe(ctx: GameContext): GlobeApi {
         layers.cloudsInner.visible = true;
         layers.clouds.visible = true;
         labels.mesh.visible = true;
+        islands?.warmup(true);
         territory.warmup();
       } else {
         earth.patch.visible = false;
         layers.cloudsInner.visible = false;
+        islands?.warmup(false);
       }
     },
     onGameStart() {
@@ -175,6 +183,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
     onGameEnd() {
       territory.clear();
       labels?.clear();
+      islands?.clear();
       hoverTile = -1;
       territory.setHoverOwner(0);
     },
@@ -231,6 +240,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       space.update(cam, sunDir, frame.time, ctx.renderer.getPixelRatio(), starFade, sunVis);
 
       labels?.update(dt, territoryOpacity);
+      islands?.update();
     },
     pickLatLon(clientX, clientY, out) {
       const r = ctx.canvas.getBoundingClientRect();
@@ -267,6 +277,9 @@ export function createGlobe(ctx: GameContext): GlobeApi {
     setHoverTile(tile) {
       hoverTile = tile;
       if (tile < 0) territory.setHoverOwner(0);
+    },
+    pickIsland(clientX, clientY) {
+      return islands && islands.mesh.visible ? islands.pick(clientX, clientY) : null;
     },
     setTerritoryOpacity(v) {
       territoryTarget = clamp(v, 0, 1);

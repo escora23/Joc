@@ -98,7 +98,12 @@ export const WAR_GROWTH_MUL = 0.5;
 /** Garrisons (§4.4): rear share, mobilization ramp and redeployment time constant. */
 export const DEFENSE_REAR_SHARE = 0.15;
 export const DEFENSE_MOBILIZE_TICKS = 60;
-export const DEFENSE_REDEPLOY_TICKS = 60;
+/**
+ * Redeployment time constant: 1/45 of the gap per tick (63 % in 4.5 h). Tuned from the design's 60 so that a defender
+ * who raises a front to «alta» during a Normal AI mobilization (80 ticks) meets the offensive with >= 1.5x the passive
+ * garrison (T34); 60 gave 1.44x.
+ */
+export const DEFENSE_REDEPLOY_TICKS = 45;
 /** Front priority weights (baja, normal, alta) and the weight multiplier of a front under an enemy offensive. */
 export const FRONT_PRIORITY_WEIGHT = [0.5, 1, 2] as const;
 export const ATTACKED_FRONT_WEIGHT = 2;

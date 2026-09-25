@@ -30,7 +30,7 @@ export type PlayerCommand =
   | { type: 'attack'; target: number; ratio: number; tile: number }
   // --- v2 (W1): war ---
   /** Declare war (§4.2). The optional offensive is queued and starts by itself when the mobilization ends. */
-  | { type: 'declareWar'; target: number; queuedAttack?: { tile: number; ratio: number } }
+  | { type: 'declareWar'; target: number; queuedAttack?: { tile: number; ratio: number }; goal?: WarGoal; reasonKey?: string }
   /** Garrison priority of the sender on one of its fronts: 0 baja, 1 normal, 2 alta (§4.4). */
   | { type: 'setFrontPriority'; frontKey: number; priority: 0 | 1 | 2 }
   /** Cancel an outgoing attack; the remaining troops come back (with a penalty). */
@@ -253,6 +253,8 @@ export interface TickUpdate {
   occupied?: Int32Array;
   /** Full occupied set (tile indices) on every resync (fullOwners). */
   occupiedFull?: Int32Array;
+  /** Truces in force (when changed): pairs at truce until untilTick (§4.15). */
+  truces?: { a: number; b: number; untilTick: number }[];
 }
 
 // =================================================================================================
@@ -276,8 +278,11 @@ export type SimDebugAction =
   | { type: 'launchNuke'; weapon: NukeWeapon; owner: number; fromTile: number; targetTile: number }
   /** Force a world event now. */
   | { type: 'worldEvent'; kind: WorldEventKind; tile: number }
-  /** v2: put two players at war immediately (no mobilization) — staging only. */
-  | { type: 'war'; a: number; b: number }
+  /**
+   * v2: put two players at war now (a declares on b; mobilization 0 unless given) — staging and pace-audit only.
+   * peace: true ends their war with a white peace instead.
+   */
+  | { type: 'war'; a: number; b: number; goal?: WarGoal; mobilizeTicks?: number; peace?: boolean }
   /** v2: remove a unit silently (probes and staging clean up after themselves). */
   | { type: 'removeUnit'; unitId: number };
 

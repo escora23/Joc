@@ -12,6 +12,7 @@ import { HUMAN_ID } from '../../shared/constants';
 import type { SimPlayer } from '../../shared/simapi';
 import { alive, relation, troopFill, type AiContext } from './context';
 import { incomingPressure, scanFront } from './perception';
+import { thinkDeclarations, thinkPeace, thinkWarPlans } from './warplan';
 import type { Brain } from './state';
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -54,7 +55,8 @@ export function thinkWar(ctx: AiContext, b: Brain, p: SimPlayer, interval: numbe
     }
     swamped = inc.total > p.troops * 0.7;
     const att = g.player(inc.topAttacker);
-    if (diff.counterAttack && att && att.alive && inc.top > p.troops * 0.12 && g.sharesBorder(p.id, att.id) && !g.isAllied(p.id, att.id)) {
+    // v2: counter-offensives only in a declared war (they form one two-sided battle, §4.8).
+    if (diff.counterAttack && att && att.alive && inc.top > p.troops * 0.12 && g.sharesBorder(p.id, att.id) && g.war.atWar(p.id, att.id)) {
       // Send just enough to annihilate their assault (opposing attacks cancel out), if we can spare it.
       const want = Math.min(inc.top * 1.08, p.troops * 0.65);
       if (want > inc.top * 0.5) {
@@ -92,95 +94,39 @@ export function thinkWar(ctx: AiContext, b: Brain, p: SimPlayer, interval: numbe
     }
   }
 
-  // --- 3. Player war ------------------------------------------------------------------------------
-  if (swamped && b.kind !== 'rebel') return;
-  if (fill < reserve * 0.9 && b.kind !== 'rebel') return;
-
-  let best: SimPlayer | null = null, bestScore = 0;
-  const sloppy = rng.next() < diff.sloppiness;
-  for (const [id, c] of contact) {
-    if (id === 0) continue;
-    const q = g.player(id);
-    if (!alive(q) || g.isAllied(p.id, id)) continue;
-    // The player gets a grace period to find their feet (shorter on harder difficulties).
-    if (q.id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < diff.humanGrace && !g.config.humanAutopilot) continue;
-    let s = scoreTarget(ctx, b, p, q, c, neutral);
-    if (sloppy) s *= 0.5 + rng.next();
-    if (s > bestScore) {
-      bestScore = s;
-      best = q;
-    }
-  }
+  // --- 3. Player war (v2: declared wars only, DESIGN_V2 §5.7; warplan.ts) --------------------------
+  thinkWarPlans(ctx, b, p, reserve);
+  thinkPeace(ctx, b, p);
+  // Rebels fight the war their rebellion declared (war plans above), nothing else.
+  if (b.kind === 'rebel' || swamped) return;
   // A full army sitting at home wastes growth: saturated nations lower their bar.
   const saturation = fill > 0.85 ? 0.6 : fill > 0.7 ? 0.8 : 1;
-  // Boxed in by allies only: time to reconsider those friendships.
-  if (!best && neutral === 0 && fill > 0.85 && b.idleTicks > 1800 && p.allies.size > 0) b.nextDiplomacy = Math.min(b.nextDiplomacy, g.tick + 5);
-  const threshold = b.kind === 'rebel' ? 0.5 : saturation / (idleBoost * (neutral > 0 ? 0.7 : 1));
-  if (best && bestScore < threshold && fill > 0.92 && b.idleTicks > 900 && g.tick > 3600) {
-    // Capped out and idle: spend the surplus nibbling the thinnest hostile neighbour (every troop above the cap
-    // is wasted growth, and thinly held land falls cheaply).
-    best = thinnestNeighbour(ctx, b, p);
-    if (best) bestScore = threshold;
-  }
-  if (!best || bestScore < threshold) return;
-  // Opening grace: nations do not devour each other in the first minutes unless the odds are crushing.
-  if (best.kind === 'nation' || best.kind === 'human') {
-    const need = g.tick < 1800 ? 3.2 : g.tick < 3600 ? 1.8 : 0;
-    if (need > 0 && p.troops < best.troops * need) return;
-  }
-
-  // How many simultaneous player wars we accept.
-  let wars = 0, onBest = 0;
-  for (const a of g.outgoingAttacks(p.id)) {
-    if (a.defender === 0 || a.naval) continue;
-    wars++;
-    if (a.defender === best.id) onBest += a.troops;
-  }
-  const maxWars = 1 + (prof.aggression * diff.aggression > 1.15 ? 1 : 0) + (p.tiles > 4000 ? 1 : 0);
-  if (onBest === 0 && wars >= maxWars) return;
-
-  const avail = p.troops - reserve * p.maxTroops;
-  // Never dig into the reserve for an offensive (tribes are cheap prey and rebels fight for survival).
-  if (avail < p.troops * 0.04 && best.kind !== 'tribe' && b.kind !== 'rebel') return;
-  let ratio = clamp(avail / Math.max(1, p.troops) + prof.attackBoost, 0.06, g.tick < 3600 ? 0.3 : 0.5);
-  if (b.kind === 'rebel') ratio = Math.min(ratio, 0.3);
-  if (best.kind === 'tribe') ratio = Math.min(ratio, 0.45);
-  const sent = p.troops * ratio;
-  // Do not bother with pinpricks against big armies (they only feed the enemy's counter-attacks).
-  // (Huge but thinly spread empires are fair game: their troops are everywhere but here.)
-  const thin = best.troops / Math.max(1, best.tiles) < (p.troops / Math.max(1, p.tiles)) * 1.3;
-  if (best.kind !== 'tribe' && !thin && sent < best.troops * 0.22 && onBest === 0 && b.kind !== 'rebel') return;
-  // Feeding an attack that is already much larger than the defender is waste.
-  if (onBest > best.troops * 1.6 + 20_000) return;
-
-  const aim = b.front.aim.get(best.id) ?? best.capitalTile;
-  if (g.issue(p.id, { type: 'attack', target: best.id, ratio, tile: aim })) {
-    if (b.enemy !== best.id) {
-      b.enemy = best.id;
-      b.enemySince = g.tick;
+  const threshold = saturation / (idleBoost * (neutral > 0 ? 0.7 : 1));
+  // Independent territories are attacked without a declaration (§4.10).
+  if (fill >= reserve * 0.9) {
+    let tribe: SimPlayer | null = null, tribeScore = 0;
+    for (const [id, c] of contact) {
+      if (id === 0) continue;
+      const q = g.player(id);
+      if (!alive(q) || q.kind !== 'tribe') continue;
+      const s = scoreTarget(ctx, b, p, q, c, neutral);
+      if (s > tribeScore) {
+        tribeScore = s;
+        tribe = q;
+      }
     }
-    b.idleTicks = Math.max(0, b.idleTicks - 600);
-  }
-}
-
-/** Non-allied neighbour with the lowest troop density (relative to ours), or null. */
-function thinnestNeighbour(ctx: AiContext, b: Brain, p: SimPlayer): SimPlayer | null {
-  const g = ctx.g;
-  const mine = p.troops / Math.max(1, p.tiles);
-  let best: SimPlayer | null = null, bestD = mine * 1.6;
-  for (const [id, c] of b.front.contact) {
-    if (id === 0 || c < 3) continue;
-    const q = g.player(id);
-    if (!alive(q) || g.isAllied(p.id, id)) continue;
-    const r = b.relations.get(id);
-    if (r && r.trust > 0.5) continue;
-    const d = q.troops / Math.max(1, q.tiles);
-    if (d < bestD) {
-      bestD = d;
-      best = q;
+    if (tribe && tribeScore >= threshold * 0.8) {
+      let onTribe = 0;
+      for (const a of g.outgoingAttacks(p.id)) if (a.defender === tribe.id) onTribe += a.troops;
+      const avail = p.troops - reserve * p.maxTroops;
+      if (onTribe < tribe.troops * 1.6 + 20_000 && avail > 0) {
+        const ratio = clamp(avail / Math.max(1, p.troops) + prof.attackBoost, 0.06, 0.45);
+        g.issue(p.id, { type: 'attack', target: tribe.id, ratio, tile: b.front.aim.get(tribe.id) ?? tribe.capitalTile });
+      }
     }
   }
-  return best;
+  // Nations and the human: tension, then a declaration after the tension lead (§5.7 steps 1–5).
+  thinkDeclarations(ctx, b, p, { threshold, neutral, swamped, fill, reserve });
 }
 
 /** How attractive `q` is as a victim for `p` (> 1 = attack). */
@@ -212,7 +158,8 @@ export function scoreTarget(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer
   if (b.allyTarget === q.id && g.tick < b.allyTargetUntil) s *= 1.6;
   // Coalition against a runaway leader.
   if (w.leader === q.id && w.leaderShare > diff.coalitionShare) s *= 1 + prof.coalition * (1 + (w.leaderShare - diff.coalitionShare) * 4);
-  if (q.id === HUMAN_ID && b.kind !== 'autopilot') s *= diff.humanFocus;
+  // v2 (§4.16): the humanFocus bias applies only after tick 18,000.
+  if (q.id === HUMAN_ID && b.kind !== 'autopilot' && g.tick >= 18_000) s *= diff.humanFocus;
   // Opportunists love a victim already bleeding elsewhere.
   if (prof.opportunism > 0) {
     let bleeding = 0;

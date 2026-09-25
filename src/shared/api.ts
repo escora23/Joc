@@ -214,6 +214,8 @@ export interface GlobeApi extends Subsystem {
   setHoverTile(tile: number): void;
   /** Territory overlay opacity 0..1 (0 on the menu). */
   setTerritoryOpacity(v: number): void;
+  /** Small-island marker under a screen point (DESIGN_V2 §10.6): the island's tile and its hover line, or null. */
+  pickIsland?(clientX: number, clientY: number): { tile: number; label: string } | null;
 }
 
 export interface PostApi extends Subsystem {

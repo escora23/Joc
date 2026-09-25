@@ -57,3 +57,11 @@ registerShot('labels-world', 'globe', 'Nation labels from 20,000 km with the HUD
 registerShot('icons-europe', 'units', 'NATO icons over Europe (&alt=6000 default, &alt=1500): frames by relation, glyphs, clusters (DESIGN_V2 §10.7)', async (s) => {
   await stageReadability(s, { lat: 44, lon: 4, alt: 6000, sun: 5, tilt: 0 });
 }, 20);
+
+registerShot('islands-caribbean', 'globe', 'Small-island markers over the Caribbean at 2,800 km (DESIGN_V2 §10.6)', async (s) => {
+  await stageReadability(s, { lat: 16.5, lon: -68, alt: 2800, sun: -68 });
+}, 20);
+
+registerShot('islands-aegean', 'globe', 'Small-island markers over the Aegean at 2,600 km (DESIGN_V2 §10.6)', async (s) => {
+  await stageReadability(s, { lat: 37.5, lon: 25, alt: 2600, sun: 25 });
+}, 20);

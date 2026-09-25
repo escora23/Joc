@@ -5,6 +5,7 @@
 
 import { isTyping } from '../dom';
 import { attackNation } from './diplomacy';
+import { needsDeclaration, openDeclareWar } from './declare';
 import type { HudShared } from './shared';
 import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon } from '../../shared/geo';
@@ -223,6 +224,11 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         const owner = ctx.sim.view.owner[tile];
         if (owner === HUMAN_ID) return;
         const shore = hs.nearestShoreOf(owner, tile, 20);
+        // v2 (§4.11): a landing on a nation at peace opens the declaration first.
+        if (needsDeclaration(hs, owner)) {
+          openDeclareWar(hs, owner, shore >= 0 ? shore : tile, true);
+          return;
+        }
         ctx.sim.send({ type: 'boatAttack', targetTile: shore >= 0 ? shore : tile, ratio: hs.attackRatio });
         hs.sound('confirm');
         hooks.ripple(hs.hover.clientX, hs.hover.clientY, 'attack');

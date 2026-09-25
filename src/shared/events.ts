@@ -90,6 +90,8 @@ export interface WorldPointerEvent {
   shift: boolean;
   ctrl: boolean;
   alt: boolean;
+  /** Set when the pointer is on a small-island marker (the tile is then the island's): «Malta · 1 casilla · libre». */
+  islandLabel?: string;
 }
 
 export type UiSoundKind =

@@ -83,7 +83,8 @@ export const GOLD_BASE_PER_TICK = 100;
 export const GOLD_PER_TILE_PER_TICK = BALANCE.goldPerTilePerSec / 10;
 export const GOLD_PER_CITY_LEVEL_PER_TICK = BALANCE.goldPerCityPerSec / 10;
 /** Share of the victim's gold the conqueror loots when capturing a capital / eliminating a nation. */
-export const CAPITAL_LOOT = 0.25;
+/** v2 (§4.13): 15 % of the gold is looted when the capital falls (was 25 %). */
+export const CAPITAL_LOOT = 0.15;
 export const ELIMINATION_LOOT = 1.0;
 
 // -------------------------------------------------------------------------------------------------

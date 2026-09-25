@@ -39,6 +39,11 @@ export class Diplomacy {
     const t = g.playerObj(target);
     if (!t || !t.alive || target === p.id || g.phase !== 'playing') return false;
     if (p.allies.has(target)) return false;
+    // v2: enemies make peace first (§4.1).
+    if (g.war.atWar(p.id, target)) {
+      g.message(p.id, 'msg.atWarNoAlliance');
+      return false;
+    }
     if (t.kind === 'tribe' || t.kind === 'rebel') {
       g.message(p.id, 'msg.cannotAllyTribe');
       return false;
@@ -71,6 +76,7 @@ export class Diplomacy {
     g.alliancesDirty = true;
     const f = g.playerObj(from);
     if (!f || !f.alive) return false;
+    if (accept && g.war.atWar(from, p.id)) accept = false;
     if (accept) this.form(from, p.id);
     else g.emit({ type: 'allianceRejected', tick: g.tick, from, to: p.id });
     return true;
@@ -105,6 +111,19 @@ export class Diplomacy {
     g.emit({ type: 'allianceBroken', tick: g.tick, breaker: p.id, victim: target });
     if (target === HUMAN_ID) g.message(HUMAN_ID, 'msg.betrayed', 'danger', { player: p.id });
     return true;
+  }
+
+  /**
+   * v2 (W1): a declaration of war on an ally breaks the alliance (the war system marks the traitor and emits the war;
+   * this only dissolves the treaty and tells the victim).
+   */
+  breakAllianceForWar(breaker: number, victim: number): void {
+    const g = this.g;
+    const p = g.playerObj(breaker);
+    if (!p || !p.allies.has(victim)) return;
+    this.remove(breaker, victim);
+    g.emit({ type: 'allianceBroken', tick: g.tick, breaker, victim });
+    if (victim === HUMAN_ID) g.message(HUMAN_ID, 'msg.betrayed', 'danger', { player: breaker });
   }
 
   private remove(a: number, b: number): void {

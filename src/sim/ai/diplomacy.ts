@@ -12,15 +12,15 @@ import { HUMAN_ID } from '../../shared/constants';
 import type { SimPlayer } from '../../shared/simapi';
 import type { EmoteId } from '../../shared/types';
 import { alive, isMajor, landShare, randRange, relation, strength, type AiContext } from './context';
-import { pairKey, type Brain } from './state';
+import type { Brain } from './state';
 
 const FRIENDLY: ReadonlySet<EmoteId> = new Set(['wave', 'thumbsUp', 'heart', 'handshake', 'peace', 'crown', 'laugh']);
 const HOSTILE: ReadonlySet<EmoteId> = new Set(['thumbsDown', 'angry', 'skull', 'clown', 'nuke', 'target', 'fire']);
 
 /** Are `a` and `b` currently fighting (per the world model)? */
+/** v2: the declared war state (DESIGN_V2 §4.1). */
 export function atWar(ctx: AiContext, a: number, b: number): boolean {
-  const t = ctx.world.wars.get(pairKey(a, b));
-  return t !== undefined && ctx.g.tick - t < 1200;
+  return ctx.g.war.atWar(a, b);
 }
 
 /** Do `p` and `q` share an enemy right now? */

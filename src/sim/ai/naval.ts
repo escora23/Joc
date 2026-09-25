@@ -35,6 +35,8 @@ export function thinkNaval(ctx: AiContext, b: Brain, p: SimPlayer): void {
     if (t < 0) continue;
     const o = g.ownerOf(t);
     if (o === p.id || (o !== 0 && g.isAllied(p.id, o))) continue;
+    // v2: nations only across a declared war (independent territories and empty coast need none).
+    if (o !== 0 && g.player(o)?.kind !== 'tribe' && !g.war.atWar(p.id, o)) continue;
     const d = Math.sqrt(dist2(t, base));
     let v: number;
     if (o === 0) v = 3;

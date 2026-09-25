@@ -93,13 +93,14 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     }
     const owner = view.owner[tile];
     const now = performance.now();
-    const key = `${owner}:${tile}`;
+    const key = `${owner}:${tile}:${hs.hover.islandLabel ?? ''}`;
     if (key === lastKey && now - lastPaint < 250) return;
     lastKey = key;
     lastPaint = now;
     tooltip.classList.remove('fu-hidden');
     markDirty(tooltip);
-    setText(ttTerrain, terrainName(tile));
+    // On a small-island marker the first line names the island, its size and its owner (DESIGN_V2 §10.6).
+    setText(ttTerrain, hs.hover.islandLabel ?? terrainName(tile));
     const me = view.human;
     if (owner === 0) {
       setStyle(ttSw, 'background', 'transparent');

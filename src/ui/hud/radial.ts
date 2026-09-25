@@ -6,6 +6,7 @@ import { h, s, setText } from '../dom';
 import { flag } from '../flag';
 import { EMOTE_GLYPH, icon, STRUCTURE_ICON } from '../icons';
 import { attackNation, breakAlliance, donate, markTarget, nationRelation, requestAlliance, sendEmote, toggleEmbargo } from './diplomacy';
+import { needsDeclaration, openDeclareWar } from './declare';
 import type { HudShared } from './shared';
 import { HUMAN_ID, STRUCTURE_DEFS } from '../../shared/constants';
 import { hexToCss } from '../../shared/color';
@@ -168,7 +169,8 @@ export function createRadial(hs: HudShared): Radial {
       {
         id: 'boat', label: t('dip.boat'), ico: 'boat', sub: '[B]',
         run: () => {
-          ctx.sim.send({ type: 'boatAttack', targetTile: tile, ratio: hs.attackRatio });
+          if (needsDeclaration(hs, ctx.sim.view.owner[tile])) openDeclareWar(hs, ctx.sim.view.owner[tile], tile, true);
+          else ctx.sim.send({ type: 'boatAttack', targetTile: tile, ratio: hs.attackRatio });
           hs.sound('confirm');
         },
       },

@@ -1,49 +1,130 @@
-// FRONT ULTRA — land attacks: expanding fronts conquered tile by tile. Owner: sim-core. Worker-only.
+// FRONT ULTRA — offensives (DESIGN_V2 §4.3–§4.11). Owner: sim-core (W1). Worker-only.
 //
-// Each attack owns a priority queue of frontier tiles (defender tiles touching the attacker). Every tick an attack
-// spends a budget of 1 on tiles, each tile consuming a fraction that grows with terrain difficulty and with how
-// outnumbered the attack is, divided by the frontier size: wide fronts advance everywhere at once, concavities
-// fill first (tiles surrounded by the attacker get lower priorities), mountains and rivers slow the push, and
-// the click point biases where the front bulges. Losses follow an attrition model on both sides.
-// Modifiers: terrain & elevation, rivers, defender density, defense posts, fallout, traitor debuff, world-event
-// modifiers, armored divisions (attack boost + spearheads) and defending armor.
+// An offensive pushes one front toward an axis point (the click) on a CORRIDOR whose width is bought with troops,
+// clamp(committed / 20,000, 3, 40) tiles, centred on the ray from the origin (the contact where the axis was set)
+// through the axis point. Every frontier tile inside the corridor accumulates pressure each tick,
+//
+//     p[t] += min(8 km/h, v × armor(t)) × axis(t) × 0.1 h / (extent(t) × terrain(t))
+//
+// and falls when p passes its threshold θ = 1 + 0.3 (u − 0.5) (u drawn when the tile joins the frontier: speed-neutral
+// desynchronisation, nothing carried over). extent(t) is the tile's size along the advance (25 km across a N/S edge,
+// 25·cos(lat) km across an E/W edge, the diagonal layer thickness across both), so the depth speed of every part of the
+// front is capped at 8 km/h in every direction and at every latitude. The force ratio R = Pa / Pd sets v up to the cap
+// (v = 8 × clamp((R − 1) / 2, 0, 1)) and decides casualties; troops never raise the speed above the cap, they buy width.
+//
+// Caps: at most 3 + ceil(0.04 × frontier) tiles per offensive per tick, a contact phase of 10 ticks, and the per-war
+// logistics bucket of the defender (WarSystem). Casualties: engagement E = 0.0005 × min(Pa, Pd) in power units; the
+// attacker loses E·√(Pd/Pa)·terrainDefense·fortification, the defender E·√(Pa/Pd), converted to troops by each side's
+// power per troop. Two-sided battles: opposing offensives on one front fight one battle (nothing annihilates at launch).
+// Stall after 120 ticks at R < 1; the offensive ends (troops home in 20 ticks, 10 % loss) when R < 0.5 for 60 ticks or
+// fewer than 10 % of the committed troops remain.
+//
+// Unclaimed land is taken at 7.5 km/h for a troop cost per tile (no declaration). Independent territories are fought
+// with the full model and their own troops, without a declaration; they never attack nations (invariant 7).
 
-import { HUMAN_ID, MAP_H, MAP_W, TILE_COUNT } from '../shared/constants';
-import { StructureType } from '../shared/types';
 import {
-  ARMOR_ATTACK_COST_MUL, ARMOR_ATTACK_LOSS_MUL, ARMOR_DEFENSE_LOSS_MUL, ARMOR_RADIUS, ARMOR_SPEARHEAD_TILES,
-  ARMOR_WEAR_PER_TROOP, ATTACK_LOSS_BASE, ATTACK_LOSS_PER_DENSITY, ATTACK_MIN_TROOPS, ATTACK_SPEED_DIV,
-  AUTO_EMBARGO_TICKS, DEFENSE_POST_LOSS_MUL, DEFENSE_POST_SPEED_MUL, FALLOUT_COST_MUL, FALLOUT_LOSS_MUL,
-  NEUTRAL_COST_SCALE, NEUTRAL_LOSS_DIV, NEUTRAL_MAX_COST, NEUTRAL_MIN_COST, RETREAT_MALUS, TRAITOR_LOSS_MUL,
-  TRAITOR_SPEED_MUL, TRIBE_DEFENDER_LOSS_MUL, defensePostRadius, largeTerritoryBonus, terrainCombat,
-  type TerrainCombat,
-} from './balance';
+  ADVANCE_FULL_RATIO, ADVANCE_MAX_KMH, DEFENSE_REAR_SHARE, ENGAGEMENT_RATE, FRONTAGE_MAX, FRONTAGE_MIN, HUMAN_ID,
+  LANDING_COAST_MUL, LANDING_STORM_TICKS, MAP_H, MAP_W, NEUTRAL_ADVANCE_KMH, NEUTRAL_TROOPS_PER_FRONT_TILE,
+  OFFENSIVE_BREAK_TICKS, OFFENSIVE_CONTACT_TICKS, OFFENSIVE_RETURN_TICKS, OFFENSIVE_STALL_TICKS, RETREAT_LOSS,
+  SIEGE_DEFENSE_MUL, THRESHOLD_JITTER, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE,
+} from '../shared/constants';
+import { StructureType, TerrainClass, TerrainFlag, type AttackView } from '../shared/types';
+import { NEUTRAL_LOSS_DIV, terrainCombat, type TerrainCombat } from './balance';
+import type { Front } from './fronts';
 import type { Game } from './game';
 import { neighbors4 } from './game';
+import { latCos, wdx } from './spatial';
 import { Attack, Mode, type Player, type Unit } from './state';
-import { wdx } from './spatial';
 
 type EndReason = 'exhausted' | 'retreat' | 'defenderEliminated' | 'cancelled';
 
-const MAX_TILES_PER_ATTACK_TICK = 4000;
+/** Defense-post zones (§6.2): radius in tiles and the time / casualty multiplier by level. */
+const POST_RADIUS = [0, 3, 4.5, 6];
+const POST_MUL = [1, 1.5, 1.75, 2];
+/** Terrain time multipliers (§4.5) and terrain defense for casualties (§4.6). */
+const TERRAIN_TIME = { plains: 1, hills: 1.6, mountains: 2.6 };
+const TERRAIN_DEF = { plains: 1, hills: 1.2, mountains: 1.5, urban: 1.4 };
+/** Neutral offensives a player may run at once (further clicks reinforce the nearest). */
+const MAX_NEUTRAL_OFFENSIVES = 3;
+const MAX_PAIR_OFFENSIVES = 3;
+/** Full frontier rebuild cadence (incremental updates in between). */
+const REBUILD_EVERY = 20;
+/** Tiles around the axis ray that get the full axis factor. */
+const AXIS_CORE = 3;
+const ARMOR_REACH = 3;
 
-interface DefensePoint {
+interface PostZone {
   x: number;
   y: number;
   r2: number;
+  mul: number;
 }
 
 export class AttackSystem {
-  private readonly tc: TerrainCombat = { mag: 0, cost: 0, prio: 1 };
+  private readonly byIdMap = new Map<number, Attack>();
   private readonly nb = new Int32Array(4);
   private readonly nb2 = new Int32Array(4);
-  private readonly nbM = new Int32Array(4);
-  private readonly nbM2 = new Int32Array(4);
-  private readonly dps: DefensePoint[] = [];
+  private readonly tc: TerrainCombat = { mag: 0, cost: 0, prio: 1 };
+  /** Static terrain time multiplier per tile (class, altitude, river), computed once. */
+  private readonly terrainTime: Float32Array;
+  private readonly terrainDef: Float32Array;
+  private readonly posts: PostZone[] = [];
   private readonly atkArmor: Unit[] = [];
   private readonly defArmor: Unit[] = [];
+  private readonly ready: number[] = [];
+  /** Terrain defense of tiles taken in the last 10 ticks (ring of per-tick sums). */
+  private defSum = new Float64Array(10);
+  private defN = new Int32Array(10);
 
-  constructor(private readonly g: Game) {}
+  constructor(private readonly g: Game) {
+    const n = TILE_COUNT;
+    this.terrainTime = new Float32Array(n);
+    this.terrainDef = new Float32Array(n);
+    for (let t = 0; t < n; t++) {
+      const tr = g.terrain[t];
+      const c = tr & 0x0f;
+      let m = c === TerrainClass.Mountains ? TERRAIN_TIME.mountains : c === TerrainClass.Hills ? TERRAIN_TIME.hills : TERRAIN_TIME.plains;
+      if (g.elevation[t] > 3000) m *= 1.5;
+      if (tr & TerrainFlag.River) m *= 1.5;
+      this.terrainTime[t] = m;
+      this.terrainDef[t] = c === TerrainClass.Mountains ? TERRAIN_DEF.mountains : c === TerrainClass.Hills ? TERRAIN_DEF.hills : TERRAIN_DEF.plains;
+    }
+  }
+
+  // =================================================================================================
+  // Queries
+  // =================================================================================================
+  byId(id: number): Attack | undefined {
+    return this.byIdMap.get(id);
+  }
+
+  isActive(id: number): boolean {
+    const a = this.byIdMap.get(id);
+    return !!a && !a.ended && a.returnAt < 0 && a.boatId === 0 && this.g.tick >= a.contactUntil;
+  }
+
+  activeBetween(x: number, y: number): boolean {
+    for (const a of this.g.attackList) {
+      if (a.ended) continue;
+      if ((a.attacker === x && a.defender === y) || (a.attacker === y && a.defender === x)) return true;
+    }
+    return false;
+  }
+
+  /** Attached divisions of `p` near a front (v2-stub(W1→W4): v1 frontArmor lists). */
+  divisionsNear(p: number, f: Front): number {
+    let n = 0;
+    for (const u of this.g.unitSys.frontArmor(p)) {
+      for (let i = 0; i < f.samples.length; i += 2) {
+        const dx = wdx(u.x, f.samples[i]), dy = f.samples[i + 1] - u.y;
+        if (dx * dx + dy * dy <= 16) {
+          n++;
+          break;
+        }
+      }
+    }
+    return n;
+  }
 
   // =================================================================================================
   // Commands
@@ -60,90 +141,288 @@ export class AttackSystem {
       g.message(p.id, 'msg.invalidTarget');
       return false;
     }
-    if (target !== 0 && g.isAllied(p.id, target)) {
-      g.message(p.id, 'msg.cannotAttackAlly');
-      return false;
+    if (d) {
+      // Independent territories never attack a nation or the human (§4.10, invariant 7).
+      if (p.kind === 'tribe' && d.kind !== 'tribe') return false;
+      if (d.kind !== 'tribe') {
+        if (g.isAllied(p.id, target)) {
+          g.message(p.id, 'msg.cannotAttackAlly');
+          return false;
+        }
+        if (!g.war.atWar(p.id, target)) {
+          g.message(p.id, 'msg.notAtWar');
+          return false;
+        }
+        // An aggressor still mobilizing: the order is queued and starts by itself when the mobilization ends.
+        if (g.war.mobilizingUntil(p.id, target) > 0) {
+          g.war.queue(p.id, target, clickTile, ratio, false);
+          g.message(p.id, 'msg.mobilizing', 'info');
+          return true;
+        }
+      }
     }
     if (!g.sharesBorder(p.id, target)) {
       g.message(p.id, target === 0 ? 'msg.noNeutralLand' : 'msg.noBorder');
       return false;
     }
     const r = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0.2;
-    let troops = Math.floor(p.troops * r);
+    const troops = Math.floor(p.troops * r);
     if (troops < 1) {
       g.message(p.id, 'msg.notEnoughTroops');
       return false;
     }
-    p.troops -= troops;
-    if (target !== 0) this.onHostileAct(p.id, target);
-
-    // Opposing attack (target already attacking us): the two assaults collide and annihilate.
-    if (target !== 0) {
-      for (const b of g.attackList) {
-        if (b.ended || b.naval || b.attacker !== target || b.defender !== p.id) continue;
-        const clash = Math.min(b.troops, troops);
-        b.troops -= clash;
-        troops -= clash;
-        p.stats.troopsLost += clash;
-        p.stats.troopsKilled += clash;
-        if (d) {
-          d.stats.troopsLost += clash;
-          d.stats.troopsKilled += clash;
-        }
-        if (b.troops < ATTACK_MIN_TROOPS) this.end(b, 'exhausted', false);
-        g.attacksDirty = true;
-        if (troops < 1) return true;
+    // A second click on the same front reinforces the offensive and moves its axis (§4.3).
+    const existing = this.offensiveNear(p.id, target, clickTile);
+    if (existing) {
+      p.troops -= troops;
+      existing.troops += troops;
+      existing.committed += troops;
+      if (clickTile >= 0) this.setAxis(existing, clickTile);
+      if (existing.returnAt >= 0) {
+        existing.returnAt = -1;
+        existing.lowTicks = existing.breakTicks = 0;
       }
-    }
-
-    // Reinforce an existing land attack on the same target.
-    for (const a of g.attackList) {
-      if (a.ended || a.naval || a.attacker !== p.id || a.defender !== target) continue;
-      a.troops += troops;
-      if (clickTile >= 0) {
-        a.clickX = (clickTile % MAP_W) + 0.5;
-        a.clickY = Math.floor(clickTile / MAP_W) + 0.5;
-      }
-      if (a.heap.size === 0) this.seedFromBorder(a);
       g.attacksDirty = true;
       return true;
     }
-
     const a = new Attack(g.allocId(), p.id, target, troops, false, g.tick, clickTile);
-    this.seedFromBorder(a);
-    if (a.heap.size === 0) {
-      p.troops += troops;
+    a.contactUntil = g.tick + OFFENSIVE_CONTACT_TICKS;
+    a.state = 'contact';
+    if (!this.setAxis(a, clickTile)) {
       g.message(p.id, target === 0 ? 'msg.noNeutralLand' : 'msg.noBorder');
       return false;
     }
-    g.attackList.push(a);
-    g.attacksDirty = true;
-    g.emit({ type: 'attackStarted', tick: g.tick, attackId: a.id, attacker: p.id, defender: target, troops: Math.floor(troops), tile: clickTile, naval: false });
+    p.troops -= troops;
+    this.register(a);
+    this.resolveFront(a);
+    this.rebuildFrontier(a);
+    g.emit({
+      type: 'attackStarted', tick: g.tick, attackId: a.id, attacker: p.id, defender: target, troops, tile: clickTile,
+      naval: false, frontKey: a.frontKey, x: a.clickX, y: a.clickY,
+    });
+    g.invariants?.onOffensiveStart(a);
     return true;
+  }
+
+  private register(a: Attack): void {
+    this.g.attackList.push(a);
+    this.byIdMap.set(a.id, a);
+    this.g.attacksDirty = true;
+  }
+
+  /** The front an offensive pushes on, and the opposing offensive on it (two-sided battle). */
+  private resolveFront(a: Attack): void {
+    const g = this.g;
+    const D = g.playerObj(a.defender);
+    if (!D || D.kind === 'tribe' || a.defender === 0) return;
+    const f = g.fronts.frontAt(a.attacker, a.defender, a.originX, a.originY);
+    a.frontKey = f?.key ?? 0;
+    if (f) f.offensive[f.a === a.attacker ? 0 : 1] = a.id;
+    a.counterId = 0;
+    for (const o of g.attackList) {
+      if (o.ended || o === a || o.attacker !== a.defender || o.defender !== a.attacker || o.frontKey !== a.frontKey || !a.frontKey) continue;
+      a.counterId = o.id;
+      o.counterId = a.id;
+    }
+  }
+
+  private offensiveNear(attacker: number, target: number, clickTile: number): Attack | null {
+    const g = this.g;
+    const list = g.attackList.filter((x) => !x.ended && !x.naval && x.attacker === attacker && x.defender === target);
+    if (list.length === 0) return null;
+    const cx = clickTile >= 0 ? (clickTile % MAP_W) + 0.5 : list[0].clickX, cy = clickTile >= 0 ? Math.floor(clickTile / MAP_W) + 0.5 : list[0].clickY;
+    const D = g.playerObj(target);
+    if (D && D.kind !== 'tribe') {
+      const f = g.fronts.frontAt(attacker, target, cx, cy);
+      if (f) {
+        const same = list.find((x) => x.frontKey === f.key);
+        if (same) return same;
+      }
+    }
+    let best: Attack | null = null, bd = Infinity;
+    for (const x of list) {
+      const dx = wdx(cx, x.originX), dy = x.originY - cy;
+      const d = dx * dx + dy * dy;
+      if (d < bd) {
+        bd = d;
+        best = x;
+      }
+    }
+    const cap = target === 0 || (D && D.kind === 'tribe') ? MAX_NEUTRAL_OFFENSIVES : MAX_PAIR_OFFENSIVES;
+    const near = best && bd <= Math.max(20, best.frontage) ** 2;
+    return near || list.length >= cap ? best : null;
+  }
+
+  /**
+   * Set the corridor: origin = centroid of the attacker's contact tiles near the contact point closest to the click,
+   * direction = toward the click (the local outward normal when the click is on the border itself or sideways).
+   */
+  private setAxis(a: Attack, clickTile: number): boolean {
+    const g = this.g;
+    const A = g.playerById[a.attacker];
+    if (!A) return false;
+    const def = a.defender;
+    const owner = g.owner, nb = this.nb;
+    let cx = clickTile >= 0 ? (clickTile % MAP_W) + 0.5 : -1, cy = clickTile >= 0 ? Math.floor(clickTile / MAP_W) + 0.5 : -1;
+    // Nearest contact tile to the click (or any contact tile without a click).
+    let c0 = -1, bd = Infinity;
+    for (const t of A.border) {
+      const n = neighbors4(t, nb);
+      let touch = false;
+      for (let k = 0; k < n; k++) if (owner[nb[k]] === def && g.playable[nb[k]]) {
+        touch = true;
+        break;
+      }
+      if (!touch) continue;
+      if (cx < 0) {
+        c0 = t;
+        break;
+      }
+      const dx = wdx(cx, (t % MAP_W) + 0.5), dy = ((t / MAP_W) | 0) + 0.5 - cy;
+      const d = dx * dx + dy * dy;
+      if (d < bd) {
+        bd = d;
+        c0 = t;
+      }
+    }
+    if (c0 < 0) return false;
+    const x0 = (c0 % MAP_W) + 0.5, y0 = ((c0 / MAP_W) | 0) + 0.5;
+    if (cx < 0) {
+      cx = x0;
+      cy = y0;
+    }
+    // Local contact centroid and outward normal (radius 12 tiles around c0).
+    let sx = 0, sy = 0, sn = 0, nx = 0, ny = 0;
+    for (const t of A.border) {
+      const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
+      const ex = wdx(x0, tx), ey = ty - y0;
+      if (ex * ex + ey * ey > 144) continue;
+      const n = neighbors4(t, nb);
+      let touch = false;
+      for (let k = 0; k < n; k++) {
+        const q = nb[k];
+        if (owner[q] !== def || !g.playable[q]) continue;
+        touch = true;
+        nx += wdx(tx, (q % MAP_W) + 0.5);
+        ny += ((q / MAP_W) | 0) + 0.5 - ty;
+      }
+      if (!touch) continue;
+      sx += ex;
+      sy += ey;
+      sn++;
+    }
+    const ox = x0 + (sn ? sx / sn : 0), oy = y0 + (sn ? sy / sn : 0);
+    const nl = Math.hypot(nx, ny) || 1;
+    nx /= nl;
+    ny /= nl;
+    let dx = wdx(ox, cx), dy = cy - oy;
+    const dl = Math.hypot(dx, dy);
+    if (dl < 4 || (dx * nx + dy * ny) / Math.max(1e-6, dl) < 0.2) {
+      dx = nx;
+      dy = ny;
+    } else {
+      dx /= dl;
+      dy /= dl;
+    }
+    if (!Number.isFinite(dx) || (dx === 0 && dy === 0)) {
+      dx = 0;
+      dy = 1;
+    }
+    a.originX = ((ox % MAP_W) + MAP_W) % MAP_W;
+    a.originY = oy;
+    a.dirX = dx;
+    a.dirY = dy;
+    a.clickX = cx;
+    a.clickY = cy;
+    a.frontage = this.frontageOf(a);
+    a.frontierDirty = true;
+    return true;
+  }
+
+  private frontageOf(a: Attack): number {
+    const per = a.defender === 0 ? NEUTRAL_TROOPS_PER_FRONT_TILE : TROOPS_PER_FRONT_TILE;
+    return Math.min(FRONTAGE_MAX, Math.max(FRONTAGE_MIN, a.troops / per));
+  }
+
+  /** Is tile t (tile coords of its centre) inside the corridor? Returns the perpendicular distance, or -1. */
+  private corridor(a: Attack, t: number): number {
+    const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
+    const rx = wdx(a.originX, tx), ry = ty - a.originY;
+    const along = rx * a.dirX + ry * a.dirY;
+    const half = a.frontage / 2;
+    if (along < -half) return -1;
+    const perp = Math.abs(rx * a.dirY - ry * a.dirX);
+    return perp <= half ? perp : -1;
+  }
+
+  /** Full rebuild of the corridor's frontier (defender tiles touching the attacker inside the corridor). */
+  private rebuildFrontier(a: Attack): void {
+    const g = this.g;
+    a.frontierDirty = false;
+    a.lastRebuildTick = g.tick;
+    const A = g.playerById[a.attacker];
+    if (!A) return;
+    const def = a.defender, owner = g.owner, nb = this.nb;
+    const keep = new Set<number>();
+    if (a.sourceTile >= 0 && a.state === 'landing') {
+      // Storming the beach: the landing tile is the whole front until it falls.
+      if (owner[a.sourceTile] === def) keep.add(a.sourceTile);
+    } else {
+      for (const t of A.border) {
+        const n = neighbors4(t, nb);
+        for (let k = 0; k < n; k++) {
+          const q = nb[k];
+          if (owner[q] !== def || !g.playable[q] || keep.has(q)) continue;
+          if (this.corridor(a, q) < 0) continue;
+          keep.add(q);
+        }
+      }
+    }
+    for (const t of [...a.pressure.keys()]) {
+      if (!keep.has(t)) {
+        a.pressure.delete(t);
+        a.theta.delete(t);
+      }
+    }
+    for (const t of keep) if (!a.pressure.has(t)) this.addFrontier(a, t);
+  }
+
+  private addFrontier(a: Attack, t: number): void {
+    a.pressure.set(t, 0);
+    a.theta.set(t, 1 + THRESHOLD_JITTER * (this.g.rngFront.next() - 0.5));
   }
 
   retreat(p: Player, attackId: number): boolean {
-    const a = this.g.attackList.find((x) => x.id === attackId && x.attacker === p.id && !x.ended);
-    if (!a) return false;
-    if (a.boatId !== 0) {
-      // Still at sea: the transport turns around and brings the troops home.
-      return this.g.unitSys.recallBoat(a);
-    }
-    this.end(a, 'retreat', true);
+    const a = this.byIdMap.get(attackId);
+    if (!a || a.ended || a.attacker !== p.id) return false;
+    if (a.boatId !== 0) return this.g.unitSys.recallBoat(a);
+    this.startRetreat(a);
     return true;
   }
 
-  /** A naval attack whose troops are still at sea (the transport ship carries them). */
+  /** Survivors return home after 20 ticks with a 10 % loss (§4.9). */
+  private startRetreat(a: Attack): void {
+    const g = this.g;
+    if (a.returnAt >= 0) return;
+    a.returnAt = g.tick + OFFENSIVE_RETURN_TICKS;
+    a.state = 'retreating';
+    a.pressure.clear();
+    a.theta.clear();
+    g.attacksDirty = true;
+    g.emit({ type: 'offensive', tick: g.tick, attackId: a.id, attacker: a.attacker, defender: a.defender, stage: 'retreating', x: a.clickX, y: a.clickY, ratio: +a.ratio.toFixed(2) });
+    if (a.attacker === HUMAN_ID && a.defender > 0) g.message(HUMAN_ID, 'msg.offensiveRetreating', 'info', { player: a.defender });
+  }
+
+  /** A naval attack whose troops are still at sea (the transport convoy carries them, §4.11). */
   createNaval(p: Player, target: number, troops: number, landingTile: number): Attack {
     const g = this.g;
     const a = new Attack(g.allocId(), p.id, target, troops, true, g.tick, landingTile);
-    g.attackList.push(a);
-    g.attacksDirty = true;
-    if (target !== 0) this.onHostileAct(p.id, target);
+    a.state = 'embarking';
+    this.register(a);
     return a;
   }
 
-  /** The transport reached the coast: the troops storm the beach and push inland from there. */
+  /** The convoy reached the coast: the troops storm the beach (2 h × coastal defense), then push inland. */
   land(a: Attack, tile: number): void {
     const g = this.g;
     a.boatId = 0;
@@ -153,39 +432,24 @@ export class AttackSystem {
       return;
     }
     const o = g.owner[tile];
-    if (o === p.id || g.isAllied(p.id, o) || !g.playable[tile]) {
-      // Friendly shore: the troops simply disembark into the reserve.
+    const D = g.playerObj(o);
+    if (o === p.id || g.isAllied(p.id, o) || !g.playable[tile] || (D && D.kind !== 'tribe' && !g.war.atWar(p.id, o))) {
+      // Friendly (or no longer hostile) shore: the troops simply disembark into the reserve.
       this.end(a, 'cancelled', true);
       return;
     }
     a.defender = o;
     a.sourceTile = tile;
-    const d = g.playerObj(o);
-    // Storm the beach tile itself.
-    const density = d && d.tiles > 0 ? d.troops / d.tiles : 0;
-    const cost = 60 + density;
-    if (a.troops <= cost) {
-      if (d) {
-        const dl = Math.min(d.troops, a.troops * 0.5);
-        d.troops -= dl;
-        d.stats.troopsLost += dl;
-      }
-      p.stats.troopsLost += a.troops;
-      a.troops = 0;
-      this.end(a, 'exhausted', false);
-      return;
-    }
-    a.troops -= cost;
-    if (d) {
-      const dl = Math.min(d.troops, density);
-      d.troops -= dl;
-      d.stats.troopsLost += dl;
-      p.stats.troopsKilled += dl;
-    }
-    g.setOwner(tile, p.id);
-    a.pushRecent(tile);
-    this.addNeighbors(a, tile);
+    a.state = 'landing';
+    a.storm = 0;
+    a.startTick = g.tick;
+    a.contactUntil = g.tick;
+    a.originX = (tile % MAP_W) + 0.5;
+    a.originY = ((tile / MAP_W) | 0) + 0.5;
+    a.frontage = this.frontageOf(a);
+    this.rebuildFrontier(a);
     g.attacksDirty = true;
+    g.invariants?.onOffensiveStart(a);
   }
 
   /** End every attack of (or against) a player. */
@@ -197,24 +461,19 @@ export class AttackSystem {
     }
   }
 
-  /** Alliance formed: both sides stand down, troops go home. */
-  cancelBetween(x: number, y: number): void {
+  /** Peace (or an alliance): both sides stand down, troops go home. Convoys at sea turn back. */
+  endBetween(x: number, y: number): void {
     for (const a of this.g.attackList) {
-      if (a.ended || a.boatId !== 0) continue;
-      if ((a.attacker === x && a.defender === y) || (a.attacker === y && a.defender === x)) this.end(a, 'cancelled', true);
+      if (a.ended) continue;
+      if (!((a.attacker === x && a.defender === y) || (a.attacker === y && a.defender === x))) continue;
+      if (a.boatId !== 0) this.g.unitSys.recallBoat(a);
+      else this.end(a, 'cancelled', true);
     }
   }
 
-  /** Records hostility and the automatic trade embargo of the attacked nation. */
-  onHostileAct(attacker: number, defender: number): void {
-    const g = this.g;
-    g.markHostile(attacker, defender);
-    const d = g.playerObj(defender);
-    const a = g.playerObj(attacker);
-    if (!d || !a || d.kind === 'tribe' || a.kind === 'tribe') return;
-    const prev = d.tempEmbargo.get(attacker) ?? 0;
-    if (prev <= g.tick) d.metaDirty = true;
-    d.tempEmbargo.set(attacker, g.tick + AUTO_EMBARGO_TICKS);
+  /** Kept for callers of the v1 API (alliances). */
+  cancelBetween(x: number, y: number): void {
+    this.endBetween(x, y);
   }
 
   end(a: Attack, reason: EndReason, returnTroops: boolean): void {
@@ -222,65 +481,21 @@ export class AttackSystem {
     const g = this.g;
     a.ended = true;
     const p = g.playerObj(a.attacker);
-    if (p && returnTroops && a.troops > 0) {
-      let back = a.troops;
-      if (reason === 'retreat' && a.defender !== 0) {
-        const lost = back * RETREAT_MALUS;
-        back -= lost;
-        p.stats.troopsLost += lost;
-      }
-      p.troops += back;
-    }
+    if (p && returnTroops && a.troops > 0) p.troops += a.troops;
     a.troops = 0;
+    a.pressure.clear();
+    a.theta.clear();
+    this.byIdMap.delete(a.id);
     g.attacksDirty = true;
     g.emit({ type: 'attackEnded', tick: g.tick, attackId: a.id, attacker: a.attacker, defender: a.defender, reason });
-  }
-
-  // =================================================================================================
-  // Frontier
-  // =================================================================================================
-  private seedFromBorder(a: Attack): void {
-    const g = this.g;
-    const p = g.playerObj(a.attacker);
-    if (!p) return;
-    a.refreshedAtTick = g.tick;
-    for (const t of p.border) this.addNeighbors(a, t);
-  }
-
-  /** Queue the defender tiles around `tile` (which the attacker owns). */
-  private addNeighbors(a: Attack, tile: number): void {
-    const g = this.g;
-    const owner = g.owner, playable = g.playable, stamp = g.frontStamp;
-    const def = a.defender, atk = a.attacker;
-    const nb = this.nb, nb2 = this.nb2;
-    const n = neighbors4(tile, nb);
-    const rng = g.rngCombat;
-    for (let k = 0; k < n; k++) {
-      const t = nb[k];
-      if (owner[t] !== def || !playable[t] || stamp[t] === a.stamp) continue;
-      stamp[t] = a.stamp;
-      let mine = 0;
-      const m = neighbors4(t, nb2);
-      for (let j = 0; j < m; j++) if (owner[nb2[j]] === atk) mine++;
-      terrainCombat(g.terrain[t], 0, this.tc);
-      let pri = g.tick + (rng.int(8) + 10) * Math.max(0.15, 1 - mine * 0.5 + this.tc.prio / 2);
-      if (a.clickX >= 0) {
-        const dx = wdx(a.clickX, (t % MAP_W) + 0.5), dy = ((t / MAP_W) | 0) + 0.5 - a.clickY;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        pri += Math.min(1, d / 90) * 16;
-      }
-      a.heap.push(t, pri);
-      a.frontierSize++;
+    if (a.defender > 0 && a.attacker > 0) {
+      g.emit({ type: 'offensive', tick: g.tick, attackId: a.id, attacker: a.attacker, defender: a.defender, stage: 'ended', x: a.clickX, y: a.clickY, ratio: +a.ratio.toFixed(2) });
     }
   }
 
-  private isFrontier(t: number, atk: number, def: number): boolean {
-    const g = this.g;
-    if (g.owner[t] !== def || !g.playable[t]) return false;
-    const nb = this.nb2;
-    const n = neighbors4(t, nb);
-    for (let k = 0; k < n; k++) if (g.owner[nb[k]] === atk) return true;
-    return false;
+  /** Records hostility (bookkeeping for independent territories; wars are explicit). */
+  onHostileAct(attacker: number, defender: number): void {
+    this.g.markHostile(attacker, defender);
   }
 
   // =================================================================================================
@@ -288,13 +503,16 @@ export class AttackSystem {
   // =================================================================================================
   step(): void {
     const g = this.g;
+    const slot = g.tick % 10;
+    this.defSum[slot] = 0;
+    this.defN[slot] = 0;
     const list = g.attackList;
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
-      if (a.ended || a.boatId !== 0) continue;
-      this.stepAttack(a);
+      if (a.ended) continue;
+      if (a.boatId !== 0) continue; // at sea: the convoy (units.ts) drives the state
+      this.stepOffensive(a);
     }
-    // Compact ended attacks & recompute committed troops.
     let j = 0;
     for (let i = 0; i < list.length; i++) if (!list[i].ended) list[j++] = list[i];
     list.length = j;
@@ -305,269 +523,458 @@ export class AttackSystem {
     }
   }
 
-  private stepAttack(a: Attack): void {
+  private stepOffensive(a: Attack): void {
     const g = this.g;
+    const tick = g.tick;
     const A = g.playerById[a.attacker];
     if (!A || !A.alive) {
       this.end(a, 'cancelled', false);
       return;
     }
+    a.conqueredThisTick = 0;
+    a.lossThisTick = 0;
+    a.consolidating = false;
+    // Retreat in progress: the column is on its way home.
+    if (a.returnAt >= 0) {
+      a.state = 'retreating';
+      if (tick >= a.returnAt) {
+        const lost = a.troops * RETREAT_LOSS;
+        A.stats.troopsLost += lost;
+        a.troops -= lost;
+        this.end(a, 'retreat', true);
+      }
+      return;
+    }
     const neutral = a.defender === 0;
     const D = neutral ? undefined : g.playerById[a.defender];
     if (!neutral) {
-      if (!D || !D.alive) {
+      if (!D || !D.alive || D.tiles === 0) {
         this.end(a, 'defenderEliminated', true);
         return;
       }
-      if (g.isAllied(a.attacker, a.defender)) {
+      if (D.kind !== 'tribe' && !g.war.atWar(a.attacker, a.defender)) {
         this.end(a, 'cancelled', true);
         return;
       }
-      g.markHostile(a.attacker, a.defender);
     }
-    const tick = g.tick;
+    const tribeDef = !!D && D.kind === 'tribe';
+    // Corridor width follows the committed troops; the frontier is rebuilt when it changes and periodically.
+    const fr = this.frontageOf(a);
+    if (Math.abs(fr - a.frontage) >= 1) {
+      a.frontage = fr;
+      a.frontierDirty = true;
+    }
+    if (a.frontierDirty || tick - a.lastRebuildTick >= REBUILD_EVERY || a.pressure.size === 0) this.rebuildFrontier(a);
+    if (a.pressure.size === 0) {
+      this.end(a, neutral ? 'exhausted' : 'cancelled', true);
+      return;
+    }
+    if (!neutral && !tribeDef && tick % 5 === 0) this.resolveFrontKeepCounter(a);
+    // Contact phase: the troops move up to the line.
+    if (tick < a.contactUntil) {
+      a.state = 'contact';
+      return;
+    }
+    const landing = a.state === 'landing';
+    // --- forces (§4.4) ---------------------------------------------------------------------------------
     const atkPower = A.mod('attackPower', tick);
-
-    // --- per-tick combat constants ----------------------------------------------------------------
-    let lossK = 0, speedK = 0, density = 0;
-    if (D) {
-      const ratio = D.troops / Math.max(1, a.troops);
-      density = D.tiles > 0 ? D.troops / D.tiles : 0;
-      const bigAtt = largeTerritoryBonus(A.tiles, 0.35);
-      const bigDef = largeTerritoryBonus(D.tiles, 0.3);
-      const bigAttSpd = largeTerritoryBonus(A.tiles, 0.4);
-      const traitor = D.traitorUntilTick > tick;
-      const defPower = D.mod('defensePower', tick);
-      lossK = Math.min(2, Math.max(0.6, ratio)) * (ATTACK_LOSS_BASE * bigAtt * bigDef + ATTACK_LOSS_PER_DENSITY * density)
-        * (traitor ? TRAITOR_LOSS_MUL : 1) * (D.kind === 'tribe' ? TRIBE_DEFENDER_LOSS_MUL : 1) * defPower / atkPower;
-      speedK = (Math.min(7.5, Math.max(0.82, ratio)) * Math.max(1, ratio / 20)) / ATTACK_SPEED_DIV
-        * bigAttSpd * bigDef * (traitor ? TRAITOR_SPEED_MUL : 1) * Math.sqrt(defPower / atkPower);
-    }
-    const neutralLossK = (A.kind === 'tribe' ? 0.5 : 1) / NEUTRAL_LOSS_DIV / atkPower;
-
-    // Defense posts of the defender, and armor of both sides, near this front.
-    const dps = this.dps;
-    dps.length = 0;
-    if (D) {
-      for (const s of g.structByOwner.get(D.id) ?? []) {
-        if (s.type !== StructureType.DefensePost || !s.operational) continue;
-        const r = defensePostRadius(s.level);
-        dps.push({ x: s.x, y: s.y, r2: r * r });
-      }
-    }
-    const atkArmor = this.atkArmor, defArmor = this.defArmor;
-    atkArmor.length = 0;
-    defArmor.length = 0;
-    for (const u of g.unitSys.frontArmor(A.id)) if (u.targetPlayer === a.defender || u.targetPlayer < 0) atkArmor.push(u);
-    if (D) for (const u of g.unitSys.frontArmor(D.id)) defArmor.push(u);
-
-    const B = Math.max(1, a.frontierSize) + g.rngCombat.int(5);
-    let budget = 1;
-    let conquered = 0;
-    let lossTick = 0;
-    const owner = g.owner, terrain = g.terrain, elevation = g.elevation, fallout = g.falloutUntil;
-    const tc = this.tc;
-    const armorR2 = ARMOR_RADIUS * ARMOR_RADIUS;
-
-    // Armored spearheads punch through first (they bite where the division stands).
-    if (atkArmor.length > 0) {
-      for (const u of atkArmor) {
-        for (let s = 0; s < ARMOR_SPEARHEAD_TILES; s++) {
-          const t = this.spearheadTile(u, a.attacker, a.defender);
-          if (t < 0) break;
-          const loss = this.tileLoss(t, neutral, lossK, neutralLossK, density) * ARMOR_ATTACK_LOSS_MUL;
-          if (a.troops <= loss) break;
-          a.troops -= loss;
-          lossTick += loss;
-          u.hp -= loss * ARMOR_WEAR_PER_TROOP * 2;
-          this.takeTile(a, A, D, t, loss, density);
-          conquered++;
-        }
-      }
-    }
-
-    while (budget > 0 && conquered < MAX_TILES_PER_ATTACK_TICK) {
-      if (a.heap.size === 0) {
-        if (a.refreshedAtTick !== tick && !a.naval) this.seedFromBorder(a);
-        if (a.heap.size === 0) {
-          this.end(a, neutral || D === undefined ? 'exhausted' : 'exhausted', true);
-          break;
-        }
-      }
-      const t = a.heap.pop();
-      a.frontierSize = Math.max(0, a.frontierSize - 1);
-      if (g.frontStamp[t] === a.stamp) g.frontStamp[t] = 0;
-      if (!this.isFrontier(t, a.attacker, a.defender)) continue;
-
-      terrainCombat(terrain[t], elevation[t], tc);
-      let lossMul = 1, costMul = 1;
-      if (fallout[t] > tick) {
-        lossMul *= FALLOUT_LOSS_MUL;
-        costMul *= FALLOUT_COST_MUL;
-      }
-      const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
-      for (let k = 0; k < dps.length; k++) {
-        const dx = wdx(dps[k].x, tx), dy = ty - dps[k].y;
-        if (dx * dx + dy * dy <= dps[k].r2) {
-          lossMul *= DEFENSE_POST_LOSS_MUL;
-          costMul *= DEFENSE_POST_SPEED_MUL;
-          break;
-        }
-      }
-      let supporting: Unit | null = null;
-      for (let k = 0; k < atkArmor.length; k++) {
-        const u = atkArmor[k];
-        const dx = wdx(u.x, tx), dy = ty - u.y;
-        if (dx * dx + dy * dy <= armorR2) {
-          supporting = u;
-          lossMul *= ARMOR_ATTACK_LOSS_MUL;
-          costMul *= ARMOR_ATTACK_COST_MUL;
-          break;
-        }
-      }
-      for (let k = 0; k < defArmor.length; k++) {
-        const u = defArmor[k];
-        const dx = wdx(u.x, tx), dy = ty - u.y;
-        if (dx * dx + dy * dy <= armorR2) {
-          lossMul *= ARMOR_DEFENSE_LOSS_MUL;
-          u.hp -= tc.mag * 0.02;
-          break;
-        }
-      }
-
-      let loss: number, frac: number;
-      if (neutral) {
-        loss = tc.mag * neutralLossK * lossMul;
-        const c = (NEUTRAL_COST_SCALE * tc.cost * costMul) / Math.max(1, a.troops);
-        frac = Math.min(NEUTRAL_MAX_COST, Math.max(NEUTRAL_MIN_COST, c)) / (2 * B);
+    this.collectArmor(a, A, D);
+    let v: number, Pa = 0, Pd = 0, garrison = 0, counterTroops = 0, counter: Attack | undefined;
+    if (neutral || !D) {
+      v = NEUTRAL_ADVANCE_KMH;
+      a.ratio = 0;
+    } else {
+      const armorA = Math.min(2, 1 + 0.25 * this.atkArmor.length);
+      const armorD = Math.min(2, 1 + 0.25 * this.defArmor.length);
+      Pa = a.troops * atkPower * armorA;
+      if (tribeDef) {
+        let n = 0;
+        for (const o of g.attackList) if (!o.ended && o.defender === D.id && o.boatId === 0) n++;
+        garrison = D.troops * (1 - DEFENSE_REAR_SHARE) / Math.max(1, n);
+      } else if (landing) {
+        // A surprise landing meets the thin coastal watch until the garrison redeploys (§4.4, §4.11).
+        const f = g.fronts.frontsOf(D.id);
+        garrison = f.length === 0 ? D.troops * (1 - DEFENSE_REAR_SHARE) * 0.1 : D.troops * (1 - DEFENSE_REAR_SHARE) * 0.05;
       } else {
-        loss = tc.mag * lossK * lossMul;
-        frac = (speedK * tc.cost * costMul) / B;
+        const f = a.frontKey ? g.fronts.get(a.frontKey) : undefined;
+        garrison = f ? g.fronts.garrison(f, D.id) : D.troops * (1 - DEFENSE_REAR_SHARE) * 0.5;
       }
-      if (a.troops <= loss) {
-        // Not enough left to take this tile: the offensive runs out of steam.
+      counter = a.counterId ? this.byIdMap.get(a.counterId) : undefined;
+      if (counter && (counter.ended || counter.returnAt >= 0 || counter.frontKey !== a.frontKey)) counter = undefined;
+      // Two-sided battle (§4.8): the troops of the offensive launched first defend at half weight (they are on the attack).
+      counterTroops = counter ? counter.troops * (counter.id < a.id ? 0.5 : 1) : 0;
+      const traitor = D.traitorUntilTick > tick ? 0.75 : 1;
+      const siege = g.enclaves.besiegedFront(D.id, a) ? SIEGE_DEFENSE_MUL : 1;
+      Pd = (garrison + counterTroops) * D.mod('defensePower', tick) * armorD * traitor * siege;
+      const R = Pa / Math.max(1, Pd);
+      a.ratio = R;
+      v = ADVANCE_MAX_KMH * Math.min(1, Math.max(0, (R - 1) / (ADVANCE_FULL_RATIO - 1)));
+    }
+    a.pa = Pa;
+    a.pd = Pd;
+    // --- pressure (§4.5) -------------------------------------------------------------------------------
+    const owner = g.owner, nb = this.nb;
+    const att = a.attacker, def = a.defender;
+    const capital = D ? D.capitalTile : -1;
+    const ready = this.ready;
+    ready.length = 0;
+    let fortSum = 0, fortN = 0;
+    for (const [t, p0] of a.pressure) {
+      // Lazy validation: still the defender's, still touching the attacker.
+      if (owner[t] !== def) {
+        a.pressure.delete(t);
+        a.theta.delete(t);
+        continue;
+      }
+      const n = neighbors4(t, nb);
+      let ns = false, ew = false;
+      for (let k = 0; k < n; k++) {
+        if (owner[nb[k]] !== att) continue;
+        const q = nb[k];
+        if (q === t - MAP_W || q === t + MAP_W) ns = true;
+        else ew = true;
+      }
+      if (!ns && !ew && !(landing && t === a.sourceTile)) {
+        a.pressure.delete(t);
+        a.theta.delete(t);
+        continue;
+      }
+      const y = ((t / MAP_W) | 0) + 0.5;
+      const H = TILE_KM, W = TILE_KM * latCos(y);
+      const extent = ns && !ew ? H : ew && !ns ? W : (H * W) / Math.sqrt(H * H + W * W);
+      const post = D ? this.postMul(t) : 1;
+      fortSum += post;
+      fortN++;
+      let inc: number;
+      if (landing && t === a.sourceTile) {
+        // Storming the beach: 2 h of pressure × coastal defense (× defense post) at the full rate.
+        inc = (v / ADVANCE_MAX_KMH) / (LANDING_STORM_TICKS * LANDING_COAST_MUL * post);
+      } else {
+        let terrain = this.terrainTime[t];
         if (D) {
-          const dl = Math.min(D.troops, a.troops * 0.4);
-          D.troops -= dl;
-          D.stats.troopsLost += dl;
-          A.stats.troopsKilled += dl;
+          if (g.structAt[t] !== 0) terrain *= 2;
+          terrain *= post;
+          if (t === capital) terrain *= 3;
+          if (this.defArmor.length && this.nearUnit(this.defArmor, t)) terrain *= 1.4;
         }
-        A.stats.troopsLost += a.troops;
-        lossTick += a.troops;
-        a.troops = 0;
-        this.end(a, 'exhausted', false);
-        break;
+        if (g.falloutUntil[t] > tick) terrain *= 2;
+        const armor = this.atkArmor.length && this.nearUnit(this.atkArmor, t) ? 1.5 : 1;
+        const perp = this.corridor(a, t);
+        const axis = perp < 0 ? 0.8 : perp <= AXIS_CORE ? 1 : 0.8;
+        inc = (Math.min(ADVANCE_MAX_KMH, v * armor) * axis * 0.1) / (extent * terrain);
       }
-      a.troops -= loss;
-      lossTick += loss;
-      budget -= frac;
-      if (supporting) supporting.hp -= loss * ARMOR_WEAR_PER_TROOP;
-      this.takeTile(a, A, D, t, loss, density);
-      conquered++;
+      const p = p0 + inc;
+      a.pressure.set(t, p);
+      if (p >= a.theta.get(t)!) ready.push(t);
     }
-
-    a.conqueredThisTick = conquered;
-    a.lossThisTick = lossTick;
-    a.conquestEma = a.conquestEma * 0.85 + conquered * 0.15;
-    a.lossEma = a.lossEma * 0.85 + lossTick * 0.15;
-    if (conquered > 0) a.lastActiveTick = tick;
-    if (!a.ended && a.troops < ATTACK_MIN_TROOPS) this.end(a, 'exhausted', false);
-    if (!a.ended && tick - a.lastActiveTick > 300 && a.heap.size === 0) this.end(a, 'exhausted', true);
+    // --- casualties (§4.6) -----------------------------------------------------------------------------
+    let lostA = 0, lostD = 0;
+    if (D && Pa > 0 && Pd > 0 && a.pressure.size > 0 && !(counter && counter.id < a.id)) {
+      const E = ENGAGEMENT_RATE * Math.min(Pa, Pd);
+      const fort = fortN ? fortSum / fortN : 1;
+      const atkPowLoss = E * Math.sqrt(Pd / Pa) * this.recentTerrainDefense() * fort;
+      const defPowLoss = E * Math.sqrt(Pa / Pd);
+      lostA = Math.min(a.troops, (atkPowLoss * a.troops) / Pa);
+      const defTroops = garrison + counterTroops;
+      const defLoss = (defPowLoss * defTroops) / Pd;
+      const toCounter = counter ? defLoss * (counterTroops / Math.max(1, defTroops)) : 0;
+      const toGarrison = Math.min(D.troops, defLoss - toCounter);
+      if (counter) counter.troops = Math.max(0, counter.troops - toCounter);
+      lostD = toGarrison + toCounter;
+      a.troops -= lostA;
+      D.troops -= toGarrison;
+      A.stats.troopsLost += lostA;
+      A.stats.troopsKilled += lostD;
+      D.stats.troopsLost += lostD;
+      D.stats.troopsKilled += lostA;
+      a.attackerLosses += lostA;
+      a.defenderLosses += lostD;
+      g.war.addCasualties(att, def, lostA, lostD);
+    }
+    a.lossThisTick = lostA + lostD;
+    // --- captures under the caps (§4.5) --------------------------------------------------------------
+    if (ready.length) {
+      ready.sort((x, y) => (a.pressure.get(y)! - a.theta.get(y)!) - (a.pressure.get(x)! - a.theta.get(x)!) || x - y);
+      const cap = 3 + Math.ceil(0.04 * a.pressure.size);
+      const warBound = !!D && !tribeDef;
+      let areaKm2 = 0;
+      for (let i = 0; i < ready.length && a.conqueredThisTick < cap; i++) {
+        const t = ready[i];
+        if (owner[t] !== def) continue;
+        if (warBound && g.war.logistics(att, def) < 1) {
+          a.consolidating = true;
+          break;
+        }
+        if (neutral || tribeDef) {
+          const cost = this.neutralCost(A, t);
+          if (neutral && a.troops <= cost) {
+            this.end(a, 'exhausted', true);
+            break;
+          }
+          if (neutral) {
+            a.troops -= cost;
+            A.stats.troopsLost += cost;
+          }
+        }
+        areaKm2 += this.take(a, A, D, t);
+        if (landing && t === a.sourceTile) this.beachhead(a);
+        // Mop-up of notches left behind (inside the corridor, same caps).
+        this.mopUp(a, A, D, t, cap);
+      }
+      g.invariants?.onCaptures(a, a.conqueredThisTick, cap);
+      if (areaKm2 > 0) {
+        const W = TILE_KM * latCos(a.originY), H = TILE_KM;
+        const widthKm = a.frontage * Math.sqrt((a.dirY * W) ** 2 + (a.dirX * H) ** 2);
+        a.advanceKmh = a.advanceKmh * 0.9 + 0.1 * ((10 * areaKm2) / Math.max(1, widthKm));
+      } else a.advanceKmh *= 0.9;
+    } else a.advanceKmh *= 0.9;
+    if (a.ended) return;
+    a.conquestEma = a.conquestEma * 0.85 + a.conqueredThisTick * 0.15;
+    a.lossEma = a.lossEma * 0.85 + a.lossThisTick * 0.15;
+    if (a.conqueredThisTick > 0) a.lastActiveTick = tick;
+    g.fronts.noteOffensive(a, lostA, lostD);
+    // --- state, stall and break (§4.9) -----------------------------------------------------------------
+    if (a.state === 'landing' && a.sourceTile >= 0 && owner[a.sourceTile] !== att) a.state = 'landing';
+    else if (a.consolidating) a.state = 'consolidating';
+    else if (a.state !== 'landing') a.state = a.stalled ? 'stalled' : 'advancing';
+    if (!neutral) {
+      const R = a.ratio;
+      if (R < 1) a.lowTicks++;
+      else {
+        if (a.stalled) {
+          a.stalled = false;
+          g.emit({ type: 'offensive', tick, attackId: a.id, attacker: att, defender: def, stage: 'resumed', x: a.clickX, y: a.clickY, ratio: +R.toFixed(2) });
+        }
+        a.lowTicks = 0;
+      }
+      if (!a.stalled && a.lowTicks >= OFFENSIVE_STALL_TICKS) {
+        a.stalled = true;
+        a.state = 'stalled';
+        g.emit({ type: 'offensive', tick, attackId: a.id, attacker: att, defender: def, stage: 'stalled', x: a.clickX, y: a.clickY, ratio: +R.toFixed(2) });
+      }
+      a.breakTicks = R < 0.5 ? a.breakTicks + 1 : 0;
+      if (a.breakTicks >= OFFENSIVE_BREAK_TICKS || a.troops < a.committed * 0.1) this.startRetreat(a);
+    }
+    if (a.troops < 1 && !a.ended) this.end(a, 'exhausted', false);
   }
 
-  private tileLoss(t: number, neutral: boolean, lossK: number, neutralLossK: number, _density: number): number {
-    const g = this.g;
-    terrainCombat(g.terrain[t], g.elevation[t], this.tc);
-    let m = 1;
-    if (g.falloutUntil[t] > g.tick) m *= FALLOUT_LOSS_MUL;
-    return this.tc.mag * (neutral ? neutralLossK : lossK) * m;
+  /** Keep the front key current (fronts re-cluster) and relink the opposing offensive. */
+  private resolveFrontKeepCounter(a: Attack): void {
+    const f = this.g.fronts.frontAt(a.attacker, a.defender, a.originX, a.originY);
+    if (f && f.key !== a.frontKey) this.resolveFront(a);
+    else if (f) f.offensive[f.a === a.attacker ? 0 : 1] = a.id;
   }
 
-  private takeTile(a: Attack, A: Player, D: Player | undefined, t: number, loss: number, density: number): void {
-    const g = this.g;
-    A.stats.troopsLost += loss;
-    a.attackerLosses += loss;
-    if (D) {
-      const dl = Math.min(D.troops, density);
-      D.troops -= dl;
-      D.stats.troopsLost += dl;
-      D.stats.troopsKilled += loss;
-      A.stats.troopsKilled += dl;
-      a.defenderLosses += dl;
+  /** The beach fell: the offensive continues inland as a normal front from the landing tile toward the click. */
+  private beachhead(a: Attack): void {
+    a.state = 'advancing';
+    const cx = a.clickX, cy = a.clickY;
+    let dx = wdx(a.originX, cx), dy = cy - a.originY;
+    const dl = Math.hypot(dx, dy);
+    if (dl < 3) {
+      // Aim inland: away from the sea (average direction to the defender's neighbours).
+      const nb = this.nb;
+      const n = neighbors4(a.sourceTile, nb);
+      dx = 0;
+      dy = 0;
+      for (let k = 0; k < n; k++) {
+        if (this.g.owner[nb[k]] !== a.defender) continue;
+        dx += wdx(a.originX, (nb[k] % MAP_W) + 0.5);
+        dy += ((nb[k] / MAP_W) | 0) + 0.5 - a.originY;
+      }
+      const l = Math.hypot(dx, dy) || 1;
+      dx /= l;
+      dy /= l;
+      if (dx === 0 && dy === 0) dy = 1;
+    } else {
+      dx /= dl;
+      dy /= dl;
     }
+    a.dirX = dx;
+    a.dirY = dy;
+    a.frontierDirty = true;
+    this.resolveFront(a);
+  }
+
+  private neutralCost(A: Player, t: number): number {
+    terrainCombat(this.g.terrain[t], this.g.elevation[t], this.tc);
+    return (this.tc.mag * (A.kind === 'tribe' ? 0.5 : 1)) / NEUTRAL_LOSS_DIV / A.mod('attackPower', this.g.tick);
+  }
+
+  /** Transfer one tile to the attacker and grow the frontier around it. Returns the tile's area (km²). */
+  private take(a: Attack, A: Player, D: Player | undefined, t: number): number {
+    const g = this.g;
+    g.transferContext = 'attack';
     g.setOwner(t, a.attacker);
+    g.transferContext = 'none';
+    a.pressure.delete(t);
+    a.theta.delete(t);
     a.pushRecent(t);
-    this.addNeighbors(a, t);
-    if (!this.mopping) this.mopUp(a, A, D, t, loss, density);
-  }
-
-  /**
-   * Keeps fronts clean: a defender tile left with 3+ attacker neighbours (a notch or a one-tile peninsula) falls
-   * with the tile just taken instead of lingering as a speckle behind the line.
-   */
-  private mopping = false;
-  private mopUp(a: Attack, A: Player, D: Player | undefined, t: number, loss: number, density: number): void {
-    const g = this.g;
-    const owner = g.owner, playable = g.playable;
-    const nb = this.nbM, nb2 = this.nbM2;
+    a.conqueredThisTick++;
+    a.tilesTaken++;
+    if (D && D.kind !== 'tribe') g.war.consumeLogistics(a.attacker, a.defender);
+    const slot = g.tick % 10;
+    this.defSum[slot] += g.structAt[t] !== 0 ? TERRAIN_DEF.urban : this.terrainDef[t];
+    this.defN[slot]++;
+    // New frontier tiles behind the one that fell.
+    const nb = this.nb2;
     const n = neighbors4(t, nb);
-    this.mopping = true;
     for (let k = 0; k < n; k++) {
       const q = nb[k];
-      if (owner[q] !== a.defender || !playable[q] || g.structAt[q] !== 0) continue;
+      if (g.owner[q] !== a.defender || !g.playable[q] || a.pressure.has(q)) continue;
+      if (this.corridor(a, q) < 0) continue;
+      this.addFrontier(a, q);
+    }
+    if (D && a.counterId) {
+      const c = this.byIdMap.get(a.counterId);
+      if (c) c.tilesLost++;
+    }
+    const y = ((t / MAP_W) | 0) + 0.5;
+    return TILE_KM * TILE_KM * latCos(y);
+  }
+
+  /** A defender tile left with 3+ attacker neighbours (a notch) falls with the tile just taken, under the caps. */
+  private mopUp(a: Attack, A: Player, D: Player | undefined, t: number, cap: number): void {
+    const g = this.g;
+    const owner = g.owner, playable = g.playable;
+    const nb = this.nb2;
+    const around: number[] = [];
+    const n = neighbors4(t, nb);
+    for (let k = 0; k < n; k++) around.push(nb[k]);
+    for (const q of around) {
+      if (a.conqueredThisTick >= cap || a.ended) return;
+      if (owner[q] !== a.defender || !playable[q] || g.structAt[q] !== 0 || q === (D?.capitalTile ?? -1)) continue;
+      if (this.corridor(a, q) < 0) continue;
       let mine = 0, other = 0;
-      const m = neighbors4(q, nb2);
+      const m = neighbors4(q, this.nb);
       for (let j = 0; j < m; j++) {
-        const o = owner[nb2[j]];
+        const o = owner[this.nb[j]];
         if (o === a.attacker) mine++;
-        else if (o !== a.defender && playable[nb2[j]]) other++;
+        else if (o !== a.defender && playable[this.nb[j]]) other++;
       }
       if (mine < 3 || other > 0) continue;
-      const cost = loss * 0.5;
-      if (a.troops <= cost) break;
-      a.troops -= cost;
-      this.takeTile(a, A, D, q, cost, density * 0.5);
-    }
-    this.mopping = false;
-  }
-
-  /** Best defender tile for an armored division to punch into (adjacent to the attacker, toward its objective). */
-  private spearheadTile(u: Unit, atk: number, def: number): number {
-    const g = this.g;
-    const cx = Math.floor(u.x), cy = Math.floor(u.y);
-    let best = -1, bestD = Infinity;
-    const R = 3;
-    for (let dy = -R; dy <= R; dy++) {
-      const y = cy + dy;
-      if (y < 0 || y >= MAP_H) continue;
-      for (let dx = -R; dx <= R; dx++) {
-        const t = y * MAP_W + ((cx + dx + MAP_W) % MAP_W);
-        if (!this.isFrontier(t, atk, def)) continue;
-        const ex = wdx(u.toX, (t % MAP_W) + 0.5), ey = y + 0.5 - u.toY;
-        const d = ex * ex + ey * ey + (dx * dx + dy * dy) * 4;
-        if (d < bestD) {
-          bestD = d;
-          best = t;
-        }
+      if (D && D.kind !== 'tribe' && g.war.logistics(a.attacker, a.defender) < 1) return;
+      if (!D) {
+        const cost = this.neutralCost(A, q);
+        if (a.troops <= cost) return;
+        a.troops -= cost;
       }
+      this.take(a, A, D, q);
     }
-    return best;
   }
 
-  /** Armor at the front without an ongoing offensive launches one (a slice of the reserve follows the tanks). */
+  private recentTerrainDefense(): number {
+    let s = 0, n = 0;
+    for (let i = 0; i < 10; i++) {
+      s += this.defSum[i];
+      n += this.defN[i];
+    }
+    return n > 0 ? s / n : 1;
+  }
+
+  /** Defense-post multiplier at tile t (the defender's posts, §6.2). */
+  private postMul(t: number): number {
+    const posts = this.posts;
+    if (posts.length === 0) return 1;
+    const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
+    let m = 1;
+    for (let k = 0; k < posts.length; k++) {
+      const dx = wdx(posts[k].x, tx) * latCos(ty), dy = ty - posts[k].y;
+      if (dx * dx + dy * dy <= posts[k].r2 && posts[k].mul > m) m = posts[k].mul;
+    }
+    return m;
+  }
+
+  /** Attached divisions near this offensive (v2-stub(W1→W4): v1 frontArmor lists) and the defender's posts. */
+  private collectArmor(a: Attack, A: Player, D: Player | undefined): void {
+    const g = this.g;
+    const atk = this.atkArmor, dfn = this.defArmor;
+    atk.length = 0;
+    dfn.length = 0;
+    this.posts.length = 0;
+    if (!D) return;
+    const reach = a.frontage / 2 + ARMOR_REACH;
+    for (const u of g.unitSys.frontArmor(A.id)) {
+      if (u.targetPlayer !== a.defender && u.targetPlayer >= 0) continue;
+      if (this.nearAxis(a, u, reach)) atk.push(u);
+    }
+    for (const u of g.unitSys.frontArmor(D.id)) if (this.nearAxis(a, u, reach + 3)) dfn.push(u);
+    for (const s of g.structByOwner.get(D.id) ?? []) {
+      if (s.type !== StructureType.DefensePost || !s.operational) continue;
+      const lv = Math.max(1, Math.min(3, s.level));
+      this.posts.push({ x: s.x, y: s.y, r2: POST_RADIUS[lv] * POST_RADIUS[lv], mul: POST_MUL[lv] });
+    }
+  }
+
+  private nearAxis(a: Attack, u: Unit, reach: number): boolean {
+    const rx = wdx(a.originX, u.x), ry = u.y - a.originY;
+    return Math.abs(rx * a.dirY - ry * a.dirX) <= reach && rx * a.dirX + ry * a.dirY >= -reach;
+  }
+
+  private nearUnit(list: Unit[], t: number): boolean {
+    const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
+    for (const u of list) {
+      const dx = wdx(u.x, tx), dy = ty - u.y;
+      if (dx * dx + dy * dy <= ARMOR_REACH * ARMOR_REACH) return true;
+    }
+    return false;
+  }
+
+  /** v1 API kept for the armor AI: a division at the front with no offensive launches one (war only). */
   armoredAssault(p: Player, u: Unit, defender: number): void {
     const g = this.g;
     for (const a of g.attackList) {
       if (!a.ended && !a.naval && a.attacker === p.id && a.defender === defender) return;
     }
+    const D = g.playerObj(defender);
+    if (defender !== 0 && (!D || (D.kind !== 'tribe' && !g.war.atWar(p.id, defender)))) return;
     if (defender !== 0 && g.isAllied(p.id, defender)) return;
     if (!g.sharesBorder(p.id, defender)) return;
-    const share = p.id === HUMAN_ID ? 0.1 : 0.12;
-    const troops = Math.max(Math.min(p.troops, 2_000), p.troops * share);
-    if (troops < 500) return;
+    if (p.id === HUMAN_ID) return; // the human launches its own offensives
+    const troops = Math.max(Math.min(p.troops, 20_000), p.troops * 0.12);
+    if (troops < 5_000) return;
     const tile = Math.floor(u.toY) * MAP_W + Math.floor(u.toX);
     this.command(p, defender, troops / Math.max(1, p.troops), tile >= 0 && tile < TILE_COUNT ? tile : -1);
   }
+
+  // =================================================================================================
+  // Views
+  // =================================================================================================
+  view(a: Attack): AttackView {
+    const g = this.g;
+    let eta = -1;
+    if (a.state === 'contact') eta = Math.max(0, a.contactUntil - g.tick);
+    else if (a.state === 'retreating') eta = Math.max(0, a.returnAt - g.tick);
+    else if (a.boatId) {
+      const u = g.unitMap.get(a.boatId);
+      if (u) eta = g.unitSys.convoyEta(u);
+    }
+    return {
+      id: a.id, attacker: a.attacker, defender: a.defender, troops: Math.floor(a.troops), naval: a.naval, startTick: a.startTick,
+      x: a.clickX, y: a.clickY, originX: a.originX, originY: a.originY, frontKey: a.frontKey, frontageTiles: +a.frontage.toFixed(1),
+      tilesTaken: a.tilesTaken, tilesLost: a.tilesLost, ratio: +a.ratio.toFixed(2), advanceKmh: +a.advanceKmh.toFixed(2),
+      committed: Math.floor(a.committed), etaTicks: eta, state: a.state, defensePower: Math.round(a.pd), attackPower: Math.round(a.pa),
+    };
+  }
+
+  /** Queued offensives (the aggressor still mobilizes) appear as 'mobilizing' views so the UI can show the massing. */
+  queuedViews(): AttackView[] {
+    const g = this.g;
+    const out: AttackView[] = [];
+    let i = 0;
+    for (const q of g.war.allQueued()) {
+      const p = g.playerById[q.attacker];
+      const w = g.war.get(q.war);
+      if (!p || !w) continue;
+      const x = q.tile >= 0 ? (q.tile % MAP_W) + 0.5 : -1, y = q.tile >= 0 ? Math.floor(q.tile / MAP_W) + 0.5 : -1;
+      out.push({
+        id: -(++i), attacker: q.attacker, defender: q.target, troops: Math.floor(p.troops * q.ratio), naval: q.naval, startTick: w.mobilizeUntilTick,
+        x, y, originX: x, originY: y, frontKey: 0, frontageTiles: 0, tilesTaken: 0, tilesLost: 0, ratio: 0, advanceKmh: 0,
+        committed: 0, etaTicks: Math.max(0, w.mobilizeUntilTick - g.tick), state: 'mobilizing', defensePower: 0, attackPower: 0,
+      });
+    }
+    return out;
+  }
 }
 
-export { Mode };
+export { Mode, MAP_H };
