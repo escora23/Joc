@@ -43,3 +43,12 @@ situation, time to think and react, every unit and building with a clear, visibl
 16. **Things are badly explained and some things exist "just because"**: every mechanic must be explained in-game
     (tooltips, help, feedback) and have a reason to exist; remove or rework what doesn't.
 17. Beyond this list: fix and improve **every other aspect** a demanding player would notice.
+
+## Clarification from the owner (after seeing the icon layer)
+
+> "como que has quitado el modelo 3d?? yo no te he pedido eso"
+
+The 3D models must NOT be removed. Item 4 only asks for 2D icons/sprites **when zoomed out**. When the camera is
+close, every unit and structure must show its proper, well-made 3D model, clearly visible, correctly grounded
+(item 15) and with visible upgrade levels. Critics must check close-up views explicitly: if models are too small,
+invisible or missing at close zoom, that is a blocker.
