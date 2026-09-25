@@ -49,6 +49,8 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
   let clock = new DoomsdayClock();
   let snapshots: Map<number, number>[] = [];
   let nextAt = FIRST_EVENT + rng.int(600);
+  /** Tick of the last event that broke out (its `start`), for the T26 spacing. */
+  let lastStart = -1_000_000;
   /** Shuffled bag of kinds so every kind shows up over a game (drawn in order, skipping kinds that do not fit). */
   let bag: WorldEventKind[] = [];
 
@@ -213,7 +215,8 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
       for (let i = 0; i < active.length; i++) {
         if (!active[i].step(env)) active.splice(i--, 1);
       }
-      if (t >= nextAt) {
+      // T26: spacing is measured between the moments events break out, so the next one waits for the last start.
+      if (t >= nextAt && t >= lastStart + GAP_MIN) {
         nextAt = t + GAP_MIN + rng.int(GAP_RAND);
         if (active.length >= MAX_CONCURRENT) return;
         for (let k = 0; k < 3; k++) {
@@ -229,14 +232,15 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
     },
     onEvent(e: SimEvent) {
       clock.onEvent(e);
+      if (e.type === 'worldEvent' && e.stage === 'start' && e.kind !== 'doomsday') lastStart = Math.max(lastStart, e.tick);
       if (e.type === 'nukeDetonated' && e.targetOwner > 0 && e.weapon !== UnitType.CruiseMissile) env.nuked.set(e.targetOwner, { tick: e.tick, tile: e.tile });
     },
     // v2 (§12.8): the director's state for saves.
     snapshotState() {
-      return { rng, env, active, clock, snapshots, nextAt, bag };
+      return { rng, env, active, clock, snapshots, nextAt, bag, lastStart };
     },
     restoreState(state: unknown) {
-      const s = state as { rng: object; env: EventEnv; active: ActiveEvent[]; clock: DoomsdayClock; snapshots: Map<number, number>[]; nextAt: number; bag: WorldEventKind[] };
+      const s = state as { rng: object; env: EventEnv; active: ActiveEvent[]; clock: DoomsdayClock; snapshots: Map<number, number>[]; nextAt: number; bag: WorldEventKind[]; lastStart?: number };
       rng = s.rng as typeof rng;
       env = s.env;
       env.g = game;
@@ -245,6 +249,7 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
       snapshots = s.snapshots;
       nextAt = s.nextAt;
       bag = s.bag;
+      lastStart = s.lastStart ?? -1_000_000;
     },
     force(kind: WorldEventKind, tile: number) {
       if (kind === 'doomsday') {

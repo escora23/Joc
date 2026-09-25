@@ -10,6 +10,8 @@ import type { GameContext } from '../shared/api';
 import type { UiSoundKind } from '../shared/events';
 import type { Lang } from '../shared/i18n';
 import type { QualityLevel } from '../shared/quality';
+import type { CloudMode } from '../shared/settings';
+import { mapLegend } from './legend';
 
 type Sound = (k: UiSoundKind) => void;
 
@@ -66,6 +68,12 @@ export function openSettings(ctx: GameContext, sound: Sound, onClose?: () => voi
     graphics: h('div', { class: 'fu-form' },
       formRow('settings.quality', quality.el, 'settings.quality.hint'),
       qualityHint,
+      // v2 (W2): map readability (DESIGN_V2 §10.5 clouds, §10.3 historical borders).
+      formRow('settings.clouds', segmented<CloudMode>(
+        (['strategic', 'realistic', 'hidden'] as const).map((v) => ({ value: v, labelKey: `settings.clouds.${v}` })),
+        s.clouds ?? 'strategic', (v) => ctx.settings.set({ clouds: v }), snd,
+      ).el, 'settings.clouds.tip'),
+      formRow('settings.historicalBorders', toggleSwitch(s.historicalBorders ?? false, (v) => ctx.settings.set({ historicalBorders: v }), snd).el, 'settings.historicalBorders.tip'),
       formRow('settings.screenShake', sw('screenShake'), 'settings.screenShake.hint'),
       formRow('settings.showFps', sw('showFps')),
     ),
@@ -153,7 +161,8 @@ export function openHowTo(sound: Sound, onClose?: () => void): ModalHandle {
   });
   const keys = h('button', { class: 'fu-btn fu-btn--ghost' }, icon('keyboard'), tx('howto.shortcuts'));
   const ok = h('button', { class: 'fu-btn fu-btn--primary' }, tx('common.understood'));
-  const m = openModal({ titleKey: 'howto.title', kickerKey: 'howto.kicker', body: grid, foot: [keys, ok], wide: true, onClose });
+  const body = h('div', null, grid, mapLegend());
+  const m = openModal({ titleKey: 'howto.title', kickerKey: 'howto.kicker', body, foot: [keys, ok], wide: true, onClose });
   ok.addEventListener('click', () => m.close());
   keys.addEventListener('click', () => {
     sound('click');

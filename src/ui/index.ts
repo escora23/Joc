@@ -24,6 +24,7 @@ import type { AppState, FrameInfo, GameContext, LoadingHandle, UiApi } from '../
 import type { UiSoundKind } from '../shared/events';
 import { registerDictionary } from '../shared/i18n';
 import { enW1, esW1 } from './i18n/w1';
+import { enW2, esW2 } from './i18n/w2';
 import type { GameOverReason } from '../shared/types';
 
 /** The HUD instance of the running UI (shots stage panels through it). */
@@ -37,6 +38,8 @@ export function createUi(ctx: GameContext): UiApi {
   registerDictionary('en', en);
   registerDictionary('es', esW1);
   registerDictionary('en', enW1);
+  registerDictionary('es', esW2);
+  registerDictionary('en', enW2);
   const root = ctx.uiRoot;
   const sound = (kind: UiSoundKind) => ctx.bus.emit('uiSound', { kind });
   initModals(root, (k) => sound(k));

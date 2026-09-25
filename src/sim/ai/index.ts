@@ -23,7 +23,7 @@ import { allianceStillUseful, helpAlly, onAllianceRequest, onEmote, recordBetray
 import { placeFor, thinkBuild } from './economy';
 import { MapIndex, dist2 } from './mapindex';
 import { emergencyAirDefense, thinkMilitary, thinkNukes } from './military';
-import { thinkNaval } from './naval';
+import { SETTLE_EVERY, thinkNaval, thinkSettle } from './naval';
 import { AUTOPILOT_PERSONALITY, DIFFICULTY, PERSONALITY, REBEL_PERSONALITY, autopilotDifficulty } from './profiles';
 import { setupWorld } from './setup';
 import { sharedEventState } from '../events/bridge';
@@ -36,7 +36,7 @@ export function createAiDirector(game: SimGame): AiDirector {
   let world: WorldModel = {
     betrayals: new Map(), nukesBy: new Map(), detonations: 0, leader: 0, leaderShare: 0, secondShare: 0, leaderTick: -1,
     wars: new Map(), doomsday: 0, rushTile: -1, rushUntil: 0, infected: sharedEventState(game).infected,
-    lastAiWarTick: -1_000_000,
+    lastAiWarTick: -1_000_000, firstUses: 0, unprovoked: new Map(),
   };
   let brains = new Map<number, Brain>();
   let ctx: AiContext | null = null;
@@ -62,7 +62,7 @@ export function createAiDirector(game: SimGame): AiDirector {
       relations: new Map(), front: emptyFront(), pending: [], lastTiles: 0, idleTicks: 0, rushTile: -1, rushUntil: 0,
       allyTarget: 0, allyTargetUntil: 0, buildFails: 0, lastBoatTick: -1_000_000, lastNukeTick: -1_000_000,
       nukesLaunched: 0, coalitionAnnounced: false, homeTile: p.capitalTile, homeCheckTick: -1_000_000, scratch: [],
-      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(),
+      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(), offCooldown: new Map(), settleFail: new Map(), settling: new Map(), intel: new Map(), lastOffensiveTick: -1_000_000,
     };
     if (kind === 'rebel' && b.parent > 0) {
       b.enemy = b.parent;
@@ -176,6 +176,8 @@ export function createAiDirector(game: SimGame): AiDirector {
       b.nextNaval = t + jitter(d.navalInterval);
       thinkNaval(c, b, p);
     }
+    // v2 (§10.6, T39): after the land race, settlers for the unclaimed islands within reach.
+    if ((t + b.id * 37) % SETTLE_EVERY === 0) thinkSettle(c, b, p);
     if (t >= b.nextMilitary) {
       b.nextMilitary = t + jitter(d.militaryInterval);
       thinkMilitary(c, b, p);
@@ -256,6 +258,14 @@ export function createAiDirector(game: SimGame): AiDirector {
         }
         return;
       }
+      case 'warDeclared': {
+        // §5.1 `unprovokedWar`: a war of choice on a nation that was not hostile (retaliation, defence, liberation and
+        // wars on the runaway leader are provoked).
+        if (e.goal !== 'retaliation' && e.goal !== 'defense' && e.goal !== 'liberation' && e.goal !== 'coalition' && !e.parentWar) {
+          world.unprovoked.set(e.aggressor, e.tick);
+        }
+        return;
+      }
       case 'nukeLaunched': {
         if (e.weapon === UnitType.CruiseMissile) return; // conventional
         world.nukesBy.set(e.owner, (world.nukesBy.get(e.owner) ?? 0) + 1);
@@ -263,6 +273,7 @@ export function createAiDirector(game: SimGame): AiDirector {
         if (b && e.targetOwner !== e.owner) {
           const r = relation(b, e.owner);
           r.nukedTick = e.tick;
+          r.nukesReceived = (r.nukesReceived ?? 0) + 1;
           r.trust = -1;
           r.grievance += 4;
           b.retaliate = e.owner;
@@ -408,7 +419,16 @@ export function createAiDirector(game: SimGame): AiDirector {
     restoreState(state: unknown) {
       const s = state as { brains: Map<number, Brain>; world: WorldModel; rng: typeof rng; knownPlayers: number; rebelParents: Map<number, number> };
       brains = s.brains;
+      for (const b of brains.values()) {
+        b.offCooldown ??= new Map();
+        b.settleFail ??= new Map();
+        b.settling ??= new Map();
+        b.intel ??= new Map();
+        b.lastOffensiveTick ??= -1_000_000;
+      }
       world = s.world;
+      world.firstUses ??= 0;
+      world.unprovoked ??= new Map();
       rng = s.rng;
       knownPlayers = s.knownPlayers;
       rebelParents = s.rebelParents;

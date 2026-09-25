@@ -20,6 +20,7 @@ import {
   GLSL_TAIL, M_PER_DEG, OUTER_RES, OUTER_SIZE_M, R_M, srgbToLinear, type BattleUniforms,
 } from './common';
 import { GLSL_FIELDS } from './fields';
+import { GLSL_TERRITORY_FILL } from '../globe/glsl';
 
 const FINE_CELL = FINE_SIZE_M / (FINE_RES - 1);
 const COARSE_CELL = COARSE_SIZE_M / (COARSE_RES - 1);
@@ -92,6 +93,7 @@ const vec3 C_WET = vec3(0.09, 0.08, 0.055);
 
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 vec3 toLin(vec3 c) { return pow(c, vec3(2.2)); }
+${GLSL_TERRITORY_FILL}
 
 void main() {
   battleFadeDiscard();
@@ -288,12 +290,10 @@ void main() {
 
   // Rim: melt into the globe's own albedo (including its territory tint far out).
   alb = mix(alb, tint, smoothstep(0.0, 0.6, vRim));
+  // Territory: the globe's own fill function (DESIGN_V2 §10.1 / §10.11), so the rim meets the globe without a seam.
   if (vTerr.a > 0.001) {
-    float la = luma(alb);
-    vec3 nat = vTerr.rgb;
-    vec3 tinted = nat * clamp(la / max(luma(nat), 0.03), 0.0, 3.0);
-    tinted = mix(mix(vec3(la), alb, 0.35) * 1.05, tinted, 0.75);
-    alb = mix(alb, tinted, vTerr.a);
+    float fa = vTerr.a + territoryFillBoost(alb, vTerr.rgb) * min(1.0, vTerr.a * 4.0);
+    alb = territoryFill(alb, vTerr.rgb, fa);
   }
 
   // Crude slope/cavity occlusion from the macro noise.

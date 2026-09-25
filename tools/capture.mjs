@@ -28,12 +28,13 @@ for (const shot of shots) {
   const logs = [];
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') logs.push(`[${m.type()}] ${m.text()}`); });
   page.on('pageerror', (e) => { logs.push(`[pageerror] ${e.message}`); failed = true; });
-  const url = shot === 'default' ? base : `${base}${base.includes('?') ? '&' : '?'}shot=${encodeURIComponent(shot)}`;
+  // --params "&alt=300&freeze=1" adds raw query params to every shot; --tag names the output file <shot>-<tag>.png.
+  const url = shot === 'default' ? base : `${base}${base.includes('?') ? '&' : '?'}shot=${encodeURIComponent(shot)}${args.params || ''}`;
   await page.goto(url, { waitUntil: 'load', timeout: 120000 });
   // The game sets window.__shotReady = true when a ?shot= scene is staged; fall back to a fixed wait.
   try { await page.waitForFunction(() => (window).__shotReady === true || (window).__ready === true, null, { timeout: readyTimeout }); } catch { logs.push('[capture] timeout waiting for __shotReady'); }
   await page.waitForTimeout(wait);
-  const file = path.join(out, `${shot}.png`);
+  const file = path.join(out, `${shot}${args.tag ? '-' + args.tag : ''}.png`);
   await page.screenshot({ path: file });
   const fps = await page.evaluate(() => (window).__fps ?? null).catch(() => null);
   console.log(`${file}${fps ? `  fps~${fps}` : ''}`);

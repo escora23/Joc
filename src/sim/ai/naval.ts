@@ -9,6 +9,80 @@ import { alive, home, relation, troopFill, type AiContext } from './context';
 import { dist2 } from './mapindex';
 import type { Brain } from './state';
 
+/** Settlement cadence (ticks) and the land race it waits for (§10.6). */
+export const SETTLE_EVERY = 200;
+const SETTLE_FROM_TICK = 1200;
+/** Settler convoys a nation runs at once. */
+const SETTLE_CONVOYS = 2;
+/** An island we could not reach (no sea route, no free beach) is left alone this long. */
+const SETTLE_RETRY_TICKS = 6000;
+
+/** How far (tiles) a nation's transports reach: grows through the game, longer for seafaring personalities. */
+function reachOf(ctx: AiContext, b: Brain): number {
+  return Math.min(420, 90 + ctx.g.tick / 18) * (0.75 + 0.25 * b.prof.naval);
+}
+
+/**
+ * v2 (§10.6, T39): after the land race every nation sends settlers to the nearest unclaimed island within reach, one
+ * convoy at a time: a small landing party that claims the beach and then expands over the island like any neutral land
+ * (the nation's own expansion continues from the beachhead). Big islands are worth a longer trip. Islands that turn
+ * out unreachable are remembered and skipped for a while, so a nation does not keep aiming at the same frozen strait.
+ */
+export function thinkSettle(ctx: AiContext, b: Brain, p: SimPlayer): void {
+  const g = ctx.g;
+  if (g.tick < SETTLE_FROM_TICK || b.kind === 'rebel') return;
+  const base = home(ctx, b, p);
+  if (p.tiles < 12 || base < 0) return;
+  // Convoys back without a foothold (no sea route, beach taken first): that island waits.
+  const out = g.outgoingAttacks(p.id);
+  for (const [id, i] of b.settling) {
+    if (out.some((a) => a.id === id)) continue;
+    b.settling.delete(id);
+    const isl = ctx.index.islands[i];
+    if (isl && !isl.coast.some((t) => g.ownerOf(t) === p.id)) b.settleFail.set(i, g.tick + SETTLE_RETRY_TICKS);
+  }
+  if (troopFill(p) < 0.3 || b.settling.size >= SETTLE_CONVOYS) return;
+  const reach = reachOf(ctx, b);
+  const origins: number[] = [base];
+  for (const t of b.front.shoreSample) origins.push(t);
+  let target = -1, targetIsl = -1, best = 0;
+  const isl = ctx.index.islands;
+  for (let i = 0; i < isl.length; i++) {
+    if ((b.settleFail.get(i) ?? 0) > g.tick) continue;
+    let sailing = false;
+    for (const j of b.settling.values()) if (j === i) sailing = true;
+    if (sailing) continue;
+    let beach = -1;
+    for (const t of isl[i].coast) {
+      if (g.ownerOf(t) === 0) {
+        beach = t;
+        break;
+      }
+    }
+    if (beach < 0) continue;
+    let d2 = Infinity;
+    for (const o of origins) d2 = Math.min(d2, dist2(beach, o));
+    const d = Math.sqrt(d2);
+    if (d > reach) continue;
+    const score = Math.sqrt(isl[i].size) / (1 + d / 60);
+    if (score > best) {
+      best = score;
+      target = beach;
+      targetIsl = i;
+    }
+  }
+  if (target < 0) return;
+  // Settlers, not an army: enough for the beach and a first stretch of the island.
+  const ratio = Math.min(0.08, Math.max(0.02, (5_000 + 100 * isl[targetIsl].size) / Math.max(1, p.troops)));
+  if (g.issue(p.id, { type: 'boatAttack', targetTile: target, ratio })) {
+    b.lastBoatTick = g.tick;
+    b.settleFail.set(targetIsl, g.tick + SETTLE_EVERY * 3);
+    let id = -1;
+    for (const a of g.outgoingAttacks(p.id)) if (a.naval && a.defender === 0 && a.id > id) id = a.id;
+    if (id >= 0) b.settling.set(id, targetIsl);
+  } else b.settleFail.set(targetIsl, g.tick + SETTLE_RETRY_TICKS);
+}
+
 export function thinkNaval(ctx: AiContext, b: Brain, p: SimPlayer): void {
   const g = ctx.g;
   const rng = ctx.rng;
@@ -25,30 +99,7 @@ export function thinkNaval(ctx: AiContext, b: Brain, p: SimPlayer): void {
   for (const a of g.outgoingAttacks(p.id)) if (a.naval) boats++;
   if (boats >= 2) return;
 
-  const reach = Math.min(420, 90 + g.tick / 18) * (0.75 + 0.25 * b.prof.naval);
-  // v2 (T39): unclaimed islands within reach get a small landing party (settlers, not an army).
-  if (rng.next() < 0.6) {
-    let target = -1, bd = reach * reach;
-    for (const isl of ctx.index.islands) {
-      let beach = -1;
-      for (const t of isl.coast) {
-        if (g.ownerOf(t) === 0) {
-          beach = t;
-          break;
-        }
-      }
-      if (beach < 0) continue;
-      const d = dist2(beach, base);
-      if (d < bd) {
-        bd = d;
-        target = beach;
-      }
-    }
-    if (target >= 0 && g.issue(p.id, { type: 'boatAttack', targetTile: target, ratio: 0.1 })) {
-      b.lastBoatTick = g.tick;
-      return;
-    }
-  }
+  const reach = reachOf(ctx, b);
   const origins: number[] = [base];
   for (const t of b.front.shoreSample) origins.push(t);
   let best = -1, bestScore = 0, bestOwner = -1;

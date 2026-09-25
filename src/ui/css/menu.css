@@ -275,3 +275,14 @@
 .fu-setup-foot { order: 3; }
 .fu-setup-foot > .fu-setup-start { order: 9; }
 .fu-setup-spacer { flex: 1; }
+/* v2 (W2): map legend in the help screen (DESIGN_V2 §10.1) */
+.fu-legend-wrap { margin-top: 1.4rem; padding-top: 1.1rem; border-top: 1px solid var(--fu-line); }
+.fu-legend-title { margin: 0 0 0.25rem; font: 700 1.1rem/1 var(--fu-font-display); letter-spacing: 0.1em; text-transform: uppercase; }
+.fu-legend-wrap > div:not(.fu-legend) { margin-bottom: 0.8rem; font-size: 0.85rem; color: var(--fu-text-2); }
+.fu-legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.55rem 1rem; }
+.fu-legend-row { display: flex; gap: 0.8rem; align-items: flex-start; }
+.fu-legend-sample { flex: none; width: 64px; height: 36px; border-radius: 4px; overflow: hidden; border: 1px solid var(--fu-line); }
+.fu-legend-svg { display: block; }
+.fu-legend-row b { display: block; margin: 0.05rem 0 0.2rem; font-size: 0.9rem; }
+.fu-legend-row p { margin: 0; font-size: 0.82rem; line-height: 1.4; color: var(--fu-text-2); }
+@media (max-width: 760px) { .fu-legend { grid-template-columns: 1fr; } }

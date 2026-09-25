@@ -980,6 +980,16 @@ export class IconLayer {
     return { kind: h.kind === 2 ? 'cluster' : h.structure ? 'structure' : 'unit', id: h.id, owner: h.owner, members: h.members, structure: h.structure };
   }
 
+  /** Debug (verification scripts): every pickable icon drawn this frame, CSS px relative to the canvas. */
+  debugHits(): { x: number; y: number; half: number; kind: 'single' | 'cluster'; id: number; owner: number; members: number[]; structure: boolean }[] {
+    const out = [];
+    for (let i = 0; i < this.hitN; i++) {
+      const h = this.hits[i];
+      out.push({ x: h.x, y: h.y, half: h.half, kind: h.kind === 2 ? 'cluster' as const : 'single' as const, id: h.id, owner: h.owner, members: [...h.members], structure: h.structure });
+    }
+    return out;
+  }
+
   clear(): void {
     this.n = 0;
     this.structs.n = 0;

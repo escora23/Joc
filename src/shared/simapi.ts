@@ -17,7 +17,7 @@
 import type { PlayerCommand, SimEvent } from './protocol';
 import type { Rng } from './rng';
 import type {
-  Difficulty, GameConfig, GamePhase, PairState, PeaceTerms, Personality, PlayerKind, PlayerStatsCounters, StructureType,
+  AttackState, Difficulty, GameConfig, GamePhase, PairState, PeaceTerms, Personality, PlayerKind, PlayerStatsCounters, StructureType,
   UnitState, UnitType, WarGoal, WorldEventKind, WorldInit,
 } from './types';
 
@@ -82,6 +82,17 @@ export interface SimAttack {
   readonly troops: number;
   readonly naval: boolean;
   readonly startTick: number;
+  /** v2 (W1): last force ratio R = Pa / Pd (§4.4; 0 during the contact phase and on neutral land). */
+  readonly ratio: number;
+  /** v2 (W1): contact / advancing / stalled / consolidating / landing / retreating. */
+  readonly state: AttackState;
+  /** v2 (W1): the front it pushes on (0 = none). */
+  readonly frontKey: number;
+  /** v2 (W1): troops committed so far (launch + reinforcements). */
+  readonly committed: number;
+  /** v2 (W1): the axis point (continuous tile coords, -1 = none). */
+  readonly clickX: number;
+  readonly clickY: number;
 }
 
 export interface NewPlayerDef {

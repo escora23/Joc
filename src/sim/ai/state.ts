@@ -27,6 +27,8 @@ export interface Relation {
   alliedTick: number;
   /** Nuclear weapons we launched at them. */
   nukesSent: number;
+  /** v2 (§5.10): nuclear weapons they launched at us (retaliation is one for one). */
+  nukesReceived: number;
 }
 
 /** Per-neighbour front analysis (refreshed every few seconds). */
@@ -107,6 +109,16 @@ export interface Brain {
   nextPeace: number;
   /** Enemy -> last tick it launched a nuclear weapon at one of our allies (retaliation, §5.10). */
   allyNukedBy: Map<number, number>;
+  /** Enemy -> no new offensive on it before this tick (after a retreat or a broken offensive, §4.9). */
+  offCooldown: Map<number, number>;
+  /** Island index -> no settler convoy to it before this tick (unreachable or just tried, T39). */
+  settleFail: Map<number, number>;
+  /** Settler convoys under way: attack id -> island index. */
+  settling: Map<number, number>;
+  /** Enemy -> measured defence / estimated garrison (divisions, posts, modifiers the estimate cannot see), EMA. */
+  intel: Map<number, number>;
+  /** Last tick this staff opened a new land offensive (tempo, §5.7 step 6). */
+  lastOffensiveTick: number;
 }
 
 export function emptyFront(): FrontInfo {
@@ -116,7 +128,7 @@ export function emptyFront(): FrontInfo {
 export function newRelation(): Relation {
   return {
     trust: 0, attackedTick: -1_000_000, nukedTick: -1_000_000, grievance: 0, betrayedUs: false,
-    sharedEnemyTick: -1_000_000, helpedTick: -1_000_000, alliedTick: -1_000_000, nukesSent: 0,
+    sharedEnemyTick: -1_000_000, helpedTick: -1_000_000, alliedTick: -1_000_000, nukesSent: 0, nukesReceived: 0,
   };
 }
 
@@ -145,6 +157,10 @@ export interface WorldModel {
   infected: Map<number, number>;
   /** v2 (W1): tick of the last AI declaration worldwide (§5.7 step 7). */
   lastAiWarTick: number;
+  /** v2 (§5.10): AI nuclear first uses (not retaliation) so far this game; the nuclear taboo allows only a few. */
+  firstUses: number;
+  /** v2 (§5.1 `unprovokedWar`): player -> last tick it declared a war on someone who was not hostile to it. */
+  unprovoked: Map<number, number>;
 }
 
 export function pairKey(a: number, b: number): number {

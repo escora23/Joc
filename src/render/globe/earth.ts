@@ -324,6 +324,28 @@ void main() {
     float fineK = clamp((1.0 / 21000.0) / max(pxWorld, 1e-9) / 3.0 - 1.0, 0.0, 1.0);
     float n3 = fineK > 0.0 ? fbm3(vWorld * 21000.0) * fineK : 0.0;
     albedo *= 1.0 + landK * (0.16 * n2 + 0.12 * n3 + 0.14 * (hd - 0.45));
+    // Land-use patchwork on gentle ground (DESIGN_V2 §10.11): fields, pasture, ploughed and wooded plots of ~1.2 km
+    // with darker hedgerows between them. The NASA albedo is ~1 km per texel, so without it the ground below 50 km
+    // reads as a flat wash of colour. Irregular polygons: 3D cells cut by the sphere, edges wobbled by noise.
+    float fieldK = landK * (1.0 - smoothstep(0.2, 0.55, rugged)) * (1.0 - smoothstep(0.3, 0.5, luma(albedo)))
+                 * (1.0 - smoothstep(2400.0, 3400.0, elevM)) * clamp((1.0 / 5200.0) / max(pxWorld, 1e-9) / 6.0 - 1.0, 0.0, 1.0);
+    if (fieldK > 0.001) {
+      vec3 q = vWorld * 5200.0 + vec3(fbm3(vWorld * 1700.0), fbm3(vWorld * 1700.0 + 7.3), 0.0) * 0.45;
+      vec3 cell = floor(q);
+      float hv = hash13(cell), hv2 = hash13(cell + 17.0);
+      vec3 f = fract(q);
+      vec3 e3 = min(f, 1.0 - f);
+      float edge = min(e3.x, min(e3.y, e3.z));
+      float hedge = 1.0 - smoothstep(0.0, 0.05 + 2.0 * pxWorld * 5200.0, edge);
+      vec3 fcol = hv < 0.3 ? albedo * vec3(1.2, 1.12, 0.82) : hv < 0.58 ? albedo * vec3(0.8, 1.0, 0.72)
+                : hv < 0.8 ? albedo * vec3(0.78, 0.7, 0.62) : albedo * vec3(0.55, 0.68, 0.5);
+      albedo = mix(albedo, fcol, fieldK * (0.6 + 0.3 * hv2));
+      // Plots inside a field (~400 m strips) and the hedgerows between fields.
+      vec3 q2 = q * 3.0;
+      float hv3 = hash13(floor(q2) + cell * 3.0);
+      albedo *= 1.0 + fieldK * 0.12 * (hv3 - 0.5);
+      albedo = mix(albedo, albedo * vec3(0.55, 0.66, 0.5), hedge * fieldK * 0.7);
+    }
     // Rock on steep ground, snow on the high crests (the 10 km albedo is too soft this close).
     float steep = clamp(length(slope) * 1.1, 0.0, 1.0);
     albedo = mix(albedo, vec3(0.19, 0.175, 0.16), landK * steep * 0.45);
@@ -507,7 +529,8 @@ void main() {
       float fillA = (uFill + (isHuman ? 0.05 : 0.0) + 0.08 * hoverO) * (alive ? 1.0 : 0.5);
       // Occupied land: a dot stipple in the owner's colour over 70 % fill (§10.1).
       fillA *= mix(1.0, 0.7, occ);
-      fillA += territoryFillBoost(albedo, natO);
+      // The similar-colour boost is for orbit; up close (uCloseK) the ground detail must read through the fill.
+      fillA += territoryFillBoost(albedo, natO) * (1.0 - 0.75 * uCloseK);
       fillA *= terr * landK;
       vec3 ground = albedo;
       albedo = territoryFill(albedo, natO, fillA);
@@ -584,9 +607,11 @@ void main() {
       float s = distPx;
       float cO = bandCov(s, 0.0, hO), cQ = bandCov(s, -hQ, 0.0);
       float nightL = 1.0 - smoothstep(-0.12, 0.06, muS);
-      float E = mix(1.5, 3.0, nightL);
-      vec3 colO = mix(natO, vec3(1.0), 0.35) * E * (1.0 + 0.25 * float(O == HUMAN_ID) + 0.5 * hoverO);
-      vec3 colQ = mix(natQ, vec3(1.0), 0.35) * E * (1.0 + 0.25 * float(Q == HUMAN_ID) + 0.5 * hoverQ);
+      float E = mix(1.5, 3.4, nightL);
+      // At night the line leans further to white so it keeps >= 3:1 against the re-emitted fills (§10.4).
+      float wl = mix(0.35, 0.55, nightL);
+      vec3 colO = mix(natO, vec3(1.0), wl) * E * (1.0 + 0.25 * float(O == HUMAN_ID) + 0.5 * hoverO);
+      vec3 colQ = mix(natQ, vec3(1.0), wl) * E * (1.0 + 0.25 * float(Q == HUMAN_ID) + 0.5 * hoverQ);
       if ((flagsO & PAL_TRAITOR) != 0) colO = mix(colO, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));
       if ((flagsQ & PAL_TRAITOR) != 0) colQ = mix(colQ, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));
       float fadeW = smoothstep(0.85, 0.35, water) * terr;

@@ -196,6 +196,25 @@ export class EnclaveSystem {
       }
       if (ok) found.push({ tiles, by: [...enemies].sort((a, b) => a - b) });
     }
+    // The nation's core (the component holding its capital, else its largest remaining one) is the nation itself, not
+    // a pocket cut off from it: it is not besieged, whatever surrounds it (§4.12; a landlocked nation at war with every
+    // neighbour fights with its whole army, it does not starve).
+    if (found.length) {
+      const cap = p.capitalTile >= 0 && g.owner[p.capitalTile] === p.id ? p.capitalTile : -1;
+      let core = -1;
+      if (cap >= 0) {
+        if (this.stamp[cap] === gen) core = found.findIndex((f) => f.tiles.includes(cap));
+      } else {
+        let largest = 0;
+        for (let i = 0; i < found.length; i++) if (found[i].tiles.length > largest) {
+          largest = found[i].tiles.length;
+          core = i;
+        }
+        // Only when it is the nation's largest component overall (every component was scanned: p.border covers them).
+        if (core >= 0 && largest * 2 < p.tiles) core = -1;
+      }
+      if (core >= 0) found.splice(core, 1);
+    }
     this.apply(p.id, found);
   }
 

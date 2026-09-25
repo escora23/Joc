@@ -1180,6 +1180,11 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       return { x: scrXY.x + rect.left, y: scrXY.y + rect.top };
     },
     pick: (x: number, y: number) => iconHitAt(x, y),
+    /** Pickable icons drawn this frame, in client px (verification: clustering, scripted clicks). */
+    icons: () => {
+      const rect = ctx.canvas.getBoundingClientRect();
+      return (icons?.debugHits() ?? []).map((h) => ({ ...h, x: h.x + rect.left, y: h.y + rect.top }));
+    },
   };
   (window as unknown as { __units?: unknown }).__units = debugHook;
   (window as unknown as { __trails?: unknown }).__trails = {

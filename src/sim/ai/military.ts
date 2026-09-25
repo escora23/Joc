@@ -232,6 +232,9 @@ export function nukeTick(ctx: AiContext, b: Brain): number {
   return b.diff.nukeTick * b.prof.nukeDelay * (1 - ctx.world.doomsday * 0.45) * (ctx.world.detonations > 0 ? 0.85 : 1);
 }
 
+/** The nuclear taboo (§5.10): AI first uses of nuclear weapons per game; retaliation is not counted. */
+const AI_FIRST_USES = 3;
+
 export function thinkNukes(ctx: AiContext, b: Brain, p: SimPlayer): void {
   const g = ctx.g;
   const rng = ctx.rng;
@@ -252,12 +255,18 @@ export function thinkNukes(ctx: AiContext, b: Brain, p: SimPlayer): void {
     const r = relation(b, enemy);
     const nukedUs = r.nukedTick >= w.startTick;
     const allyNuked = b.allyNukedBy.get(enemy) ?? -1;
-    const retaliation = nukedUs || allyNuked >= w.startTick;
-    const desperate = (lost >= w.tilesAtStart[s] * 0.4 || w.capitalLost[s]) && g.tick - w.startTick >= 1200 && b.prof.nukes >= 0.4;
-    const existential = w.capitalLost[s] && lost >= w.tilesAtStart[s] * 0.6 && (b.personality === 'nuker' || ctx.world.doomsday >= 0.7);
+    // Proportionate answers (§5.10): one launch for each one received, and one for a nuclear strike on an ally; a
+    // first use (desperation, existential) happens at most once per enemy, only while the world's fear (doomsday) is
+    // low and the nuclear taboo still holds (AI_FIRST_USES per game). This ends tit-for-tat spirals after one exchange.
+    const owed = nukedUs && (r.nukesReceived ?? 0) > r.nukesSent;
+    const allyOwed = allyNuked >= w.startTick && r.nukesSent === 0 && ctx.world.doomsday < 0.5;
+    const retaliation = owed || allyOwed;
+    const firstUseOk = r.nukesSent === 0 && ctx.world.firstUses < AI_FIRST_USES && ctx.world.doomsday < 0.35;
+    const desperate = firstUseOk && (lost >= w.tilesAtStart[s] * 0.4 || w.capitalLost[s]) && g.tick - w.startTick >= 1200 && b.prof.nukes >= 0.4;
+    const existential = firstUseOk && w.capitalLost[s] && lost >= w.tilesAtStart[s] * 0.6 && (b.personality === 'nuker' || ctx.world.doomsday >= 0.7);
     let want = 0;
     if (retaliation || desperate) want = 3;
-    if (nukedUs || existential) want = 4;
+    if (owed || existential) want = 4;
     if (want === 0) continue;
     const level = g.war.escalation(p.id, enemy);
     if (level < want) {
@@ -279,6 +288,7 @@ export function thinkNukes(ctx: AiContext, b: Brain, p: SimPlayer): void {
         b.lastNukeTick = g.tick;
         b.nukesLaunched++;
         r.nukesSent++;
+        if (!retaliation) ctx.world.firstUses++;
         r.trust = -1;
         return;
       }

@@ -129,8 +129,8 @@ async function captureRun(run) {
   page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
   const url = `${base}${base.includes('?') ? '&' : '?'}shot=${encodeURIComponent(shot)}&freeze=1&hud=0${extra}`;
   const t0 = Date.now();
-  await page.goto(url, { waitUntil: 'load', timeout: 180000 });
-  await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 300000, polling: 500 });
+  await page.goto(url, { waitUntil: 'load', timeout: 300000 });
+  await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 900000, polling: 500 });
   const images = {};
   for (const v of variants) {
     await page.evaluate((view) => window.__shotView.set(view), VIEW[v]);

@@ -81,7 +81,11 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     const c = world.terrain[tile] & TERRAIN_CLASS_MASK;
     const k = c === TerrainClass.Mountains ? 'terrain.mountains' : c === TerrainClass.Hills ? 'terrain.hills' : c === TerrainClass.Plains ? 'terrain.plains' : c === TerrainClass.Ice ? 'terrain.ice' : 'terrain.water';
     const country = countryName(world.countries[world.country[tile]]);
-    return country ? `${t(k)} · ${country}` : t(k);
+    if (!country) return t(k);
+    // Owned land that historically belongs to another country names it (DESIGN_V2 §10.3): «antes: Francia».
+    const owner = ctx.sim.view.owner[tile];
+    if (owner !== 0 && hs.name(owner) !== country) return `${t(k)} · ${t('tt.formerly', { country })}`;
+    return `${t(k)} · ${country}`;
   }
 
   function paintTooltip(tile: number): void {

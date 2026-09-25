@@ -19,6 +19,8 @@ export class Hurricane implements ActiveEvent {
   private category = 1;
   private peak: number;
   private landfall = false;
+  /** The `start` news goes out once per storm (mid-life shipping news or landfall, whichever comes first). */
+  private startEmitted = false;
   private landTicks = 0;
   private announced = false;
   private announcedTick = -1_000_000;
@@ -79,7 +81,10 @@ export class Hurricane implements ActiveEvent {
       this.landfall = true;
       this.announced = true;
       this.hitCoast(env, 1);
-      if (t - this.announcedTick > 400) emitStage(env, this.id, this.kind, 'start', this.x, this.y, this.radius, Math.round(this.category), [...this.affected]);
+      if (!this.startEmitted) {
+        this.startEmitted = true;
+        emitStage(env, this.id, this.kind, 'start', this.x, this.y, this.radius, Math.round(this.category), [...this.affected]);
+      }
     }
     // No landfall by mid-life: it is still news when it batters shipping lanes near a coast.
     if (!this.announced && t === Math.round(this.lifetime * 0.45)) {
@@ -87,6 +92,7 @@ export class Hurricane implements ActiveEvent {
       if (land >= 0) {
         this.announced = true;
         this.announcedTick = t;
+        this.startEmitted = true;
         emitStage(env, this.id, this.kind, 'start', (land % 1600) + 0.5, ((land / 1600) | 0) + 0.5, this.radius, Math.round(this.category), [...this.affected]);
       }
     }

@@ -22,6 +22,7 @@ import type { BattleApi, CameraState, FrameInfo, GameContext } from '../../share
 import { BATTLE_LAYER_ALT_KM, HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../../shared/constants';
 import { latLonToTile, latLonToVec3, tangentFrame, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { smoothstep } from '../../shared/math';
+import { territoryFillAmount } from '../globe/glsl';
 import type { QualityProfile } from '../../shared/quality';
 import { hashString } from '../../shared/rng';
 import { UnitType, type FrontView, type LatLon } from '../../shared/types';
@@ -347,8 +348,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       const o = view0.owner[latLonToTile(la, lo)];
       const p = o ? view0.players[o] : undefined;
       if (!p) return null;
-      // Same fill strength as the globe's territory overlay (so the rim matches it).
-      return { color: p.color, fill: (0.26 + (o === HUMAN_ID ? 0.05 : 0)) * (p.alive ? 1 : 0.5) };
+      // Same fill strength as the globe's territory overlay at close range (§10.1), so the rim matches it.
+      return { color: p.color, fill: (territoryFillAmount(40) + (o === HUMAN_ID ? 0.05 : 0)) * (p.alive ? 1 : 0.5) };
     });
     near.add(patch.group);
     yield;

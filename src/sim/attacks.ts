@@ -44,6 +44,18 @@ const POST_MUL = [1, 1.5, 1.75, 2];
 /** Terrain time multipliers (§4.5) and terrain defense for casualties (§4.6). */
 const TERRAIN_TIME = { plains: 1, hills: 1.6, mountains: 2.6 };
 const TERRAIN_DEF = { plains: 1, hills: 1.2, mountains: 1.5, urban: 1.4 };
+
+/**
+ * The capital district (§4.5): the capital tile and the 8 tiles around it, a city of ~50 km defended street by street.
+ * Terrain time ×3 there (the table's "×3 the defender's capital"), so the last stand of a nation takes days.
+ */
+const CAPITAL_DISTRICT_TIME = 3;
+function inCapitalDistrict(t: number, capital: number): boolean {
+  let dx = Math.abs((t % MAP_W) - (capital % MAP_W));
+  if (dx > MAP_W / 2) dx = MAP_W - dx;
+  return dx <= 1 && Math.abs(((t / MAP_W) | 0) - ((capital / MAP_W) | 0)) <= 1;
+}
+
 /** Neutral offensives a player may run at once (further clicks reinforce the nearest). */
 const MAX_NEUTRAL_OFFENSIVES = 3;
 const MAX_PAIR_OFFENSIVES = 3;
@@ -355,6 +367,19 @@ export class AttackSystem {
     return perp <= half ? perp : -1;
   }
 
+  /**
+   * Does attacker tile `from` push on defender tile `t` along the offensive's axis? An offensive advances toward its
+   * axis point (§4.3): it presses the tiles in front of it and on its flanks, never a tile from the far side (that is
+   * another army's front). On a straight front every contact qualifies; around an encircled pocket only the side the
+   * offensive comes from does, so a pocket is taken by advancing through it, not peeled from every side at once.
+   * Neutral land keeps the free expansion of the land race.
+   */
+  private pushesFrom(a: Attack, t: number, from: number): boolean {
+    if (a.defender === 0) return true;
+    const ex = wdx((t % MAP_W) + 0.5, (from % MAP_W) + 0.5), ey = ((from / MAP_W) | 0) - ((t / MAP_W) | 0);
+    return ex * a.dirX + ey * a.dirY <= 0.05;
+  }
+
   /** Full rebuild of the corridor's frontier (defender tiles touching the attacker inside the corridor). */
   private rebuildFrontier(a: Attack): void {
     const g = this.g;
@@ -364,6 +389,7 @@ export class AttackSystem {
     if (!A) return;
     const def = a.defender, owner = g.owner, nb = this.nb;
     const keep = new Set<number>();
+    let anyInCorridor = -1;
     if (a.sourceTile >= 0 && a.state === 'landing') {
       // Storming the beach: the landing tile is the whole front until it falls.
       if (owner[a.sourceTile] === def) keep.add(a.sourceTile);
@@ -374,7 +400,19 @@ export class AttackSystem {
           const q = nb[k];
           if (owner[q] !== def || !g.playable[q] || keep.has(q)) continue;
           if (this.corridor(a, q) < 0) continue;
+          anyInCorridor = q;
+          if (!this.pushesFrom(a, q, t)) continue;
           keep.add(q);
+        }
+      }
+      // A corridor whose every contact faces backwards (an axis drawn across a salient): it pushes where it touches.
+      if (keep.size === 0 && anyInCorridor >= 0) {
+        for (const t of A.border) {
+          const n = neighbors4(t, nb);
+          for (let k = 0; k < n; k++) {
+            const q = nb[k];
+            if (owner[q] === def && g.playable[q] && this.corridor(a, q) >= 0) keep.add(q);
+          }
         }
       }
     }
@@ -654,7 +692,7 @@ export class AttackSystem {
         if (D) {
           if (g.structAt[t] !== 0) terrain *= 2;
           terrain *= post;
-          if (t === capital) terrain *= 3;
+          if (capital >= 0 && inCapitalDistrict(t, capital)) terrain *= CAPITAL_DISTRICT_TIME;
           if (this.defArmor.length && this.nearUnit(this.defArmor, t)) terrain *= 1.4;
         }
         if (g.falloutUntil[t] > tick) terrain *= 2;
@@ -700,7 +738,7 @@ export class AttackSystem {
       let areaKm2 = 0;
       for (let i = 0; i < ready.length && a.conqueredThisTick < cap; i++) {
         const t = ready[i];
-        if (owner[t] !== def) continue;
+        if (owner[t] !== def || g.flipTick[t] === tick) continue;
         if (warBound && g.war.logistics(att, def) < 1) {
           a.consolidating = true;
           break;
@@ -822,7 +860,7 @@ export class AttackSystem {
     for (let k = 0; k < n; k++) {
       const q = nb[k];
       if (g.owner[q] !== a.defender || !g.playable[q] || a.pressure.has(q)) continue;
-      if (this.corridor(a, q) < 0) continue;
+      if (this.corridor(a, q) < 0 || !this.pushesFrom(a, q, t)) continue;
       this.addFrontier(a, q);
     }
     if (D && a.counterId) {
@@ -843,7 +881,8 @@ export class AttackSystem {
     for (let k = 0; k < n; k++) around.push(nb[k]);
     for (const q of around) {
       if (a.conqueredThisTick >= cap || a.ended) return;
-      if (owner[q] !== a.defender || !playable[q] || g.structAt[q] !== 0 || q === (D?.capitalTile ?? -1)) continue;
+      if (owner[q] !== a.defender || !playable[q] || g.structAt[q] !== 0 || g.flipTick[q] === g.tick) continue;
+      if (D && D.capitalTile >= 0 && inCapitalDistrict(q, D.capitalTile)) continue;
       if (this.corridor(a, q) < 0) continue;
       let mine = 0, other = 0;
       const m = neighbors4(q, this.nb);
@@ -920,14 +959,18 @@ export class AttackSystem {
     return false;
   }
 
-  /** v1 API kept for the armor AI: a division at the front with no offensive launches one (war only). */
+  /**
+   * v1 API kept for the armor AI: a division at the edge of unclaimed land or an independent territory with no offensive
+   * launches one. v2 (§4.4, §5.7): against a nation or the human a division only supports the offensives its staff
+   * launches (armor ×1.25 power, ×1.5 speed around it); the war plan alone decides when the odds justify one.
+   */
   armoredAssault(p: Player, u: Unit, defender: number): void {
     const g = this.g;
     for (const a of g.attackList) {
       if (!a.ended && !a.naval && a.attacker === p.id && a.defender === defender) return;
     }
     const D = g.playerObj(defender);
-    if (defender !== 0 && (!D || (D.kind !== 'tribe' && !g.war.atWar(p.id, defender)))) return;
+    if (defender !== 0 && (!D || D.kind !== 'tribe')) return;
     if (defender !== 0 && g.isAllied(p.id, defender)) return;
     if (!g.sharesBorder(p.id, defender)) return;
     if (p.id === HUMAN_ID) return; // the human launches its own offensives

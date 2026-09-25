@@ -4,9 +4,10 @@
 // Knobs: &tick= (staged ticks), &lat= &lon= &alt= &tilt= &heading= &sun= (subsolar longitude).
 
 import { HUMAN_ID, MAP_H, MAP_W } from '../../shared/constants';
-import { latLonToTile, worldTimeForSubsolarLon } from '../../shared/geo';
+import { latLonToTile, neighbors4, tileDistance, tileIndex, tileToLatLon, worldTimeForSubsolarLon } from '../../shared/geo';
 import { registerShot, type ShotContext } from '../../shared/shots';
-import { isNavigableTerrain } from '../../shared/terrain';
+import { isNavigableTerrain, isPlayableTerrain } from '../../shared/terrain';
+import { relationsFor } from '../relations';
 import { UnitType } from '../../shared/types';
 
 function num(params: URLSearchParams, key: string, def: number): number {
@@ -112,3 +113,73 @@ registerShot('routes-atlantic', 'units', 'Route lines: a Lisbon -> New York conv
   ctx.cameraRig.setState({ lat: num(params, 'lat', 38), lon: num(params, 'lon', -38), altitudeKm: num(params, 'alt', 7000), tilt: 0, heading: 0 });
   await s.waitFrames(8);
 }, 20);
+
+/**
+ * A land border tile between two players for the close-border shots, the one nearest the human's capital: a border of
+ * the human with a nation first, then with any other player, then between two other players. `peaceful` skips pairs
+ * at war and tiles near a front (the zoom shots are "outside battles").
+ */
+function humanBorderTile(s: ShotContext, peaceful: boolean): number {
+  const view = s.ctx.sim.view;
+  const w = s.ctx.world;
+  const cap = view.human?.capitalTile ?? latLonToTile(40.4, -3.7);
+  if (!w) return cap;
+  const rel = relationsFor(s.ctx);
+  rel.refresh(Number.POSITIVE_INFINITY);
+  const fronts = view.fronts.map((f) => tileIndex(Math.floor(f.x), Math.floor(f.y)));
+  const nb = new Int32Array(4);
+  const best = [cap, cap, cap], bestD = [Infinity, Infinity, Infinity];
+  for (let t = 0; t < view.owner.length; t++) {
+    const a = view.owner[t];
+    if (a === 0 || !isPlayableTerrain(w.terrain[t])) continue;
+    const d = tileDistance(t, cap);
+    if (a === HUMAN_ID ? d >= Math.max(bestD[0], bestD[1]) : d >= bestD[2]) continue;
+    const n = neighbors4(t, nb);
+    for (let i = 0; i < n; i++) {
+      const o = view.owner[nb[i]];
+      if (o === 0 || o === a || !isPlayableTerrain(w.terrain[nb[i]])) continue;
+      if (peaceful && (rel.atWar(a, o) || fronts.some((f) => tileDistance(t, f) < 40))) continue;
+      const cls = a === HUMAN_ID ? (view.players[o]?.kind === 'nation' ? 0 : 1) : o === HUMAN_ID ? 3 : 2;
+      if (cls > 2 || d >= bestD[cls]) continue;
+      bestD[cls] = d;
+      best[cls] = t;
+    }
+  }
+  for (let c = 0; c < 3; c++) if (Number.isFinite(bestD[c])) return best[c];
+  return cap;
+}
+
+async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt: number, heading: number): Promise<number> {
+  const p = s.params;
+  // 9,000 ticks: the land rush is over, so the human borders other nations (v2 pacing, 1 tick = 6 game minutes).
+  await s.ctx.app.startScriptedGame({ ticks: num(p, 'tick', 9000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(p, 'sun', 0)) });
+  const tile = humanBorderTile(s, peaceful);
+  const ll = tileToLatLon(tile);
+  s.ctx.cameraRig.setMode('game');
+  s.ctx.cameraRig.setState({
+    lat: num(p, 'lat', ll.lat), lon: num(p, 'lon', ll.lon), altitudeKm: num(p, 'alt', alt),
+    tilt: num(p, 'tilt', tilt), heading: num(p, 'heading', heading),
+  });
+  return tile;
+}
+
+registerShot('borders-close', 'globe', 'Borders up close (&alt=1500 default, &alt=300): smooth, constant-width lines, the human\'s 2.4 px with glow; &flash=1 plays a few ticks so conquest flashes show (DESIGN_V2 §10.3)', async (s) => {
+  await stageBorder(s, false, 1500, 0, 0);
+  if (s.params.get('flash') === '1') {
+    // A few live ticks: the tiles taken now glow in the attacker's colour and fade over 2 s.
+    s.ctx.sim.setSpeed(1);
+    await s.wait(num(s.params, 'live', 2500));
+    s.ctx.sim.setSpeed(0);
+  }
+  await s.waitFrames(6);
+}, 20);
+
+registerShot('zoom-40', 'globe', 'Close zoom outside battles at 40 km over the human\'s border: fill, ground borders, near patch without seam (DESIGN_V2 §10.11)', async (s) => {
+  await stageBorder(s, true, 40, 0.75, 0.4);
+  await s.waitFrames(10);
+}, 30);
+
+registerShot('zoom-8', 'globe', 'Close zoom outside battles at 8 km over the human\'s border: fill, ground borders, procedural detail, no flat plane (DESIGN_V2 §10.11)', async (s) => {
+  await stageBorder(s, true, 8, 0.8, 0.4);
+  await s.waitFrames(10);
+}, 30);

@@ -168,6 +168,8 @@ export class Game implements SimGame {
   transferContext: TransferContext = 'none';
   /** v2 (W1): tick a tile was last captured from another player (-1 = never), §4.13. */
   readonly captureTick: Int32Array;
+  /** Tick of each tile's last owner change: an offensive never takes a tile that already changed hands this tick (§4.17 invariant 2). Not saved: only the current tick matters. */
+  readonly flipTick: Int32Array;
   /** 1 while a tile is occupied (captured < OCCUPATION_TICKS ago). */
   readonly occupiedFlag: Uint8Array;
   /** Occupation expiry queue (captures in tick order): tiles and their capture ticks. */
@@ -206,6 +208,7 @@ export class Game implements SimGame {
     this.structAt = new Int32Array(TILE_COUNT);
     this.frontStamp = new Uint32Array(TILE_COUNT);
     this.captureTick = new Int32Array(TILE_COUNT).fill(-1);
+    this.flipTick = new Int32Array(TILE_COUNT).fill(-1);
     this.occupiedFlag = new Uint8Array(TILE_COUNT);
     this.contact = new Int32Array(this.contactCap * this.contactCap);
     this.spawnDeadline = config.spawnTimeoutTicks;
@@ -755,6 +758,7 @@ export class Game implements SimGame {
     if (prev === newOwner) return;
     this.invariants?.onTransfer(tile, prev, newOwner, this.transferContext);
     owner[tile] = newOwner;
+    this.flipTick[tile] = this.tick;
     if (!this.changedOverflow) {
       this.changed.push(packTileOwner(tile, newOwner));
       if (this.changed.length > TILE_COUNT / 8) {

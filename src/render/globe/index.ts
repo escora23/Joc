@@ -158,6 +158,8 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       root.add(islands.mesh);
       const isl = islands;
       (window as unknown as { __islands?: unknown }).__islands = { visible: () => isl.visible(), details: () => isl.details() };
+      // Verification (tools/w2-verify.mjs): the historical-borders overlay strength actually sent to the shader.
+      (window as unknown as { __globeDebug?: unknown }).__globeDebug = { historical: () => territory.uniforms.uHistorical.value };
       progress(1);
     },
     warmup(on) {

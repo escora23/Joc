@@ -132,8 +132,8 @@ export const OCCUPATION_TICKS = 720;
 /** Traitor flag after breaking a treaty (§5.6). */
 export const TRAITOR_TICKS = 720;
 /** Capitulation thresholds (§4.13): capital lost, share of the pre-war land lost, exhaustion. */
-export const CAPITULATION_LAND_LOST = 0.5;
-export const CAPITULATION_EXHAUSTION = 60;
+export const CAPITULATION_LAND_LOST = 0.4;
+export const CAPITULATION_EXHAUSTION = 50;
 /** Naval invasions (§4.11). */
 export const EMBARK_PORT_TICKS = 60;
 export const EMBARK_SHORE_TICKS = 120;

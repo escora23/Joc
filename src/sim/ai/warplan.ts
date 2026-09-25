@@ -15,7 +15,7 @@
 //      exhaustion ≥ 35 or when its goal is met, but a winner (score ≥ 40, exhaustion < 70) demands a cession (or a
 //      tribute at ≥ 25); a `conquest` goal is met only by capitulation (WarSystem).
 
-import { DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID, TENSION_LEAD_TICKS } from '../../shared/constants';
+import { DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID, MAP_W, TENSION_LEAD_TICKS } from '../../shared/constants';
 import type { SimPlayer, SimWar } from '../../shared/simapi';
 import type { PeaceTerms, WarGoal } from '../../shared/types';
 import { alive, relation, strength, type AiContext } from './context';
@@ -29,7 +29,65 @@ const PLAN_EVERY = 120;
 const PEACE_EVERY = 240;
 const DECLARE_GAP = 720;
 
-/** The opinion proxy of `b` about `q` (−100…+100). v2-stub(W1→W3): W3's opinion model replaces it. */
+/**
+ * Offensive discipline (§4.4–§4.9). A staff launches an offensive only with the odds that make it advance and bleed the
+ * enemy faster than itself (§4.6: from R ≈ 1.7 the attacker's advantage grows), tops it up while it holds, and pulls
+ * it back when it stalls and cannot be fed, instead of throwing troops at a wall and relaunching every few hours.
+ */
+export const LAUNCH_RATIO = 1.7;
+/** A defender counter-attacks only with a clear edge: its troops also hold the line. */
+export const COUNTER_RATIO = 2.1;
+/** A running offensive below this ratio is topped up to TOPUP_RATIO, or pulled back when that is not affordable. */
+const HOLD_RATIO = 1.15;
+const TOPUP_RATIO = 1.6;
+/** No new offensive on the same enemy for this long after pulling one back (the staff regroups). */
+export const OFFENSIVE_COOLDOWN = 600;
+/** A staff opens at most one new land offensive per this many ticks, over all its wars (planning capacity). */
+const OFFENSIVE_TEMPO = 300;
+/** Home troops an offensive may take at most (the rest garrisons the other fronts and the land). */
+const MAX_COMMIT = 0.75;
+
+/**
+ * The garrison `q` holds (or would hold) against `p` (§4.4 `Gf`): the strongest of their current fronts at war, else
+ * the share q would give a new front of `contact` tiles next to the fronts it already fights on.
+ */
+export function enemyGarrison(ctx: AiContext, p: SimPlayer, q: SimPlayer, contact: number): number {
+  return rawGarrison(ctx, p, q, contact) * (ctx.brains.get(p.id)?.intel.get(q.id) ?? 1);
+}
+
+function rawGarrison(ctx: AiContext, p: SimPlayer, q: SimPlayer, contact: number): number {
+  const g = ctx.g;
+  const fronts = g.fronts.frontsOfPair(p.id, q.id);
+  if (fronts.length) {
+    let best = 0;
+    for (const f of fronts) best = Math.max(best, g.fronts.garrison(f, q.id));
+    return best;
+  }
+  let other = 0;
+  for (const f of g.fronts.frontsOf(q.id)) {
+    const hit = f.offensive[f.a === q.id ? 1 : 0] !== 0;
+    other += f.length * (hit ? 2 : 1);
+  }
+  return q.troops * 0.85 * Math.max(1, contact) / Math.max(1, Math.max(1, contact) + other);
+}
+
+/**
+ * The force ratio a staff sizes its offensives for: better staffs (difficulty `efficiency`, §5.9) mass more for a faster
+ * decision; every one stays above the launch odds. Easy 1.8, Normal 2.3, Hard 2.6, Insane 2.7.
+ */
+export function targetRatio(b: Brain): number {
+  return LAUNCH_RATIO + 2 * (b.diff.efficiency - 0.5);
+}
+
+/** Share of home troops `p` must commit for an offensive at `ratio` against a garrison `G` (> MAX_COMMIT = cannot). */
+function neededShare(p: SimPlayer, G: number, ratio: number): number {
+  return (ratio * Math.max(1, G)) / Math.max(1, p.troops);
+}
+
+/**
+ * The opinion proxy of `b` about `q` (−100…+100), built from the reasons of §5.1 that the sim already knows, on top of
+ * v1's trust and grievance. v2-stub(W1→W3): W3's opinion model replaces it.
+ */
 export function opinionProxy(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): number {
   const g = ctx.g;
   const r = b.relations.get(q.id);
@@ -37,17 +95,36 @@ export function opinionProxy(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlaye
   if (r) {
     o += 100 * r.trust - 10 * r.grievance;
     if (r.betrayedUs) o -= 60;
-    if (g.tick - r.attackedTick < 2400) o -= 25;
+    if (g.tick - r.attackedTick < 2400) o -= 25; // pastWar / they attacked us recently
     if (g.tick - r.nukedTick < 7200) o -= 60;
   }
-  // Border friction: a long shared border is a standing dispute (the `border` casus belli).
+  // borderLong / borderShort: a shared border is a standing dispute.
   const c = b.front.contact.get(q.id) ?? 0;
-  if (c > 0) o -= Math.min(35, c * 0.7);
-  if (ctx.world.leader === q.id && ctx.world.leaderShare > b.diff.coalitionShare) o -= 40;
+  if (c > 60) o -= 10;
+  else if (c > 0) o -= 3;
+  // sizeThreat: a neighbour with twice our land or more (−5 at 2×, −20 at 4× and above).
+  if (c > 0 && q.tiles >= p.tiles * 2) o -= Math.min(20, 5 + 7.5 * (q.tiles / Math.max(1, p.tiles) - 2));
+  // runawayLeader: −(0…30) × coalition above the difficulty's coalition share.
+  if (ctx.world.leader === q.id && ctx.world.leaderShare > b.diff.coalitionShare) {
+    o -= Math.min(30, 30 * (ctx.world.leaderShare - b.diff.coalitionShare) / 0.2) * (0.5 + b.prof.coalition);
+  }
+  // unprovokedWar (half-life 20 days = 4,800 ticks) and reputationTraitor.
+  const agg = ctx.world.unprovoked.get(q.id);
+  if (agg !== undefined) o -= 10 * Math.pow(0.5, (g.tick - agg) / 4800);
   if (q.traitorUntilTick > g.tick) o -= 15;
-  if (p.allies.has(q.id)) o += 60;
+  // personality affinity: traders like traders, conquerors distrust conquerors.
+  const qb = ctx.brains.get(q.id);
+  if (qb && qb.personality === b.personality) o += b.personality === 'trader' ? 10 : b.personality === 'conqueror' ? -10 : 0;
+  // alliance / commonEnemy.
+  if (p.allies.has(q.id)) o += 25;
   for (const a of q.allies) {
     if (p.allies.has(a)) {
+      o += 10;
+      break;
+    }
+  }
+  for (const e of g.war.enemiesOf(p.id)) {
+    if (g.war.atWar(q.id, e)) {
       o += 20;
       break;
     }
@@ -124,10 +201,15 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     if (stale) {
       b.tension = null;
     } else if (g.tick - t.tick >= lead && mayDeclare(ctx, b, p) && !gate.swamped) {
-      if (g.war.declareError(p.id, t.target) === null) {
-        const ratio = commitRatio(b);
+      const naval = !g.sharesBorder(p.id, t.target);
+      // The odds are re-read when the lead has run: a target that grew or made peace elsewhere is dropped.
+      const need = naval ? 0 : neededShare(p, enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1), LAUNCH_RATIO);
+      if (need > MAX_COMMIT) {
+        if (g.tick - t.tick > lead * 3) b.tension = null;
+      } else if (g.war.declareError(p.id, t.target) === null) {
+        const size = naval ? commitRatio(b) : neededShare(p, enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1), targetRatio(b) * 1.05);
+        const ratio = clamp(Math.max(need * 1.05, Math.min(size, commitRatio(b) * 1.5)), 0.05, MAX_COMMIT);
         const aim = aimAt(ctx, b, q!);
-        const naval = !g.sharesBorder(p.id, t.target);
         const ok = g.issue(p.id, {
           type: 'declareWar', target: t.target, goal: t.goal, reasonKey: t.reasonKey,
           queuedAttack: aim >= 0 && !naval ? { tile: aim, ratio } : undefined,
@@ -160,7 +242,12 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     if (id === HUMAN_ID && g.war.declareError(p.id, id) === 'msg.warCap') continue;
     const opinion = opinionProxy(ctx, b, p, q);
     const weak = strength(q) <= strength(p) * 0.5;
-    if (opinion >= -30 && !(b.personality === 'conqueror' && weak)) continue;
+    // Step 1 filter: hostile opinion (< −30), unless a conqueror faces a much weaker neighbour or an opportunist a cold
+    // one (< −10) already bleeding in another war (§5.8).
+    const bleeding = b.personality === 'opportunist' && opinion < -10 && g.war.enemiesOf(q.id).length > 0;
+    if (opinion >= -30 && !(b.personality === 'conqueror' && weak) && !bleeding) continue;
+    // No war it cannot fight: the first offensive must reach the launch odds against the garrison it will meet.
+    if (neededShare(p, enemyGarrison(ctx, p, q, c), LAUNCH_RATIO) > MAX_COMMIT) continue;
     let s = scoreTarget(ctx, b, p, q, c, gate.neutral);
     s *= 1 + Math.min(0.5, (-opinion - 30) / 140);
     if (s > bestScore) {
@@ -215,7 +302,12 @@ function runPlan(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar, reserve: num
     const want = hit ? 2 : 1;
     if (f.priority[s] !== want) g.issue(p.id, { type: 'setFrontPriority', frontKey: f.key, priority: want as 0 | 1 | 2 });
   }
-  if (g.war.mobilizingUntil(p.id, enemyId) > 0) return;
+  const mobUntil = g.war.mobilizingUntil(p.id, enemyId);
+  if (mobUntil > 0) {
+    // The next plan runs as the mobilization ends, to size the queued offensive against the garrison it meets.
+    b.plans.set(w.id, Math.min(b.plans.get(w.id) ?? mobUntil, mobUntil));
+    return;
+  }
   // Offensives: top up to the commit ratio and re-aim; start one when there is none and the odds are fair.
   const mine = g.outgoingAttacks(p.id).filter((a) => a.defender === enemyId);
   const land = mine.filter((a) => !a.naval);
@@ -224,18 +316,52 @@ function runPlan(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar, reserve: num
   const spare = home - reserve * p.maxTroops * 0.6;
   const aim = aimAt(ctx, b, q);
   if (g.sharesBorder(p.id, enemyId)) {
+    const G = enemyGarrison(ctx, p, q, b.front.contact.get(enemyId) ?? 1);
     if (land.length === 0) {
-      // Defensive side: counter-attack only with a real edge; aggressor: always push its war.
-      const theirGarrison = q.troops * 0.85 / Math.max(1, g.fronts.frontsOf(enemyId).length);
-      const want = home * commit;
-      const fair = want > theirGarrison * (side === 0 ? 1.2 : 1.6);
-      if ((side === 0 || fair) && spare > home * 0.05 && aim >= 0) g.issue(p.id, { type: 'attack', target: enemyId, ratio: commit, tile: aim });
+      // A new offensive only with the odds (§4.6): the aggressor commits what it takes (up to MAX_COMMIT), a defender
+      // counter-attacks only with a clear edge; otherwise the staff waits for its troops to grow or the enemy to split.
+      if (g.tick < (b.offCooldown.get(enemyId) ?? 0) || g.tick - b.lastOffensiveTick < OFFENSIVE_TEMPO || aim < 0 || spare <= home * 0.05) return;
+      // Their offensive on the same front joins the defence of a counter-offensive at half weight (§4.8).
+      let incoming = 0;
+      for (const a of g.incomingAttacks(p.id)) if (a.attacker === enemyId && !a.naval) incoming += a.troops;
+      const need = neededShare(p, G + 0.5 * incoming, side === 0 ? LAUNCH_RATIO : COUNTER_RATIO);
+      if (need > MAX_COMMIT) return;
+      // Economy of force: size it for the staff's target ratio, keep the rest for the other fronts and the land.
+      const size = neededShare(p, G + 0.5 * incoming, Math.max(side === 0 ? LAUNCH_RATIO : COUNTER_RATIO, targetRatio(b)) * 1.05);
+      if (g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(Math.max(need * 1.05, Math.min(size, commit * 1.5)), 0.05, MAX_COMMIT), tile: aim })) {
+        b.lastOffensiveTick = g.tick;
+      }
     } else {
+      const goal = targetRatio(b);
       for (const a of land) {
-        const want = commit * (home + a.troops);
-        if (a.troops < want * 0.8 && spare > home * 0.05 && aim >= 0) {
-          const add = clamp((want - a.troops) / Math.max(1, home), 0.03, commit);
-          g.issue(p.id, { type: 'attack', target: enemyId, ratio: add, tile: aim });
+        if (a.state === 'retreating') continue;
+        // In the contact phase the ratio is not measured yet: estimate it from the garrison it will meet.
+        const R = a.state === 'contact' ? a.troops / Math.max(1, G) : a.ratio;
+        if (R <= 0) continue;
+        // What the offensive meets teaches the staff the enemy's real strength (divisions, posts, modifiers).
+        if (a.state !== 'contact' && G > 0) {
+          const seen = clamp(a.troops / R / G, 0.5, 3);
+          b.intel.set(enemyId, (b.intel.get(enemyId) ?? 1) * 0.5 + seen * 0.5);
+        }
+        if (R < HOLD_RATIO && a.state !== 'contact') {
+          // Stuck: feed it up to a winning ratio if we can, else pull it back before it bleeds out (§4.9).
+          const add = a.troops * (TOPUP_RATIO / R - 1);
+          if (add < spare && add / Math.max(1, home) <= MAX_COMMIT) {
+            g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(add / Math.max(1, home), 0.03, MAX_COMMIT), tile: aim });
+          } else if (a.state === 'stalled') {
+            g.issue(p.id, { type: 'retreat', attackId: a.id });
+            b.offCooldown.set(enemyId, g.tick + OFFENSIVE_COOLDOWN);
+          }
+          continue;
+        }
+        // Top up to the target ratio (casualties and the enemy's redeployment wear it down) on the same axis; once
+        // its axis point has fallen, re-aim it at the capital or the enemy's front (§5.7 step 6).
+        const add = R < goal * 0.85 ? Math.min(spare, a.troops * (goal / R - 1)) : 0;
+        const axis = a.clickX >= 0 ? Math.floor(a.clickY) * MAP_W + Math.floor(a.clickX) : -1;
+        const axisTaken = axis < 0 || g.ownerOf(axis) !== enemyId;
+        const tile = axisTaken && aim >= 0 && g.distance(aim, axis >= 0 ? axis : aim) <= 20 ? aim : axis;
+        if (tile >= 0 && home > 1 && (add > home * 0.01 || (axisTaken && tile === aim && aim !== axis))) {
+          g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(add / home, 0.005, MAX_COMMIT), tile });
         }
       }
     }
@@ -272,15 +398,30 @@ function goalMet(ctx: AiContext, w: SimWar, p: number): boolean {
   return false;
 }
 
+/**
+ * Does `p` press on toward the enemy's capitulation (§4.15 "winners hold out", §5.7 step 8)? Its own `conquest` war,
+ * or any war it is clearly winning (score ≥ 40 with the enemy capital in hand) when its personality has the appetite:
+ * turtles and traders take their terms instead.
+ */
+function pressing(ctx: AiContext, w: SimWar, p: number): boolean {
+  const side = w.a === p ? 0 : 1;
+  if (side === 0 && w.goal === 'conquest') return true;
+  const b = ctx.brains.get(p);
+  if (!b || b.personality === 'turtle' || b.personality === 'trader') return false;
+  const enemy = side === 0 ? w.b : w.a;
+  return w.capitalLost[side === 0 ? 1 : 0] && ctx.g.war.warScore(p, enemy) >= 40;
+}
+
 /** Would `q` accept a white peace from its enemy? (the side that holds out demands terms instead). */
 function answerWhite(ctx: AiContext, w: SimWar, q: number, enemy: number): 'yes' | 'no' | 'cede' | 'tribute' {
   const g = ctx.g;
   const ex = g.war.exhaustion(q);
   const s = g.war.warScore(q, enemy);
-  const conquest = w.a === q && w.goal === 'conquest';
+  const conquest = pressing(ctx, w, q);
+  // A `conquest` goal is met only by capitulation (§5.7 step 8): the conqueror holds out for all of it.
+  if (conquest && ex < 70) return 'no';
   if (s >= 40 && ex < 70) return 'cede';
   if (s >= 25 && ex < 70) return 'tribute';
-  if (conquest && ex < 70) return 'no';
   if (ex >= 35 || goalMet(ctx, w, q)) return 'yes';
   return 'no';
 }
@@ -298,7 +439,7 @@ export function thinkPeace(ctx: AiContext, b: Brain, p: SimPlayer): void {
     if (!ctx.brains.has(enemy)) continue;
     const ex = g.war.exhaustion(p.id);
     const s = g.war.warScore(p.id, enemy);
-    const mineConquest = w.a === p.id && w.goal === 'conquest';
+    const mineConquest = pressing(ctx, w, p.id);
     // A losing, exhausted side sues for peace.
     if (ex >= 45 && s <= 0 && !(mineConquest && ex < 70)) {
       const ans = answerWhite(ctx, w, enemy, p.id);

@@ -12,7 +12,7 @@ import { HUMAN_ID } from '../../shared/constants';
 import type { SimPlayer } from '../../shared/simapi';
 import { alive, relation, troopFill, type AiContext } from './context';
 import { incomingPressure, scanFront } from './perception';
-import { thinkDeclarations, thinkPeace, thinkWarPlans } from './warplan';
+import { COUNTER_RATIO, enemyGarrison, thinkDeclarations, thinkPeace, thinkWarPlans } from './warplan';
 import type { Brain } from './state';
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -56,10 +56,14 @@ export function thinkWar(ctx: AiContext, b: Brain, p: SimPlayer, interval: numbe
     swamped = inc.total > p.troops * 0.7;
     const att = g.player(inc.topAttacker);
     // v2: counter-offensives only in a declared war (they form one two-sided battle, §4.8).
-    if (diff.counterAttack && att && att.alive && inc.top > p.troops * 0.12 && g.sharesBorder(p.id, att.id) && g.war.atWar(p.id, att.id)) {
-      // Send just enough to annihilate their assault (opposing attacks cancel out), if we can spare it.
-      const want = Math.min(inc.top * 1.08, p.troops * 0.65);
-      if (want > inc.top * 0.5) {
+    if (diff.counterAttack && att && att.alive && inc.top > p.troops * 0.12 && g.sharesBorder(p.id, att.id) && g.war.atWar(p.id, att.id)
+      && g.tick >= (b.offCooldown.get(att.id) ?? 0)) {
+      // A counter-offensive on the same front forms one two-sided battle (§4.8): it meets their garrison plus half of
+      // the assault, so it goes in only with a clear edge (COUNTER_RATIO) and at most 65 % of the home troops.
+      const need = COUNTER_RATIO * (enemyGarrison(ctx, p, att, b.front.contact.get(att.id) ?? 1) + 0.5 * inc.top);
+      const want = Math.min(need * 1.05, p.troops * 0.65);
+      if (want >= need && g.tick - b.lastOffensiveTick >= 300 && !g.outgoingAttacks(p.id).some((a) => a.defender === att.id && !a.naval)) {
+        b.lastOffensiveTick = g.tick;
         const ratio = clamp(want / Math.max(1, p.troops), 0.05, 0.65);
         const aim = b.front.aim.get(att.id) ?? att.capitalTile;
         g.issue(p.id, { type: 'attack', target: att.id, ratio, tile: aim });
