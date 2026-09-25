@@ -84,7 +84,8 @@ export function createFx(ctx: GameContext): FxApi {
 
   const atlas = createSpriteAtlas(256);
   const particles = new ParticleSystem(ctx.quality.particles, atlas);
-  const trails = new TrailSystem(ctx.quality.particles >= 15000 ? 48000 : 24000);
+  // Room for the 64 route lines of DESIGN_V2 §10.8 (up to 256 points each) on top of the effect trails.
+  const trails = new TrailSystem(ctx.quality.particles >= 15000 ? 96000 : 64000);
   const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tmp3 = new THREE.Vector3();
   const up = new THREE.Vector3(), tA = new THREE.Vector3(), tB = new THREE.Vector3();
   const ll: LatLon = { lat: 0, lon: 0 };

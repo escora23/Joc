@@ -29,6 +29,7 @@ import { airHeightKm, ballisticApexKm, env, refreshEnv, unitSizeKm } from './com
 import { ModelBuilder } from './geom';
 import { createModelMaterial, minPxScale, structFade, unitFade } from './material';
 import { IconLayer, unitCategory, type IconHit } from './icons';
+import { RouteManager, type RouteEnv } from './routes';
 import { relationsFor } from '../relations';
 import {
   buildBuilding, buildSpire, buildStructModel, buildUnitModel, STRUCT_MODELS, UNIT_MODELS, type StructModelKey, type UnitModelKey,
@@ -161,6 +162,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPxScale: 0.5 };
   const relations = relationsFor(ctx);
   let structModelsOn = false;
+  const routes = new RouteManager();
+  let routeEnv: RouteEnv | null = null;
+  let hoverUnit = -1;
   let viewW = 1, viewH = 1;
   const scr = new THREE.Vector3();
   const scrXY = { x: 0, y: 0 };
@@ -231,6 +235,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   ctx.bus.on('simTick', (e) => sampleTrails(e));
   ctx.bus.on('worldHover', (e) => {
     if (icons) icons.hoverKey = e.unitId >= 0 ? e.unitId : e.structureId >= 0 ? -e.structureId - 1 : -1;
+    hoverUnit = e.unitId;
   });
   ctx.bus.on('allianceFormed', () => (railDirty = true));
   ctx.bus.on('allianceBroken', () => (railDirty = true));
@@ -572,8 +577,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       case UnitType.TransportShip:
       case UnitType.TradeShip:
       case UnitType.Warship:
+        // The white wake stays only up close (below 300 km); from higher up the owner-coloured route tells the story.
         T.copy(G).addScaledVector(B, 0.46 * s);
-        emit(0, 'wake', T, active && surfaceMoving, frame && t.idle > 1.5);
+        emit(0, 'wake', T, active && surfaceMoving && env.altitudeKm < 300, frame && (t.idle > 1.5 || env.altitudeKm >= 300));
         return;
       case UnitType.Shell:
         emit(0, 'shell', P, active, false);
@@ -672,9 +678,30 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     icons.add(false, u.id, u.type, u.owner, relations.relationTo(u.owner), scrXY.x + dxPx, scrXY.y + dyPx - lift, u.hp, 0, sel, size, unitCategory(u.type));
   }
 
+  function makeRouteEnv(fx: FxInternal): RouteEnv {
+    if (!routeEnv) {
+      routeEnv = {
+        fx, now: 0, altitudeKm: 0,
+        relationTo: (o) => relations.relationTo(o),
+        radiusAt,
+        ownerColor: (o) => ownerColor(o),
+        ownerOfXY: (x, y) => ctx.sim.view.owner[Math.min(799, Math.max(0, Math.floor(y))) * MAP_W + ((Math.floor(x) % MAP_W) + MAP_W) % MAP_W] ?? 0,
+      };
+    }
+    routeEnv.fx = fx;
+    routeEnv.now = env.fxTime;
+    routeEnv.altitudeKm = env.altitudeKm;
+    return routeEnv;
+  }
+
   function updateUnits(frame: FrameInfo, fx: FxInternal | undefined): void {
     const view = ctx.sim.view;
     for (const key of UNIT_MODELS) unitMeshes[key].n = 0;
+    const renv = fx ? makeRouteEnv(fx) : null;
+    routes.focus.clear();
+    for (const id of selectedUnits) routes.focus.add(id);
+    if (hoverUnit >= 0) routes.focus.add(hoverUnit);
+    routes.begin();
     const gen = ++seenGen;
     const a = clamp(frame.simAlpha, 0, 1);
     const unitK = unitScaleK();
@@ -684,6 +711,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const key = modelFor(u.type);
       const t = getTrack(u);
       t.seen = gen;
+      if (renv) routes.unit(renv, u, Math.abs(u.x - u.prevX) + Math.abs(u.y - u.prevY) > 1e-4);
       if (isAir(u.type) && u.state === UnitState.Docked) {
         t.hasPos = false;
         if (fx) for (let s = 0; s < t.trails.length; s++) stopTrail(fx, t, s);
@@ -775,6 +803,16 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       releaseTrack(t, fx);
     }
     for (const key of UNIT_MODELS) commit(unitMeshes[key]);
+    if (renv) {
+      routes.end(renv);
+      // Sunk ships: a red cross for 15 s; division routes: the ETA at their end.
+      routes.forEachCross(env.fxTime, (p, a) => {
+        if (icons && toScreen(p)) icons.addCross(scrXY.x, scrXY.y, a);
+      });
+      routes.forEachEta((p, eta, owner) => {
+        if (icons && toScreen(p)) icons.addText(scrXY.x, scrXY.y - 12, eta, ctx.sim.view.players[owner]?.color ?? 0xffffff);
+      });
+    }
   }
 
   function latLonTile(lat: number, lon: number): number {
@@ -1032,6 +1070,20 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       tmpColor.copy(ownerColor(u.owner)).lerp(white, 0.4);
       ov.ring({ lat: t.lat, lon: t.lon, radiusKm: t.size * 1.1, minPx: 22, style: 0, color: tmpColor.getHex(), alpha: 1, dashes: 12, spin: 0.25 }, radiusAt);
     }
+    // CAP circles while a fighter patrols (v2-stub(W2→W4): "patrolling" = airborne within 8 tiles of its target until
+    // W4 publishes the unit mode), warship patrol / blockade zones when selected.
+    for (const u of view.units.values()) {
+      if (u.type === UnitType.FighterSquadron && u.state !== UnitState.Docked && u.alt > 0.2) {
+        const dx = wrapDX(u.x, u.targetX), dy = u.targetY - u.y;
+        if (dx * dx + dy * dy < 64) {
+          tileXYToLatLon(u.targetX, u.targetY, ll2);
+          ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: 150, minPx: 10, style: 2, color: ownerColor(u.owner).getHex(), alpha: 0.7, dashes: 40, spin: 0.02 }, radiusAt);
+        }
+      } else if (u.type === UnitType.Warship && selectedUnits.has(u.id)) {
+        tileXYToLatLon(u.targetX, u.targetY, ll2);
+        ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: 150, minPx: 10, style: 2, color: ownerColor(u.owner).getHex(), alpha: 0.8, dashes: 36, spin: 0.03 }, radiusAt);
+      }
+    }
     if (selectedStructure >= 0) {
       const st = view.structures.get(selectedStructure);
       if (st) {
@@ -1130,6 +1182,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     pick: (x: number, y: number) => iconHitAt(x, y),
   };
   (window as unknown as { __units?: unknown }).__units = debugHook;
+  (window as unknown as { __trails?: unknown }).__trails = {
+    stats: () => ({ ...routes.stats({ relationTo: (o: number) => relations.relationTo(o) }), humanSuppressed: routes.humanSuppressed() }),
+  };
   const api: UnitsApi = {
     async init(progress) {
       await build(progress);
@@ -1160,6 +1215,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (buildings) buildings.mesh.count = buildings.n = 0;
       if (spires) spires.mesh.count = spires.n = 0;
       icons?.clear();
+      routes.clear(fx);
       structAnchor.clear();
       structHeading.clear();
       cityCache.clear();

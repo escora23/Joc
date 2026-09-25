@@ -36,8 +36,8 @@ const RELIEF_TOP = 1 + (TOPO_MAX_METERS * RELIEF_EXAGGERATION) / (EARTH_RADIUS_K
 export const MASK_LAYER = 30;
 /** Camera layer of the cloud deck in the &mask=cloud measurement. */
 export const CLOUD_MASK_LAYER = 29;
-/** Cloud drift offset while frozen (&freeze=1). */
-const FROZEN_CLOUD_U = 0.37;
+/** Cloud drift offset while frozen (&freeze=1): a cloudy day over western Europe, so cloud shots test something. */
+const FROZEN_CLOUD_U = 0.52;
 
 /**
  * Cloud thinning factors for a mode and camera altitude (DESIGN_V2 §10.5): x = the human's land, y = other land,

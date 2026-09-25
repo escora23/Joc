@@ -194,9 +194,17 @@ vec3 srgbToLinear(vec3 c) { return pow(c, vec3(2.2)); }
  */
 export const GLSL_TERRITORY_FILL = /* glsl */ `
 #define TERR_LUM_AVG 0.15
+vec3 territoryTarget(vec3 ground, vec3 owner) {
+  return owner * clamp(0.7 + 0.3 * luma(ground) / TERR_LUM_AVG, 0.6, 1.4);
+}
 vec3 territoryFill(vec3 ground, vec3 owner, float fill) {
-  float k = clamp(0.7 + 0.3 * luma(ground) / TERR_LUM_AVG, 0.6, 1.4);
-  return mix(ground, owner * k, fill);
+  return mix(ground, territoryTarget(ground, owner), fill);
+}
+// Extra fill where the owner colour is close to the ground it covers (a light nation over desert, a green one
+// over forest), so every nation keeps a clearly visible tint: up to +0.18.
+float territoryFillBoost(vec3 ground, vec3 owner) {
+  vec3 d = sqrt(max(territoryTarget(ground, owner), 0.0)) - sqrt(max(ground, 0.0));
+  return 0.18 * (1.0 - clamp(length(d) * 2.5, 0.0, 1.0));
 }
 `;
 

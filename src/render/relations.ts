@@ -3,9 +3,10 @@
 // cores, relation flags in the palette), the icon layer (NATO frames by relation) and the nation labels (crossed
 // swords, handshake) all read it, so they always agree.
 //
-// v2-stub(W2→W4): until W1's WarSystem pair states are switched in by W4, "at war" is v1's notion of hostility as
-// the client can see it: an active offensive or a front between the two players, or an embargo. Replace
-// `rebuildPairs()` with the pair states (view.wars) and nothing else has to change.
+// "At war" is the sim's pair state (W1's WarSystem, view.wars: declared wars, call-to-arms wars included). W1 landed
+// it in stage 1, so the v1-hostility stub the design planned for W4 to replace is not needed. Independent
+// territories are outside pair states (they can be attacked without a declaration): a player with an active
+// offensive against one, or the other way round, counts as hostile to it.
 
 import type { GameContext } from '../shared/api';
 import { HUMAN_ID } from '../shared/constants';
@@ -51,11 +52,10 @@ function createRelations(ctx: GameContext): Relations {
     const add = (a: number, b: number) => {
       if (a > 0 && b > 0 && a !== b) next.add(key(a, b));
     };
-    for (const a of view.attacks) add(a.attacker, a.defender);
-    for (const f of view.fronts) add(f.a, f.b);
-    for (const p of view.playerList) {
-      if (!p.alive) continue;
-      for (const e of p.embargoes) add(p.id, e);
+    for (const w of view.wars ?? []) add(w.aggressor, w.target);
+    for (const a of view.attacks) {
+      const pa = view.players[a.attacker], pd = view.players[a.defender];
+      if (pa?.kind === 'tribe' || pd?.kind === 'tribe') add(a.attacker, a.defender);
     }
     // Allies are never at war with each other.
     for (const k of next) {

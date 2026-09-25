@@ -302,11 +302,10 @@ export function createIslandMarkers(ctx: GameContext): IslandMarkers {
           if (d < m.r + k.r + MERGE_PX) {
             const n = m.comps.length;
             m.comps.push(k.c);
-            // Enclosing circle (approximate): centroid of members, radius covering both.
-            const nx = (m.x * n + k.x) / (n + 1), ny = (m.y * n + k.y) / (n + 1);
-            m.r = Math.max(m.r + Math.hypot(m.x - nx, m.y - ny), k.r + Math.hypot(k.x - nx, k.y - ny));
-            m.x = nx;
-            m.y = ny;
+            // One compact marker at the members' centroid with a count (a big enclosing ring would hide the sea).
+            m.x = (m.x * n + k.x) / (n + 1);
+            m.y = (m.y * n + k.y) / (n + 1);
+            m.r = Math.min(9, Math.max(m.r, k.r) + 1);
             if (k.owner !== m.owner) m.mixed = true;
             merged = true;
             break;

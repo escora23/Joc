@@ -40,8 +40,6 @@ export const OWN_WATER = 8, OWN_ISLAND = 16, OWN_OCCUPIED = 32, OWN_PLAYABLE = 6
 
 /** Flash stamps: 32 units per real second, 16-bit wrap (34 min) handled by periodic re-stamping. */
 const FLASH_UNITS = 32;
-/** Occupation stub: a tile captured from a player stays occupied this many ticks (DESIGN_V2 §4.13: 72 h). */
-const OCCUPIED_TICKS = 720;
 const QUEUE_CAP = 1 << 18;
 
 export interface TerritoryLayer {
@@ -68,7 +66,7 @@ export interface TerritoryLayer {
   warmup(): void;
   /** Tiles still waiting in the conquest wave (debug / tests). */
   readonly pending: number;
-  /** Is the tile occupied (the sim's occupied set once W1 publishes it; the capture stub until then)? */
+  /** Is the tile shown as occupied (the sim's occupied set, view.isOccupied)? */
   isOccupied(tile: number): boolean;
 }
 
@@ -160,8 +158,8 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
 
   const relations = relationsFor(ctx);
   const mirror = new Uint16Array(TILE_COUNT);
-  const captureTick = new Int32Array(TILE_COUNT).fill(-1);
-  const occupiedList = new Set<number>();
+  /** Tiles whose occupied flag may differ from the sim's: recently changed tiles and every tile shown occupied. */
+  const occCand = new Set<number>();
   const dirty = new Uint8Array(BX * BY);
   let anyDirty = false;
   let fullDirty = true;
@@ -194,9 +192,8 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
   }
 
   function occupiedNow(tile: number): boolean {
-    // v2-stub(W1→W2): replace with view.isOccupied(tile) once the sim publishes its occupied set (§14.5).
-    const ct = captureTick[tile];
-    return ct >= 0 && ctx.sim.view.tick - ct < OCCUPIED_TICKS;
+    // The sim is the source of truth (§4.13, occupied in §14.5), never the client capture stamp.
+    return ctx.sim.view.isOccupied?.(tile) === true;
   }
 
   function writeOwner(tile: number, owner: number, stamp: number): void {
@@ -245,9 +242,11 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
     qLen = 0;
     qHead = 0;
     humanCnt.fill(0);
+    occCand.clear();
     for (let t = 0; t < TILE_COUNT; t++) {
       const o = owner[t] ?? 0;
       writeOwner(t, o, old);
+      if (data[t * 4 + 1] & OWN_OCCUPIED) occCand.add(t);
       if (o === HUMAN_ID) {
         const x = t % MAP_W, y = (t / MAP_W) | 0;
         humanCnt[(y >> 2) * MASK_W + (x >> 2)]++;
@@ -278,7 +277,6 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
     const n = e.count;
     if (n <= 0) return;
     if (qLen + n > QUEUE_CAP) flushQueue(Infinity);
-    const tick = ctx.sim.view.tick;
     // Wave length: one update interval for the everyday trickle, up to 2 s for a big transfer.
     const span = Math.min(2, 0.1 + n / 600);
     const start = Math.max(realNow, lastDue);
@@ -293,14 +291,7 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
         if (prev === HUMAN_ID && humanCnt[cell] > 0) humanCnt[cell]--;
         if (owner === HUMAN_ID) humanCnt[cell]++;
       }
-      // Occupation stub: captures between players (not neutral expansion).
-      if (prev > 0 && owner > 0 && prev !== owner) {
-        captureTick[tile] = tick;
-        occupiedList.add(tile);
-      } else if (captureTick[tile] >= 0) {
-        captureTick[tile] = -1;
-        occupiedList.delete(tile);
-      }
+      occCand.add(tile);
       const due = start + (span * i) / n;
       const k = (qHead + qLen) % QUEUE_CAP;
       qTile[k] = tile;
@@ -485,19 +476,25 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
     uniforms.uScarCount.value = n;
   }
 
-  /** Expire occupied tiles (stub) and keep flash stamps from wrapping into "fresh" after 34 minutes. */
+  /** Follow the sim's occupied set (§4.13) and keep flash stamps from wrapping into "fresh" after 34 minutes. */
   function housekeeping(dt: number): void {
     occTimer -= dt;
-    if (occTimer <= 0 && occupiedList.size) {
-      occTimer = 1;
-      const tick = ctx.sim.view.tick;
-      for (const t of occupiedList) {
-        if (tick - captureTick[t] >= OCCUPIED_TICKS) {
-          captureTick[t] = -1;
-          occupiedList.delete(t);
+    if (occTimer <= 0 && occCand.size) {
+      occTimer = 0.5;
+      const view = ctx.sim.view;
+      for (const t of occCand) {
+        const want = occupiedNow(t);
+        const has = (data[t * 4 + 1] & OWN_OCCUPIED) !== 0;
+        const shownOwner = data[t * 4] | ((data[t * 4 + 1] & 7) << 8);
+        // Wait for the conquest wave to reveal the new owner before stippling it.
+        if (want && !has && shownOwner === view.owner[t]) {
+          data[t * 4 + 1] |= OWN_OCCUPIED;
+          markDirty(t);
+        } else if (!want && has) {
           data[t * 4 + 1] &= ~OWN_OCCUPIED;
           markDirty(t);
         }
+        if (!want && shownOwner === view.owner[t]) occCand.delete(t);
       }
     }
     restampTimer -= dt;
@@ -526,8 +523,6 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
       return occupiedNow(tile);
     },
     resetAll() {
-      captureTick.fill(-1);
-      occupiedList.clear();
       rebuildAll();
       lastFronts = null;
       lastScars = null;
@@ -544,8 +539,7 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
         data[o + 1] &= OWN_WATER | OWN_ISLAND | OWN_PLAYABLE;
       }
       mirror.fill(0);
-      captureTick.fill(-1);
-      occupiedList.clear();
+      occCand.clear();
       qLen = 0;
       qHead = 0;
       fullDirty = true;

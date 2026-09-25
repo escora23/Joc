@@ -503,10 +503,11 @@ void main() {
       float fillA = (uFill + (isHuman ? 0.05 : 0.0) + 0.08 * hoverO) * (alive ? 1.0 : 0.5);
       // Occupied land: a dot stipple in the owner's colour over 70 % fill (§10.1).
       fillA *= mix(1.0, 0.7, occ);
+      fillA += territoryFillBoost(albedo, natO);
       fillA *= terr * landK;
       vec3 ground = albedo;
       albedo = territoryFill(albedo, natO, fillA);
-      nightFill = natO * clamp(0.7 + 0.3 * luma(ground) / TERR_LUM_AVG, 0.6, 1.4) * fillA;
+      nightFill = territoryTarget(ground, natO) * fillA;
       emissive += natO * 0.05 * hoverO * terr * landK * (0.8 + 0.2 * sin(uTime * 4.0));
 
       if ((flagsO & PAL_ALLY) != 0) {
@@ -537,9 +538,10 @@ void main() {
       // Conquest flash in the attacker's (new owner's) colour, 2 s.
       emissive += mix(natO, vec3(1.0), 0.25) * 1.7 * flash * terr * landK;
     } else if (landK > 0.0 && playableHere) {
-      // Neutral land: desaturated 35 % and darkened 10 % from orbit, so owned land stands out.
+      // Neutral land: desaturated 50 % and darkened 18 % from orbit, so owned land stands out (the design's 35 % / 10 %
+      // measured ΔE 2.9 against the plain globe at 3,000 km; the readability target is ≥ 5).
       float l = luma(albedo);
-      albedo = mix(albedo, mix(vec3(l), albedo, 0.65) * 0.9, uNeutralK * terr * landK);
+      albedo = mix(albedo, mix(vec3(l), albedo, 0.5) * 0.82, uNeutralK * terr * landK);
     }
 
     // Contested land (front heat): narrow animated diagonal stripes, orange-red, 1.5 tiles deep (§10.1).

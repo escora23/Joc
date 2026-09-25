@@ -27,8 +27,18 @@ const COLS = ATLAS / CELL;
 export const G = {
   ARMOR: 0, WARSHIP: 1, FIGHTER: 2, BOMBER: 3, DRONE: 4, TRANSPORT: 5, TRADE: 6, CRUISE: 7, NUKE: 8, TRAIN: 9,
   CITY: 10, PORT: 11, FACTORY: 12, DEFENSE: 13, SAM: 14, SILO: 15, AIRBASE: 16, ARMYBASE: 17, YARD: 18, RADAR: 19,
-  DIGIT0: 20, PLUS: 30, SHELL: 31,
+  DIGIT0: 20, PLUS: 30, SHELL: 31, H: 32, D: 33, LT: 34,
 } as const;
+
+/** Glyph cell of a text character ('' / unknown = -1): digits, 'h', 'd', '<', '+'. */
+export function textGlyph(ch: string): number {
+  if (ch >= '0' && ch <= '9') return G.DIGIT0 + ch.charCodeAt(0) - 48;
+  if (ch === 'h') return G.H;
+  if (ch === 'd') return G.D;
+  if (ch === '<') return G.LT;
+  if (ch === '+') return G.PLUS;
+  return -1;
+}
 
 export function unitGlyph(t: UnitType): number {
   switch (t) {
@@ -346,13 +356,15 @@ function drawAtlas(): HTMLCanvasElement {
     g.lineTo(40, 56);
     g.stroke();
   });
-  // Digits and '+' (count badges, city levels).
-  for (let d = 0; d <= 10; d++) {
-    cell(d < 10 ? G.DIGIT0 + d : G.PLUS, (g) => {
+  // Digits, '+', and the letters of ETA labels (count badges, city levels, "12h").
+  const chars: [number, string][] = [[G.PLUS, '+'], [G.H, 'h'], [G.D, 'd'], [G.LT, '<']];
+  for (let d = 0; d < 10; d++) chars.push([G.DIGIT0 + d, String(d)]);
+  for (const [idx, ch] of chars) {
+    cell(idx, (g) => {
       g.font = 'bold 50px "Barlow Condensed", "Arial Narrow", sans-serif';
       g.textAlign = 'center';
       g.textBaseline = 'middle';
-      g.fillText(d < 10 ? String(d) : '+', 32, 35);
+      g.fillText(ch, 32, 35);
     });
   }
   return c;
@@ -362,8 +374,11 @@ function drawAtlas(): HTMLCanvasElement {
 // Batch
 // -------------------------------------------------------------------------------------------------
 
-/** Inverse of the post pipeline's ACES fit (render/post/shaders.ts): icons land on screen in their exact sRGB colour. */
-function inverseToneGlsl(): string {
+/**
+ * Inverse of the post pipeline's ACES fit (render/post/shaders.ts): UI-like overlays (icons, route lines, island
+ * markers) land on screen in their exact sRGB colour. Defines srgbToLin() and untone().
+ */
+export function inverseToneGlsl(): string {
   const inM = new THREE.Matrix3().set(0.59719, 0.35458, 0.04823, 0.076, 0.90834, 0.01566, 0.0284, 0.13383, 0.83777).invert();
   const outM = new THREE.Matrix3().set(1.60475, -0.53108, -0.07367, -0.10208, 1.10813, -0.00605, -0.00327, -0.07276, 1.07602).invert();
   const m3 = (m: THREE.Matrix3) => `mat3(${m.elements.map((v) => v.toFixed(6)).join(', ')})`;
@@ -451,7 +466,28 @@ void main() {
   int flags = int(vA.w + 0.5);
   vec3 owner = vColor.rgb;
   vec4 acc = vec4(0.0);
-  if (vA.x > 0.5) {
+  if (vA.x > 2.5) {
+    // Short text (ETA): up to four glyph cells in vB, on a dark pill.
+    float n = vA.y;
+    float h = S * 2.0, adv = h * 0.52;
+    float pill = 1.0 - smoothstep(-0.5, 0.5, sdRound(p, vec2(n * adv * 0.5 + 3.0, h * 0.5 + 1.5), h * 0.5));
+    over(acc, vec3(0.02, 0.03, 0.05), pill * 0.8);
+    float m = 0.0;
+    for (int k = 0; k < 4; k++) {
+      if (float(k) >= n) break;
+      float cellIdx = k == 0 ? vB.x : k == 1 ? vB.y : k == 2 ? vB.z : vB.w;
+      vec2 uv = (p - vec2((float(k) - (n - 1.0) * 0.5) * adv, 0.0)) / h + 0.5;
+      m = max(m, cellSample(cellIdx, uv));
+    }
+    over(acc, owner, m);
+  } else if (vA.x > 1.5) {
+    // Sunk ship: a small red cross with a dark outline.
+    vec2 q = abs(p);
+    float d = min(abs(q.x - q.y), 99.0) * 0.7071 - 1.3;
+    d = max(d, max(q.x, q.y) - S);
+    over(acc, vec3(0.02), 1.0 - smoothstep(0.0, 1.8, d - 0.2));
+    over(acc, vec3(0.95, 0.12, 0.08), 1.0 - smoothstep(-0.5, 0.5, d));
+  } else if (vA.x > 0.5) {
     // Owner pip: a disc with a dark rim.
     float d = length(p) - S;
     float a = 1.0 - smoothstep(-0.5, 0.5, d);
@@ -693,6 +729,7 @@ export class IconLayer {
   begin(width: number, height: number): void {
     this.uRes.value.set(width, height);
     this.n = 0;
+    this.extras.length = 0;
   }
 
   /**
@@ -837,6 +874,7 @@ export class IconLayer {
         st.fanned = ms.length;
       }
     }
+    this.drawExtras();
     this.structs.commit();
     this.units.commit();
     st.structureIcons = this.structs.n;
@@ -873,6 +911,35 @@ export class IconLayer {
 
   /** Owner colour lookup, set by the renderer each frame. */
   ownerColor: (owner: number) => number = () => 0xcccccc;
+
+  private readonly extras: number[] = [];
+
+  /** A red cross where a ship sank (drawn in the unit batch, not pickable). Call between begin() and end(). */
+  addCross(x: number, y: number, alpha: number): void {
+    this.extras.push(0, x, y, alpha, 0, -1, -1, -1, -1);
+  }
+
+  /** A short text (digits, 'h', 'd', '<'; up to 4 characters) on a dark pill, coloured `rgb`. */
+  addText(x: number, y: number, text: string, rgb: number): void {
+    const cells = [-1, -1, -1, -1];
+    let n = 0;
+    for (const ch of text) {
+      const c = textGlyph(ch);
+      if (c < 0 || n >= 4) continue;
+      cells[n++] = c;
+    }
+    if (n) this.extras.push(n, x, y, 1, rgb, cells[0], cells[1], cells[2], cells[3]);
+  }
+
+  private drawExtras(): void {
+    const e = this.extras;
+    for (let i = 0; i < e.length; i += 9) {
+      const n = e[i];
+      if (n === 0) this.units.push(e[i + 1], e[i + 2], 9, 5, 0xffffff, e[i + 3], 2, 0, 0, 0, -1, 0, 0, 0);
+      else this.units.push(e[i + 1], e[i + 2], n * 6 + 10, 5, e[i + 4], 1, 3, n, 0, 0, e[i + 5], e[i + 6], e[i + 7], e[i + 8]);
+    }
+    e.length = 0;
+  }
 
   private hit(x: number, y: number, half: number, kind: 0 | 1 | 2, s: Src, members: number[]): void {
     let h = this.hits[this.hitN];
