@@ -244,7 +244,10 @@ export class WeaponSystem {
       if (y < 0 || y >= MAP_H) continue;
       const t = y * MAP_W + ((Math.floor(cx + Math.cos(a) * r / Math.max(0.3, Math.cos((90 - (y / MAP_H) * 180) * DEG))) % MAP_W) + MAP_W) % MAP_W;
       if (!g.playable[t]) continue;
-      if (victim > 0 && g.owner[t] !== victim && guard < 1200) continue;
+      const o = g.owner[t];
+      // Never on the launcher or its allies; the victim's land first, then anyone else's nearby.
+      if (o === bus.owner || (o !== 0 && g.isAllied(bus.owner, o))) continue;
+      if (victim > 0 && o !== victim && guard < 1000) continue;
       if (far(t)) picks.push(t);
     }
     if (picks.length === 0) picks.push(bus.targetTile);
@@ -508,8 +511,17 @@ export class WeaponSystem {
       g.emit({ type: 'combat', tick: g.tick, kind: kind === 'strafe' ? 'strafe' : 'bomb', owner: u.owner, fromX: u.x, fromY: u.y, toX: wrapXf(u.toX + ox), toY: u.toY + oy, hit: true });
     }
     if (structDmg > 0) {
+      // The structure nearest to the aim point takes a direct hit (a bomber sortie levels it), the rest splash damage.
+      let direct: Structure | null = null, bestD = 2.25;
+      g.structGrid.query(u.toX, u.toY, 1.5, (s, d2) => {
+        if (s.owner !== u.owner && !g.isAllied(u.owner, s.owner) && d2 < bestD) {
+          bestD = d2;
+          direct = s;
+        }
+      });
+      const directDmg = kind === 'bomb' ? 1.1 : 0.6;
       g.structGrid.query(u.toX, u.toY, radius, (s) => {
-        if (s.owner !== u.owner && !g.isAllied(u.owner, s.owner)) this.damageStructure(s, structDmg, u.owner);
+        if (s.owner !== u.owner && !g.isAllied(u.owner, s.owner)) this.damageStructure(s, s === direct ? directDmg : structDmg, u.owner);
       });
     }
     g.unitGrid.query(u.toX, u.toY, radius, (o) => {
@@ -566,6 +578,7 @@ export class WeaponSystem {
     const rx = Math.ceil(outer / cosLat), ry = Math.ceil(outer);
     const x0 = Math.floor(cx), y0 = Math.floor(cy);
     const inner2 = inner * inner, outer2 = outer * outer;
+    const ph1 = rng.next() * 6.283, ph2 = rng.next() * 6.283, ph3 = rng.next() * 6.283;
     for (let dy = -ry; dy <= ry; dy++) {
       const y = y0 + dy;
       if (y < 0 || y >= MAP_H) continue;
@@ -585,10 +598,12 @@ export class WeaponSystem {
           hits.set(o, (hits.get(o) ?? 0) + w);
         }
         if (!isNuke) continue;
+        // The crater edge is ragged but contiguous: a low-frequency noisy radius between inner and outer.
         let destroy = innerHit;
         if (!destroy) {
-          const k = (Math.sqrt(d2) - inner) / Math.max(1, outer - inner);
-          destroy = rng.next() < 0.6 * (1 - k);
+          const ang = Math.atan2(y + 0.5 - cy, wdx(cx, (t % MAP_W) + 0.5));
+          const n = 0.5 + 0.22 * Math.sin(ang * 3 + ph1) + 0.16 * Math.sin(ang * 5 + ph2) + 0.12 * Math.sin(ang * 9 + ph3);
+          destroy = Math.sqrt(d2) < inner + (outer - inner) * 0.55 * n;
         }
         const until = innerHit ? falloutEnd : tick + Math.round(def.falloutTicks * 0.55);
         if (destroy && o !== 0) g.setOwner(t, 0);

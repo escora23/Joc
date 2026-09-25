@@ -1,0 +1,98 @@
+/* FRONT ULTRA — end screen (owner: ui). */
+
+.fu-end { position: absolute; inset: 0; pointer-events: auto; overflow: hidden; --ec: 255, 196, 77; }
+.fu-end.is-lose { --ec: 255, 74, 74; }
+.fu-end-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 50% at 22% 12%, rgba(var(--ec), 0.16), transparent 70%),
+    linear-gradient(180deg, rgba(2, 5, 9, 0.78), rgba(2, 5, 9, 0.93) 40%, rgba(1, 3, 6, 0.97));
+  animation: fu-fade-in 1.2s ease both;
+}
+.fu-end-bg::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px); }
+.fu-end-wrap { position: absolute; inset: 2.2rem 3rem 2rem; display: flex; flex-direction: column; gap: 1.4rem; }
+.fu-end-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; }
+.fu-end-kicker { font: 700 0.85rem var(--fu-font-cond); letter-spacing: 0.4em; text-transform: uppercase; color: rgb(var(--ec)); animation: fu-rise 0.6s 0.2s var(--fu-ease) both; }
+.fu-end-title { margin: 0.3rem 0 0.5rem; font: 700 7rem/0.85 var(--fu-font-display); letter-spacing: 0.14em; text-transform: uppercase; }
+.fu-end-title > span {
+  display: inline-block;
+  background: linear-gradient(180deg, #fff 0%, rgb(var(--ec)) 60%, color-mix(in srgb, rgb(var(--ec)) 60%, #000) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 2.2rem rgba(var(--ec), 0.45));
+  animation: fu-end-title 1.1s 0.1s var(--fu-ease) both;
+}
+@keyframes fu-end-title { from { opacity: 0; letter-spacing: 0.5em; filter: blur(12px) drop-shadow(0 0 2.2rem rgba(var(--ec), 0.45)); } to { opacity: 1; } }
+.fu-end-sub { display: flex; align-items: center; gap: 0.7rem; font-size: 1.15rem; color: var(--fu-text-2); animation: fu-rise 0.6s 0.6s var(--fu-ease) both; }
+.fu-end-sub .fu-flag { width: 1.9rem; height: 1.9rem; }
+.fu-end-actions { display: flex; gap: 0.7rem; animation: fu-rise 0.6s 0.8s var(--fu-ease) both; }
+.fu-end-actions .fu-btn { font-size: 1.05rem; padding: 0.95rem 1.6rem; }
+
+.fu-end-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 24rem 1fr;
+  grid-template-rows: 1fr 15rem;
+  gap: 1rem;
+}
+.fu-end-panel { padding: 0.9rem 1rem 1rem; display: flex; flex-direction: column; gap: 0.7rem; min-height: 0; animation: fu-rise 0.7s 0.45s var(--fu-ease) both; }
+.fu-end-panel:first-child { grid-row: 1 / span 2; }
+.fu-end-tl { animation-delay: 0.55s; }
+.fu-end-chartpanel { animation-delay: 0.65s; }
+.fu-end-panel .fu-panel-title .fu-ico { width: 1rem; height: 1rem; color: rgb(var(--ec)); }
+
+.fu-end-me { display: flex; align-items: center; gap: 0.8rem; padding: 0.2rem 0 0.5rem; border-bottom: 1px solid var(--fu-line); }
+.fu-end-me .fu-flag { width: 2.8rem; height: 2.8rem; }
+.fu-end-me b { display: block; font: 700 1.35rem/1 var(--fu-font-display); letter-spacing: 0.06em; text-transform: uppercase; }
+.fu-end-me small { font: 600 0.7rem var(--fu-font-cond); letter-spacing: 0.2em; text-transform: uppercase; color: var(--fu-text-dim); }
+.fu-end-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem; overflow: auto; }
+.fu-end-stat { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.65rem; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 2px; animation: fu-rise 0.5s var(--fu-ease) both; }
+.fu-end-stat-ico { width: 2rem; height: 2rem; flex: none; display: grid; place-items: center; color: rgb(var(--ec)); border: 1px solid rgba(var(--ec), 0.3); border-radius: 50%; background: rgba(var(--ec), 0.07); }
+.fu-end-stat-ico .fu-ico { width: 1.05rem; height: 1.05rem; }
+.fu-end-stat small { display: block; font: 600 0.58rem var(--fu-font-cond); letter-spacing: 0.16em; text-transform: uppercase; color: var(--fu-text-dim); }
+.fu-end-stat b { display: block; margin-top: 0.15rem; font-size: 1.15rem; font-weight: 500; color: #fff; }
+
+.fu-end-mapwrap { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #040a12; border: 1px solid var(--fu-line); overflow: hidden; }
+.fu-end-map { max-width: 100%; max-height: 100%; aspect-ratio: 2 / 1; image-rendering: auto; height: 100%; filter: saturate(1.15) contrast(1.05); }
+.fu-end-mapscan { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px); box-shadow: inset 0 0 3rem rgba(0, 0, 0, 0.7); }
+.fu-end-tlbar { display: flex; align-items: center; gap: 0.8rem; }
+.fu-end-tlbar .fu-range { flex: 1; }
+.fu-end-tltime { font-size: 0.85rem; min-width: 3.4rem; text-align: right; color: var(--fu-text-2); }
+.fu-end.has-no-timelapse .fu-end-tlbar { opacity: 0.4; pointer-events: none; }
+
+.fu-end-chartwrap { flex: 1; min-height: 0; display: flex; gap: 1rem; }
+.fu-end-chart { flex: 1; min-width: 0; height: 100%; }
+.fu-end-legend { width: 13rem; display: flex; flex-direction: column; gap: 0.25rem; overflow: auto; }
+.fu-end-leg { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0.35rem; font-size: 0.8rem; color: var(--fu-text-2); border-radius: 2px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-end-leg:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.fu-end-leg i { width: 1rem; height: 3px; flex: none; }
+.fu-end-leg.is-me { color: #fff; font-weight: 700; }
+.fu-end-leg.is-me i { height: 4px; box-shadow: 0 0 6px currentColor; }
+
+.fu-end-standings-title { margin-top: 0.4rem; }
+.fu-end-standings { display: flex; flex-direction: column; gap: 0.2rem; }
+.fu-end-rank { display: grid; grid-template-columns: 1.4rem 1.5rem 1fr auto; align-items: center; gap: 0.55rem; padding: 0.35rem 0.5rem; font-size: 0.88rem; color: var(--fu-text-2); border-radius: 2px; }
+.fu-end-rank .fu-flag { width: 1.4rem; height: 1.4rem; }
+.fu-end-rank-n { font-size: 0.74rem; color: var(--fu-text-dim); text-align: center; }
+.fu-end-rank:first-child .fu-end-rank-n { color: #ffd36b; }
+.fu-end-rank-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-end-rank-v { font-size: 0.8rem; color: var(--fu-text); }
+.fu-end-rank.is-me { background: linear-gradient(90deg, rgba(var(--ec), 0.18), transparent); box-shadow: inset 2px 0 0 rgb(var(--ec)); color: #fff; font-weight: 700; }
+.fu-end-rank.is-dead { opacity: 0.5; }
+
+/* Short viewports (720p): tighten the campaign column so stats + standings fit without scrolling. */
+@media (max-height: 820px) {
+  .fu-end-wrap { inset: 1.6rem 2.4rem 1.4rem; gap: 1rem; }
+  .fu-end-title { font-size: 5.6rem; }
+  .fu-end-grid { grid-template-rows: 1fr 13rem; }
+  .fu-end-stats { gap: 0.3rem; overflow: visible; }
+  .fu-end-stat { padding: 0.35rem 0.5rem; gap: 0.45rem; }
+  .fu-end-stat-ico { width: 1.6rem; height: 1.6rem; }
+  .fu-end-stat b { font-size: 1rem; margin-top: 0.05rem; }
+  .fu-end-rank { padding: 0.18rem 0.5rem; font-size: 0.82rem; }
+  .fu-end-me { padding-bottom: 0.3rem; }
+  .fu-end-me .fu-flag { width: 2.2rem; height: 2.2rem; }
+}

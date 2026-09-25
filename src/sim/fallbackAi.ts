@@ -4,11 +4,12 @@
 // and everybody expands, fights the weakest neighbour, builds an economy, invades by sea and (nukers) nukes.
 
 import { HUMAN_ID, MAP_H, MAP_W, TILE_COUNT } from '../shared/constants';
+import { AIRCRAFT_STRIKE_RANGE, CRUISE_RANGE } from './balance';
 import { hslToHex } from '../shared/color';
 import { latLonToTile } from '../shared/geo';
 import type { SimEvent } from '../shared/protocol';
 import type { AiDirector, SimGame, SimPlayer } from '../shared/simapi';
-import { PERSONALITIES, StructureType, UnitType, type Personality } from '../shared/types';
+import { EMOTES, PERSONALITIES, StructureType, UnitState, UnitType, type Personality, type WeaponType } from '../shared/types';
 
 /** Used when the world data carries no capitals: [English name, lat, lon, weight]. */
 const BUILTIN_NATIONS: [string, number, number, number][] = [
@@ -41,6 +42,10 @@ interface Brain {
   nextBuild: number;
   nextNaval: number;
   nextNuke: number;
+  nextMilitary: number;
+  nextDiplomacy: number;
+  /** Current war target (the neighbour we attack most), 0 = none. */
+  enemy: number;
   aggression: number;
 }
 
@@ -58,7 +63,8 @@ export function createFallbackAi(game: SimGame, adopt: boolean): AiDirector {
       const personality = p.personality ?? PERSONALITIES[p.id % PERSONALITIES.length];
       b = {
         id: p.id, personality, nextThink: game.tick + rng.int(30), nextBuild: game.tick + 40 + rng.int(60),
-        nextNaval: game.tick + 300 + rng.int(300), nextNuke: game.tick + 3000 + rng.int(3000),
+        nextNaval: game.tick + 300 + rng.int(300), nextNuke: game.tick + 2400 + rng.int(2400),
+        nextMilitary: game.tick + 600 + rng.int(600), nextDiplomacy: game.tick + 900 + rng.int(900), enemy: 0,
         aggression: personality === 'conqueror' ? 1.3 : personality === 'turtle' ? 0.6 : personality === 'opportunist' ? 1.1 : 0.9,
       };
       brains.set(p.id, b);
@@ -229,6 +235,7 @@ export function createFallbackAi(game: SimGame, adopt: boolean): AiDirector {
       }
     }
     if (best && bestScore > 0.9 && p.troops > best.troops * 0.35) {
+      b.enemy = best.id;
       game.issue(p.id, { type: 'attack', target: best.id, ratio: 0.28 + 0.12 * b.aggression, tile: best.capitalTile });
       // Armor joins the offensive.
       for (const u of game.units(p.id, UnitType.ArmoredDivision)) {
@@ -261,21 +268,132 @@ export function createFallbackAi(game: SimGame, adopt: boolean): AiDirector {
   }
 
   function nukes(p: SimPlayer, b: Brain): void {
-    if (!game.config.nukes || b.personality !== 'nuker' && b.personality !== 'conqueror') return;
-    if (game.structures(p.id, StructureType.MissileSilo).length === 0) return;
-    if (p.gold < game.unitCost(p.id, UnitType.AtomBomb) * 1.2) return;
-    let target: SimPlayer | null = null;
-    for (const n of game.neighborsOf(p.id)) {
-      if (n === 0 || game.isAllied(p.id, n)) continue;
-      const q = game.player(n);
-      if (q && q.alive && q.kind !== 'tribe' && (!target || q.troops > target.troops)) target = q;
+    if (!game.config.nukes) return;
+    const eager = b.personality === 'nuker' || b.personality === 'conqueror';
+    const silos = game.structures(p.id, StructureType.MissileSilo).filter((s) => s.built >= 1 && s.cooldownTicks <= 0);
+    if (silos.length === 0) return;
+    // Everyone goes nuclear once rich enough; nukers and conquerors much earlier.
+    const threshold = eager ? 1.2 : 4;
+    if (p.gold < game.unitCost(p.id, UnitType.AtomBomb) * threshold) return;
+    let target: SimPlayer | null = b.enemy ? game.player(b.enemy) ?? null : null;
+    if (!target || !target.alive || game.isAllied(p.id, target.id)) {
+      target = null;
+      for (const n of game.neighborsOf(p.id)) {
+        if (n === 0 || game.isAllied(p.id, n)) continue;
+        const q = game.player(n);
+        if (q && q.alive && q.kind !== 'tribe' && (!target || q.troops > target.troops)) target = q;
+      }
     }
-    if (!target) return;
-    const cities = game.structures(target.id, StructureType.City);
-    const tile = cities.length ? cities[rng.int(cities.length)].tile : target.capitalTile;
+    if (!target || target.tiles < 400) return;
+    // Aim at the biggest city (or a silo that threatens us), else the capital.
+    const structs = game.structures(target.id).filter((s) => s.type === StructureType.City || s.type === StructureType.MissileSilo);
+    structs.sort((a, c) => c.level - a.level || a.id - c.id);
+    const tile = structs.length ? structs[Math.min(structs.length - 1, rng.int(3))].tile : target.capitalTile;
     if (tile < 0) return;
-    const weapon = p.gold > game.unitCost(p.id, UnitType.HydrogenBomb) * 1.3 ? UnitType.HydrogenBomb : UnitType.AtomBomb;
+    let weapon: WeaponType = UnitType.AtomBomb;
+    if (p.gold > game.unitCost(p.id, UnitType.Mirv) * 1.2 && target.tiles > 8000) weapon = UnitType.Mirv;
+    else if (p.gold > game.unitCost(p.id, UnitType.HydrogenBomb) * 1.4) weapon = UnitType.HydrogenBomb;
+    // Keep the blast away from our own land.
+    if (weapon !== UnitType.Mirv && game.distance(tile, p.capitalTile) < (weapon === UnitType.HydrogenBomb ? 70 : 30)) weapon = UnitType.AtomBomb;
+    if (game.distance(tile, p.capitalTile) < 26) return;
     game.issue(p.id, { type: 'launch', weapon, targetTile: tile, siloId: -1 });
+  }
+
+  /** Navy, air force, missiles and defenses once a nation is big enough to afford them. */
+  function military(p: SimPlayer, b: Brain): void {
+    const own = (type: StructureType) => game.structures(p.id, type).length;
+    const units = (type: UnitType) => game.units(p.id, type);
+    const coastal = game.structures(p.id, StructureType.Port).length > 0;
+    // Build the military infrastructure.
+    if (coastal && p.tiles > 2500 && own(StructureType.NavalYard) < 1 && tryBuild(p, StructureType.NavalYard, true)) return;
+    if (p.tiles > 3500 && own(StructureType.Airbase) < 1 + Math.floor(p.tiles / 20000) && tryBuild(p, StructureType.Airbase, false)) return;
+    if (p.tiles > 5000 && own(StructureType.Radar) < 1 && tryBuild(p, StructureType.Radar, false)) return;
+    if (p.tiles > 7000 && own(StructureType.SamSite) < 1 + Math.floor(p.tiles / 15000) && tryBuild(p, StructureType.SamSite, false)) return;
+    if (game.config.nukes && p.tiles > 6000 && own(StructureType.MissileSilo) < 1 + (b.personality === 'nuker' ? 1 : 0) && tryBuild(p, StructureType.MissileSilo, false)) return;
+    const rich = (type: UnitType, k: number) => p.gold > game.unitCost(p.id, type) * k;
+    // Produce units.
+    if (own(StructureType.NavalYard) > 0 && units(UnitType.Warship).length < Math.min(4, 1 + Math.floor(p.tiles / 8000)) && rich(UnitType.Warship, 1.5)) {
+      game.issue(p.id, { type: 'buildUnit', unit: UnitType.Warship, structureId: -1 });
+    }
+    if (own(StructureType.Airbase) > 0) {
+      if (units(UnitType.FighterSquadron).length < 2 && rich(UnitType.FighterSquadron, 1.5)) game.issue(p.id, { type: 'buildUnit', unit: UnitType.FighterSquadron, structureId: -1 });
+      else if (units(UnitType.Bomber).length < 2 && rich(UnitType.Bomber, 1.8)) game.issue(p.id, { type: 'buildUnit', unit: UnitType.Bomber, structureId: -1 });
+      else if (units(UnitType.DroneSwarm).length < 1 && rich(UnitType.DroneSwarm, 2)) game.issue(p.id, { type: 'buildUnit', unit: UnitType.DroneSwarm, structureId: -1 });
+    }
+    // Use them against the current enemy.
+    const enemy = b.enemy ? game.player(b.enemy) : undefined;
+    if (!enemy || !enemy.alive || game.isAllied(p.id, enemy.id)) return;
+    const targets = game.structures(enemy.id).filter((s) => s.built >= 1);
+    for (const u of [...units(UnitType.Bomber), ...units(UnitType.DroneSwarm)]) {
+      if (u.state !== UnitState.Docked && u.state !== UnitState.Idle) continue;
+      const range = AIRCRAFT_STRIKE_RANGE[u.type] ?? 150;
+      let best = -1, bestD = range;
+      for (const s of targets) {
+        const d = game.distance(Math.floor(u.y) * MAP_W + Math.floor(u.x), s.tile);
+        const prio = s.type === StructureType.SamSite ? 0.5 : s.type === StructureType.MissileSilo || s.type === StructureType.Airbase ? 0.7 : 1;
+        if (d * prio < bestD) {
+          bestD = d * prio;
+          best = s.tile;
+        }
+      }
+      if (best < 0) {
+        // No structure in range: bomb the troops at the front.
+        for (const t of game.borderTiles(enemy.id)) {
+          if (game.distance(Math.floor(u.y) * MAP_W + Math.floor(u.x), t) < range * 0.8) {
+            best = t;
+            break;
+          }
+        }
+      }
+      if (best >= 0) game.issue(p.id, { type: 'airStrike', unitId: u.id, targetTile: best });
+    }
+    for (const u of units(UnitType.Warship)) {
+      if (u.state !== UnitState.Moving && u.state !== UnitState.Idle) continue;
+      if (rng.next() < 0.5) continue;
+      // Patrol off the enemy's coast (the warship shells it and hunts its shipping).
+      for (const t of game.borderTiles(enemy.id)) {
+        if (game.isShore(t) && game.distance(t, Math.floor(u.y) * MAP_W + Math.floor(u.x)) < 250) {
+          game.issue(p.id, { type: 'moveUnit', unitId: u.id, tile: t });
+          break;
+        }
+      }
+    }
+    // Cruise missiles on the enemy's air defenses and silos.
+    {
+      const silo = game.structures(p.id, StructureType.MissileSilo).find((s) => s.built >= 1 && s.cooldownTicks <= 0);
+      if (silo && rich(UnitType.CruiseMissile, 3)) {
+        const hv = targets.find((s) => (s.type === StructureType.SamSite || s.type === StructureType.MissileSilo || s.type === StructureType.Airbase) && game.distance(s.tile, silo.tile) < CRUISE_RANGE);
+        if (hv) game.issue(p.id, { type: 'launch', weapon: UnitType.CruiseMissile, targetTile: hv.tile, siloId: silo.id });
+      }
+    }
+  }
+
+  function diplomacy(p: SimPlayer, b: Brain): void {
+    // Seek an ally among strong nations that are not our current enemy (trade & safety).
+    if (p.allies.size < 2 && rng.next() < (b.personality === 'trader' ? 0.8 : b.personality === 'turtle' ? 0.6 : 0.3)) {
+      const cands = game.players().filter((q) => q.alive && q.kind === 'nation' && q.id !== p.id && q.id !== b.enemy && !game.isAllied(p.id, q.id));
+      if (cands.length) {
+        const q = cands[rng.int(cands.length)];
+        game.issue(p.id, { type: 'allianceRequest', target: q.id });
+      }
+    }
+    // Opportunists stab allies in the back when the ally is weak and next door.
+    if (b.personality === 'opportunist') {
+      for (const a of p.allies) {
+        const q = game.player(a);
+        if (q && game.sharesBorder(p.id, a) && q.troops < p.troops * 0.35 && rng.next() < 0.4) {
+          game.issue(p.id, { type: 'breakAlliance', target: a });
+          b.enemy = a;
+          game.issue(p.id, { type: 'emote', target: a, emote: 'clown' });
+          break;
+        }
+      }
+    }
+    // Embargo the enemy; taunt it now and then.
+    if (b.enemy && !game.hasEmbargo(p.id, b.enemy) && game.player(b.enemy)?.kind === 'nation') {
+      game.issue(p.id, { type: 'embargo', target: b.enemy, active: true });
+    }
+    if (b.enemy && rng.next() < 0.15) game.issue(p.id, { type: 'emote', target: b.enemy, emote: EMOTES[rng.int(EMOTES.length)] });
   }
 
   function think(p: SimPlayer): void {
@@ -292,9 +410,17 @@ export function createFallbackAi(game: SimGame, adopt: boolean): AiDirector {
       b.nextNaval = game.tick + 450 + rng.int(450);
       naval(p);
     }
+    if (game.tick >= b.nextMilitary) {
+      b.nextMilitary = game.tick + 120 + rng.int(120);
+      military(p, b);
+    }
     if (game.tick >= b.nextNuke) {
-      b.nextNuke = game.tick + 1500 + rng.int(1500);
+      b.nextNuke = game.tick + 900 + rng.int(1200);
       nukes(p, b);
+    }
+    if (game.tick >= b.nextDiplomacy) {
+      b.nextDiplomacy = game.tick + 900 + rng.int(900);
+      if (p.id !== HUMAN_ID) diplomacy(p, b);
     }
   }
 

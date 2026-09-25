@@ -17,6 +17,12 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let idleCounter = 0;
 let forcePost = false;
 let errorsPosted = 0;
+/**
+ * Scripted sessions (shots, playtests: auto-spawned human + instant start) hold the clock once the playing phase
+ * begins, until the client sends a speed or fastForward message. Staging actions (conquer, spawnStructure...) then
+ * land on a deterministic tick, so the same seed always stages the same world regardless of wall-clock timing.
+ */
+let held = false;
 
 function post(msg: FromWorker, transfer: Transferable[] = []): void {
   self.postMessage(msg, transfer);
@@ -51,7 +57,7 @@ function runTicks(n: number): number {
 function loop(): void {
   if (!game) return;
   const g = game;
-  const n = g.phase === 'spawn' ? (g.speed === 0 ? 0 : 1) : g.phase === 'playing' ? g.speed : 0;
+  const n = g.phase === 'spawn' ? (g.speed === 0 ? 0 : 1) : g.phase === 'playing' && !held ? g.speed : 0;
   let ms = 0;
   if (n === 0) {
     const before = g.pendingEventCount;
@@ -75,6 +81,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         if (timer) clearInterval(timer);
         game = new Game(msg.config, msg.world);
         game.onError = postError;
+        held = msg.config.instantStart && msg.config.autoSpawnTile >= 0;
         post({ kind: 'ready' });
         postUpdate(0, 0, true);
         timer = setInterval(loop, UPDATE_INTERVAL_MS);
@@ -90,6 +97,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         }
         break;
       case 'speed':
+        held = false;
         if (game) {
           game.speed = msg.speed;
           forcePost = true;

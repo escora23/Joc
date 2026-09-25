@@ -56,6 +56,7 @@ export class Player implements SimPlayer {
   /** Player that took our last tile (elimination credit). */
   lastConqueror = 0;
   eliminatedTick = -1;
+  lastCapitalEventTick = -1_000_000;
   mirvsLaunched = 0;
   boats = 0;
   attackingTroops = 0;

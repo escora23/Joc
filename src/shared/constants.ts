@@ -18,7 +18,7 @@ export const GLOBE_RADIUS = 1;
 /** Kilometers per tile along the equator (~25 km). */
 export const TILE_KM = (2 * Math.PI * EARTH_RADIUS_KM) / MAP_W;
 /** Visual vertical exaggeration of real relief (globe displacement, local terrain, unit placement). */
-export const RELIEF_EXAGGERATION = 12;
+export const RELIEF_EXAGGERATION = 4;
 /** Topology texture: gray 255 == this many meters (linear). */
 export const TOPO_MAX_METERS = 8848;
 /** Tiles south of this latitude that are land become TerrainClass.Ice (unplayable). */
@@ -173,10 +173,10 @@ export interface NukeDef {
 }
 
 export const NUKE_DEFS: Record<WeaponType | typeof UnitType.MirvWarhead, NukeDef> = {
-  [U.AtomBomb]: { innerRadius: 12, outerRadius: 30, troopLoss: 0.6, falloutTicks: 1_800, minFlightTicks: 60 },
-  [U.HydrogenBomb]: { innerRadius: 80, outerRadius: 100, troopLoss: 0.85, falloutTicks: 3_600, minFlightTicks: 80 },
+  [U.AtomBomb]: { innerRadius: 10, outerRadius: 22, troopLoss: 0.6, falloutTicks: 1_800, minFlightTicks: 60 },
+  [U.HydrogenBomb]: { innerRadius: 28, outerRadius: 46, troopLoss: 0.85, falloutTicks: 3_600, minFlightTicks: 80 },
   [U.Mirv]: { innerRadius: 0, outerRadius: 0, troopLoss: 0, falloutTicks: 0, minFlightTicks: 90 },
-  [U.MirvWarhead]: { innerRadius: 12, outerRadius: 18, troopLoss: 0.6, falloutTicks: 1_800, minFlightTicks: 20 },
+  [U.MirvWarhead]: { innerRadius: 9, outerRadius: 14, troopLoss: 0.6, falloutTicks: 1_800, minFlightTicks: 20 },
   [U.CruiseMissile]: { innerRadius: 3, outerRadius: 6, troopLoss: 0.2, falloutTicks: 0, minFlightTicks: 20 },
 };
 

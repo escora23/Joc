@@ -1,0 +1,247 @@
+/* FRONT ULTRA — loading screen & logo (owner: ui). */
+
+/* ---------------------------------------------------------------------------------------------
+   Logo
+   --------------------------------------------------------------------------------------------- */
+.fu-logo { display: flex; align-items: center; gap: 1.6rem; }
+.fu-logo-emblem { width: 7.5rem; height: 7.5rem; flex: none; overflow: visible; filter: drop-shadow(0 0 0.9rem rgba(63, 208, 255, 0.35)); }
+.fu-logo-emblem [pathLength] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: fu-draw 1.6s var(--fu-ease) forwards; }
+.fu-logo-ring [pathLength] { animation-delay: 0.1s; animation-duration: 1.9s; }
+.fu-logo-globe [pathLength]:nth-child(1) { animation-delay: 0.25s; }
+.fu-logo-globe [pathLength]:nth-child(2) { animation-delay: 0.45s; }
+.fu-logo-globe [pathLength]:nth-child(3) { animation-delay: 0.55s; }
+.fu-logo-globe [pathLength]:nth-child(4) { animation-delay: 0.65s; }
+.fu-logo-globe [pathLength]:nth-child(5) { animation-delay: 0.75s; }
+.fu-logo-front { animation-delay: 1.0s !important; animation-duration: 0.9s !important; filter: drop-shadow(0 0 4px rgba(255, 140, 40, 0.9)); }
+.fu-logo-arrow { animation-delay: 1.75s !important; animation-duration: 0.3s !important; }
+.fu-logo-core { opacity: 0; animation: fu-fade-in 1.4s 0.6s ease forwards; }
+.fu-logo-ring { transform-origin: 60px 60px; animation: fu-spin 60s linear infinite; }
+@keyframes fu-draw { to { stroke-dashoffset: 0; } }
+
+.fu-logo-text { display: flex; flex-direction: column; gap: 0.55rem; }
+.fu-logo-word {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  font-family: var(--fu-font-display);
+  font-weight: 700;
+  font-size: 5.6rem;
+  line-height: 0.82;
+  letter-spacing: 0.1em;
+  overflow: hidden;
+  padding: 0.12em 0.1em 0.06em 0;
+  clip-path: inset(0 100% 0 0);
+  animation: fu-wipe 1.1s 0.55s var(--fu-ease) forwards;
+}
+.fu-logo-a { color: #f2f8ff; text-shadow: 0 0 1.6rem rgba(160, 225, 255, 0.35); }
+.fu-logo-b {
+  background: linear-gradient(180deg, #bff2ff 0%, #3fd0ff 55%, #1c8fc4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 1.1rem rgba(63, 208, 255, 0.45));
+}
+.fu-logo-sheen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  mix-blend-mode: overlay;
+  transform: translateX(-120%) skewX(-20deg);
+  opacity: 0;
+  animation: fu-logo-sheen 1.3s 1.7s var(--fu-ease) forwards;
+}
+@keyframes fu-logo-sheen { 0% { opacity: 1; transform: translateX(-120%) skewX(-20deg); } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(420%) skewX(-20deg); } }
+.fu-logo-tag {
+  font: 600 0.95rem/1 var(--fu-font-cond);
+  letter-spacing: 0.62em;
+  text-transform: uppercase;
+  color: var(--fu-text-2);
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  opacity: 0;
+  animation: fu-rise 0.9s 1.4s var(--fu-ease) forwards;
+}
+.fu-logo-tag::before { content: ''; width: 2.2rem; height: 1px; background: var(--fu-accent-2); box-shadow: 0 0 6px var(--fu-accent-2); }
+@keyframes fu-wipe { to { clip-path: inset(0 0 0 0); } }
+
+.fu-logo--menu .fu-logo-emblem { width: 4.6rem; height: 4.6rem; }
+.fu-logo--menu { gap: 1.1rem; }
+.fu-logo--menu .fu-logo-word { font-size: 3.6rem; gap: 0.6rem; }
+.fu-logo--menu .fu-logo-tag { font-size: 0.74rem; letter-spacing: 0.5em; }
+
+/* ---------------------------------------------------------------------------------------------
+   Loading screen
+   --------------------------------------------------------------------------------------------- */
+.fu-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  pointer-events: auto;
+  overflow: hidden;
+  background: #010306;
+  font-family: var(--fu-font);
+  transition: opacity 1s var(--fu-ease), filter 1s var(--fu-ease);
+}
+.fu-loading.is-leaving { opacity: 0; filter: brightness(2.2) blur(6px); }
+.fu-loading.is-leaving .fu-ld-center { transform: scale(1.06); transition: transform 1.1s var(--fu-ease); }
+.fu-ld-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 46%, rgba(16, 52, 84, 0.55), transparent 70%),
+    radial-gradient(ellipse 40% 30% at 78% 20%, rgba(255, 150, 50, 0.05), transparent 70%),
+    linear-gradient(180deg, #02060b 0%, #03101b 55%, #010407 100%);
+}
+.fu-ld-floor {
+  position: absolute;
+  left: -50%;
+  right: -50%;
+  bottom: -10%;
+  height: 60%;
+  background-image:
+    linear-gradient(rgba(63, 208, 255, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(63, 208, 255, 0.16) 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  transform: perspective(40rem) rotateX(72deg);
+  transform-origin: 50% 0;
+  mask-image: linear-gradient(180deg, transparent 0%, #000 45%, #000 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 45%, #000 70%, transparent 100%);
+  animation: fu-floor 6s linear infinite;
+  opacity: 0.65;
+}
+@keyframes fu-floor { to { background-position: 0 4rem, 0 0; } }
+.fu-ld-globe {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  width: 56rem;
+  height: 56rem;
+  transform: translate(-50%, -50%);
+  opacity: 0.75;
+  mask-image: radial-gradient(circle, #000 55%, transparent 72%);
+  -webkit-mask-image: radial-gradient(circle, #000 55%, transparent 72%);
+}
+.fu-ld-scan {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px);
+  pointer-events: none;
+}
+.fu-ld-scan::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18%;
+  background: linear-gradient(180deg, transparent, rgba(63, 208, 255, 0.05), transparent);
+  animation: fu-scanline 7s linear infinite;
+}
+@keyframes fu-scanline { from { top: -20%; } to { top: 110%; } }
+.fu-ld-vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.85) 100%); pointer-events: none; }
+
+.fu-ld-corner {
+  position: absolute;
+  font: 600 0.72rem/1.4 var(--fu-font-cond);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--fu-text-faint);
+  opacity: 0;
+  animation: fu-fade-in 1s 0.6s ease forwards;
+}
+.fu-ld-corner b { color: var(--fu-text-2); font-weight: 700; }
+.fu-ld-corner .fu-mono { letter-spacing: 0.08em; color: var(--fu-text-dim); }
+.fu-ld-tl { top: 2rem; left: 2.4rem; }
+.fu-ld-tr { top: 2rem; right: 2.4rem; }
+.fu-ld-bl { bottom: 2rem; left: 2.4rem; }
+.fu-ld-br { bottom: 2rem; right: 2.4rem; }
+.fu-ld-tl::before, .fu-ld-tr::before, .fu-ld-bl::before, .fu-ld-br::before { content: ''; position: absolute; width: 1.2rem; height: 1.2rem; border: 1px solid rgba(63, 208, 255, 0.4); }
+.fu-ld-tl::before { left: -1rem; top: -1rem; border-width: 1px 0 0 1px; }
+.fu-ld-tr::before { right: -1rem; top: -1rem; border-width: 1px 1px 0 0; }
+.fu-ld-bl::before { left: -1rem; bottom: -1rem; border-width: 0 0 1px 1px; }
+.fu-ld-br::before { right: -1rem; bottom: -1rem; border-width: 0 1px 1px 0; }
+.fu-ld-blink { color: var(--fu-accent); animation: fu-pulse 1s steps(2) infinite; }
+
+.fu-ld-center {
+  position: absolute;
+  left: 50%;
+  top: 43%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3.2rem;
+}
+.fu-ld-center .fu-logo { transform: translateX(-1.8rem); }
+
+.fu-ld-progress { width: 38rem; opacity: 0; animation: fu-rise 0.8s 0.9s var(--fu-ease) forwards; }
+.fu-ld-row { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 0.6rem; }
+.fu-ld-status {
+  font: 600 0.86rem/1 var(--fu-font-cond);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--fu-text-2);
+}
+.fu-ld-status::before { content: '▸ '; color: var(--fu-accent); }
+.fu-ld-pctwrap { display: flex; align-items: baseline; gap: 0.15rem; color: var(--fu-text); }
+.fu-ld-pct { font-size: 1.9rem; font-weight: 500; line-height: 0.9; }
+.fu-ld-pctwrap small { font: 600 0.8rem var(--fu-font-mono); color: var(--fu-text-dim); }
+.fu-ld-bar { display: grid; grid-template-columns: repeat(48, 1fr); gap: 2px; height: 0.55rem; }
+.fu-ld-bar i { background: rgba(120, 190, 255, 0.1); transition: background 0.25s, box-shadow 0.25s; transform: skewX(-20deg); }
+.fu-ld-bar i.is-on { background: linear-gradient(180deg, #a9ecff, var(--fu-accent)); box-shadow: 0 0 0.5rem rgba(63, 208, 255, 0.6); }
+.fu-ld-bar i.is-head { background: #ffffff; box-shadow: 0 0 0.9rem #bdf3ff, 0 0 0.3rem #fff; }
+.fu-loading.is-ready .fu-ld-bar i.is-on { background: linear-gradient(180deg, #c9fff0, var(--fu-success)); box-shadow: 0 0 0.5rem rgba(69, 240, 160, 0.6); }
+
+.fu-ld-steps { display: flex; justify-content: space-between; margin-top: 1rem; }
+.fu-ld-step {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font: 600 0.7rem/1 var(--fu-font-cond);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fu-text-faint);
+  transition: color 0.3s;
+}
+.fu-ld-step-dot { width: 0.55rem; height: 0.55rem; border: 1px solid currentColor; transform: rotate(45deg); transition: all 0.3s; }
+.fu-ld-step.is-active { color: var(--fu-accent-2); }
+.fu-ld-step.is-active .fu-ld-step-dot { background: var(--fu-accent-2); box-shadow: 0 0 0.6rem var(--fu-accent-2); animation: fu-pulse 0.9s ease-in-out infinite; }
+.fu-ld-step.is-done { color: var(--fu-text-2); }
+.fu-ld-step.is-done .fu-ld-step-dot { background: var(--fu-accent); border-color: var(--fu-accent); box-shadow: 0 0 0.5rem var(--fu-accent); }
+
+.fu-ld-press {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  font: 700 1rem/1 var(--fu-font-display);
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--fu-text);
+  opacity: 0;
+  transform: translateY(0.5rem);
+  transition: opacity 0.6s, transform 0.6s var(--fu-ease);
+}
+.fu-ld-press.is-on { opacity: 1; transform: none; animation: fu-pulse 1.8s 0.6s ease-in-out infinite; }
+
+.fu-ld-tip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  bottom: 5.5rem;
+  width: 42rem;
+  padding: 0.9rem 1.2rem 1rem;
+  opacity: 0;
+  animation: fu-rise 0.9s 1.3s var(--fu-ease) forwards;
+}
+.fu-ld-tip-head { display: flex; align-items: center; gap: 0.5rem; font: 600 0.7rem/1 var(--fu-font-cond); letter-spacing: 0.24em; text-transform: uppercase; color: var(--fu-accent-2); margin-bottom: 0.5rem; }
+.fu-ld-tip-head .fu-ico { width: 0.95rem; height: 0.95rem; }
+.fu-ld-tip-dots { margin-left: auto; display: flex; gap: 0.3rem; }
+.fu-ld-tip-dots i { width: 0.9rem; height: 2px; background: rgba(255, 255, 255, 0.15); transition: background 0.3s; }
+.fu-ld-tip-dots i.is-on { background: var(--fu-accent-2); }
+.fu-ld-tip-text { font-size: 1.02rem; line-height: 1.45; color: var(--fu-text); min-height: 2.9em; opacity: 0; transform: translateY(0.3rem); transition: opacity 0.5s, transform 0.5s var(--fu-ease); }
+.fu-ld-tip-text.is-in { opacity: 1; transform: none; }

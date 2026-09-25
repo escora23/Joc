@@ -290,7 +290,7 @@ export class EconomySystem {
       else if (s.type === StructureType.Port) this.maybeTrade(s);
     }
     if (progressDirty && tick % 5 === 0) g.structuresDirty = true;
-    if (this.railDirty && tick - this.lastRailBuild >= 15) this.rebuildRail();
+    if (this.railDirty && tick - this.lastRailBuild >= 60) this.rebuildRail();
     if (tick % 50 === 0) g.weapons.maintainFallout();
   }
 
@@ -316,6 +316,7 @@ export class EconomySystem {
       });
       cand.sort((x, y) => x.d - y.d || x.s.id - y.s.id);
       let links = a.rail.length;
+      if (cand.length > 12) cand.length = 12;
       for (const c of cand) {
         if (links >= RAIL_MAX_LINKS_PER_STATION) break;
         const b = c.s;

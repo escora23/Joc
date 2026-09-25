@@ -37,6 +37,8 @@ export class AttackSystem {
   private readonly tc: TerrainCombat = { mag: 0, cost: 0, prio: 1 };
   private readonly nb = new Int32Array(4);
   private readonly nb2 = new Int32Array(4);
+  private readonly nbM = new Int32Array(4);
+  private readonly nbM2 = new Int32Array(4);
   private readonly dps: DefensePoint[] = [];
   private readonly atkArmor: Unit[] = [];
   private readonly defArmor: Unit[] = [];
@@ -331,9 +333,9 @@ export class AttackSystem {
     if (D) {
       const ratio = D.troops / Math.max(1, a.troops);
       density = D.tiles > 0 ? D.troops / D.tiles : 0;
-      const bigAtt = largeTerritoryBonus(A.tiles, 0.7);
+      const bigAtt = largeTerritoryBonus(A.tiles, 0.35);
       const bigDef = largeTerritoryBonus(D.tiles, 0.3);
-      const bigAttSpd = largeTerritoryBonus(A.tiles, 0.73);
+      const bigAttSpd = largeTerritoryBonus(A.tiles, 0.4);
       const traitor = D.traitorUntilTick > tick;
       const defPower = D.mod('defensePower', tick);
       lossK = Math.min(2, Math.max(0.6, ratio)) * (ATTACK_LOSS_BASE * bigAtt * bigDef + ATTACK_LOSS_PER_DENSITY * density)
@@ -496,6 +498,37 @@ export class AttackSystem {
     g.setOwner(t, a.attacker);
     a.pushRecent(t);
     this.addNeighbors(a, t);
+    if (!this.mopping) this.mopUp(a, A, D, t, loss, density);
+  }
+
+  /**
+   * Keeps fronts clean: a defender tile left with 3+ attacker neighbours (a notch or a one-tile peninsula) falls
+   * with the tile just taken instead of lingering as a speckle behind the line.
+   */
+  private mopping = false;
+  private mopUp(a: Attack, A: Player, D: Player | undefined, t: number, loss: number, density: number): void {
+    const g = this.g;
+    const owner = g.owner, playable = g.playable;
+    const nb = this.nbM, nb2 = this.nbM2;
+    const n = neighbors4(t, nb);
+    this.mopping = true;
+    for (let k = 0; k < n; k++) {
+      const q = nb[k];
+      if (owner[q] !== a.defender || !playable[q] || g.structAt[q] !== 0) continue;
+      let mine = 0, other = 0;
+      const m = neighbors4(q, nb2);
+      for (let j = 0; j < m; j++) {
+        const o = owner[nb2[j]];
+        if (o === a.attacker) mine++;
+        else if (o !== a.defender && playable[nb2[j]]) other++;
+      }
+      if (mine < 3 || other > 0) continue;
+      const cost = loss * 0.5;
+      if (a.troops <= cost) break;
+      a.troops -= cost;
+      this.takeTile(a, A, D, q, cost, density * 0.5);
+    }
+    this.mopping = false;
   }
 
   /** Best defender tile for an armored division to punch into (adjacent to the attacker, toward its objective). */

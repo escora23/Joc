@@ -4,3 +4,4 @@
 - Country shapes and names: Natural Earth (public domain) via the `world-atlas` package.
 - Game design inspired by OpenFront.io (https://openfront.io). No OpenFront code or assets are used.
 - Built with Three.js, TypeScript and Vite.
+- Fonts: Rajdhani, Barlow, Barlow Condensed (SIL OFL 1.1) and JetBrains Mono (SIL OFL 1.1), bundled via `@fontsource/*`.

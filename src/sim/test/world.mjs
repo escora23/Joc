@@ -85,11 +85,19 @@ export async function loadWorldInit(log = console.log) {
   } else {
     log('[world] building WorldData in headless Chromium (first run or src/data changed)...');
     const t0 = Date.now();
-    d = await dumpFromBrowser();
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    for (const f of fs.readdirSync(CACHE_DIR)) if (f.startsWith('world-')) fs.rmSync(path.join(CACHE_DIR, f));
-    fs.writeFileSync(file, JSON.stringify(d));
-    log(`[world] cached in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    try {
+      d = await dumpFromBrowser();
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+      for (const f of fs.readdirSync(CACHE_DIR)) if (f.startsWith('world-')) fs.rmSync(path.join(CACHE_DIR, f));
+      fs.writeFileSync(file, JSON.stringify(d));
+      log(`[world] cached in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    } catch (err) {
+      // The data pipeline may be mid-edit by its owner: fall back to the last good cache when there is one.
+      const old = fs.existsSync(CACHE_DIR) ? fs.readdirSync(CACHE_DIR).filter((f) => f.startsWith('world-')) : [];
+      if (old.length === 0) throw err;
+      console.warn(`[world] rebuild failed (${String(err?.message ?? err).split('\n')[0]}); using the cached ${old[0]}`);
+      d = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, old[0]), 'utf8'));
+    }
   }
   return {
     width: d.width,

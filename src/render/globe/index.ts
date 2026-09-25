@@ -1,176 +1,245 @@
-// FRONT ULTRA — the planet (owner: globe).
-// STUB by the architect: day/night textured sphere lit by the moving sun, star sphere, and a territory overlay
-// (CPU-colored RGBA DataTexture patched from 'tilesChanged'). pickTile via analytic ray/sphere.
-// The globe owner replaces it with the photoreal Earth (relief, ocean glint, clouds, scattering, glowing
-// borders, hot fronts, labels...). Keep the export: createGlobe(ctx): GlobeApi.
+// FRONT ULTRA — the living planet (owner: globe).
+// Orchestrates the photoreal Earth (relief-displaced sphere + camera-following near patch), atmosphere,
+// clouds, space backdrop with sun, the territory overlay data and the nation labels. Exposes picking with
+// relief, the rendered ground radius, the sun direction and hover highlight (GlobeApi).
 
 import * as THREE from 'three';
-import type { FrameInfo, GameContext, GlobeApi } from '../../shared/api';
-import { TEXTURES, assetUrl } from '../../shared/assets';
-import { MAP_H, MAP_W, TILE_COUNT } from '../../shared/constants';
+import type { CameraState, FrameInfo, GameContext, GlobeApi } from '../../shared/api';
+import { EARTH_RADIUS_KM, RELIEF_EXAGGERATION, TOPO_MAX_METERS } from '../../shared/constants';
 import { latLonToTile, sunDirection, surfaceRadius, vec3ToLatLon } from '../../shared/geo';
-import { unpackOwner, unpackTile } from '../../shared/protocol';
+import type { QualityProfile } from '../../shared/quality';
 import type { LatLon } from '../../shared/types';
+import { clamp, damp, smoothstep } from '../../shared/math';
 import { sampleElevation } from '../../data';
+import { createEarth, createPlanetUniforms, earthDefines, PATCH_RES, PATCH_WARP, type Earth } from './earth';
+import { buildSdfFont, type SdfFont } from './font';
+import { createNationLabels, type NationLabels } from './labels';
+import { createAtmosphereLayers, type AtmosphereLayers } from './layers';
+import { createSpaceBackdrop } from './sky';
+import { createTerritoryLayer } from './territory';
+import { applyTextureSize, loadPlanetTextures, type PlanetTextures } from './textures';
 
-const vert = /* glsl */ `
-varying vec2 vUv;
-varying vec3 vNormalW;
-void main() {
-  vUv = uv;
-  vNormalW = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}`;
+/** Cloud drift: one revolution per this many world seconds. */
+const CLOUD_PERIOD_SEC = 5400;
+/** Shots only: freeze the sun at a world time regardless of the app clock (null = follow frame.worldTime). */
+let worldTimeOverride: number | null = null;
+export function setGlobeWorldTimeOverride(t: number | null): void {
+  worldTimeOverride = t;
+}
 
-const frag = /* glsl */ `
-uniform sampler2D uDay;
-uniform sampler2D uNight;
-uniform sampler2D uTerritory;
-uniform vec3 uSunDir;
-uniform float uTerritoryOpacity;
-varying vec2 vUv;
-varying vec3 vNormalW;
-void main() {
-  vec3 n = normalize(vNormalW);
-  float ndl = dot(n, uSunDir);
-  float day = smoothstep(-0.12, 0.18, ndl);
-  vec3 dayCol = texture2D(uDay, vUv).rgb * (0.25 + 1.1 * max(ndl, 0.0));
-  vec3 nightCol = texture2D(uNight, vUv).rgb * 1.4;
-  vec3 col = mix(nightCol, dayCol, day);
-  vec4 terr = texture2D(uTerritory, vec2(vUv.x, 1.0 - vUv.y));
-  col = mix(col, terr.rgb * mix(0.35, 1.0, day), terr.a * uTerritoryOpacity);
-  gl_FragColor = vec4(col, 1.0);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}`;
+const RELIEF_TOP = 1 + (TOPO_MAX_METERS * RELIEF_EXAGGERATION) / (EARTH_RADIUS_KM * 1000);
 
 export function createGlobe(ctx: GameContext): GlobeApi {
   const root = new THREE.Group();
   root.name = 'globe';
-  const territoryData = new Uint8Array(TILE_COUNT * 4);
-  const territory = new THREE.DataTexture(territoryData, MAP_W, MAP_H, THREE.RGBAFormat);
-  // Grid-ordered data (row 0 = north) is uploaded as-is (flipY=false): sample it with v = 1 - uv.y.
-  territory.magFilter = THREE.NearestFilter;
-  territory.minFilter = THREE.LinearFilter;
-  territory.colorSpace = THREE.SRGBColorSpace;
-  territory.needsUpdate = true;
-  let territoryDirty = false;
-
-  const uniforms = {
-    uDay: { value: null as THREE.Texture | null },
-    uNight: { value: null as THREE.Texture | null },
-    uTerritory: { value: territory },
-    uSunDir: { value: new THREE.Vector3(1, 0, 0) },
-    uTerritoryOpacity: { value: 0 },
-  };
-  const material = new THREE.ShaderMaterial({ vertexShader: vert, fragmentShader: frag, uniforms });
-  const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), material);
-  earth.name = 'earth';
-  root.add(earth);
-
-  const starsMat = new THREE.MeshBasicMaterial({ side: THREE.BackSide, depthWrite: false, color: 0x8a8a8a });
-  const stars = new THREE.Mesh(new THREE.SphereGeometry(90, 32, 16), starsMat);
-  stars.renderOrder = -100;
-  root.add(stars);
   ctx.scene.add(root);
+
+  let quality: QualityProfile = ctx.quality;
+  const planet = createPlanetUniforms();
+  const territory = createTerritoryLayer(ctx);
+  const space = createSpaceBackdrop();
+  root.add(space.group);
+
+  let tex: PlanetTextures | null = null;
+  let earth: Earth | null = null;
+  let layers: AtmosphereLayers | null = null;
+  let labels: NationLabels | null = null;
+  let font: SdfFont | null = null;
+  let territoryOpacity = 0;
+  let territoryTarget = 0;
+  let hoverTile = -1;
 
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
-  const sphere = new THREE.Sphere(new THREE.Vector3(), 1);
   const hit = new THREE.Vector3();
+  const pickSphere = new THREE.Sphere(new THREE.Vector3(), 1);
   const tmpLL: LatLon = { lat: 0, lon: 0 };
+  const camLL: LatLon = { lat: 0, lon: 0 };
+  const camState: CameraState = { lat: 0, lon: 0, altitudeKm: 0, tilt: 0, heading: 0 };
+  const camUp = new THREE.Vector3();
+  const sunDir = new THREE.Vector3(1, 0, 0);
 
-  function paint(tile: number, owner: number): void {
-    const o = tile * 4;
-    const p = owner ? ctx.sim.view.players[owner] : undefined;
-    if (!p) {
-      territoryData[o + 3] = 0;
-      return;
-    }
-    territoryData[o] = (p.color >> 16) & 255;
-    territoryData[o + 1] = (p.color >> 8) & 255;
-    territoryData[o + 2] = p.color & 255;
-    territoryData[o + 3] = owner === 1 ? 170 : 140;
+  function reliefRadius(lat: number, lon: number): number {
+    const w = ctx.world;
+    if (w) return surfaceRadius(sampleElevation(w, lat, lon));
+    if (!tex) return 1;
+    // Same bilinear lookup as data.sampleElevation, on our copy of the topology.
+    const W = tex.reliefW, H = tex.reliefH, d = tex.reliefGray;
+    const fx = (((((lon + 180) / 360) * W - 0.5) % W) + W) % W;
+    const fy = Math.min(H - 1, Math.max(0, ((90 - lat) / 180) * H - 0.5));
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const x1 = (x0 + 1) % W, y1 = Math.min(H - 1, y0 + 1);
+    const tx = fx - x0, ty = fy - y0;
+    const a = d[y0 * W + x0] * (1 - tx) + d[y0 * W + x1] * tx;
+    const b = d[y1 * W + x0] * (1 - tx) + d[y1 * W + x1] * tx;
+    return surfaceRadius(((a * (1 - ty) + b * ty) / 255) * TOPO_MAX_METERS);
   }
 
-  function repaintAll(): void {
-    const owner = ctx.sim.view.owner;
-    for (let t = 0; t < TILE_COUNT; t++) paint(t, owner[t]);
-    territoryDirty = true;
+  function placePatch(): void {
+    if (!earth) return;
+    const cam = ctx.camera;
+    const dist = cam.position.length();
+    const alt = dist - 1;
+    const altKm = alt * EARTH_RADIUS_KM;
+    const active = altKm < 2600;
+    earth.patch.visible = active;
+    earth.uniforms.uPatchActive.value = active ? 1 : 0;
+    if (!active) return;
+    const s = ctx.cameraRig.getState(camState);
+    // Centre between the point under the camera and the look-at target (tilted views look ahead).
+    vec3ToLatLon(cam.position, camLL);
+    let lat = (camLL.lat + s.lat) / 2;
+    let dLon = s.lon - camLL.lon;
+    dLon -= 360 * Math.floor((dLon + 180) / 360);
+    let lon = camLL.lon + dLon / 2;
+    lat = clamp(lat, -78, 78);
+    const horizon = Math.sqrt(2 * Math.max(alt, 1e-5) + alt * alt);
+    const ext = clamp(Math.max(alt * 4.5, horizon * (0.55 + 0.6 * Math.sin(s.tilt))), 0.012, 0.42);
+    const coslat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+    const extLon = Math.min(ext / coslat, 1.2);
+    // Snap the centre to the central vertex spacing so the grid does not swim over the relief.
+    const n = PATCH_RES[quality.globeDetail];
+    const step = ((2 * ext) / n) * PATCH_WARP * (180 / Math.PI);
+    lat = Math.round(lat / step) * step;
+    const stepLon = step / coslat;
+    lon = Math.round(lon / stepLon) * stepLon;
+    const D = Math.PI / 180;
+    (earth.uniforms.uPatch.value as THREE.Vector4).set(lat * D, lon * D, ext, extLon);
+    (earth.uniforms.uPatchCut.value as THREE.Vector4).set(lat * D, lon * D, ext * 0.93, extLon * 0.93);
   }
-
-  ctx.bus.on('tilesChanged', (e) => {
-    if (e.full) return repaintAll();
-    for (let i = 0; i < e.count; i++) paint(unpackTile(e.packed[i]), unpackOwner(e.packed[i]));
-    territoryDirty = true;
-  });
-  // Player colors arrive with the first update after the tiles: repaint when new players appear.
-  let knownPlayers = 0;
 
   const api: GlobeApi = {
     root,
     async init(progress) {
-      const loader = new THREE.TextureLoader();
-      const load = (url: string, srgb: boolean) =>
-        loader.loadAsync(assetUrl(url)).then((t) => {
-          t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-          t.anisotropy = ctx.renderer.capabilities.getMaxAnisotropy();
-          return t;
-        });
-      let done = 0;
-      const step = () => progress(++done / 3);
-      const [day, night, sky] = await Promise.all([
-        load(TEXTURES.day, true).finally(step),
-        load(TEXTURES.night, true).finally(step),
-        load(TEXTURES.stars, true).finally(step),
-      ]);
-      uniforms.uDay.value = day;
-      uniforms.uNight.value = night;
-      starsMat.map = sky;
-      starsMat.needsUpdate = true;
+      const texP = loadPlanetTextures(ctx.renderer, quality.textureSize, (f) => progress(f * 0.85));
+      const fontP = buildSdfFont().catch((err: unknown) => {
+        console.warn('[globe] label font atlas failed', err);
+        return null;
+      });
+      const [t, f] = await Promise.all([texP, fontP]);
+      tex = t;
+      font = f;
+      space.setTextures(t.stars);
+      space.bake(ctx.renderer);
+
+      earth = createEarth(t, planet, territory, earthDefines(quality), quality.globeDetail);
+      root.add(earth.sphere, earth.patch);
+      layers = createAtmosphereLayers(planet, t.clouds, quality.atmosphere, quality.globeDetail);
+      root.add(layers.clouds, layers.cloudsInner, layers.atmosphere);
+      labels = createNationLabels(ctx, font);
+      root.add(labels.mesh);
+      progress(1);
+    },
+    warmup(on) {
+      if (!earth || !layers || !labels) return;
+      if (on) {
+        earth.patch.visible = true;
+        layers.cloudsInner.visible = true;
+        layers.clouds.visible = true;
+        labels.mesh.visible = true;
+        territory.warmup();
+      } else {
+        earth.patch.visible = false;
+        layers.cloudsInner.visible = false;
+      }
     },
     onGameStart() {
-      knownPlayers = 0;
-      repaintAll();
+      territory.resetAll();
+      labels?.clear();
+      labels?.markTextDirty();
     },
     onGameEnd() {
-      territoryData.fill(0);
-      territoryDirty = true;
+      territory.clear();
+      labels?.clear();
+      hoverTile = -1;
+      territory.setHoverOwner(0);
     },
     update(frame: FrameInfo) {
-      sunDirection(frame.worldTime, uniforms.uSunDir.value);
-      stars.position.copy(ctx.camera.position);
-      const n = ctx.sim.view.playerList.length;
-      if (n !== knownPlayers) {
-        knownPlayers = n;
-        repaintAll();
-      }
-      if (territoryDirty) {
-        territory.needsUpdate = true;
-        territoryDirty = false;
-      }
+      const dt = frame.dt;
+      const worldTime = worldTimeOverride ?? frame.worldTime;
+      sunDirection(worldTime, sunDir);
+      planet.uSunDir.value.copy(sunDir);
+      planet.uTime.value = frame.time;
+      const cloudU = (worldTime / CLOUD_PERIOD_SEC) % 1;
+      planet.uCloudOffset.value.set(quality.clouds >= 1 ? cloudU : 0, 0);
+
+      const cam = ctx.camera;
+      const camDist = cam.position.length();
+      const altKm = (camDist - 1) * EARTH_RADIUS_KM;
+      planet.uNormalBoost.value = 0.65 + 0.45 * smoothstep(150, 7000, altKm);
+      planet.uHaze.value = 0.3 + 0.7 * smoothstep(80, 3000, altKm);
+
+      territoryOpacity = damp(territoryOpacity, territoryTarget, 5, dt);
+      if (Math.abs(territoryOpacity - territoryTarget) < 0.002) territoryOpacity = territoryTarget;
+      territory.uniforms.uTerritoryOpacity.value = territoryOpacity;
+      territory.update(dt);
+      if (hoverTile >= 0 && ctx.sim.view.phase !== 'none') territory.setHoverOwner(ctx.sim.view.owner[hoverTile] ?? 0);
+
+      placePatch();
+      layers?.update(camDist);
+      layers?.setCloudFade(smoothstep(45, 320, altKm));
+      planet.uCloudShadow.value = smoothstep(45, 320, altKm);
+
+      // Stars fade in a daylit sky (camera inside the atmosphere with the sun up).
+      camUp.copy(cam.position).normalize();
+      const sunUp = camUp.dot(sunDir);
+      const inAir = 1 - smoothstep(40, 400, altKm);
+      const starFade = 1 - smoothstep(-0.12, 0.12, sunUp) * inAir * 0.97;
+      const sunVis = 1 - inAir * 0.5;
+      space.update(cam, sunDir, frame.time, ctx.renderer.getPixelRatio(), starFade, sunVis);
+
+      labels?.update(dt, territoryOpacity);
     },
     pickLatLon(clientX, clientY, out) {
       const r = ctx.canvas.getBoundingClientRect();
       ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
       raycaster.setFromCamera(ndc, ctx.camera);
-      if (!raycaster.ray.intersectSphere(sphere, hit)) return null;
-      return vec3ToLatLon(hit, out ?? { lat: 0, lon: 0 });
+      const ray = raycaster.ray;
+      pickSphere.radius = RELIEF_TOP;
+      if (!ray.intersectSphere(pickSphere, hit)) return null;
+      pickSphere.radius = 1;
+      if (!ray.intersectSphere(pickSphere, hit)) {
+        // Grazing the horizon over high ground: keep the outer hit.
+        pickSphere.radius = RELIEF_TOP;
+        ray.intersectSphere(pickSphere, hit);
+      }
+      const ll = out ?? { lat: 0, lon: 0 };
+      // Iterate on the relief: intersect the sphere at the ground radius of the previous estimate.
+      for (let i = 0; i < 4; i++) {
+        vec3ToLatLon(hit, ll);
+        pickSphere.radius = reliefRadius(ll.lat, ll.lon);
+        if (!ray.intersectSphere(pickSphere, hit)) break;
+      }
+      return vec3ToLatLon(hit, ll);
     },
     pickTile(clientX, clientY) {
       const ll = api.pickLatLon(clientX, clientY, tmpLL);
       return ll ? latLonToTile(ll.lat, ll.lon) : -1;
     },
     surfaceRadiusAt(lat, lon) {
-      const w = ctx.world;
-      return w ? surfaceRadius(sampleElevation(w, lat, lon)) : 1;
+      return reliefRadius(lat, lon);
     },
     getSunDirection(out) {
-      return sunDirection(ctx.frame.worldTime, out);
+      return sunDirection(worldTimeOverride ?? ctx.frame.worldTime, out);
     },
-    setHoverTile() {},
+    setHoverTile(tile) {
+      hoverTile = tile;
+      if (tile < 0) territory.setHoverOwner(0);
+    },
     setTerritoryOpacity(v) {
-      uniforms.uTerritoryOpacity.value = v;
+      territoryTarget = clamp(v, 0, 1);
+      if (ctx.app?.isShot) territoryOpacity = territoryTarget;
+    },
+    setQuality(q) {
+      const prev = quality;
+      quality = q;
+      if (!earth || !layers || !tex) return;
+      earth.setDefines(earthDefines(q));
+      if (q.globeDetail !== prev.globeDetail) earth.setDetail(q.globeDetail);
+      layers.setQuality(q.atmosphere, q.clouds, q.globeDetail);
+      if (q.textureSize !== prev.textureSize) {
+        for (const t of [tex.day, tex.night, tex.clouds, tex.stars]) applyTextureSize(t, q.textureSize);
+      }
     },
   };
   return api;

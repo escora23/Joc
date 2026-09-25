@@ -3,7 +3,8 @@
 // subsystem sees one consistent state per frame. Re-emits sim events on the bus, raises nuke alarms for the
 // human, and records the stats history (every 5 s of game time) and the timelapse (400x200 RLE frames every 10 s).
 
-import { HUMAN_ID, MAP_H, MAP_W, TICK_MS, TILE_COUNT, UPDATE_INTERVAL_MS, structureCost } from '../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS, TICK_MS, TILE_COUNT, UNIT_DEFS, UPDATE_INTERVAL_MS, structureCost } from '../shared/constants';
+import { playerName, t } from '../shared/i18n';
 import type { GameBus } from '../shared/events';
 import type { GameView, ProgressFn, SimClientApi } from '../shared/api';
 import {
@@ -19,6 +20,7 @@ import {
 import { worldInit } from '../data';
 import { unitPrice } from './balance';
 import './shots';
+import { registerSimStrings } from './strings';
 
 const TL_W = 400;
 const TL_H = 200;
@@ -152,6 +154,7 @@ class ClientView implements GameView {
 }
 
 export function createSimClient(bus: GameBus): SimClientApi {
+  registerSimStrings();
   const view = new ClientView();
   let worker: Worker | null = null;
   const queue: FromWorker[] = [];
@@ -315,7 +318,25 @@ export function createSimClient(bus: GameBus): SimClientApi {
     bus.emit('simTick', { tick: u.tick, ticks: u.ticks });
   }
 
+  /** Message params carry ids; add their localised names so UI strings can say {playerName} / {structureName}. */
+  function enrichMessage(e: Extract<SimEvent, { type: 'message' }>): void {
+    const p = e.params;
+    if (typeof p.player === 'number') {
+      const pv = view.players[p.player];
+      p.playerName = pv ? playerName(pv, view.world) : `#${p.player}`;
+    }
+    if (typeof p.structure === 'number') {
+      const d = STRUCTURE_DEFS[p.structure as StructureType];
+      if (d) p.structureName = t(`structure.${d.id}`);
+    }
+    if (typeof p.weapon === 'number') {
+      const d = UNIT_DEFS[p.weapon as UnitType];
+      if (d) p.weaponName = t(`unit.${d.id}`);
+    }
+  }
+
   function emitSim(e: SimEvent): void {
+    if (e.type === 'message') enrichMessage(e);
     (bus.emit as (t: string, p: unknown) => void)(e.type, e);
     if (e.type === 'nukeLaunched') {
       if (e.owner === HUMAN_ID && e.weapon === UnitType.Mirv) view.humanMirvs++;

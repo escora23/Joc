@@ -21,9 +21,22 @@ export class LabelPlacer {
 
   constructor(private readonly g: Game) {}
 
+  /** Full update in one call (spawn, staging). */
   update(): void {
-    const g = this.g;
-    const owner = g.owner;
+    this.stage(0);
+    this.stage(1);
+    this.stage(2);
+  }
+
+  /** Incremental update spread over three consecutive ticks (keeps every tick short). */
+  stage(step: number): void {
+    if (step === 0) this.passInterior();
+    else if (step === 1) this.passChamfer();
+    else this.passAssign();
+  }
+
+  private passInterior(): void {
+    const owner = this.g.owner;
     const co = this.cellOwner, dt = this.dt;
     // 1. Interior cells: all 4 tiles owned by the same player.
     for (let cy = 0; cy < H; cy++) {
@@ -41,6 +54,10 @@ export class LabelPlacer {
         }
       }
     }
+  }
+
+  private passChamfer(): void {
+    const co = this.cellOwner, dt = this.dt;
     // 2. Chamfer (3-4) forward & backward passes; a cell's distance also stops at other owners' cells.
     for (let cy = 0; cy < H; cy++) {
       for (let cx = 0; cx < W; cx++) {
@@ -76,6 +93,11 @@ export class LabelPlacer {
         dt[c] = v;
       }
     }
+  }
+
+  private passAssign(): void {
+    const g = this.g;
+    const co = this.cellOwner, dt = this.dt;
     // 3. Best cell per player.
     const n = g.playerArr.length + 1;
     if (this.bestVal.length < n) {

@@ -46,6 +46,8 @@ export class EnclaveSystem {
       for (let k = 0; k < list.length; k++) {
         const p = list[(this.rr + k) % list.length];
         if (!p.alive || p.tiles === 0 || p.lastTileLossTick <= p.lastEnclaveCheckTick) continue;
+        // Huge empires are expensive to flood: scan them less often (small pockets are caught per tick anyway).
+        if (p.tiles > 40_000 && tick - p.lastEnclaveCheckTick < 200) continue;
         this.rr = (this.rr + k + 1) % list.length;
         p.lastEnclaveCheckTick = tick;
         this.componentScan(p);

@@ -7,6 +7,7 @@ import '../render/units/shots';
 import '../render/fx/shots';
 import '../render/battle/shots';
 import '../command/shots';
+import '../sim/ai/shots';
 import { registerShot } from '../shared/shots';
 
 registerShot('midgame', 'app', 'Typical mid-game view with HUD (Iberia, ~5 game minutes in)', async ({ ctx, waitFrames }) => {

@@ -98,6 +98,11 @@ function smoothstep(a: number, b: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/** Patch presence gate: a land-cover class with (almost) no regional coverage never forms patches. */
+function gate(cov: number): number {
+  return cov >= 0.05 ? 1 : cov <= 0 ? 0 : cov / 0.05;
+}
+
 /** Horizontal bilinear setup for a grid of width w (pixel centers at +0.5, wrap). */
 function colSetup(u: number, w: number, x0: Int32Array, x1: Int32Array, t: Float32Array, j: number): void {
   const fx = u * w - 0.5;
@@ -334,26 +339,28 @@ export function buildLocalHeightfield(
       const mx = Math.max(r, g, bl), mn = Math.min(r, g, bl);
       const white = Math.max(0, Math.min(1, (bright / 255 - 0.45) / 0.4)) * Math.max(0, 1 - ((mx - mn) / Math.max(1, mx)) * 2.2);
       // Patches: a class is present where its patch field falls under its coverage (soft edge).
-      const forest = smoothstep(cov[2] + 0.07, cov[2] - 0.07, pa) * (1 - smoothstep(treeLine * 0.85, treeLine * 1.05, h)) * (1 - smoothstep(0.55, 0.9, s));
-      const sand = smoothstep(1 - cov[0] - 0.08, 1 - cov[0] + 0.08, pa);
-      const dirt = smoothstep(cov[6] + 0.1, cov[6] - 0.1, pb) * (1 - forest);
+      const forest = smoothstep(cov[2] + 0.07, cov[2] - 0.07, pa) * gate(cov[2]) * (1 - smoothstep(treeLine * 0.85, treeLine * 1.05, h)) * (1 - smoothstep(0.55, 0.9, s));
+      const sand = smoothstep(1 - cov[0] - 0.08, 1 - cov[0] + 0.08, pa) * gate(cov[0]);
+      const dirt = smoothstep(cov[6] + 0.1, cov[6] - 0.1, pb) * gate(cov[6]) * (1 - forest);
       const altitudeRock = smoothstep(treeLine, snowLine * 1.02, h);
-      const rock = Math.max(smoothstep(0.5, 0.9, s + (pb - 0.5) * 0.25), altitudeRock * (0.5 + 0.5 * pb), smoothstep(cov[3] + 0.05, cov[3] - 0.05, 1 - pb) * 0.8);
+      const rock = Math.max(smoothstep(0.5, 0.9, s + (pb - 0.5) * 0.25), altitudeRock * (0.5 + 0.5 * pb), smoothstep(cov[3] + 0.05, cov[3] - 0.05, 1 - pb) * gate(cov[3]) * 0.8);
       const snowAlt = smoothstep(snowLine * 0.94, snowLine * 1.06, h + f * 600);
-      const snowCover = smoothstep(1 - cov[4] - 0.06, 1 - cov[4] + 0.06, 1 - pb) * polar;
+      const snowCover = smoothstep(1 - cov[4] - 0.06, 1 - cov[4] + 0.06, 1 - pb) * gate(cov[4]) * polar * smoothstep(snowLine * 0.3, snowLine * 0.6, h);
       const snow = Math.max(snowAlt, snowCover, white * whiteLat) * (1 - smoothstep(0.8, 1.2, s));
       const beach = smoothstep(0.4, 0.48, wv) * (1 - smoothstep(3, 12, h)) * (1 - smoothstep(0.25, 0.5, s));
       const urban = smoothstep(0.22, 0.7, lum + f * 0.35) * (1 - smoothstep(0.3, 0.55, s));
       const river = terrain[tileRow + sc.colTile[j]] & 0x40 ? 0.18 : 0;
       const wet = smoothstep(0.34, 0.47, wv) * (1 - beach) * 0.7 + river * smoothstep(0.4, 0.7, pa);
       wS[0] = Math.max(sand * (0.6 + 0.4 * cov[0]), beach * 1.4);
-      wS[1] = (1 - forest) * (1 - sand) * (0.25 + cov[1]) + 0.04;
+      wS[1] = (1 - forest) * (1 - sand) * (0.08 + cov[1]) + 0.02;
       wS[2] = forest * 1.2;
       wS[3] = rock * (1 - snow * 0.6) * 1.2;
       wS[4] = snow * 1.6;
       wS[5] = urban * 2;
       wS[6] = dirt * 0.8 + smoothstep(0.35, 0.55, s) * 0.2;
       wS[7] = wet;
+      // Regional baseline: where no patch wins, the region's own mix shows (desert floor stays sand, not grass).
+      for (let k = 0; k < 8; k++) wS[k] += cov[k] * 0.3;
       if (snow > 0.3) { wS[1] *= 1 - snow; wS[2] *= 1 - snow * 0.7; wS[6] *= 1 - snow; }
       if (urban > 0.3) { wS[2] *= 1 - urban; wS[1] *= 1 - urban * 0.6; }
       let sum = 0;

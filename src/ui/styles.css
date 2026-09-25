@@ -1,20 +1,46 @@
-/* FRONT ULTRA — UI base styles & design tokens (owner: ui).
-   Other owners with DOM overlays (command HUD) may use these CSS variables but must not edit this file. */
+/* FRONT ULTRA — UI design tokens & shared components (owner: ui).
+   Other owners with DOM overlays (command HUD) may use these CSS variables and the generic component classes
+   (.fu-glass, .fu-btn, .fu-kbd, .fu-mono) but must not edit this file.
+
+   Sizing: the root font-size scales with the viewport (16px at 1920x1080, clamped 12..22px), and every UI
+   dimension is expressed in rem, so the whole interface scales from 1280x720 to 2560x1440. */
 
 :root {
-  --fu-bg: #05080d;
-  --fu-panel: rgba(8, 14, 22, 0.72);
-  --fu-panel-border: rgba(120, 190, 255, 0.22);
+  --fu-bg: #03070c;
+  --fu-glass: rgba(7, 13, 21, 0.74);
+  --fu-glass-strong: rgba(5, 10, 17, 0.9);
+  --fu-glass-hi: rgba(18, 32, 48, 0.72);
+  --fu-line: rgba(132, 196, 255, 0.16);
+  --fu-line-strong: rgba(132, 196, 255, 0.32);
   --fu-accent: #3fd0ff;
-  --fu-accent-2: #ffb347;
-  --fu-danger: #ff4d4d;
-  --fu-success: #4dff9a;
-  --fu-text: #e6f1ff;
-  --fu-text-dim: #8aa0b8;
-  --fu-font: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --fu-font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  --fu-blur: blur(14px);
-  --fu-radius: 6px;
+  --fu-accent-rgb: 63, 208, 255;
+  --fu-accent-dim: rgba(63, 208, 255, 0.14);
+  --fu-accent-2: #ffb53d;
+  --fu-accent-2-rgb: 255, 181, 61;
+  --fu-danger: #ff4a4a;
+  --fu-danger-rgb: 255, 74, 74;
+  --fu-success: #45f0a0;
+  --fu-success-rgb: 69, 240, 160;
+  --fu-text: #e8f2ff;
+  --fu-text-2: #b3c4d6;
+  --fu-text-dim: #7d91a8;
+  --fu-text-faint: #4f6176;
+  --fu-font: 'Barlow', 'Segoe UI', system-ui, sans-serif;
+  --fu-font-display: 'Rajdhani', 'Barlow Condensed', 'Segoe UI', sans-serif;
+  --fu-font-cond: 'Barlow Condensed', 'Rajdhani', 'Segoe UI', sans-serif;
+  --fu-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  /* legacy aliases (kept for other owners) */
+  --fu-panel: var(--fu-glass);
+  --fu-panel-border: var(--fu-line-strong);
+  --fu-blur: blur(14px) saturate(1.3);
+  --fu-radius: 3px;
+  --fu-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fu-ease-in: cubic-bezier(0.6, 0, 0.8, 0.2);
+  --fu-shadow: 0 0.6rem 2rem rgba(0, 0, 0, 0.45);
+}
+
+html {
+  font-size: clamp(12px, min(1.4815vh, 0.8333vw), 22px);
 }
 
 html, body {
@@ -28,36 +54,250 @@ html, body {
   font-family: var(--fu-font);
   user-select: none;
   -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #app { position: fixed; inset: 0; }
-#app canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
-#ui { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
-#ui .fu-interactive, #ui button, #ui input, #ui select { pointer-events: auto; }
+#app > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+#ui { position: absolute; inset: 0; pointer-events: none; z-index: 10; font-size: 1rem; line-height: 1.3; }
+#ui .fu-interactive, #ui button, #ui input, #ui select, #ui textarea, #ui a { pointer-events: auto; }
+#ui *, #ui *::before, #ui *::after { box-sizing: border-box; }
 
-.fu-screen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
-.fu-title { font-size: 72px; font-weight: 800; letter-spacing: 0.35em; text-shadow: 0 0 30px rgba(63, 208, 255, 0.6); margin-right: -0.35em; }
-.fu-sub { color: var(--fu-text-dim); letter-spacing: 0.3em; font-size: 14px; text-transform: uppercase; }
-.fu-btn {
-  font: 700 16px var(--fu-font); letter-spacing: 0.25em; color: var(--fu-text); min-width: 260px; padding: 14px 28px;
-  background: var(--fu-panel); border: 1px solid var(--fu-panel-border); border-radius: var(--fu-radius);
-  backdrop-filter: var(--fu-blur); cursor: pointer; transition: all 0.15s ease;
+.fu-layer { position: absolute; inset: 0; pointer-events: none; }
+.fu-hidden { display: none !important; }
+
+/* ---------------------------------------------------------------------------------------------
+   Typography helpers
+   --------------------------------------------------------------------------------------------- */
+.fu-mono { font-family: var(--fu-font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.fu-display { font-family: var(--fu-font-display); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.fu-caps { font-family: var(--fu-font-cond); font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; font-size: 0.72rem; color: var(--fu-text-dim); }
+.fu-ico { width: 1.25em; height: 1.25em; flex: none; display: inline-block; vertical-align: -0.22em; }
+.fu-pos { color: var(--fu-success); }
+.fu-neg { color: var(--fu-danger); }
+.fu-warn { color: var(--fu-accent-2); }
+
+/* ---------------------------------------------------------------------------------------------
+   Glass panels with crisp 1px borders and corner brackets
+   --------------------------------------------------------------------------------------------- */
+.fu-glass {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(120, 190, 255, 0.055), rgba(120, 190, 255, 0) 38%),
+    var(--fu-glass);
+  border: 1px solid var(--fu-line);
+  border-radius: var(--fu-radius);
+  backdrop-filter: var(--fu-blur);
+  -webkit-backdrop-filter: var(--fu-blur);
+  box-shadow: var(--fu-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
-.fu-btn:hover { border-color: var(--fu-accent); box-shadow: 0 0 18px rgba(63, 208, 255, 0.35); }
-.fu-panel { background: var(--fu-panel); border: 1px solid var(--fu-panel-border); border-radius: var(--fu-radius); backdrop-filter: var(--fu-blur); padding: 16px 20px; }
-.fu-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; min-width: 360px; }
-.fu-row input, .fu-row select { font: 14px var(--fu-font); background: rgba(0, 0, 0, 0.4); color: var(--fu-text); border: 1px solid var(--fu-panel-border); padding: 6px 8px; border-radius: 4px; }
-.fu-mono { font-family: var(--fu-font-mono); font-variant-numeric: tabular-nums; }
+.fu-brackets::before, .fu-brackets::after {
+  content: '';
+  position: absolute;
+  width: 0.55rem;
+  height: 0.55rem;
+  pointer-events: none;
+  border-color: rgba(var(--fu-accent-rgb), 0.75);
+  border-style: solid;
+}
+.fu-brackets::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.fu-brackets::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
 
-.fu-loading { background: radial-gradient(ellipse at center, #0b1622 0%, #000 70%); pointer-events: auto; z-index: 100; transition: opacity 0.6s ease; }
-.fu-progress { width: 420px; height: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
-.fu-progress > div { height: 100%; width: 0; background: var(--fu-accent); box-shadow: 0 0 12px var(--fu-accent); transition: width 0.2s ease; }
-.fu-press { animation: fu-pulse 1.4s ease-in-out infinite; letter-spacing: 0.3em; font-size: 13px; }
+.fu-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--fu-font-cond);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fu-text-dim);
+}
+.fu-panel-title::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--fu-line-strong), transparent); }
+
+/* ---------------------------------------------------------------------------------------------
+   Buttons
+   --------------------------------------------------------------------------------------------- */
+.fu-btn {
+  --c: var(--fu-accent-rgb);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  font: 700 0.95rem/1 var(--fu-font-display);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fu-text);
+  padding: 0.75rem 1.4rem;
+  background: linear-gradient(180deg, rgba(var(--c), 0.1), rgba(var(--c), 0.03));
+  border: 1px solid rgba(var(--c), 0.35);
+  border-radius: var(--fu-radius);
+  cursor: pointer;
+  transition: background 0.18s var(--fu-ease), border-color 0.18s var(--fu-ease), box-shadow 0.18s var(--fu-ease), transform 0.12s var(--fu-ease), color 0.18s;
+  outline: none;
+  white-space: nowrap;
+}
+.fu-btn:hover { background: linear-gradient(180deg, rgba(var(--c), 0.22), rgba(var(--c), 0.08)); border-color: rgba(var(--c), 0.85); box-shadow: 0 0 1.2rem rgba(var(--c), 0.25), inset 0 0 0.8rem rgba(var(--c), 0.08); }
+.fu-btn:active { transform: translateY(1px) scale(0.99); }
+.fu-btn:focus-visible { box-shadow: 0 0 0 2px rgba(var(--c), 0.7); }
+.fu-btn[disabled], .fu-btn.is-disabled { opacity: 0.38; cursor: not-allowed; filter: grayscale(0.6); box-shadow: none; }
+.fu-btn--primary {
+  color: #041018;
+  background: linear-gradient(180deg, #7fe4ff, var(--fu-accent) 55%, #22a9d6);
+  border-color: #a9ecff;
+  box-shadow: 0 0 1.6rem rgba(var(--fu-accent-rgb), 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.fu-btn--primary:hover { background: linear-gradient(180deg, #a6eeff, #5ad8ff 55%, #2bb6e3); box-shadow: 0 0 2.4rem rgba(var(--fu-accent-rgb), 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.6); }
+.fu-btn--amber { --c: var(--fu-accent-2-rgb); }
+.fu-btn--danger { --c: var(--fu-danger-rgb); }
+.fu-btn--success { --c: var(--fu-success-rgb); }
+.fu-btn--ghost { background: transparent; border-color: var(--fu-line); }
+.fu-btn--sm { font-size: 0.78rem; padding: 0.5rem 0.8rem; letter-spacing: 0.12em; }
+.fu-btn--icon { padding: 0.5rem; }
+.fu-btn--icon .fu-ico { width: 1.15rem; height: 1.15rem; }
+
+.fu-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35em;
+  height: 1.35em;
+  padding: 0 0.35em;
+  font: 600 0.72em/1 var(--fu-font-mono);
+  color: var(--fu-text-2);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Form controls
+   --------------------------------------------------------------------------------------------- */
+.fu-seg { display: inline-flex; border: 1px solid var(--fu-line-strong); border-radius: var(--fu-radius); overflow: hidden; background: rgba(0, 0, 0, 0.25); }
+.fu-seg > button {
+  font: 600 0.82rem/1 var(--fu-font-display);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fu-text-dim);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--fu-line);
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.fu-seg > button:last-child { border-right: 0; }
+.fu-seg > button:hover { color: var(--fu-text); background: rgba(var(--fu-accent-rgb), 0.08); }
+.fu-seg > button.is-on { color: #041018; background: var(--fu-accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+
+.fu-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 1.3rem;
+  background: transparent;
+  cursor: pointer;
+  --p: 50%;
+  margin: 0;
+}
+.fu-range::-webkit-slider-runnable-track {
+  height: 0.28rem;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--fu-accent) 0 var(--p), rgba(255, 255, 255, 0.12) var(--p) 100%);
+  box-shadow: 0 0 0.6rem rgba(var(--fu-accent-rgb), 0.25);
+}
+.fu-range::-moz-range-track { height: 0.28rem; border-radius: 2px; background: rgba(255, 255, 255, 0.12); }
+.fu-range::-moz-range-progress { height: 0.28rem; border-radius: 2px; background: var(--fu-accent); }
+.fu-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 0.9rem;
+  height: 1.2rem;
+  margin-top: -0.46rem;
+  background: #dff7ff;
+  border: 1px solid var(--fu-accent);
+  border-radius: 2px;
+  box-shadow: 0 0 0.7rem rgba(var(--fu-accent-rgb), 0.8);
+  clip-path: polygon(50% 0, 100% 22%, 100% 100%, 0 100%, 0 22%);
+}
+.fu-range::-moz-range-thumb { width: 0.9rem; height: 1.2rem; background: #dff7ff; border: 1px solid var(--fu-accent); border-radius: 2px; }
+.fu-range--amber::-webkit-slider-runnable-track { background: linear-gradient(90deg, var(--fu-accent-2) 0 var(--p), rgba(255, 255, 255, 0.12) var(--p) 100%); box-shadow: 0 0 0.6rem rgba(var(--fu-accent-2-rgb), 0.3); }
+.fu-range--amber::-webkit-slider-thumb { border-color: var(--fu-accent-2); background: #fff4df; box-shadow: 0 0 0.7rem rgba(var(--fu-accent-2-rgb), 0.8); }
+
+.fu-input {
+  font: 600 1.05rem var(--fu-font-display);
+  letter-spacing: 0.06em;
+  color: var(--fu-text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--fu-line-strong);
+  border-radius: var(--fu-radius);
+  padding: 0.65rem 0.8rem;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.fu-input:focus { border-color: var(--fu-accent); box-shadow: 0 0 0 1px rgba(var(--fu-accent-rgb), 0.3), 0 0 1rem rgba(var(--fu-accent-rgb), 0.18); }
+
+.fu-switch { position: relative; width: 2.6rem; height: 1.35rem; flex: none; border-radius: 1rem; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--fu-line-strong); cursor: pointer; transition: background 0.2s, border-color 0.2s; padding: 0; }
+.fu-switch::after { content: ''; position: absolute; top: 0.15rem; left: 0.18rem; width: 0.95rem; height: 0.95rem; border-radius: 50%; background: var(--fu-text-dim); transition: transform 0.22s var(--fu-ease), background 0.2s; }
+.fu-switch.is-on { background: rgba(var(--fu-accent-rgb), 0.35); border-color: var(--fu-accent); }
+.fu-switch.is-on::after { transform: translateX(1.2rem); background: #e8fbff; box-shadow: 0 0 0.6rem var(--fu-accent); }
+
+/* ---------------------------------------------------------------------------------------------
+   Modal dialogs (settings, how to play, credits, pause, shortcuts)
+   --------------------------------------------------------------------------------------------- */
+.fu-modal-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(2, 6, 12, 0.55), rgba(0, 0, 0, 0.82));
+  pointer-events: auto;
+  animation: fu-fade-in 0.25s var(--fu-ease) both;
+}
+.fu-modal-scrim.is-leaving { animation: fu-fade-out 0.22s var(--fu-ease-in) both; }
+.fu-modal {
+  width: min(58rem, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  animation: fu-modal-in 0.34s var(--fu-ease) both;
+}
+.fu-modal-scrim.is-leaving .fu-modal { animation: fu-modal-out 0.22s var(--fu-ease-in) both; }
+.fu-modal--narrow { width: min(30rem, 92vw); }
+.fu-modal-head { display: flex; align-items: center; gap: 1rem; padding: 1.1rem 1.4rem 0.9rem; border-bottom: 1px solid var(--fu-line); }
+.fu-modal-head h2 { margin: 0; flex: 1; font: 700 1.7rem/1 var(--fu-font-display); letter-spacing: 0.14em; text-transform: uppercase; }
+.fu-modal-head .fu-caps { color: var(--fu-accent); }
+.fu-modal-body { padding: 1.2rem 1.4rem; overflow: auto; flex: 1; }
+.fu-modal-foot { display: flex; justify-content: flex-end; gap: 0.7rem; padding: 0.9rem 1.4rem 1.1rem; border-top: 1px solid var(--fu-line); }
+.fu-close { background: transparent; border: 1px solid transparent; color: var(--fu-text-dim); cursor: pointer; padding: 0.35rem; border-radius: var(--fu-radius); display: inline-flex; }
+.fu-close:hover { color: var(--fu-text); border-color: var(--fu-line-strong); }
+
+.fu-modal-body::-webkit-scrollbar, .fu-scroll::-webkit-scrollbar { width: 6px; }
+.fu-modal-body::-webkit-scrollbar-thumb, .fu-scroll::-webkit-scrollbar-thumb { background: rgba(var(--fu-accent-rgb), 0.3); border-radius: 3px; }
+
+/* ---------------------------------------------------------------------------------------------
+   Keyframes
+   --------------------------------------------------------------------------------------------- */
+@keyframes fu-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fu-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes fu-modal-in { from { opacity: 0; transform: translateY(1.2rem) scale(0.985); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes fu-modal-out { to { opacity: 0; transform: translateY(0.6rem) scale(0.99); } }
 @keyframes fu-pulse { 50% { opacity: 0.35; } }
+@keyframes fu-rise { from { opacity: 0; transform: translateY(0.8rem); } to { opacity: 1; transform: none; } }
+@keyframes fu-slide-left { from { opacity: 0; transform: translateX(-1.4rem); } to { opacity: 1; transform: none; } }
+@keyframes fu-slide-right { from { opacity: 0; transform: translateX(1.4rem); } to { opacity: 1; transform: none; } }
+@keyframes fu-drop { from { opacity: 0; transform: translateY(-1rem); } to { opacity: 1; transform: none; } }
+@keyframes fu-spin { to { transform: rotate(360deg); } }
+@keyframes fu-sheen { from { transform: translateX(-120%) skewX(-20deg); } to { transform: translateX(260%) skewX(-20deg); } }
 
-.fu-topbar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 28px; padding: 10px 22px; }
-.fu-stat { display: flex; flex-direction: column; align-items: center; }
-.fu-stat .k { font-size: 10px; letter-spacing: 0.2em; color: var(--fu-text-dim); text-transform: uppercase; }
-.fu-stat .v { font-size: 20px; font-weight: 700; }
-.fu-banner { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); padding: 12px 24px; letter-spacing: 0.1em; }
-.fu-bottom { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 16px; align-items: center; }
+@media (prefers-reduced-motion: reduce) {
+  #ui *, #ui *::before, #ui *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

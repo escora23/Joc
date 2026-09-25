@@ -44,14 +44,14 @@ export const NATION_COLORS: readonly PaletteColor[] = [
   { hex: 0x7fdcff, en: 'Ice blue', es: 'Azul hielo' },
   { hex: 0x3ea6f0, en: 'Sky', es: 'Celeste' },
   { hex: 0x2f6fd6, en: 'Royal blue', es: 'Azul real' },
-  { hex: 0x1d3f8f, en: 'Navy', es: 'Azul marino' },
+  { hex: 0xff7a6b, en: 'Coral', es: 'Coral' },
   { hex: 0x5c7cfa, en: 'Cornflower', es: 'Aciano' },
-  { hex: 0x4b6584, en: 'Steel', es: 'Acero' },
-  { hex: 0x0b5e8e, en: 'Cobalt', es: 'Cobalto' },
+  { hex: 0x7d97b8, en: 'Steel', es: 'Acero' },
+  { hex: 0x9cbf7a, en: 'Sage', es: 'Salvia' },
   // Purples & magentas
   { hex: 0x7b2cbf, en: 'Violet', es: 'Violeta' },
   { hex: 0xa66cff, en: 'Lavender', es: 'Lavanda' },
-  { hex: 0x4a2a8a, en: 'Indigo', es: 'Índigo' },
+  { hex: 0x6247c9, en: 'Indigo', es: 'Índigo' },
   { hex: 0x8e3b8a, en: 'Plum', es: 'Ciruela' },
   { hex: 0xd63aaf, en: 'Magenta', es: 'Magenta' },
   { hex: 0xf06bf0, en: 'Orchid', es: 'Orquídea' },
@@ -71,6 +71,9 @@ export const NATION_COLORS: readonly PaletteColor[] = [
   { hex: 0x2d9cdb, en: 'Azure', es: 'Azur' },
   { hex: 0x9d0208, en: 'Blood', es: 'Sangre' },
 ];
+
+/** Typical Blue Marble open-ocean color: nation colors must stay clearly distinct from it. */
+const OCEAN_RGB = 0x14305c;
 
 /** Just the colors (0xRRGGBB). */
 export const NATION_PALETTE: readonly number[] = NATION_COLORS.map((c) => c.hex);
@@ -139,6 +142,8 @@ export function assignCountryColors(
   order: readonly number[],
   neighbors: readonly (readonly number[])[],
   preferred: (index: number) => number | undefined,
+  /** Optional regional neighbours (kept apart softly, like neighbours-of-neighbours). */
+  soft?: readonly (readonly number[])[],
 ): Int16Array {
   const res = new Int16Array(countryCount).fill(-1);
   const P = NATION_PALETTE.length;
@@ -150,6 +155,7 @@ export function assignCountryColors(
       if (res[n] >= 0) near.add(res[n]);
       for (const m of neighbors[n] ?? []) if (m !== c && res[m] >= 0) far.add(res[m]);
     }
+    for (const m of soft?.[c] ?? []) if (m !== c && res[m] >= 0) far.add(res[m]);
     const pref = preferred(c);
     let best = 0, bs = -Infinity;
     for (let i = 0; i < P; i++) {
@@ -160,8 +166,10 @@ export function assignCountryColors(
       if (near.has(i)) dNear = 0;
       // Hard rule: clearly distinct from every land neighbour. Then the signature color wins; then distance from
       // neighbours-of-neighbours and spreading usage over the whole palette.
-      let score = (dNear < 0.13 ? -10 : 0) + Math.min(dNear, 0.28) * 2 + Math.min(dFar, 0.2) * 0.8 - usage[i] * 0.025;
+      let score = (dNear < 0.13 ? -10 : 0) + Math.min(dNear, 0.28) * 2 + Math.min(dFar, 0.2) * 0.8 - (dFar < 0.08 ? 0.35 : 0) - usage[i] * 0.025;
       if (pref !== undefined) score -= colorDistance(col, pref) * 6;
+      // Must read against the dark Blue Marble ocean (island nations, coasts).
+      score -= Math.max(0, 0.3 - colorDistance(col, OCEAN_RGB)) * 8;
       // Deterministic tie-break.
       score += ((c * 31 + i * 17) % 97) * 1e-5;
       if (score > bs) { bs = score; best = i; }

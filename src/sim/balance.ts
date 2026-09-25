@@ -129,7 +129,7 @@ export function terrainCombat(terrain: number, elevation: number, out: TerrainCo
 /** Neutral-land expansion: troops lost per tile = mag / NEUTRAL_LOSS_DIV (tribes lose half as much). */
 export const NEUTRAL_LOSS_DIV = 5;
 export const NEUTRAL_COST_SCALE = 2000;
-export const NEUTRAL_MIN_COST = 5;
+export const NEUTRAL_MIN_COST = 18;
 export const NEUTRAL_MAX_COST = 100;
 
 /** Player-vs-player attrition constants. */
@@ -265,7 +265,7 @@ export function unitPrice(type: UnitType, owned: number): number {
 
 export const MIRV_WARHEADS = 18;
 export const MIRV_SPLIT_T = 0.62;
-export const MIRV_SPREAD = 110;
+export const MIRV_SPREAD = 60;
 export const INTERCEPT_WEAPON_MUL: Record<number, number> = {
   [UnitType.AtomBomb]: 1,
   [UnitType.HydrogenBomb]: 0.85,

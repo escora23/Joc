@@ -674,7 +674,12 @@ export class Game implements SimGame {
       p.troops -= lost;
       p.stats.troopsLost += lost;
     }
-    if (by !== 0 && this.phase === 'playing') this.emit({ type: 'capitalCaptured', tick: this.tick, playerId: p.id, by, tile });
+    // News-worthy only for real nations, and at most once per minute per nation (a crumbling empire keeps
+    // relocating its capital to the next safe spot).
+    if (by !== 0 && this.phase === 'playing' && (p.kind === 'nation' || p.kind === 'human') && this.tick - p.lastCapitalEventTick >= 600) {
+      p.lastCapitalEventTick = this.tick;
+      this.emit({ type: 'capitalCaptured', tick: this.tick, playerId: p.id, by, tile });
+    }
     // Move the capital to the biggest remaining city, else the label anchor.
     let best: Structure | null = null;
     for (const s of this.structByOwner.get(p.id) ?? EMPTY_STRUCTS) {
@@ -902,7 +907,8 @@ export class Game implements SimGame {
     // 7. alliances & timers
     this.diplomacy.step();
     // periodic derived data
-    if (this.tick % 10 === 0) this.labels.update();
+    const lt = this.tick % 10;
+    if (lt < 3) this.labels.stage(lt);
     if (this.tick - this.lastFrontsTick >= 5) {
       this.lastFrontsTick = this.tick;
       this.fronts.update();

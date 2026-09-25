@@ -78,7 +78,7 @@ wrap(game.unitSys, 'step', 'units');
 wrap(game.weapons, 'step', 'weapons');
 wrap(game.economy, 'step', 'economy');
 wrap(game.diplomacy, 'step', 'diplomacy');
-wrap(game.labels, 'update', 'labels');
+wrap(game.labels, 'stage', 'labels');
 wrap(game.fronts, 'update', 'fronts');
 wrap(game.ai, 'tick', 'ai');
 wrap(game.worldEvents, 'tick', 'worldEvents');

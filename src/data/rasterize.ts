@@ -401,8 +401,8 @@ export function rasterizeCountries(
     const idx = k + 1;
     const row = rows[pc - 1];
     const capTile = nearestTileOf(country, idx, row.lat, row.lon);
-    const ownTile = tileOf(row.lat, row.lon);
-    if (country[ownTile] === idx) capitalsOnOwnLand++;
+    // "On own land" within the grid's precision: coastal capitals (Lisbon, Helsinki...) may sit on a sea tile.
+    if (capTile >= 0 && tileDistance(capTile, row.lat, row.lon) <= 2.5) capitalsOnOwnLand++;
     const ct = centerTile[idx];
     const center = ct >= 0 ? tileCenter(ct) : { lat: row.lat, lon: row.lon };
     out.push({
@@ -434,7 +434,11 @@ export function rasterizeCountries(
 
   // --- colors ------------------------------------------------------------------------------------------------
   const order = out.slice(1).map((c) => c.index).sort((a, b) => out[b].weight * 3 + out[b].tiles / 20000 - (out[a].weight * 3 + out[a].tiles / 20000) || a - b);
-  const pal = assignCountryColors(K, order, neighbors, (i) => PREFERRED_COLORS[out[i]?.iso3 ?? '']);
+  // Coloring also keeps countries apart across narrow seas (UK/France, Spain/Morocco) and, softly, regional
+  // neighbours up to ~1500 km away, so a region never shows two look-alike nations side by side.
+  const prox = proximityNeighbors(country, K);
+  const hard = neighbors.map((l, i) => [...new Set([...l, ...prox.hard[i]])]);
+  const pal = assignCountryColors(K, order, hard, (i) => PREFERRED_COLORS[out[i]?.iso3 ?? ''], prox.soft);
   for (let i = 1; i < K; i++) {
     out[i].paletteIndex = pal[i];
     out[i].color = NATION_PALETTE[pal[i]];
@@ -467,10 +471,57 @@ function numericFor(fc: GeoJSON.FeatureCollection<GeoJSON.Geometry, { name: stri
   return f?.id !== undefined ? String(f.id) : '';
 }
 
-function tileOf(lat: number, lon: number): number {
-  const x = ((Math.floor(((lon + 180) / 360) * W) % W) + W) % W;
-  const y = Math.min(H - 1, Math.max(0, Math.floor(((90 - lat) / 180) * H)));
-  return y * W + x;
+/** Distance in tiles (cos-lat corrected) from a tile center to lat/lon. */
+function tileDistance(t: number, lat: number, lon: number): number {
+  const cx = ((lon + 180) / 360) * W, cy = ((90 - lat) / 180) * H;
+  let dx = Math.abs((t % W) + 0.5 - cx);
+  if (dx > W / 2) dx = W - dx;
+  return Math.hypot(dx * Math.max(0.05, Math.cos(lat * DEG)), ((t / W) | 0) + 0.5 - cy);
+}
+
+/**
+ * Voronoi of the country raster over every tile (land and sea, 4-neighbour BFS with wrap). Two countries whose
+ * cells touch are "sea neighbours" (hard) when their tiles are within HARD_TILES of each other, and "regional"
+ * (soft) within SOFT_TILES.
+ */
+function proximityNeighbors(country: Uint16Array, K: number): { hard: number[][]; soft: number[][] } {
+  const HARD_TILES = 14, SOFT_TILES = 60;
+  const owner = new Uint16Array(TILE_COUNT);
+  const dist = new Uint16Array(TILE_COUNT).fill(65535);
+  const q = new Int32Array(TILE_COUNT);
+  let head = 0, tail = 0;
+  for (let i = 0; i < TILE_COUNT; i++) {
+    if (country[i]) { owner[i] = country[i]; dist[i] = 0; q[tail++] = i; }
+  }
+  while (head < tail) {
+    const c = q[head++];
+    const d = dist[c] + 1;
+    if (d > SOFT_TILES) continue;
+    const x = c % W;
+    for (let k = 0; k < 4; k++) {
+      const n = k === 0 ? (x === 0 ? c + W - 1 : c - 1) : k === 1 ? (x === W - 1 ? c - W + 1 : c + 1) : k === 2 ? c - W : c + W;
+      if (n < 0 || n >= TILE_COUNT || dist[n] !== 65535) continue;
+      dist[n] = d;
+      owner[n] = owner[c];
+      q[tail++] = n;
+    }
+  }
+  const hard = Array.from({ length: K }, () => new Set<number>());
+  const soft = Array.from({ length: K }, () => new Set<number>());
+  for (let i = 0; i < TILE_COUNT; i++) {
+    const a = owner[i];
+    if (!a) continue;
+    const x = i % W;
+    for (const n of [x === W - 1 ? i - W + 1 : i + 1, i + W]) {
+      if (n >= TILE_COUNT) continue;
+      const b = owner[n];
+      if (!b || b === a) continue;
+      const gap = dist[i] + dist[n];
+      if (gap <= HARD_TILES) { hard[a].add(b); hard[b].add(a); }
+      if (gap <= SOFT_TILES) { soft[a].add(b); soft[b].add(a); }
+    }
+  }
+  return { hard: hard.map((s) => [...s].sort((p, r) => p - r)), soft: soft.map((s) => [...s].sort((p, r) => p - r)) };
 }
 
 function tileCenter(t: number): LatLon {

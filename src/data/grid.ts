@@ -22,6 +22,7 @@
 import { ICE_LATITUDE, MAP_H, MAP_W, TILE_COUNT, TOPO_MAX_METERS } from '../shared/constants';
 import { DEG } from '../shared/geo';
 import { TerrainClass, TerrainFlag, type HeightField } from '../shared/types';
+import { Simplex3 } from './noise';
 import { Biome, TerrainDetail } from './types';
 
 // --- Tunables ---------------------------------------------------------------------------------------------
@@ -223,6 +224,9 @@ export async function buildGrid(inp: GridInput, stage: StageFn = () => undefined
   const detail = new Uint8Array(N);
   const biome = new Uint8Array(N);
   const day = inp.dayTile;
+  // Climate-zone latitude jitter (+-5 deg, smooth): biome bands follow ragged natural boundaries instead of
+  // straight parallels.
+  const climate = new Simplex3(4242);
   const stats = {
     iceTiles: 0, oceanTiles: 0, lakeTiles: 0, lakes, riverTiles: 0, removedPonds, carvedStraits: carved, shoreTiles: 0,
     plains: 0, hills: 0, mountains: 0,
@@ -287,7 +291,10 @@ export async function buildGrid(inp: GridInput, stage: StageFn = () => undefined
           stats.plains++;
           detail[i] = e < LOWLAND_ELEV ? TerrainDetail.Lowland : TerrainDetail.Plains;
         }
-        biome[i] = classifyBiome(r, g, b, lat, e, detail[i]);
+        const lonR = ((x + 0.5) / W) * 2 * Math.PI, cl = Math.cos(lat * DEG);
+        const sx = cl * Math.cos(lonR), sy = Math.sin(lat * DEG), sz = cl * Math.sin(lonR);
+        const jit = climate.noise(sx * 9, sy * 9, sz * 9) * 3.6 + climate.noise(sx * 33 + 5, sy * 33, sz * 33) * 1.4;
+        biome[i] = classifyBiome(r, g, b, lat + (lat >= 0 ? jit : -jit), e, detail[i]);
         if (river[i]) {
           terrain[i] |= TerrainFlag.River;
           stats.riverTiles++;
@@ -505,7 +512,12 @@ export function whiteness(r: number, g: number, b: number): number {
   return Math.max(0, Math.min(1, (bright - 0.45) / 0.4)) * Math.max(0, 1 - sat * 2.2);
 }
 
-/** Land cover from the Blue Marble color, latitude, elevation and topographic detail. */
+/**
+ * Land cover from the Blue Marble color, latitude, elevation and topographic detail. Tuned on probes of the NASA
+ * image (Congo 25,38,7 / Borneo 17,29,4 rainforest; Germany 51,54,25 forest; Finland 17,24,4 taiga; Ukraine
+ * 57,53,28 grassland; Kazakh steppe 119,99,69; Serengeti 98,79,52 and Cerrado 103,84,54 savanna; Tassili
+ * 119,91,60 and Kalahari 152,122,86 desert). `lat` may be jittered by the caller for ragged zone boundaries.
+ */
 export function classifyBiome(r: number, g: number, b: number, lat: number, elev: number, detail: number): number {
   const alat = Math.abs(lat);
   if (whiteness(r, g, b) > 0.55) return Biome.Snow;
@@ -514,17 +526,22 @@ export function classifyBiome(r: number, g: number, b: number, lat: number, elev
   const green = (g - r) / Math.max(24, bright);
   const redness = (r - b) / Math.max(24, bright);
   if (detail === TerrainDetail.Peaks && bright > 90) return Biome.Rock;
+  // Dense vegetation: dark and green (or dark olive in the wet tropics).
+  if ((bright < 60 && green > 0) || (bright < 62 && alat < 12 && g > b * 1.5 && green > -0.08)) {
+    if (alat < 15) return Biome.Rainforest;
+    return alat > 55 ? Biome.Taiga : Biome.Forest;
+  }
   // Sand seas and stony deserts: bright, warm, not green.
   if (bright > 120 && redness > 0.3 && green < 0.02) return alat < 45 ? Biome.Desert : Biome.Steppe;
-  if (bright > 100 && redness > 0.34 && green < 0 && alat < 35) return Biome.Desert;
-  // Dense vegetation: dark and green.
-  if (bright < 66 && green > 0.0) {
-    if (alat < 18) return Biome.Rainforest;
-    return alat > 50 ? Biome.Taiga : Biome.Forest;
+  // Dry brown ground: desert in the subtropical dry belts, savanna in the tropics, steppe further out.
+  if (green < -0.15 && redness > 0.4) {
+    if (alat >= 16 && alat <= 31 && bright > 80) return Biome.Desert;
+    if (alat < 17) return Biome.Savanna;
+    return Biome.Steppe;
   }
-  if (alat > 62) return green > 0.05 && bright < 90 ? Biome.Taiga : Biome.Tundra;
-  if (alat < 26) return redness > 0.5 && bright > 95 ? Biome.Steppe : Biome.Savanna;
+  if (alat > 64) return green > 0.05 && bright < 90 ? Biome.Taiga : Biome.Tundra;
+  if (alat < 24) return redness > 0.5 && bright > 95 ? Biome.Steppe : Biome.Savanna;
   if (detail >= TerrainDetail.Mountains && bright > 95) return Biome.Rock;
-  if (alat > 50) return green > 0.02 ? Biome.Taiga : Biome.Grassland;
+  if (alat > 55) return green > 0.02 ? Biome.Taiga : Biome.Grassland;
   return green > -0.05 || bright < 72 ? Biome.Grassland : Biome.Steppe;
 }
