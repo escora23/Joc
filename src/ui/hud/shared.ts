@@ -163,18 +163,13 @@ export class HudShared {
   }
 
   isCoastal(tile: number): boolean {
+    // Same rule as the sim (sim/water.ts): a land tile 4-adjacent to navigable open water.
     const world = this.ctx.sim.view.world;
     if (!world) return false;
     const x = tile % MAP_W, y = (tile / MAP_W) | 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      const yy = y + dy;
-      if (yy < 0 || yy >= world.height) continue;
-      for (let dx = -1; dx <= 1; dx++) {
-        const xx = (x + dx + MAP_W) % MAP_W;
-        if (isNavigableTerrain(world.terrain[yy * MAP_W + xx])) return true;
-      }
-    }
-    return false;
+    const nav = (t: number) => isNavigableTerrain(world.terrain[t]) && (world.terrain[t] & 0x0f) <= 1;
+    return nav(y * MAP_W + ((x + MAP_W - 1) % MAP_W)) || nav(y * MAP_W + ((x + 1) % MAP_W))
+      || (y > 0 && nav(tile - MAP_W)) || (y < world.height - 1 && nav(tile + MAP_W));
   }
 
   /** True when the human owns a tile 4-adjacent to one owned by `target` (0 = unclaimed playable land). */

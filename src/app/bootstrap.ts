@@ -28,6 +28,7 @@ import { createCommandMode } from '../command';
 import { createUi } from '../ui';
 import { createAudio } from '../audio';
 import { createInputRouter } from './input';
+import { createWorldFx } from './worldfx';
 import { registerAllShots } from './shots';
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -206,7 +207,8 @@ export async function bootstrap(): Promise<void> {
   ctx.audio = createAudio(ctx);
   ctx.ui = createUi(ctx);
   const input = createInputRouter(ctx);
-  const systems: Subsystem[] = [ctx.cameraRig, ctx.post, ctx.globe, ctx.units, ctx.fx, ctx.battle, ctx.command, ctx.audio, ctx.ui];
+  const worldFx = createWorldFx(ctx);
+  const systems: Subsystem[] = [ctx.cameraRig, ctx.post, ctx.globe, ctx.units, ctx.fx, ctx.battle, worldFx, ctx.command, ctx.audio, ctx.ui];
   (window as unknown as { __front: unknown }).__front = { ctx, app };
   registerAllShots();
 
@@ -258,19 +260,32 @@ export async function bootstrap(): Promise<void> {
     const kind = UNIT_DEFS[u.type].command;
     if (!kind) return null;
     const tile = tileAtXY(u.x, u.y);
-    // Enemy: the strongest non-allied foreign owner within 40 tiles.
-    const counts = new Map<number, number>();
+    // Enemy: the dominant non-allied foreign owner around the unit (40 tiles, widening to 160 if the unit is deep
+    // inside our own land), else the strongest hostile nation in the world — never a skirmish against nobody.
+    const allies = view.human?.allies ?? [];
     const cx = tileX(tile), cy = tileY(tile);
-    for (let dy = -40; dy <= 40; dy += 2) {
-      for (let dx = -40; dx <= 40; dx += 2) {
-        const y = cy + dy;
-        if (y < 0 || y >= MAP_H) continue;
-        const o = view.owner[y * MAP_W + wrapX(cx + dx)];
-        if (o && o !== HUMAN_ID && !view.human?.allies.includes(o)) counts.set(o, (counts.get(o) ?? 0) + 1);
+    let enemy = 0;
+    for (const radius of [40, 90, 160]) {
+      const counts = new Map<number, number>();
+      const step = radius > 40 ? 4 : 2;
+      for (let dy = -radius; dy <= radius; dy += step) {
+        for (let dx = -radius; dx <= radius; dx += step) {
+          const y = cy + dy;
+          if (y < 0 || y >= MAP_H || dx * dx + dy * dy > radius * radius) continue;
+          const o = view.owner[y * MAP_W + wrapX(cx + dx)];
+          if (o && o !== HUMAN_ID && !allies.includes(o)) counts.set(o, (counts.get(o) ?? 0) + 1 / (1 + Math.hypot(dx, dy) * 0.05));
+        }
+      }
+      let best = 0;
+      for (const [o, c] of counts) if (c > best) { best = c; enemy = o; }
+      if (enemy) break;
+    }
+    if (!enemy) {
+      let best = 0;
+      for (const p of view.playerList) {
+        if (p.alive && p.id !== HUMAN_ID && !allies.includes(p.id) && p.troops > best) { best = p.troops; enemy = p.id; }
       }
     }
-    let enemy = 0, best = 0;
-    for (const [o, c] of counts) if (c > best) { best = c; enemy = o; }
     const ll = tileToLatLon(tile);
     const me = view.human!;
     const foe = view.players[enemy];
@@ -335,6 +350,12 @@ export async function bootstrap(): Promise<void> {
     void ctx.audio.unlock();
   };
   window.addEventListener('pointerdown', unlockAudio);
+  // HUD buttons must not keep keyboard focus: Space/Enter would re-activate the last clicked button on top of
+  // the gameplay hotkey (e.g. Space = pause would also buy the unit you clicked last).
+  window.addEventListener('click', (e) => {
+    const el = e.target instanceof Element ? e.target.closest('button') : null;
+    if (el && uiRoot.contains(el)) el.blur();
+  });
   window.addEventListener('keydown', unlockAudio);
 
   // ---------------------------------------------------------------------------------------------
@@ -372,6 +393,7 @@ export async function bootstrap(): Promise<void> {
       ctx.units.update(frame);
       ctx.fx.update(frame);
       ctx.battle.update(frame);
+      worldFx.update(frame);
       ctx.audio.update(frame);
       ctx.ui.update(frame);
       ctx.post.update(frame);
@@ -405,26 +427,37 @@ export async function bootstrap(): Promise<void> {
 
   const weights = { data: 0.3, globe: 0.3, others: 0.2, compile: 0.2 };
   const prog = { data: 0, globe: 0, others: 0, compile: 0 };
-  let label = 'loading.systems';
-  const report = () =>
+  // The status line follows the real pipeline: satellite download/decode and grid/country build (data worker),
+  // then the globe's own textures, the remaining subsystems, and finally shader compilation.
+  let dataLabel = 'data.download';
+  let compiling = false;
+  const report = () => {
+    const label = compiling ? 'loading.shaders'
+      : prog.data < 1 ? dataLabel
+      : prog.globe < 1 ? 'loading.textures'
+      : prog.others < 1 ? 'loading.systems'
+      : 'loading.shaders';
     loading.setProgress(
       prog.data * weights.data + prog.globe * weights.globe + prog.others * weights.others + prog.compile * weights.compile,
       label,
     );
+  };
   const others = systems.filter((s) => s !== ctx.globe && s !== ctx.ui);
   const otherProg = new Array(others.length).fill(0);
   try {
     await Promise.all([
       loadWorldData((f, l) => {
         prog.data = f;
-        if (l) label = l;
+        if (l) dataLabel = l;
         report();
       }).then((w) => {
         ctx.world = w;
+        prog.data = 1;
+        dataLabel = 'data.done';
+        report();
       }),
       ctx.globe.init((f) => {
         prog.globe = f;
-        label = 'loading.textures';
         report();
       }),
       ...others.map((s, i) =>
@@ -435,7 +468,7 @@ export async function bootstrap(): Promise<void> {
         }),
       ),
     ]);
-    label = 'loading.shaders';
+    compiling = true;
     report();
     for (const s of systems) s.warmup?.(true);
     await renderer.compileAsync(scene, camera);

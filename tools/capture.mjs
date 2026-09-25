@@ -1,5 +1,5 @@
 // Screenshot harness: builds nothing, serves nothing — point it at a running dev/preview server.
-// Usage: node tools/capture.mjs [--url http://127.0.0.1:5173/] [--shot name] [--out shots] [--wait ms] [--w 1600 --h 900]
+// Usage: node tools/capture.mjs [--url http://127.0.0.1:5173/] [--shot name] [--out shots] [--wait ms] [--timeout ms] [--w 1600 --h 900]
 // Shots are defined by URL query params the game understands (see ARCHITECTURE.md "Shot hooks").
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -14,6 +14,8 @@ const out = args.out || 'shots';
 const shots = (args.shot || 'default').split(',');
 const wait = Number(args.wait || 6000);
 const w = Number(args.w || 1600), h = Number(args.h || 900);
+// Max time to wait for the shot to stage (software WebGL stages some scenes in 1-3 minutes).
+const readyTimeout = Number(args.timeout || 90000);
 fs.mkdirSync(out, { recursive: true });
 
 const browser = await chromium.launch({
@@ -29,7 +31,7 @@ for (const shot of shots) {
   const url = shot === 'default' ? base : `${base}${base.includes('?') ? '&' : '?'}shot=${encodeURIComponent(shot)}`;
   await page.goto(url, { waitUntil: 'load', timeout: 120000 });
   // The game sets window.__shotReady = true when a ?shot= scene is staged; fall back to a fixed wait.
-  try { await page.waitForFunction(() => (window).__shotReady === true || (window).__ready === true, null, { timeout: 90000 }); } catch { logs.push('[capture] timeout waiting for __shotReady'); }
+  try { await page.waitForFunction(() => (window).__shotReady === true || (window).__ready === true, null, { timeout: readyTimeout }); } catch { logs.push('[capture] timeout waiting for __shotReady'); }
   await page.waitForTimeout(wait);
   const file = path.join(out, `${shot}.png`);
   await page.screenshot({ path: file });

@@ -676,8 +676,10 @@ export class Game implements SimGame {
     }
     // News-worthy only for real nations, and at most once per minute per nation (a crumbling empire keeps
     // relocating its capital to the next safe spot).
+    let announced = false;
     if (by !== 0 && this.phase === 'playing' && (p.kind === 'nation' || p.kind === 'human') && this.tick - p.lastCapitalEventTick >= 600) {
       p.lastCapitalEventTick = this.tick;
+      announced = true;
       this.emit({ type: 'capitalCaptured', tick: this.tick, playerId: p.id, by, tile });
     }
     // Move the capital to the biggest remaining city, else the label anchor.
@@ -692,7 +694,8 @@ export class Game implements SimGame {
       else p.capitalTile = p.border.values().next().value ?? -1;
     }
     p.metaDirty = true;
-    if (p.id === HUMAN_ID && by !== 0 && this.phase === 'playing') this.message(p.id, 'msg.capitalLost', 'danger');
+    // Same once-a-minute throttle as the news event: a collapsing front can relocate the capital several times a tick.
+    if (announced && p.id === HUMAN_ID) this.message(p.id, 'msg.capitalLost', 'danger');
   }
 
   // =================================================================================================

@@ -356,7 +356,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // Hooks
     const h = hud;
     world.hooks = {
-      onPlayerHit: (_e, kill) => h.hitMarker(kill),
+      onPlayerHit: (_e, kill) => {
+        h.hitMarker(kill);
+        // Audible hit tick (audio maps 'click' to its hitMarker cue in command mode); kills notify in onKill.
+        if (!kill) ctx.bus.emit('uiSound', { kind: 'click' });
+      },
       onKill: (victim, killer, byPlayer) => onKill(victim, killer, byPlayer),
       onPlayerDamaged: (amount, from) => {
         h.damage(amount, player.pos, from);

@@ -31,7 +31,7 @@ export function createEndScreen(ctx: GameContext, sound: (k: UiSoundKind) => voi
   const r = reason ?? (won ? 'domination' : 'eliminated');
 
   // ---- header ---------------------------------------------------------------------------------------
-  const subtitleKey = won ? `end.reason.win.${r}` : winner && winner.id !== HUMAN_ID ? 'end.reason.lose.winner' : 'end.reason.lose.eliminated';
+  const subtitleKey = won ? `end.reason.win.${r}` : r !== 'eliminated' && winner && winner.id !== HUMAN_ID ? 'end.reason.lose.winner' : 'end.reason.lose.eliminated';
   const headline = h('div', { class: `fu-end-head ${won ? 'is-win' : 'is-lose'}` },
     h('div', { class: 'fu-end-kicker' }, tx(won ? 'end.kicker.win' : 'end.kicker.lose')),
     h('h1', { class: 'fu-end-title' }, h('span', { 'data-text': t(won ? 'end.victory' : 'end.defeat') }, tx(won ? 'end.victory' : 'end.defeat'))),

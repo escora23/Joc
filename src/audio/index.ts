@@ -173,6 +173,7 @@ export function createAudio(ctx: GameContext): AudioApi {
       if (k === 'hover') return void snd.play('lockTone', 1);
       if (k === 'alert') return void snd.play('missileWarning', 1);
       if (k === 'notify') return void snd.play('killConfirm', 1);
+      if (k === 'click') return void snd.play('hitMarker', 1);
     }
     snd.ui(k);
   });
