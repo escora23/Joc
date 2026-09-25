@@ -347,6 +347,8 @@ export function drawSpectrogram(cv: HTMLCanvasElement, buf: AudioBuffer): void {
   const re = new Float64Array(N), im = new Float64Array(N);
   const fLo = Math.log(30), fHi = Math.log(Math.min(16000, sr / 2));
   const col = new Float64Array(H);
+  const db = new Float32Array(W * H);
+  let top = -200;
   for (let x = 0; x < W; x++) {
     const c = Math.floor((x / W) * (n - N));
     for (let i = 0; i < N; i++) {
@@ -362,7 +364,14 @@ export function drawSpectrogram(cv: HTMLCanvasElement, buf: AudioBuffer): void {
       col[y] = 10 * Math.log10(p + 1e-12);
     }
     for (let y = 0; y < H; y++) {
-      const t = (col[y] + 70) / 75;
+      db[y * W + x] = col[y];
+      if (col[y] > top) top = col[y];
+    }
+  }
+  // Normalise to the loudest bin so dense (music) and sparse (UI) renders both read clearly: 80 dB range.
+  for (let x = 0; x < W; x++) {
+    for (let y = 0; y < H; y++) {
+      const t = (db[y * W + x] - top + 80) / 80;
       const [r, gg, b] = magma(t);
       const o = (y * W + x) * 4;
       img.data[o] = r;

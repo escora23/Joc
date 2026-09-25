@@ -104,6 +104,8 @@ export class CommandHud {
   /** Pooled marker labels (no per-frame object allocation). */
   private readonly labelPool: { x: number; y: number; w: number; txt: string; score: number }[] = Array.from({ length: 64 }, () => ({ x: 0, y: 0, w: 0, txt: '', score: 0 }));
   private labels: { x: number; y: number; w: number; txt: string; score: number }[] = [];
+  /** Name/range of the entity under the lock box (drawn with the lock, not as a free marker label). */
+  private lockLabel = '';
   private compassGrad: CanvasGradient | null = null;
   private compassGradX = -1;
   private hits: { t: number; kill: boolean }[] = [];
@@ -178,7 +180,7 @@ export class CommandHud {
   show(info: MissionInfo, weapons: { key: string; label: string }[]): void {
     this.kind = info.kind;
     this.root.classList.remove('fu-cmd-hidden');
-    this.root.classList.remove('fu-cmd-cine');
+    this.root.classList.remove('fu-cmd-cine', 'fu-cmd-report');
     this.feed.innerHTML = '';
     this.feedList = [];
     this.hits = [];
@@ -235,6 +237,7 @@ export class CommandHud {
 
   hide(): void {
     this.root.classList.add('fu-cmd-hidden');
+    this.root.classList.remove('fu-cmd-report');
     this.intro.classList.remove('show');
   }
 
@@ -314,6 +317,7 @@ export class CommandHud {
     this.over.className = 'fu-cmd-over dead';
     this.over.innerHTML = `<div class="card"><div class="hdr">${t('command.debrief.status')}</div><div class="ttl">${t('command.destroyed')}</div>
       <div class="sum" style="color:#ffb0a8">${t('command.destroyedSub')}</div></div>`;
+    this.root.classList.add('fu-cmd-report');
     requestAnimationFrame(() => this.over.classList.add('show'));
   }
 
@@ -339,6 +343,7 @@ export class CommandHud {
       <div class="sum">${esc(sum)}</div>
       <div class="ret">${t('command.debrief.return')}<i style="--dur:${seconds}s"></i></div>
     </div>`;
+    this.root.classList.add('fu-cmd-report');
     requestAnimationFrame(() => this.over.classList.add('show'));
   }
 
@@ -424,7 +429,7 @@ export class CommandHud {
     g.clearRect(0, 0, W, H);
     if (this.root.classList.contains('fu-cmd-cine')) return;
     const cx = W / 2, cy = H / 2;
-    this.drawMarkers(g, camera, world, W, H);
+    this.drawMarkers(g, camera, world, W, H, s);
     this.drawCompass(g, s, cx);
     if (s.kind === 'tank') this.drawTank(g, s, cx, cy);
     else if (s.kind === 'jet') this.drawJet(g, s, camera, cx, cy);
@@ -475,7 +480,10 @@ export class CommandHud {
     }
   }
 
-  private drawMarkers(g: CanvasRenderingContext2D, camera: THREE.PerspectiveCamera, world: World, W: number, H: number): void {
+  private drawMarkers(g: CanvasRenderingContext2D, camera: THREE.PerspectiveCamera, world: World, W: number, H: number, s: HudState): void {
+    const lockOn = s.lockState > 0 && s.lock.visible;
+    let lockBest = 56;
+    this.lockLabel = '';
     const maxD = this.kind === 'jet' ? 14000 : this.kind === 'ship' ? 20000 : 2600;
     const cx = W / 2, cy = H / 2;
     g.font = '700 11px "Barlow Condensed", "Rajdhani", sans-serif';
@@ -511,6 +519,15 @@ export class CommandHud {
             g.fillText('AT', x, y - 6);
           }
           continue;
+        }
+        if (lockOn) {
+          // The locked target's name rides on the lock box instead of floating on top of it.
+          const dl = Math.hypot(x - s.lock.x, y - s.lock.y);
+          if (dl < lockBest) {
+            lockBest = dl;
+            this.lockLabel = `${t(`command.type.${e.kind}`)}  ${d >= 1000 ? (d / 1000).toFixed(1) + ' km' : Math.round(d) + ' m'}`;
+            continue;
+          }
         }
         const sz = d < 250 ? 7 : d < 700 ? 6 : 5;
         g.fillStyle = 'rgba(255,70,55,0.95)';
@@ -862,7 +879,7 @@ export class CommandHud {
       g.textAlign = 'center';
       g.fillStyle = locked ? 'rgba(255,70,50,0.98)' : col;
       g.fillText(locked ? t('command.lock') : t('command.locking'), x, y + r + 14);
-      g.fillText(`${(s.rangeM / 1000).toFixed(1)} km`, x, y - r - 6);
+      g.fillText(this.lockLabel || `${(s.rangeM / 1000).toFixed(1)} km`, x, y - r - 6);
     }
     if (s.lead.visible) {
       g.strokeStyle = col;
@@ -901,9 +918,9 @@ export class CommandHud {
     }
     g.stroke();
     g.font = '700 12px "JetBrains Mono", monospace';
-    g.textAlign = 'left';
+    g.textAlign = 'right';
     g.fillStyle = c;
-    g.fillText(s.rangeM < 21000 ? `${(s.rangeM / 1000).toFixed(2)} km` : '—', cx + 48, cy + 4);
+    g.fillText(s.rangeM < 21000 ? `${(s.rangeM / 1000).toFixed(2)} km` : '—', cx - 50, cy + 4);
     // Reload ring
     const R = 44;
     g.shadowBlur = 0;
@@ -948,11 +965,26 @@ export class CommandHud {
       g.strokeStyle = locked ? 'rgba(255,70,50,0.98)' : 'rgba(232,242,255,0.8)';
       g.lineWidth = locked ? 2.5 : 1.5;
       const r = locked ? 20 : 34 - s.lockProgress * 14;
-      g.strokeRect(x - r, y - r, r * 2, r * 2);
+      // Corner brackets read cleaner than a closed box over a ship silhouette.
+      const k = r * 0.45;
+      g.beginPath();
+      for (let sx = -1; sx <= 1; sx += 2) {
+        for (let sy = -1; sy <= 1; sy += 2) {
+          g.moveTo(x + sx * r, y + sy * (r - k));
+          g.lineTo(x + sx * r, y + sy * r);
+          g.lineTo(x + sx * (r - k), y + sy * r);
+        }
+      }
+      g.stroke();
       g.font = '700 11px "Barlow Condensed", sans-serif';
-      g.textAlign = 'center';
       g.fillStyle = g.strokeStyle;
-      g.fillText(locked ? t('command.lock') : t('command.locking'), x, y - r - 6);
+      g.textAlign = 'left';
+      g.fillText(locked ? t('command.lock') : t('command.locking'), x + r + 6, y + 4);
+      if (this.lockLabel) {
+        g.textAlign = 'center';
+        g.fillStyle = 'rgba(255,150,140,0.95)';
+        g.fillText(this.lockLabel, x, y - r - 6);
+      }
     }
     g.shadowBlur = 0;
   }

@@ -4,7 +4,7 @@
 // the synthesis primitives every cue is built from. Works on any BaseAudioContext, so the offline lab
 // (OfflineAudioContext) renders exactly the graph the game plays.
 //
-//   voices ─► bus.in ─► bus.vol ─┬─► duck ─► mix ─► glue comp ─► limiter ─► master vol ─► ½ ─► soft clip ─► out
+//   voices ─► bus.in ─► bus.vol ─┬─► duck ─► mix ─► DC block ─► glue comp ─► limiter ─► master vol ─► ½ ─► soft clip ─► out
 //                                └─► bus.send ─► reverb ─► duck
 //   'over' bus (nuke roar, stingers) skips the duck and has its own reverb, so it can roar through the silence.
 
@@ -48,7 +48,7 @@ type NoiseKind = keyof NoiseBank;
 
 const BUS_SEND: Record<BusName, number> = { music: 0.32, sfx: 0.16, ui: 0.08, amb: 0.22, over: 0.3 };
 /** Base trims so default settings give a balanced mix. */
-const BUS_TRIM: Record<BusName, number> = { music: 0.55, sfx: 0.9, ui: 0.55, amb: 0.8, over: 1 };
+const BUS_TRIM: Record<BusName, number> = { music: 0.66, sfx: 0.9, ui: 0.6, amb: 0.62, over: 1 };
 
 export class AudioEngine {
   readonly ac: BaseAudioContext;
@@ -79,9 +79,9 @@ export class AudioEngine {
     // --- master chain -----------------------------------------------------------------------
     const mix = ac.createGain();
     const glue = ac.createDynamicsCompressor();
-    glue.threshold.value = -20;
+    glue.threshold.value = -12;
     glue.knee.value = 14;
-    glue.ratio.value = 2.4;
+    glue.ratio.value = 2;
     glue.attack.value = 0.012;
     glue.release.value = 0.28;
     const limiter = ac.createDynamicsCompressor();
@@ -98,7 +98,13 @@ export class AudioEngine {
     const clip = ac.createWaveShaper();
     clip.curve = softClipCurve();
     clip.oversample = '2x';
-    mix.connect(glue);
+    // DC blocker / infrasound trim: nothing below ~18 Hz reaches the dynamics or the speakers.
+    const dcBlock = ac.createBiquadFilter();
+    dcBlock.type = 'highpass';
+    dcBlock.frequency.value = 18;
+    dcBlock.Q.value = 0.6;
+    mix.connect(dcBlock);
+    dcBlock.connect(glue);
     glue.connect(limiter);
     limiter.connect(trim);
     trim.connect(this.masterVol);

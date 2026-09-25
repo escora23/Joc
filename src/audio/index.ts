@@ -59,6 +59,27 @@ export function createAudio(ctx: GameContext): AudioApi {
   let commandKind: 'tank' | 'jet' | 'ship' | null = null;
 
   const now = () => ctx.frame?.time ?? performance.now() / 1000;
+  let meter: AnalyserNode | null = null;
+  let meterBuf: Float32Array<ArrayBuffer> | null = null;
+
+  // Read-only diagnostics for playtests and automation (window.__fuAudio.stats()).
+  (window as unknown as { __fuAudio: unknown }).__fuAudio = {
+    stats() {
+      let rmsDb = -120;
+      if (meter) {
+        meterBuf ??= new Float32Array(meter.fftSize);
+        meter.getFloatTimeDomainData(meterBuf);
+        let e = 0;
+        for (let i = 0; i < meterBuf.length; i++) e += meterBuf[i] * meterBuf[i];
+        rmsDb = Math.round(10 * Math.log10(e / meterBuf.length + 1e-12) * 10) / 10;
+      }
+      return {
+        state: ac?.state ?? 'none', unlocked, appState, mood, family: snd?.music.family ?? 'none',
+        intensity: Math.round(intensity * 1000) / 1000, voices: snd?.eng.voices.length ?? 0,
+        vehicle: commandKind, sirens: sirenFor.size, rmsDb,
+      };
+    },
+  };
 
   // ---------------------------------------------------------------------------------------------
   // Helpers
@@ -463,7 +484,10 @@ export function createAudio(ctx: GameContext): AudioApi {
           if (!AC) return;
           const a = new AC({ latencyHint: 'interactive' });
           ac = a;
-          snd = new SoundSystem(a, a.destination, (Math.random() * 0xffffffff) >>> 0);
+          meter = a.createAnalyser();
+          meter.fftSize = 2048;
+          meter.connect(a.destination);
+          snd = new SoundSystem(a, meter, (Math.random() * 0xffffffff) >>> 0);
           applyQuality(ctx.quality);
           applyVolumes();
           syncMusic();

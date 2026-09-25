@@ -702,8 +702,18 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         // Climb away from the battle, looking back down at it.
         const k = Math.min(1, phaseT / 4);
         const e = controller.ent;
-        camera.position.copy(outroPos).lerp(tmp.copy(e.pos).add(tmp2.set(0, params?.kind === 'jet' ? 2500 : 700, 0)), easeInOutCubic(k) * 0.9);
-        camera.lookAt(tmp.copy(outroLook).lerp(e.pos, k));
+        // Pull up and back along the original view so the battlefield and horizon stay in frame (a straight
+        // vertical climb only shows a top-down patch of dirt).
+        const jet = params?.kind === 'jet';
+        tmp2.copy(outroLook).sub(outroPos).setY(0);
+        if (tmp2.lengthSq() < 1e-6) tmp2.set(0, 0, -1);
+        tmp2.normalize();
+        const back = jet ? 1800 : 420, up = jet ? 1300 : 260;
+        tmp.copy(e.pos).addScaledVector(tmp2, -back);
+        tmp.y += up;
+        camera.position.copy(outroPos).lerp(tmp, easeInOutCubic(k) * 0.9);
+        tmp.copy(e.pos).addScaledVector(tmp2, jet ? 1400 : 260);
+        camera.lookAt(tmp.lerp(outroLook, 1 - easeInOutCubic(k)));
       } else {
         controller.updateCamera(dt);
         if (phase === 'intro') {

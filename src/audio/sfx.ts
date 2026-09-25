@@ -254,11 +254,12 @@ export const CUES: Record<string, CueDef> = {
     },
   },
   jetCannon: {
-    pri: 6, dur: 1.0, bus: 'sfx', gap: 0.08, echo: 0.3,
+    pri: 6, dur: 1.0, bus: 'sfx', gap: 0.28, echo: 0.3,
     fn(e, v, t, g) {
       const len = 0.42;
       const env = e.ahrGain(t, 0.004, 0.7 * g, len, 0.12, v.out);
-      const sat = e.shaper(6, env);
+      // The saturated saw is asymmetric: block the DC it creates.
+      const sat = e.shaper(6, e.filter('highpass', 45, 0.7, env));
       const bp = e.filter('bandpass', 380, 0.6, sat);
       e.osc(v, 'sawtooth', 68, t, len + 0.15, bp);
       // Gated noise at the fire rate (BRRRT).
@@ -617,6 +618,21 @@ export function nukeBoom(e: AudioEngine, v: Voice, t: number, g: number, p: CueP
   crack(e, v, t, 0.5 * g * near * near, 900, 0.25);
 }
 
+/** The flash: a muffled pressure pop, then (after the silence) the air inhaling toward the blast. */
+export function nukeFlash(e: AudioEngine, v: Voice, t: number, g: number, hold: number): void {
+  thump(e, v, t, 0.3 * g, 46, 24, 0.4, 0.6);
+  const t0 = t + hold * 0.35;
+  const env = e.ac.createGain();
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.exponentialRampToValueAtTime(0.22 * g, t + hold - 0.02);
+  env.gain.linearRampToValueAtTime(0, t + hold + 0.01);
+  env.connect(v.out);
+  const lp = e.filter('bandpass', 180, 0.7, env);
+  lp.frequency.setValueAtTime(180, t0);
+  lp.frequency.exponentialRampToValueAtTime(1300, t + hold);
+  e.noiseSrc(v, 'pink', t0, t + hold - t0 + 0.05, lp);
+}
+
 /** The roar that follows: wide, saturated, slowly darkening rumble with burning crackle. */
 export function nukeRoar(e: AudioEngine, v: Voice, t: number, g: number, p: CueParams): void {
   const near = 1 - p.dist;
@@ -638,7 +654,7 @@ export function nukeRoar(e: AudioEngine, v: Voice, t: number, g: number, p: CueP
 
 /** High ringing tail (tinnitus after the flash). */
 export function nukeRing(e: AudioEngine, v: Voice, t: number, g: number, dur: number): void {
-  const env = e.ahrGain(t, 0.08, 0.07 * g, dur * 0.25, dur * 0.75, v.out);
+  const env = e.ahrGain(t, 0.08, 0.022 * g, dur * 0.25, dur * 0.75, v.out);
   e.osc(v, 'sine', 4120, t, dur + 0.2, env);
   e.osc(v, 'sine', 4127, t, dur + 0.2, e.gain(0.7, env));
   e.osc(v, 'sine', 2060, t, dur + 0.2, e.gain(0.15, env));

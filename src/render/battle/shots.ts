@@ -55,7 +55,7 @@ async function stageTheatre(s: ShotContext, advHeading: number): Promise<Staged>
   const { ctx, params } = s;
   const cLat = Number(params.get('lat') ?? 48.95);
   const cLon = Number(params.get('lon') ?? 4.35);
-  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 300), speed: 1, headStart: 10 });
+  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 300), speed: 1, headStart: 10, autopilot: false });
   const view = ctx.sim.view;
   const T = (la: number, lo: number) => latLonToTile(la, lo);
   // The enemy: the living AI nation whose capital is closest to the theatre (a plausible neighbour).
@@ -81,9 +81,16 @@ async function stageTheatre(s: ShotContext, advHeading: number): Promise<Staged>
   // Attack across the line and freeze the sim as soon as the contact line shows up as a front (the globe's hot front
   // and the far layer read it), re-issuing the attack if the first wave dies out.
   const hasFront = () => view.fronts.some((f) => (f.a === HUMAN_ID && f.b === enemy) || (f.a === enemy && f.b === HUMAN_ID));
-  for (let i = 0; i < 48 && !hasFront(); i++) {
-    if (i % 8 === 0) ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.6, tile: T(cLat + dLat * 0.3, cLon + dLon * 0.3) });
-    await s.waitFrames(1);
+  // The sim worker ticks on wall-clock time, so poll by time (software-rendered frames can take seconds each).
+  // The near battlefield does not depend on it (it falls back to the nations' troops), so the wait is bounded.
+  const t0 = performance.now();
+  let lastAttack = -1e9;
+  while (!hasFront() && performance.now() - t0 < 12_000) {
+    if (performance.now() - lastAttack > 2500) {
+      lastAttack = performance.now();
+      ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.6, tile: T(cLat + dLat * 0.3, cLon + dLon * 0.3) });
+    }
+    await s.wait(120);
   }
   ctx.sim.setSpeed(0);
   console.info(`[battle] theatre front ${hasFront() ? 'live' : 'missing'} (enemy ${enemy})`);

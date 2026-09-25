@@ -73,6 +73,8 @@ interface FamilyDef {
   droneRoot: number;
   dark: boolean;
   levels: (i: number) => Partial<Record<LayerId, number>>;
+  /** Overall family level vs intensity (the whole score swells as war escalates). */
+  swell?: (i: number) => number;
 }
 
 const two = (...names: string[]): Chord[] => names.flatMap((n) => [CH[n], CH[n]]);
@@ -84,8 +86,9 @@ const FAMILIES: Record<Exclude<MusicFamily, 'silence'>, FamilyDef> = {
   },
   game: {
     tempo: 92, prog: two('Dm', 'Bb', 'F', 'C', 'Dm', 'Bb', 'Gm', 'A'), theme: THEME_MINOR, droneRoot: 38, dark: false,
+    swell: (i) => 0.58 + 0.42 * smoothstep(0.05, 0.85, i),
     levels: (i) => ({
-      pad: 0.78 - 0.28 * i,
+      pad: 0.72 - 0.26 * i,
       bells: Math.max(0, 0.55 - i * 1.4),
       melody: 0.5 * smoothstep(0.15, 0.3, i) * (1 - smoothstep(0.55, 0.75, i)),
       pulse: 0.7 * smoothstep(0.12, 0.38, i),
@@ -115,6 +118,8 @@ const FAMILIES: Record<Exclude<MusicFamily, 'silence'>, FamilyDef> = {
 
 class FamilyPlayer {
   readonly out: GainNode;
+  private readonly swell: GainNode;
+  private swellV = 1;
   readonly layer: Record<LayerId, GainNode>;
   readonly lv: Record<LayerId, number>;
   step = 0;
@@ -128,6 +133,10 @@ class FamilyPlayer {
     this.out.gain.setValueAtTime(0.0001, start);
     this.out.gain.linearRampToValueAtTime(1, start + fadeIn);
     this.out.connect(dest);
+    this.swell = e.ac.createGain();
+    this.swellV = def.swell ? def.swell(intensity) : 1;
+    this.swell.gain.setValueAtTime(this.swellV, start);
+    this.swell.connect(this.out);
     this.rng = new AudioRng(0xa11 + name.length * 977);
     this.layer = {} as Record<LayerId, GainNode>;
     this.lv = {} as Record<LayerId, number>;
@@ -136,16 +145,23 @@ class FamilyPlayer {
       const g = e.ac.createGain();
       const v = lv[id] ?? 0;
       g.gain.setValueAtTime(v, start);
-      g.connect(this.out);
+      g.connect(this.swell);
       this.layer[id] = g;
       this.lv[id] = v;
     }
     this.next = start + 0.05;
-    this.stopDrone = I.drone(e, start, def.droneRoot, def.dark ? 0.42 : 0.3, this.out, def.dark);
+    this.stopDrone = I.drone(e, start, def.droneRoot, def.dark ? 0.42 : 0.3, this.swell, def.dark);
   }
 
   setIntensity(i: number, at: number, tau: number): void {
     const lv = this.def.levels(i);
+    if (this.def.swell) {
+      const sv = this.def.swell(i);
+      if (Math.abs(sv - this.swellV) > 0.004) {
+        this.swellV = sv;
+        this.swell.gain.setTargetAtTime(sv, at, tau * 1.5);
+      }
+    }
     for (const id of LAYERS) {
       const v = lv[id] ?? 0;
       if (Math.abs(v - this.lv[id]) < 0.004) continue;
@@ -377,7 +393,7 @@ export class MusicDirector {
     I.horn(e, t + 3.6, 64, 0.6, 0.34, out, 0.3);
     I.horn(e, t + 4.2, 62, 2.4, 0.34, out, 0.3);
     this.family = 'silence';
-    this.startLater('defeat', t + 6.5);
+    this.startLater('defeat', t + 4.4);
   }
 
   private startLater(f: MusicFamily, at: number): void {

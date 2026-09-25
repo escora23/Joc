@@ -308,11 +308,21 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       const flight = d / sp;
       add.emit(x, y, z, (dx / d) * sp, (dy / d) * sp, (dz / d) * sp, flight, 0.3, 0.035, 0, 0, 1, 0.75, 0.4, 7, PK.Streak, 0, 0, now);
       add.emit(x, y, z, 0, 0, 0, 0.08, 1.2, 2, 0, 0, 1, 0.8, 0.5, 8, PK.Flash, 0, 0, now);
-      const puffs = Math.min(40, Math.ceil(d / 12));
+      // A continuous, wind-torn exhaust trail: dense overlapping puffs at jittered spacing, each a little different,
+      // expanding and thinning as they drift (sparse identical puffs read as a string of beads).
+      const lodR = host.lod(x, y, z);
+      const puffs = Math.max(6, Math.min(Math.round(70 * (0.4 + 0.6 * lodR)), Math.ceil(d / 5)));
       for (let k = 0; k < puffs; k++) {
-        const f = k / puffs;
+        const f = Math.min(1, (k + rng.next()) / puffs);
         const t0 = now + f * flight;
-        alpha.emit(x + dx * f, y + dy * f, z + dz * f, rng.range(-0.5, 0.5), rng.range(0.2, 0.8), rng.range(-0.5, 0.5), rng.range(2.5, 4.5), 1.2, 6, 0.5, 0.3, 0.26, 0.255, 0.25, 0.3, PK.Smoke, rng.range(0, 6), 0.2, t0);
+        const s0 = rng.range(0.8, 1.8);
+        const g = rng.range(0.22, 0.3);
+        alpha.emit(
+          x + dx * f + rng.range(-0.6, 0.6), y + dy * f + rng.range(-0.6, 0.6), z + dz * f + rng.range(-0.6, 0.6),
+          rng.range(-0.7, 0.7), rng.range(0.1, 0.9), rng.range(-0.7, 0.7),
+          rng.range(2.2, 5.5), s0, s0 * rng.range(4, 7), 0.6, 0.25, g, g * 0.98, g * 0.95, rng.range(0.14, 0.24),
+          PK.Smoke, rng.range(0, 6), rng.range(-0.3, 0.3), t0,
+        );
       }
       fx.schedule(now + flight, tx, tz, 1);
       violenceAcc += 0.1;

@@ -44,7 +44,8 @@ for (const s of list) {
   if (m.nan) issues.push('NaN');
   if (m.clipped > 0) issues.push(`clipped ${m.clipped}`);
   if (m.peak > 0.99) issues.push(`peak ${m.peak.toFixed(3)}`);
-  if (m.activeSec < 0.05) issues.push('silent');
+  // UI ticks are a few ms long: judge them by peak, not by 250 ms windows.
+  if (s.group === 'ui' ? m.peakDb < -45 : m.activeSec < 0.05) issues.push('silent');
   if (Math.abs(m.dc) > 0.01) issues.push(`dc ${m.dc.toFixed(4)}`);
   if (s.group === 'ui' && m.activeSec > 1.5) issues.push('ui sound too long');
   if (s.group === 'music' && m.activeSec < s.seconds * 0.8) issues.push('music has gaps');

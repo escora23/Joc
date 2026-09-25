@@ -119,7 +119,8 @@ export const HUD_CSS = /* css */ `
 .fu-cmd-intro .mono { font-family: var(--fu-font-mono, monospace); letter-spacing: 0.06em; }
 
 .fu-cmd-over { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.6s;
-  background: radial-gradient(ellipse at center, rgba(4,8,14,0.55), rgba(2,4,8,0.88)); }
+  background: radial-gradient(ellipse at center, rgba(4,8,14,0.5), rgba(2,4,8,0.8)); }
+.fu-cmd.fu-cmd-report > *:not(.fu-cmd-over) { opacity: 0 !important; transition: opacity 0.6s; }
 .fu-cmd-over.show { opacity: 1; }
 .fu-cmd-over.dead { background: radial-gradient(ellipse at center, rgba(40,4,4,0.45), rgba(10,1,1,0.9)); }
 .fu-cmd-over .card { width: 34rem; padding: 1.6rem 1.9rem 1.5rem; position: relative; }
