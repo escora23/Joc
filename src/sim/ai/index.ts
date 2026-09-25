@@ -31,17 +31,18 @@ import { emptyFront, pairKey, type Brain, type WorldModel } from './state';
 import { thinkTribe, thinkWar } from './war';
 
 export function createAiDirector(game: SimGame): AiDirector {
-  const rng = game.rng.fork('ai');
-  const world: WorldModel = {
+  // `let`: a save restores these objects wholesale (restoreState).
+  let rng = game.rng.fork('ai');
+  let world: WorldModel = {
     betrayals: new Map(), nukesBy: new Map(), detonations: 0, leader: 0, leaderShare: 0, secondShare: 0, leaderTick: -1,
     wars: new Map(), doomsday: 0, rushTile: -1, rushUntil: 0, infected: sharedEventState(game).infected,
     lastAiWarTick: -1_000_000,
   };
-  const brains = new Map<number, Brain>();
+  let brains = new Map<number, Brain>();
   let ctx: AiContext | null = null;
   let knownPlayers = 0;
   /** Rebel id -> the nation it broke away from (learned from rebellion events). */
-  const rebelParents = new Map<number, number>();
+  let rebelParents = new Map<number, number>();
 
   function context(): AiContext {
     if (!ctx) ctx = { g: game, rng, index: new MapIndex(game), world, brains };
@@ -61,7 +62,7 @@ export function createAiDirector(game: SimGame): AiDirector {
       relations: new Map(), front: emptyFront(), pending: [], lastTiles: 0, idleTicks: 0, rushTile: -1, rushUntil: 0,
       allyTarget: 0, allyTargetUntil: 0, buildFails: 0, lastBoatTick: -1_000_000, lastNukeTick: -1_000_000,
       nukesLaunched: 0, coalitionAnnounced: false, homeTile: p.capitalTile, homeCheckTick: -1_000_000, scratch: [],
-      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240),
+      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(),
     };
     if (kind === 'rebel' && b.parent > 0) {
       b.enemy = b.parent;
@@ -279,6 +280,7 @@ export function createAiDirector(game: SimGame): AiDirector {
             if (ab) {
               const r = relation(ab, e.owner);
               r.trust = Math.max(-1, r.trust - 0.4);
+              ab.allyNukedBy.set(e.owner, e.tick);
             }
           }
         }
@@ -399,5 +401,19 @@ export function createAiDirector(game: SimGame): AiDirector {
       }
     },
     onEvent,
+    // v2 (§12.8): everything the AI remembers, for saves (the map index is rebuilt on load).
+    snapshotState() {
+      return { brains, world, rng, knownPlayers, rebelParents };
+    },
+    restoreState(state: unknown) {
+      const s = state as { brains: Map<number, Brain>; world: WorldModel; rng: typeof rng; knownPlayers: number; rebelParents: Map<number, number> };
+      brains = s.brains;
+      world = s.world;
+      rng = s.rng;
+      knownPlayers = s.knownPlayers;
+      rebelParents = s.rebelParents;
+      sharedEventState(game).infected = world.infected;
+      ctx = null;
+    },
   };
 }

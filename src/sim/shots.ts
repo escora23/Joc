@@ -374,8 +374,8 @@ async function stageWorld(ctx: GameContext, ticks: number): Promise<void> {
   await ctx.app.startScriptedGame({ ticks, speed: 0, seed: 1337, aiCount: 24, tribeCount: 40 });
 }
 
-registerShot('sim-map', 'sim-core', '2D war-room plot of the whole simulated world (~5 game minutes in)', async ({ ctx, waitFrames, params }) => {
-  await stageWorld(ctx, Number(params.get('tick') ?? 3000));
+registerShot('sim-map', 'sim-core', '2D war-room plot of the whole simulated world (~37 game days in)', async ({ ctx, waitFrames, params }) => {
+  await stageWorld(ctx, Number(params.get('tick') ?? 9000));
   await waitFrames(5);
   const { canvas, g } = overlay();
   const W = canvas.width, H = canvas.height;
@@ -386,7 +386,7 @@ registerShot('sim-map', 'sim-core', '2D war-room plot of the whole simulated wor
 });
 
 registerShot('sim-europe', 'sim-core', 'Close 2D plot of Europe: borders, fronts, units, structures', async ({ ctx, waitFrames, params }) => {
-  await stageWorld(ctx, Number(params.get('tick') ?? 3000));
+  await stageWorld(ctx, Number(params.get('tick') ?? 9000));
   await waitFrames(5);
   const { canvas, g } = overlay();
   const W = canvas.width, H = canvas.height;
@@ -397,7 +397,7 @@ registerShot('sim-europe', 'sim-core', 'Close 2D plot of Europe: borders, fronts
 });
 
 registerShot('sim-war', 'sim-core', 'Staged total war over western Europe: nukes, MIRV, SAMs, aircraft, navies, armor (2D plot)', async ({ ctx, waitFrames, wait, params }) => {
-  await stageWorld(ctx, 3000);
+  await stageWorld(ctx, 6000);
   const T = (lat: number, lon: number) => latLonToTile(lat, lon);
   const view = ctx.sim.view;
   const paris = T(48.86, 2.35);
@@ -452,7 +452,7 @@ registerShot('sim-war', 'sim-core', 'Staged total war over western Europe: nukes
 });
 
 registerShot('sim-timelapse', 'sim-core', 'Timelapse frames + territory graph recorded by the sim client (end-screen data)', async ({ ctx, waitFrames, params }) => {
-  await stageWorld(ctx, Number(params.get('tick') ?? 6000));
+  await stageWorld(ctx, Number(params.get('tick') ?? 12000));
   await waitFrames(5);
   const { canvas, g } = overlay();
   const W = canvas.width, H = canvas.height;

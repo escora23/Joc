@@ -41,6 +41,10 @@ export interface SimPlayer {
   readonly embargoes: ReadonlySet<number>;
   readonly traitorUntilTick: number;
   readonly stats: Readonly<PlayerStatsCounters>;
+  /** v2 (W1): tiles still under occupation (§4.13), population and its target (§6.7). */
+  readonly occupied: number;
+  readonly pop: number;
+  readonly popTarget: number;
   /** Free slot for sim-ai to keep per-player memory (sim-core never touches it). */
   aiMemory: unknown;
 }
@@ -115,6 +119,7 @@ export interface SimWarApi {
   atWar(a: number, b: number): boolean;
   between(a: number, b: number): SimWar | undefined;
   warsOf(p: number): SimWar[];
+  list(): Iterable<SimWar>;
   enemiesOf(p: number): number[];
   /** Tick until which `attacker` may not start an offensive on `target` (0 = free). */
   mobilizingUntil(attacker: number, target: number): number;
@@ -238,11 +243,16 @@ export interface AiDirector {
   tick(): void;
   /** Every SimEvent emitted by the sim, synchronously (e.g. answer alliance requests). */
   onEvent(e: SimEvent): void;
+  /** v2 (§12.8): the director's hidden state for a save (a graph of plain objects, Maps and registered classes). */
+  snapshotState?(): unknown;
+  restoreState?(state: unknown): void;
 }
 
 export interface WorldEventDirector {
   tick(): void;
   onEvent(e: SimEvent): void;
+  snapshotState?(): unknown;
+  restoreState?(state: unknown): void;
 }
 
 export type AiDirectorFactory = (game: SimGame) => AiDirector;

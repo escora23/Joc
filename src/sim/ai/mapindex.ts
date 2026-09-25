@@ -37,6 +37,11 @@ export class MapIndex {
   readonly cellStart: Int32Array;
   /** Latitude-band friendly list of all playable tiles (for random picks). */
   readonly playable: Int32Array;
+  /**
+   * v2 (W1, T39): islands, i.e. land components of 5..20,000 playable tiles, each with up to 12 coastal tiles
+   * (landing beaches) and its size. The AI settles the unclaimed ones by sea.
+   */
+  readonly islands: { size: number; coast: number[] }[] = [];
 
   constructor(private readonly g: SimGame) {
     const counts = new Int32Array(CELLS_X * CELLS_Y + 1);
@@ -64,6 +69,32 @@ export class MapIndex {
       if (!g.isPlayable(t)) continue;
       this.playable[k++] = t;
       if (g.isShore(t)) this.coast[fill[cellOf(t)]++] = t;
+    }
+    // Land components (4-connected playable tiles).
+    const comp = new Int32Array(TILE_COUNT).fill(-1);
+    const stack: number[] = [];
+    let id = 0;
+    for (let t0 = 0; t0 < TILE_COUNT; t0++) {
+      if (comp[t0] >= 0 || !g.isPlayable(t0)) continue;
+      const coast: number[] = [];
+      let size = 0;
+      stack.length = 0;
+      stack.push(t0);
+      comp[t0] = id;
+      while (stack.length) {
+        const t = stack.pop()!;
+        size++;
+        if (coast.length < 12 && g.isShore(t) && (coast.length === 0 || size % 7 === 0)) coast.push(t);
+        const x = t % MAP_W;
+        const n4 = [x === 0 ? t + MAP_W - 1 : t - 1, x === MAP_W - 1 ? t - MAP_W + 1 : t + 1, t - MAP_W, t + MAP_W];
+        for (const n of n4) {
+          if (n < 0 || n >= TILE_COUNT || comp[n] >= 0 || !g.isPlayable(n)) continue;
+          comp[n] = id;
+          stack.push(n);
+        }
+      }
+      if (size >= 5 && size <= 20_000 && coast.length > 0) this.islands.push({ size, coast });
+      id++;
     }
   }
 

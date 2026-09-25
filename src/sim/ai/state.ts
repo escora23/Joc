@@ -105,6 +105,8 @@ export interface Brain {
   /** War id -> next war-plan tick. */
   plans: Map<number, number>;
   nextPeace: number;
+  /** Enemy -> last tick it launched a nuclear weapon at one of our allies (retaliation, §5.10). */
+  allyNukedBy: Map<number, number>;
 }
 
 export function emptyFront(): FrontInfo {

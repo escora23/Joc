@@ -210,6 +210,63 @@ if (want('motion')) {
   row('T40', `crisis: max/mean per-frame displacement (${r.units.length} units, clock ${r.clock.mode}, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, '<= 2', r.clock.mode === 'crisis' && r.pass);
 }
 
+// --- acceptance 15 / 16: declaration path, queued offensive, occupation after a resync ---------------------
+if (want('declare')) {
+  const st = await ev(async () => {
+    const { ctx } = window.__front;
+    const view = ctx.sim.view;
+    const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
+    const enemy = view.playerList.find((p) => p.alive && p.kind === 'nation')?.id ?? 2;
+    ctx.sim.debug({ type: 'conquer', playerId: 1, centerTile: tile(40.4, -3.7), radius: 22 });
+    ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: tile(44.6, 1.5), radius: 14 });
+    ctx.sim.debug({ type: 'addTroops', playerId: 1, amount: 400_000 });
+    window.__decl = { msgs: [], wars: [], starts: [] };
+    ctx.bus.on('message', (e) => window.__decl.msgs.push(e.key));
+    ctx.bus.on('warDeclared', (e) => window.__decl.wars.push({ tick: e.tick, mob: e.mobilizeUntilTick, a: e.aggressor, b: e.target }));
+    ctx.bus.on('attackStarted', (e) => window.__decl.starts.push({ tick: e.tick, a: e.attacker, d: e.defender }));
+    return { enemy, target: tile(43.2, -0.5) };
+  });
+  await sleep(1500);
+  // The raw command at peace is rejected.
+  await ev((a) => window.__front.ctx.sim.send({ type: 'attack', target: a.enemy, ratio: 0.5, tile: a.target }), st);
+  await sleep(1500);
+  const msgs = await ev(() => window.__decl.msgs.slice());
+  row('A15', 'raw attack on a nation at peace', msgs.includes('msg.notAtWar') ? 'msg.notAtWar' : msgs.join(',') || 'accepted', 'msg.notAtWar', msgs.includes('msg.notAtWar'));
+  // A left click on its land opens the minimal declaration modal.
+  await ev((a) => window.__front.ctx.bus.emit('worldClick', { button: 0, tile: a.target, lat: 43.2, lon: -0.5, unitId: -1, structureId: -1, clientX: 640, clientY: 360, shift: false, ctrl: false, alt: false }), st);
+  await sleep(1200);
+  const modal = await ev(() => ({ open: !!document.querySelector('.fu-declare-modal'), title: document.querySelector('.fu-declare-modal h2')?.textContent ?? '', lines: [...document.querySelectorAll('.fu-declare-line')].map((l) => l.textContent) }));
+  await page.screenshot({ path: path.join(out, 'declare-modal.png') });
+  row('A15', 'left click on a nation at peace opens the declaration', modal.open ? `«${modal.title}»` : 'no modal', 'modal', modal.open && /Declarar la guerra|Declare war/.test(modal.title));
+  if (modal.open) {
+    await page.click('.fu-declare-modal .fu-btn--danger');
+    const t1 = Date.now();
+    while (Date.now() - t1 < 60_000) {
+      const d = await ev(() => window.__decl);
+      if (d.starts.some((x) => x.a === 1 && x.d === st.enemy)) break;
+      await sleep(500);
+    }
+    const d = await ev(() => window.__decl);
+    const w = d.wars.find((x) => x.a === 1 && x.b === st.enemy);
+    const s0 = d.starts.find((x) => x.a === 1 && x.d === st.enemy);
+    row('A15', 'war declared; human mobilization (Normal)', w ? `${w.mob - w.tick} ticks` : 'no war', '60 ticks', !!w && w.mob - w.tick === 60);
+    row('A15', 'queued offensive starts at mobilizeUntilTick', s0 && w ? `tick ${s0.tick} (mobilized ${w.mob})` : 'no offensive', 'equal', !!s0 && !!w && s0.tick === w.mob);
+  }
+  // Occupation after a fast-forward (a fullOwners resync): the drawn set equals the sim's (checked through the view).
+  const occ = await ev(async () => {
+    const { ctx } = window.__front;
+    await ctx.sim.fastForward(400);
+    const v = ctx.sim.view;
+    let owned = 0, occNotOwned = 0;
+    for (const t of v.occupiedTiles) {
+      if (v.owner[t] !== 0) owned++;
+      else occNotOwned++;
+    }
+    return { n: v.occupiedTiles.size, owned, occNotOwned, human: v.occupiedCount(1) };
+  });
+  row('A16', 'occupied tiles after a fast-forward resync', `${occ.n} (human ${occ.human}), ${occ.occNotOwned} on unowned land`, '> 0, none unowned', occ.n > 0 && occ.occNotOwned === 0);
+}
+
 console.log('\n=== W1 browser checks ===');
 for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.id.padEnd(6)} ${r.what}: ${r.value}  (target ${r.target})`);
 console.log(`--- ${results.filter((r) => r.pass).length}/${results.length} pass`);

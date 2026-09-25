@@ -156,6 +156,15 @@ export const MAX_PLAYER_ID = 2047;
 
 // --- Win condition ---------------------------------------------------------------------------
 export const WIN_LAND_SHARE = 0.8;
+/**
+ * v2 (§4.18): victory by «Duración». domination = land share that wins at once; hegemony = land share and ratio over
+ * the second power held for holdTicks; timeLimit = the tick the largest nation wins (0 = none).
+ */
+export const DURATION_RULES = {
+  short: { domination: 0.6, hegemony: 0.35, hegemonyRatio: 2.5, holdTicks: 1_200, timeLimit: 48_000 },
+  normal: { domination: 0.8, hegemony: 0.5, hegemonyRatio: 3, holdTicks: 2_400, timeLimit: 96_000 },
+  long: { domination: 0.9, hegemony: 0.6, hegemonyRatio: 4, holdTicks: 4_800, timeLimit: 0 },
+} as const;
 
 // --- Balance (sim-core tunes values) -----------------------------------------------------------
 export const BALANCE = {
@@ -309,13 +318,30 @@ export interface NukeDef {
   minFlightTicks: number;
 }
 
+/**
+ * v2 (§4.14, §6.3): nuclear radii in tiles (atom 75 / 175 km, H-bomb 175 / 350 km, MIRV warheads 3 / 6 tiles ×10);
+ * detonations never change ownership; troopLoss is the share of the garrison killed on inner tiles (outer 25 %);
+ * fallout 30 / 60 days on inner tiles (outer ×0.5).
+ */
 export const NUKE_DEFS: Record<WeaponType | typeof UnitType.MirvWarhead, NukeDef> = {
-  [U.AtomBomb]: { innerRadius: 10, outerRadius: 22, troopLoss: 0.6, falloutTicks: 1_800, minFlightTicks: 60 },
-  [U.HydrogenBomb]: { innerRadius: 28, outerRadius: 46, troopLoss: 0.85, falloutTicks: 3_600, minFlightTicks: 80 },
-  [U.Mirv]: { innerRadius: 0, outerRadius: 0, troopLoss: 0, falloutTicks: 0, minFlightTicks: 90 },
-  [U.MirvWarhead]: { innerRadius: 9, outerRadius: 14, troopLoss: 0.6, falloutTicks: 1_800, minFlightTicks: 20 },
-  [U.CruiseMissile]: { innerRadius: 3, outerRadius: 6, troopLoss: 0.2, falloutTicks: 0, minFlightTicks: 20 },
+  [U.AtomBomb]: { innerRadius: 3, outerRadius: 7, troopLoss: 0.6, falloutTicks: 7_200, minFlightTicks: 8 },
+  [U.HydrogenBomb]: { innerRadius: 7, outerRadius: 14, troopLoss: 0.6, falloutTicks: 14_400, minFlightTicks: 8 },
+  [U.Mirv]: { innerRadius: 0, outerRadius: 0, troopLoss: 0, falloutTicks: 0, minFlightTicks: 8 },
+  [U.MirvWarhead]: { innerRadius: 3, outerRadius: 6, troopLoss: 0.6, falloutTicks: 7_200, minFlightTicks: 2 },
+  [U.CruiseMissile]: { innerRadius: 3, outerRadius: 6, troopLoss: 0.2, falloutTicks: 0, minFlightTicks: 2 },
 };
+/** v2 (§5.10): AI nuclear caps. */
+export const AI_FIRST_NUKE_TICK = 18_000;
+export const AI_NUKE_GAP_TICKS = 480;
+export const AI_NUKES_IN_FLIGHT = 2;
+export const AI_NUKE_PER_PLAYER_TICKS = 720;
+export const AI_CRUISE_PER_PLAYER_TICKS = 120;
+export const AI_CRUISE_WORLD_WINDOW = 600;
+export const AI_CRUISE_WORLD_MAX = 3;
+/** Population (§6.7): target per tile and per city level; the real population moves 0.2 % of the target per hour. */
+export const POP_PER_TILE = 25_000;
+export const POP_PER_CITY_LEVEL = 800_000;
+export const POP_DRIFT_PER_HOUR = 0.002;
 
 // --- Rendering scale helpers ---------------------------------------------------------------------
 /** Camera altitude limits in km. */

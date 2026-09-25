@@ -210,6 +210,24 @@ export function wireNews(hs: HudShared, ticker: Ticker, toasts: Toasts, alarm: N
     if (e.against === HUMAN_ID) toasts.push(t('toast.escalation', { name: name(e.by), level: t(`escalation.${e.level}`) }), 'danger', 6000, 'attack');
   });
 
+  bus.on('unrest', (e) => {
+    const tile = Math.floor(e.y) * MAP_W + Math.floor(e.x);
+    const place = placeOf(tile);
+    const hours = Math.max(0, Math.round((e.untilTick - e.tick) / 10));
+    if (e.owner === HUMAN_ID) {
+      if (e.stage === 'start') toasts.push(t(`unrest.${e.cause}`, { place, hours }), 'warning', 9000, 'flag');
+      else if (e.stage === 'cancelled') toasts.push(t('unrest.cancelled', { place }), 'success', 5000, 'flag');
+      else if (e.stage === 'rebellion') toasts.push(t('unrest.rebellion', { place, cause: t(`unrest.cause.${e.cause}`) }), 'danger', 8000, 'flag');
+      return;
+    }
+    if (!isMajor(e.owner)) return;
+    if (e.stage === 'start') newsXY(t('news.unrest', { a: name(e.owner), cause: t(`unrest.cause.short.${e.cause}`), hours }), 'info', e.x, e.y);
+  });
+  bus.on('hegemony', (e) => {
+    if (e.stage === 'start') news(t('news.hegemony.start', { name: name(e.leader), days: Math.max(1, Math.round((e.untilTick - e.tick) / 240)) }), 'critical');
+    else if (e.stage === 'broken') news(t('news.hegemony.broken', { name: name(e.leader) }), 'warning');
+  });
+
   bus.on('gameTornDown', () => {
     ticker.clear();
     toasts.clear();

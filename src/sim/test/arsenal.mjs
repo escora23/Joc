@@ -23,7 +23,7 @@ const MADRID = T(40.4, -3.7), PARIS = T(48.86, 2.35), ROME = T(41.9, 12.5), LOND
 
 /** A quiet world: human + `n` nations (no tribes), AI and world events off, already in the playing phase. */
 function quietGame(n = 3, extra = {}) {
-  Game.withFallbackAi = true;
+  Game.withFallbackAi = false;
   const g = new Game({
     seed: 7, playerName: 'Tester', playerColor: 0x3366ff, difficulty: 'normal', aiCount: n, tribeCount: 0, speed: 1,
     nukes: true, worldEvents: false, startWorldTimeSec: DEFAULT_START_WORLD_TIME, spawnTimeoutTicks: 50,
@@ -42,6 +42,11 @@ function run(g, ticks) {
   for (let i = 0; i < ticks; i++) g.tick1();
   // Drain the event queue like the worker would.
   return g.buildUpdate(ticks).events;
+}
+
+/** v2: offensives, strikes and landings on a nation need a declared war (staged here without mobilization). */
+function war(g, a, b) {
+  g.applyDebug({ type: 'war', a, b });
 }
 
 function claim(g, pid, tile, radius) {
@@ -114,11 +119,13 @@ await scenario('land-attack-and-retreat', (note) => {
   h.troops = 400_000;
   a.troops = 80_000;
   const before = a.tiles;
+  expect(!g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.5, tile: T(40.4, 1) }), 'attack at peace rejected (msg.notAtWar)');
+  war(g, HUMAN_ID, a.id);
   expect(g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.5, tile: T(40.4, 1) }), 'attack issued');
-  const ev = run(g, 150);
+  const ev = run(g, 300);
   expect(eventsOf(ev, 'attackStarted').length === 1, 'attackStarted event');
   note(`defender tiles ${before} -> ${a.tiles}, attacker ${h.tiles}, fronts ${g.fronts.take().length}`);
-  expect(a.tiles < before - 50, 'the front advances');
+  expect(a.tiles < before - 30, 'the front advances');
   const atk = g.attackList.find((x) => !x.ended && x.attacker === HUMAN_ID);
   if (atk) {
     const t = h.troops;
@@ -133,9 +140,9 @@ await scenario('neutral-expansion', (note) => {
   const h = g.playerById[HUMAN_ID];
   const t0 = h.tiles;
   expect(g.issue(HUMAN_ID, { type: 'attack', target: 0, ratio: 0.4, tile: MADRID }), 'expand');
-  run(g, 200);
+  run(g, 300);
   note(`tiles ${t0} -> ${h.tiles}`);
-  expect(h.tiles > t0 + 300, 'cheap neutral expansion');
+  expect(h.tiles > t0 + 30, 'neutral expansion at 7.5 km/h');
 });
 
 await scenario('naval-invasion', (note) => {
@@ -144,6 +151,7 @@ await scenario('naval-invasion', (note) => {
   claim(g, HUMAN_ID, MADRID, 40);
   claim(g, a.id, ROME, 12);
   h.troops = 300_000;
+  war(g, HUMAN_ID, a.id);
   expect(g.issue(HUMAN_ID, { type: 'boatAttack', targetTile: T(41.9, 12.3), ratio: 0.3 }), 'boat attack issued');
   let landed = null;
   for (let i = 0; i < 900 && !landed; i++) {
@@ -161,7 +169,7 @@ await scenario('warship-sinks-transport', (note) => {
   const [h, a] = [g.playerById[HUMAN_ID], g.playerArr[1]];
   claim(g, HUMAN_ID, MADRID, 17);
   claim(g, a.id, T(39.6, 3.0), 3); // Mallorca
-  g.markHostile(HUMAN_ID, a.id);
+  war(g, HUMAN_ID, a.id);
   g.applyDebug({ type: 'spawnUnit', unit: U.Warship, owner: a.id, tile: T(39.0, 1.5), targetTile: -1 });
   a.troops = 200_000;
   expect(g.issue(a.id, { type: 'boatAttack', targetTile: T(39.47, -0.38), ratio: 0.2 }) || true, 'boat');
@@ -220,6 +228,7 @@ await scenario('armored-division', (note) => {
   expect(tank, 'division exists');
   h.troops = 300_000;
   a.troops = 150_000;
+  war(g, HUMAN_ID, a.id);
   expect(g.issue(HUMAN_ID, { type: 'deployArmor', unitId: tank.id, targetTile: T(40.4, 2) }), 'deploy');
   g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.5, tile: T(40.4, 1) });
   const before = a.tiles;
@@ -233,7 +242,7 @@ await scenario('air-war', (note) => {
   const [h, a] = [g.playerById[HUMAN_ID], g.playerArr[1]];
   claim(g, HUMAN_ID, MADRID, 30);
   claim(g, a.id, PARIS, 30);
-  g.markHostile(HUMAN_ID, a.id);
+  war(g, HUMAN_ID, a.id);
   g.addGold(HUMAN_ID, 20_000_000);
   g.addGold(a.id, 20_000_000);
   g.applyDebug({ type: 'spawnStructure', structure: S.Airbase, owner: HUMAN_ID, tile: T(41.5, -2.5), level: 3 });
@@ -261,7 +270,7 @@ await scenario('bomber-and-drone-strike', (note) => {
   const a = g.playerArr[1];
   claim(g, HUMAN_ID, MADRID, 30);
   claim(g, a.id, PARIS, 30);
-  g.markHostile(HUMAN_ID, a.id);
+  war(g, HUMAN_ID, a.id);
   g.addGold(HUMAN_ID, 20_000_000);
   g.applyDebug({ type: 'spawnStructure', structure: S.Airbase, owner: HUMAN_ID, tile: T(41.5, -2.5), level: 3 });
   const target = T(48.6, 2.8);
@@ -299,6 +308,8 @@ await scenario('cruise-missile', (note) => {
   g.applyDebug({ type: 'spawnStructure', structure: S.MissileSilo, owner: HUMAN_ID, tile: T(42.0, -2.0), level: 1 });
   g.applyDebug({ type: 'spawnStructure', structure: S.City, owner: a.id, tile: PARIS, level: 2 });
   run(g, 5);
+  expect(!g.issue(HUMAN_ID, { type: 'launch', weapon: U.CruiseMissile, targetTile: PARIS, siloId: -1 }), 'cruise missile at peace rejected');
+  war(g, HUMAN_ID, a.id);
   expect(g.issue(HUMAN_ID, { type: 'launch', weapon: U.CruiseMissile, targetTile: PARIS, siloId: -1 }), 'launch cruise');
   const ev = run(g, 400);
   note(`destroyed: ${eventsOf(ev, 'structureDestroyed').length}, detonations ${eventsOf(ev, 'nukeDetonated').length}`);
@@ -317,9 +328,14 @@ await scenario('nukes-sam-fallout', (note) => {
   run(g, 2);
   // Atom bomb, no defense.
   expect(g.issue(HUMAN_ID, { type: 'launch', weapon: U.AtomBomb, targetTile: T(48.0, 1.0), siloId: -1 }), 'launch atom');
+  const owners0 = g.owner.slice();
   let ev = run(g, 400);
   const det = eventsOf(ev, 'nukeDetonated');
   expect(det.length === 1, 'atom bomb detonates');
+  let flipped = 0;
+  for (let t = 0; t < g.owner.length; t++) if (g.owner[t] !== owners0[t]) flipped++;
+  note(`tiles that changed owner in the detonation: ${flipped}`);
+  expect(flipped === 0, 'v2: a detonation changes no tile owner');
   note(`atom: casualties ${det[0].casualties}, troops left ${a.troops.toFixed(0)}, scars ${g.scars.length}`);
   expect(g.scars.length === 1, 'radioactive scar');
   const fallTile = T(48.0, 1.0);
@@ -329,11 +345,12 @@ await scenario('nukes-sam-fallout', (note) => {
   g.applyDebug({ type: 'spawnStructure', structure: S.Radar, owner: a.id, tile: T(49.3, 3.5), level: 1 });
   run(g, 250);
   let launched = 0;
-  for (let i = 0; i < 6; i++) {
+  ev = [];
+  for (let i = 0; i < 12; i++) {
     if (g.issue(HUMAN_ID, { type: 'launch', weapon: U.AtomBomb, targetTile: T(48.9, 2.4), siloId: -1 })) launched++;
-    run(g, 5);
+    ev.push(...run(g, 40));
   }
-  ev = run(g, 500);
+  ev.push(...run(g, 100));
   const inter = eventsOf(ev, 'nukeIntercepted').length;
   note(`SAM: launched ${launched}, intercepted ${inter}, detonated ${eventsOf(ev, 'nukeDetonated').length}`);
   expect(inter > 0, 'the SAM intercepts some bombs');
@@ -399,9 +416,13 @@ await scenario('encirclement', (note) => {
   claim(g, a.id, MADRID, 3); // a pocket inside Spain, cut off from the homeland
   const pocket = a.tiles;
   a.lastTileLossTick = g.tick + 1; // it just lost land (as after a real breakthrough)
-  const ev = run(g, 200);
-  note(`pocket ${pocket} tiles -> ${a.tiles}; alive=${a.alive}`);
-  expect(a.tiles < pocket, 'enclave is absorbed');
+  let ev = run(g, 200);
+  expect(a.tiles === pocket && eventsOf(ev, 'siege').length === 0, 'v2: no annexation and no siege at peace');
+  war(g, HUMAN_ID, a.id);
+  ev = run(g, 200);
+  note(`pocket ${pocket} tiles -> ${a.tiles}; alive=${a.alive}; sieges ${JSON.stringify(g.enclaves.views())}`);
+  expect(eventsOf(ev, 'siege').some((e) => e.stage === 'start' && e.owner === a.id), 'v2: the pocket is besieged');
+  expect(a.tiles === pocket, 'v2: nothing is annexed in one step');
 });
 
 await scenario('elimination-and-victory', (note) => {
@@ -411,9 +432,11 @@ await scenario('elimination-and-victory', (note) => {
   claim(g, HUMAN_ID, MADRID, 12);
   claim(g, a.id, T(40.4, -1.5), 5);
   h.troops = 2_000_000;
+  war(g, HUMAN_ID, a.id);
   note(`a tiles ${a.tiles}, b tiles ${b.tiles}`);
   expect(g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.8, tile: T(40.4, -1.5) }), 'attack');
-  const ev = run(g, 400);
+  // v2: at most 8 km/h and 3 + 4 % of the corridor per tick; the capital takes 3x longer.
+  const ev = run(g, 900);
   note(`eliminated: ${eventsOf(ev, 'nationEliminated').map((e) => e.playerId).join(',')}, phase ${g.phase}, winner ${g.winner}`);
   expect(!a.alive, 'nation eliminated');
 });

@@ -11,8 +11,9 @@ import '../sim/ai/shots';
 import { registerShot } from '../shared/shots';
 import { latLonToTile, worldTimeForSubsolarLon } from '../shared/geo';
 
-registerShot('midgame', 'app', 'Typical mid-game view with HUD (Iberia, ~5 game minutes in)', async ({ ctx, waitFrames }) => {
-  await ctx.app.startScriptedGame({ ticks: 3000, speed: 1 });
+registerShot('midgame', 'app', 'Typical mid-game view with HUD (Iberia, ~37 game days in)', async ({ ctx, waitFrames }) => {
+  // v2 (W1): 1 tick = 6 game minutes; the land rush fills the world by ~9,000 ticks.
+  await ctx.app.startScriptedGame({ ticks: 9000, speed: 1 });
   ctx.cameraRig.setState({ lat: 41, lon: 0, altitudeKm: 4000, tilt: 0.3, heading: 0 });
   await waitFrames(45);
 });

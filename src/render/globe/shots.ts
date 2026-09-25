@@ -54,7 +54,8 @@ registerShot('night', 'globe', 'Night side: city lights and the day/night termin
 
 registerShot('territory', 'globe', 'Mid-game territories: nation colors, glowing borders, hot fronts, labels (Europe)', async (s) => {
   s.setUiVisible(false);
-  await s.ctx.app.startScriptedGame({ ticks: num(s.params, 'tick', 3000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(s.params, 'sun', 5)) });
+  // v2 (W1): 1 tick = 6 game minutes; the land rush fills the world by ~9,000 ticks.
+  await s.ctx.app.startScriptedGame({ ticks: num(s.params, 'tick', 9000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(s.params, 'sun', 5)) });
   place(s, 47, 14, 4800, 0.18, 0);
   s.ctx.cameraRig.setMode('game');
   await s.waitFrames(4);
@@ -62,7 +63,7 @@ registerShot('territory', 'globe', 'Mid-game territories: nation colors, glowing
 
 registerShot('territory-close', 'globe', 'Territory borders up close (~1300 km, tilted) with a hovered nation', async (s) => {
   s.setUiVisible(false);
-  await s.ctx.app.startScriptedGame({ ticks: num(s.params, 'tick', 3000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(s.params, 'sun', -10)) });
+  await s.ctx.app.startScriptedGame({ ticks: num(s.params, 'tick', 9000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(s.params, 'sun', -10)) });
   place(s, 45, 6, 1300, 0.55, 0.2);
   s.ctx.cameraRig.setMode('game');
   const h = s.ctx.sim.view.human;
@@ -87,7 +88,7 @@ registerShot('horizon-himalaya', 'globe', 'Low horizon view over the Himalayas i
 registerShot('territory-war', 'globe', 'War up close: hot front lines, a fallout scar, capture flashes and the hover highlight', async (s) => {
   s.setUiVisible(false);
   const { ctx } = s;
-  await ctx.app.startScriptedGame({ ticks: num(s.params, 'tick', 2400), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(s.params, 'sun', 0)) });
+  await ctx.app.startScriptedGame({ ticks: num(s.params, 'tick', 7200), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(s.params, 'sun', 0)) });
   const view = ctx.sim.view;
   const human = view.human;
   // Nuke the capital of the biggest rival within reach so a fallout scar is on screen.

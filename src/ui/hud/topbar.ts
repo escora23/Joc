@@ -7,6 +7,7 @@ import { icon } from '../icons';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
 import type { GameSpeed } from '../../shared/types';
+import { HUMAN_ID } from '../../shared/constants';
 import { formatCompact, formatNumber, t } from '../../shared/i18n';
 
 export interface TopBar {
@@ -85,9 +86,17 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   let doomMinutes = -1;
   ctx.bus.on('doomsday', (e) => (doomMinutes = Math.max(0, Math.round(e.minutesToMidnight))));
   ctx.bus.on('gameTornDown', () => (doomMinutes = -1));
+  // v2 (§4.18): the hegemony countdown chip («Alemania alcanzará la hegemonía en 6 días»).
+  const hegChip = h('div', { class: 'fu-hegchip fu-mono fu-hidden' }, '');
+  let heg = { leader: 0, until: 0 };
+  ctx.bus.on('hegemony', (e) => {
+    heg = e.stage === 'start' ? { leader: e.leader, until: e.untilTick } : { leader: 0, until: 0 };
+  });
+  ctx.bus.on('gameTornDown', () => (heg = { leader: 0, until: 0 }));
   const time = h('div', { class: 'fu-time fu-glass fu-interactive' },
     h('div', { class: 'fu-time-main' }, icon('clock'), clock, speeds, iconBtn('help', 'hud.help', actions.help), iconBtn('settings', 'menu.settings', actions.settings), iconBtn('menu', 'hud.menu', actions.pause)),
     chip,
+    hegChip,
     doom,
   );
   let lastDay = -1, lastHour = -1, lastChip = '', lastMode = '';
@@ -171,6 +180,11 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
     if (c.mode !== lastMode) {
       lastMode = c.mode;
       chip.dataset.mode = c.mode;
+    }
+    toggleClass(hegChip, 'fu-hidden', heg.leader === 0);
+    if (heg.leader) {
+      const days = Math.max(0, Math.ceil((heg.until - view.tick) / 240));
+      setText(hegChip, heg.leader === HUMAN_ID ? t('hegemony.chipUs', { days }) : t('hegemony.chip', { name: hs.name(heg.leader), days }));
     }
     for (const [spd, b] of speedBtns) toggleClass(b, 'is-on', view.speed === spd);
     toggleClass(time, 'is-paused', view.speed === 0);

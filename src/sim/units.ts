@@ -454,6 +454,13 @@ export class UnitSystem {
       g.message(p.id, 'msg.invalidTarget');
       return false;
     }
+    // v2 (§4.1, §5.10): strikes on a nation need a declared war (independent territories do not).
+    const D = g.playerById[o];
+    if (o !== 0 && D && D.kind !== 'tribe' && !g.war.atWar(p.id, o)) {
+      g.message(p.id, 'msg.notAtWar');
+      return false;
+    }
+    if (o !== 0) g.invariants?.onHostileLaunch(p.id, o, 'air strike');
     if (!this.inAirRange(u, tx, ty)) {
       g.message(p.id, 'msg.outOfRange');
       return false;

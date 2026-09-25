@@ -10,7 +10,7 @@ import {
   DEFAULT_START_WORLD_TIME, HUMAN_ID, MAP_H, MAP_W, MENU_WORLD_TIME_SCALE, OBSERVATION_ENTER_KM, OBSERVATION_LEAVE_KM, TICK_MS, UNIT_DEFS,
 } from '../shared/constants';
 import { EventBus, type GameEvents } from '../shared/events';
-import { latLonToTile, tileAtXY, tileToLatLon, tileX, tileY, wrapX } from '../shared/geo';
+import { latLonToTile, tileAtXY, tileToLatLon, tileX, tileY, worldTimeForSubsolarLon, wrapX } from '../shared/geo';
 import { setLanguage } from '../shared/i18n';
 import { qualityProfile, type QualityProfile } from '../shared/quality';
 import { hashString } from '../shared/rng';
@@ -32,6 +32,7 @@ import { createAudio } from '../audio';
 import { createInputRouter } from './input';
 import { createWorldFx } from './worldfx';
 import { installProbes } from './probes';
+import { installAutosave } from './autosave';
 import { registerAllShots } from './shots';
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -93,7 +94,8 @@ export async function bootstrap(): Promise<void> {
       ctx.cameraRig.setMode('game');
       const phase = ctx.sim.view.phase;
       setState(phase === 'playing' ? 'playing' : 'spawn');
-      if (!isShot) void ctx.cameraRig.flyTo({ lat: 30, lon: 10, altitudeKm: 14_000, tilt: 0, heading: 0 }, 1500);
+      // Spawn view (DESIGN_V2 §10.13): Europe and Africa from 12,000 km, in daylight (the sun starts at noon there).
+      if (!isShot) void ctx.cameraRig.flyTo({ lat: 35, lon: 15, altitudeKm: 12_000, tilt: 0, heading: 0 }, 1500);
     },
     async startScriptedGame(opts: ScriptedGameOptions) {
       const world = ctx.world;
@@ -190,7 +192,8 @@ export async function bootstrap(): Promise<void> {
         nukes: s.nukes,
         worldEvents: s.worldEvents,
         duration: s.duration ?? 'normal',
-        startWorldTimeSec: DEFAULT_START_WORLD_TIME,
+        // Noon over the spawn view (§10.13).
+        startWorldTimeSec: worldTimeForSubsolarLon(15),
         spawnTimeoutTicks: 900,
         autoSpawnTile: -1,
         instantStart: false,
@@ -444,6 +447,8 @@ export async function bootstrap(): Promise<void> {
   // Checked on a 100 ms timer rather than per frame: the camera state is set immediately on input, and a slow frame
   // must not delay the clock change.
   setInterval(() => updateObservationClock(performance.now()), 100);
+  // v2 (§12.8): autosave every game day, at most once per 60 real seconds.
+  installAutosave(ctx);
   function updateObservationClock(now: number): void {
     const view = ctx.sim.view;
     const eligible = state === 'playing' && view.phase === 'playing';

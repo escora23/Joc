@@ -24,6 +24,8 @@ const CRUISE_RANGE = 300;
 const SAM_COVER = 70;
 
 const unitTile = (x: number, y: number) => tileAt(Math.floor(x), Math.floor(y));
+/** Strategic (L2) targets: cities, ports, factories (§5.10). */
+const STRATEGIC = new Set<number>([StructureType.City, StructureType.Port, StructureType.Factory]);
 
 export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
   const g = ctx.g;
@@ -72,6 +74,25 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
 
   // --- operations -----------------------------------------------------------------------------------
   const enemy = atWar ? g.player(b.enemy)! : null;
+  // v2 escalation ladder (§5.10): L1 (military targets) from the end of our mobilization, L2 (cities, ports,
+  // factories) after 72 h of war, when the enemy went L2 first, or in a war of conquest.
+  let level = 0;
+  if (enemy) {
+    const w = g.war.between(p.id, enemy.id);
+    if (w && g.war.mobilizingUntil(p.id, enemy.id) === 0) {
+      level = g.war.escalation(p.id, enemy.id);
+      if (level < 1) {
+        g.war.raiseEscalation(p.id, enemy.id, 1, 'escalation.reason.military');
+        level = 1;
+      }
+      const long = g.tick - w.startTick >= 720;
+      const theirs = g.war.escalation(enemy.id, p.id) >= 2;
+      if (level < 2 && (long || theirs || (w.a === p.id && w.goal === 'conquest'))) {
+        g.war.raiseEscalation(p.id, enemy.id, 2, theirs ? 'escalation.reason.answer' : 'escalation.reason.strategic');
+        level = 2;
+      }
+    }
+  }
   const enemyAim = enemy ? b.front.aim.get(enemy.id) ?? -1 : -1;
   const ourFront = enemy ? b.front.ours.get(enemy.id) ?? -1 : -1;
   let targets: readonly SimStructure[] | null = null;
@@ -113,13 +134,14 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
       }
       case UnitType.Bomber:
       case UnitType.DroneSwarm: {
-        if (!enemy || (u.state !== UnitState.Docked && u.state !== UnitState.Idle)) break;
+        if (!enemy || level < 1 || (u.state !== UnitState.Docked && u.state !== UnitState.Idle)) break;
         if (rng.next() < 0.25) break;
         targets ??= g.structures(enemy.id);
         const range = AIR_RANGE[u.type];
         let best = -1, bestScore = 0;
         for (const s of targets) {
           if (s.built < 1) continue;
+          if (level < 2 && STRATEGIC.has(s.type)) continue;
           const d = Math.sqrt(nearestDist2(airbaseTiles, s.tile));
           if (d > range * 0.95) continue;
           const v = s.type === StructureType.SamSite ? 5 : s.type === StructureType.MissileSilo ? 4.5 : s.type === StructureType.Airbase ? 3.5
@@ -163,8 +185,9 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
     }
   }
 
-  // Cruise missiles on air defenses and silos that threaten us.
-  if (enemy && rng.next() < 0.5 && rich(UnitType.CruiseMissile, 2.5)) {
+  // Cruise missiles (v2 §5.10): from the war plan's target list (the enemy's air defenses, silos and airbases in
+  // range), within the sim's caps (1 per AI per 120 ticks, 3 per 600 ticks worldwide); never a dice roll.
+  if (enemy && level >= 1 && rich(UnitType.CruiseMissile, 2.5)) {
     const silos = mine.filter((s) => s.type === StructureType.MissileSilo && s.built >= 1 && s.cooldownTicks <= 0);
     if (silos.length) {
       targets ??= g.structures(enemy.id);
@@ -217,58 +240,49 @@ export function thinkNukes(ctx: AiContext, b: Brain, p: SimPlayer): void {
   if (silos.length === 0) return;
   const ready = silos.filter((s) => s.cooldownTicks <= 0);
   if (ready.length === 0) return;
-
-  // Who deserves it?
-  let target: SimPlayer | undefined;
-  let retaliation = false;
-  if (b.retaliate > 0 && g.tick < b.retaliateUntil && g.tick - b.lastNukeTick > 150) {
-    const q = g.player(b.retaliate);
-    if (alive(q) && !g.isAllied(p.id, q.id)) {
-      target = q;
-      retaliation = true;
+  // v2 (§5.10): nuclear weapons only inside a war, after raising the escalation ladder for a stated reason:
+  // L3 (atom) in retaliation or out of desperation, L4 (H-bomb, MIRV) in retaliation for a strike on our own land
+  // or when the war is existential. The sim enforces the global caps and the aim rule (invariant 6).
+  for (const w of g.war.warsOf(p.id)) {
+    const enemy = w.a === p.id ? w.b : w.a;
+    const q = g.player(enemy);
+    if (!alive(q) || !isMajor(q)) continue;
+    const s = w.a === p.id ? 0 : 1;
+    const lost = s === 0 ? Math.max(0, -w.net) : Math.max(0, w.net);
+    const r = relation(b, enemy);
+    const nukedUs = r.nukedTick >= w.startTick;
+    const allyNuked = b.allyNukedBy.get(enemy) ?? -1;
+    const retaliation = nukedUs || allyNuked >= w.startTick;
+    const desperate = (lost >= w.tilesAtStart[s] * 0.4 || w.capitalLost[s]) && g.tick - w.startTick >= 1200 && b.prof.nukes >= 0.4;
+    const existential = w.capitalLost[s] && lost >= w.tilesAtStart[s] * 0.6 && (b.personality === 'nuker' || ctx.world.doomsday >= 0.7);
+    let want = 0;
+    if (retaliation || desperate) want = 3;
+    if (nukedUs || existential) want = 4;
+    if (want === 0) continue;
+    const level = g.war.escalation(p.id, enemy);
+    if (level < want) {
+      const reason = nukedUs ? 'escalation.reason.retaliation' : retaliation ? 'escalation.reason.allyRetaliation' : existential ? 'escalation.reason.existential' : 'escalation.reason.desperation';
+      g.war.raiseEscalation(p.id, enemy, want, reason);
     }
-  }
-  if (!target) {
-    if (g.tick < nukeTick(ctx, b)) return;
-    // Pace unprovoked strikes (the doomsday clock shortens the pause).
-    if (g.tick - b.lastNukeTick < 450 * (1 - ctx.world.doomsday * 0.6)) return;
-    const will = b.prof.nukes * (0.55 + ctx.world.doomsday * 0.9) * b.diff.nukeChance;
-    if (rng.next() > will) return;
-    target = pickNukeTarget(ctx, b, p);
-    if (!target) return;
-  }
-
-  // Pick the weapon we can afford, biggest first when the target is worth it.
-  const reserveGold = retaliation ? 1 : 1.25;
-  const can = (w: WeaponType) => p.gold >= g.unitCost(p.id, w) * reserveGold;
-  const options: WeaponType[] = [];
-  if (can(UnitType.Mirv) && target.tiles > 9000 && (b.personality === 'nuker' || retaliation || ctx.world.doomsday > 0.6)) options.push(UnitType.Mirv);
-  if (can(UnitType.HydrogenBomb)) options.push(UnitType.HydrogenBomb);
-  if (can(UnitType.AtomBomb)) options.push(UnitType.AtomBomb);
-  if (options.length === 0) return;
-  // Near midnight the great nuclear powers save up for a MIRV to end it.
-  if (!retaliation && options[0] !== UnitType.Mirv && ctx.world.doomsday > 0.6 && target.tiles > 9000
-    && (b.personality === 'nuker' || ctx.world.leader === p.id) && p.income * 600 * 3 > g.unitCost(p.id, UnitType.Mirv) && rng.next() < 0.6) return;
-  // Once an exchange is under way, trading atom bombs is a losing game: rich nations save up for the big one.
-  const rel = relation(b, target.id);
-  if (options[0] === UnitType.AtomBomb && rel.nukesSent >= 2 && p.income * 600 > 1_200_000 && rng.next() < 0.75) return;
-
-  for (const weapon of options) {
-    const aim = chooseNukeTarget(ctx, b, p, target, weapon);
-    if (aim < 0) continue;
-    if (g.issue(p.id, { type: 'launch', weapon, targetTile: aim, siloId: -1 })) {
-      b.lastNukeTick = g.tick;
-      b.nukesLaunched++;
-      rel.nukesSent++;
-      if (retaliation && rng.next() < 0.6) b.retaliate = 0; // honour satisfied (maybe)
-      rel.trust = -1;
-      if (b.enemy !== target.id) {
-        b.enemy = target.id;
-        b.enemySince = g.tick;
+    // Retaliation always answers; desperation only sometimes (personality and difficulty).
+    if (!retaliation && rng.next() > b.prof.nukes * b.diff.nukeChance) continue;
+    const top = g.war.escalation(p.id, enemy);
+    const can = (wpn: WeaponType) => p.gold >= g.unitCost(p.id, wpn);
+    const options: WeaponType[] = [];
+    if (top >= 4 && can(UnitType.Mirv) && q.tiles > 9000 && (b.personality === 'nuker' || nukedUs)) options.push(UnitType.Mirv);
+    if (top >= 4 && can(UnitType.HydrogenBomb)) options.push(UnitType.HydrogenBomb);
+    if (top >= 3 && can(UnitType.AtomBomb)) options.push(UnitType.AtomBomb);
+    for (const weapon of options) {
+      const aim = chooseNukeTarget(ctx, b, p, q, weapon);
+      if (aim < 0) continue;
+      if (g.issue(p.id, { type: 'launch', weapon, targetTile: aim, siloId: -1 })) {
+        b.lastNukeTick = g.tick;
+        b.nukesLaunched++;
+        r.nukesSent++;
+        r.trust = -1;
+        return;
       }
-      // Taunt the victim.
-      if (rng.next() < 0.5) g.issue(p.id, { type: 'emote', target: target.id, emote: rng.next() < 0.5 ? 'nuke' : 'skull' });
-      return;
+      break;
     }
   }
 }
@@ -303,7 +317,7 @@ function pickNukeTarget(ctx: AiContext, b: Brain, p: SimPlayer): SimPlayer | und
 function chooseNukeTarget(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer, weapon: WeaponType): number {
   const g = ctx.g;
   const def = NUKE_DEFS[weapon];
-  const outer = weapon === UnitType.Mirv ? 60 : def.outerRadius;
+  const outer = weapon === UnitType.Mirv ? 14 : def.outerRadius;
   const candidates: { tile: number; value: number }[] = [];
   const structs = g.structures(q.id);
   const samTiles: number[] = [];
@@ -342,7 +356,9 @@ function chooseNukeTarget(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer, 
     // Never nuke near our own capital, and keep the blast off our and allied land.
     if (b.homeTile >= 0 && dist2(c.tile, b.homeTile) < (outer * 1.6) * (outer * 1.6)) continue;
     const friendly = friendlyShare(g, p.id, c.tile, outer * 1.1);
-    if (friendly > 0.06) continue;
+    if (friendly > 0) continue;
+    // Invariant 6: the outer radius may only cover land of players at war with us (or nobody).
+    if (!onlyEnemies(ctx, p.id, c.tile, weapon === UnitType.Mirv ? 14 : outer)) continue;
     const onTarget = ownerShare(g, q.id, c.tile, outer);
     if (onTarget < 0.35) continue;
     // Value of everything else inside the blast.
@@ -364,4 +380,28 @@ export function emergencyAirDefense(ctx: AiContext, b: Brain, p: SimPlayer): boo
   if (nuclearThreat(ctx, b, p) < 0.9) return false;
   if (g.structures(p.id, StructureType.SamSite).length >= 1 + Math.floor(p.tiles / 6000)) return false;
   return p.gold >= g.structureCost(p.id, StructureType.SamSite);
+}
+
+/** Every owned land tile within r tiles of `tile` belongs to an enemy at war with `p` (or to nobody). */
+function onlyEnemies(ctx: AiContext, p: number, tile: number, r: number): boolean {
+  const g = ctx.g;
+  const cx = tile % MAP_W, cy = (tile / MAP_W) | 0;
+  const lat = 90 - ((cy + 0.5) / (MAP_W / 2)) * 180;
+  const cos = Math.max(0.12, Math.cos((lat * Math.PI) / 180));
+  const rx = Math.ceil(r / cos), ry = Math.ceil(r);
+  const seen = new Set<number>();
+  for (let dy = -ry; dy <= ry; dy++) {
+    const y = cy + dy;
+    if (y < 0 || y >= MAP_W / 2) continue;
+    for (let dx = -rx; dx <= rx; dx++) {
+      const ex = dx * cos;
+      if (ex * ex + dy * dy > r * r) continue;
+      const t = y * MAP_W + ((cx + dx + MAP_W) % MAP_W);
+      const o = g.ownerOf(t);
+      if (o === 0 || seen.has(o)) continue;
+      seen.add(o);
+      if (!g.war.atWar(p, o)) return false;
+    }
+  }
+  return true;
 }

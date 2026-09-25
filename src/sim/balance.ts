@@ -264,9 +264,10 @@ export function unitPrice(type: UnitType, owned: number): number {
 // Nukes
 // -------------------------------------------------------------------------------------------------
 
-export const MIRV_WARHEADS = 18;
-export const MIRV_SPLIT_T = 0.62;
-export const MIRV_SPREAD = 60;
+/** v2 (§6.3): 10 warheads, split at 70 % of the flight, spread 8 tiles. */
+export const MIRV_WARHEADS = 10;
+export const MIRV_SPLIT_T = 0.7;
+export const MIRV_SPREAD = 8;
 export const INTERCEPT_WEAPON_MUL: Record<number, number> = {
   [UnitType.AtomBomb]: 1,
   [UnitType.HydrogenBomb]: 0.85,

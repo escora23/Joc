@@ -11,6 +11,10 @@ export interface EventEnv {
   rng: Rng;
   /** Tiles per player a few minutes ago (overextension = fast growth). */
   pastTiles: Map<number, number>;
+  /** v2 (W1): player -> last tick a nuclear weapon detonated on its land, and where (the `nuclear` cause, §5.12). */
+  nuked: Map<number, { tick: number; tile: number }>;
+  /** Player -> tick of its last rebellion (at most one per 7,200 ticks, §5.12). */
+  lastRebellion: Map<number, number>;
 }
 
 /** A running world event. `step` returns false once it is over (it must have emitted its 'end'). */

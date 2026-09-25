@@ -5,7 +5,7 @@
 import { openHowTo, openSettings } from './dialogs';
 import { getHud } from './index';
 import { HUMAN_ID } from '../shared/constants';
-import { tileToLatLon } from '../shared/geo';
+import { tileToLatLon, worldTimeForSubsolarLon } from '../shared/geo';
 import { playerName, t } from '../shared/i18n';
 import { registerShot, type ShotContext } from '../shared/shots';
 import { UnitType } from '../shared/types';
@@ -73,9 +73,10 @@ registerShot('howto', 'ui', 'How-to-play modal', async ({ wait }) => {
   await wait(1200);
 }, 10);
 
-registerShot('spawn', 'ui', 'Spawn phase: AI nations placed, human choosing a capital over Europe', async ({ ctx, waitFrames, wait }) => {
-  await ctx.app.startScriptedGame({ humanSpawn: null, stayInSpawn: true });
-  ctx.cameraRig.setState({ lat: 42, lon: 6, altitudeKm: 9_000, tilt: 0, heading: 0 });
+registerShot('spawn', 'ui', 'Spawn phase: AI nations placed and labelled, human choosing a capital (DESIGN_V2 §10.13 view)', async ({ ctx, waitFrames, wait }) => {
+  // The spawn view of §10.13: Europe and Africa from 12,000 km at noon there.
+  await ctx.app.startScriptedGame({ humanSpawn: null, stayInSpawn: true, worldTimeSec: worldTimeForSubsolarLon(15) });
+  ctx.cameraRig.setState({ lat: 35, lon: 15, altitudeKm: 12_000, tilt: 0, heading: 0 });
   await waitFrames(20);
   // Hover the reticle over Iberia so the spawn preview marker shows up.
   const hud = getHud();

@@ -3,7 +3,8 @@
 // Owner: sim-core. Worker-only.
 
 import {
-  BALANCE, HUMAN_ID, MAP_W, STRUCTURE_DEFS, TILE_COUNT, TROOP_REGROWTH_SCALE, WAR_GROWTH_MUL, structureCost,
+  BALANCE, HUMAN_ID, MAP_W, POP_DRIFT_PER_HOUR, POP_PER_CITY_LEVEL, POP_PER_TILE, STRUCTURE_DEFS, TICKS_PER_GAME_HOUR,
+  TILE_COUNT, TROOP_REGROWTH_SCALE, WAR_GROWTH_MUL, structureCost,
 } from '../shared/constants';
 import { STRUCTURE_TYPES, StructureType, UnitType } from '../shared/types';
 import {
@@ -27,6 +28,11 @@ export class EconomySystem {
   private readonly comps2: number[] = [];
 
   private readonly atWarSet = new Set<number>();
+
+  /** Population target of a player (§6.7): 25,000 per tile + 800,000 per built city level. */
+  popTargetOf(p: Player): number {
+    return p.tiles * POP_PER_TILE + p.structLevels[StructureType.City] * POP_PER_CITY_LEVEL;
+  }
 
   constructor(private readonly g: Game) {}
 
@@ -247,6 +253,13 @@ export class EconomySystem {
     }
     for (const p of g.playerArr) {
       if (!p.alive || !p.spawned) continue;
+      // Population (§6.7): the target follows the land and the cities; the people move 0.2 % of it per game hour.
+      p.popTarget = this.popTargetOf(p);
+      const drift = POP_DRIFT_PER_HOUR / TICKS_PER_GAME_HOUR * p.popTarget;
+      if (p.pop < p.popTarget) p.pop = Math.min(p.popTarget, p.pop + drift);
+      else if (p.pop > p.popTarget) p.pop = Math.max(p.popTarget, p.pop - drift);
+      p.civilians = p.pop;
+      const fPop = p.popTarget > 0 ? Math.min(1, Math.max(0.3, p.pop / p.popTarget)) : 1;
       // v2 (§4.13, §6.7): occupied tiles count 50 % for the troop cap and 25 % for taxes; fallout 20 % / 0 %.
       const occ = Math.min(p.occupied, p.tiles);
       const eff = Math.max(0, p.tiles - p.falloutTiles * 0.8 - occ * 0.5);
@@ -258,8 +271,8 @@ export class EconomySystem {
       const max = baseMaxTroops(eff, cityLv, armyLv) * kindCapMul(p.kind, diff) * p.mod('maxTroops', tick);
       p.maxTroops = max;
       let growth = troopGrowthPerTick(p.troops, max);
-      // Recruitment (§6.7): occupied land recruits at 50 %. v2-stub(W1→W1c): × f_pop once population moves with land.
-      p.recruitment = p.tiles > 0 ? 1 - 0.5 * (occ / p.tiles) : 1;
+      // Recruitment (§6.7): f_pop × (1 − 0.5 × occupied / tiles).
+      p.recruitment = fPop * (p.tiles > 0 ? 1 - 0.5 * (occ / p.tiles) : 1);
       if (growth > 0) {
         const falloutFrac = p.tiles > 0 ? p.falloutTiles / p.tiles : 0;
         growth *= TROOP_REGROWTH_SCALE * p.recruitment * kindGrowthMul(p.kind, diff) * p.mod('troopGrowth', tick)
@@ -269,7 +282,7 @@ export class EconomySystem {
       p.troops = Math.max(0, p.troops + growth);
       // Gold.
       const base = p.kind === 'tribe' ? GOLD_BASE_PER_TICK * 0.5 : GOLD_BASE_PER_TICK;
-      let income = (base + GOLD_PER_TILE_PER_TICK * effTax + GOLD_PER_CITY_LEVEL_PER_TICK * cityLv
+      let income = (base + GOLD_PER_TILE_PER_TICK * effTax * fPop + GOLD_PER_CITY_LEVEL_PER_TICK * cityLv
         + (facLv * BALANCE.goldPerFactoryPerSec) / 10) * kindGoldMul(p.kind, diff) * p.mod('goldIncome', tick);
       // Tribute after a lost war (§4.15): a share of the income goes to the winner.
       if (p.tributeTo && tick < p.tributeUntil) {
@@ -288,9 +301,6 @@ export class EconomySystem {
       p.goldGainedThisTick += income;
       p.incomeEma = p.incomeEma === 0 ? income : p.incomeEma * 0.98 + p.goldGainedThisTick * 0.02;
       p.goldGainedThisTick = 0;
-      // Civilians drift toward what the land and cities support.
-      const civTarget = eff * CIVILIANS_PER_TILE + cityLv * CIVILIANS_PER_CITY_LEVEL;
-      p.civilians += (civTarget - p.civilians) * (p.civilians < civTarget ? 0.002 : 0.01);
     }
     // Structures: construction, repairs, factories, ports.
     let progressDirty = false;

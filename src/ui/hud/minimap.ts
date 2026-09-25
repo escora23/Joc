@@ -84,13 +84,31 @@ export function createMinimap(hs: HudShared): Minimap {
     return col;
   }
 
+  /** Owner of a 4x4-tile block: the most common owner among its tiles (0 when none), so small nations show too. */
+  function blockOwner(x: number, y: number): number {
+    const own = ctx.sim.view.owner;
+    const at = (k: number) => own[(y * S + ((k / S) | 0)) * MAP_W + x * S + (k % S)];
+    let best = 0, bn = 0;
+    for (let k = 0; k < S * S; k++) {
+      const o = at(k);
+      if (!o || o === best) continue;
+      // Counting from its first occurrence gives the owner's full count.
+      let n = 0;
+      for (let j = k; j < S * S; j++) if (at(j) === o) n++;
+      if (n > bn) {
+        bn = n;
+        best = o;
+      }
+    }
+    return best;
+  }
+
   function fullRebuild(): void {
     if (!terrainBuilt) buildTerrain();
-    const own = ctx.sim.view.owner;
     for (let y = 0; y < MH; y++) {
       for (let x = 0; x < MW; x++) {
         const i = y * MW + x;
-        const o0 = landMask[i] ? own[(y * S + 2) * MAP_W + x * S + 2] || own[(y * S + 1) * MAP_W + x * S + 1] : 0;
+        const o0 = blockOwner(x, y);
         px[i] = o0 ? colorFor(o0) : terrainPx[i];
       }
     }
@@ -110,8 +128,8 @@ export function createMinimap(hs: HudShared): Minimap {
       const owner = unpackOwner(packed[k]);
       const x = ((tile % MAP_W) / S) | 0, y = ((tile / MAP_W) | 0) / S | 0;
       const i = y * MW + x;
-      if (!landMask[i]) continue;
-      px[i] = owner ? colorFor(owner) : terrainPx[i];
+      const o0 = owner ? owner : blockOwner(x, y);
+      px[i] = o0 ? colorFor(o0) : terrainPx[i];
     }
     dirty = true;
   });
@@ -192,6 +210,20 @@ export function createMinimap(hs: HudShared): Minimap {
     if (x0 < 0) drawRect(x0 + W, x1 + W);
     if (x1 > W) drawRect(x0 - W, x1 - W);
     o.shadowBlur = 0;
+    // Spawn phase (§10.13): every nation's capital as a dot in its colour, so the map shows who is where.
+    if (view.phase === 'spawn') {
+      for (const p of view.playerList) {
+        if (!p.alive || p.capitalTile < 0 || p.kind !== 'nation') continue;
+        const cx = ((p.capitalTile % MAP_W) + 0.5) / MAP_W * W, cy = (((p.capitalTile / MAP_W) | 0) + 0.5) / MAP_H * H;
+        o.fillStyle = `#${p.color.toString(16).padStart(6, '0')}`;
+        o.strokeStyle = 'rgba(0,0,0,0.7)';
+        o.lineWidth = 1.5;
+        o.beginPath();
+        o.arc(cx, cy, 3.5, 0, Math.PI * 2);
+        o.fill();
+        o.stroke();
+      }
+    }
     // Human capital
     const me = view.human;
     blink = (blink + 1) % 8;

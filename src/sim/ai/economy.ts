@@ -67,15 +67,22 @@ export function thinkBuild(ctx: AiContext, b: Brain, p: SimPlayer): void {
     add(StructureType.SamSite, w.sam * nukeThreat * (count[StructureType.SamSite] < 1 + cityLevels / 8 ? 2.4 : 0.3));
     if (count[StructureType.SamSite] > 0) add(StructureType.Radar, w.radar * (count[StructureType.Radar] < 1 ? 1.2 : 0));
   }
-  // Nukes: the nuclear-minded build silos from mid-game, everybody else late (the doomsday clock accelerates it).
+  // Nukes (v2 §5.10): silos only for the nuclear-minded (personality nukes >= 0.3) or when an enemy at war owns silos
+  // (no more "every large nation builds silos").
   if (g.config.nukes && tiles > 800) {
-    const siloTick = diff.nukeTick * b.prof.nukeDelay * 0.75 * (1 - ctx.world.doomsday * 0.5);
-    const nSilo = count[StructureType.MissileSilo];
-    // Great powers arm themselves late in the game whatever their temperament.
-    const power = tiles > 6000 && tick > 6600 ? 1 : 0;
-    const want = Math.max(w.silo, power);
-    const maxSilos = (b.personality === 'nuker' && tiles > 4000 ? 2 : 1) + (tiles > 20000 ? 1 : 0);
-    if (tick > siloTick || power) add(StructureType.MissileSilo, want * (nSilo < maxSilos ? (late ? 2.2 : 1.2) : 0));
+    let enemySilos = false;
+    for (const e of g.war.enemiesOf(p.id)) {
+      if (g.structures(e, StructureType.MissileSilo).length > 0) {
+        enemySilos = true;
+        break;
+      }
+    }
+    if (b.prof.nukes >= 0.3 || enemySilos) {
+      const siloTick = diff.nukeTick * b.prof.nukeDelay * 0.75 * (1 - ctx.world.doomsday * 0.5);
+      const nSilo = count[StructureType.MissileSilo];
+      const maxSilos = (b.personality === 'nuker' && tiles > 4000 ? 2 : 1) + (tiles > 20000 ? 1 : 0);
+      if (tick > siloTick || enemySilos) add(StructureType.MissileSilo, Math.max(w.silo, enemySilos ? 0.8 : 0) * (nSilo < maxSilos ? (late ? 2.2 : 1.2) : 0));
+    }
   }
   if (wants.length === 0) return;
 

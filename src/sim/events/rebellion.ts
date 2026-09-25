@@ -1,42 +1,56 @@
-// FRONT ULTRA — world event: rebellion (owner: sim-ai). Worker-only, deterministic.
+// FRONT ULTRA — world event: unrest and rebellion (DESIGN_V2 §5.12; owner: sim-ai, rebuilt by W1). Worker-only.
 //
-// Overextended empires crack. The candidate is a big nation spread thin (troops far below its cap), growing fast,
-// losing wars or its capital. Unrest is reported first (warning); then a contiguous province far from the capital
-// breaks away as a new rebel nation ("<Country> Libre"), taking part of the local garrison and every structure in
-// the province with it. The AI director gives the rebels a brain that fights their former masters.
+// Rebellions happen only where there is a cause: occupied land above 20 % of a nation's land, war exhaustion above 60,
+// or a nuclear strike on its land in the last 10 days. Unrest always comes first: an `unrest` event names the region,
+// the cause and the tiles at risk 480 ticks (48 h) before anything happens. If the cause disappears in the meantime
+// the rebellion is cancelled (and the alert says so); a front raised to «alta» near the region halves the chance.
+// When it breaks out, the region announced by the unrest (what the parent still holds of it, nothing more) forms a
+// rebel movement at war with its parent, which mobilizes for 60 ticks before its first offensive (invariant 4).
+// At most one rebellion per nation per 7,200 ticks; a successor takes ≤ 15 % of the world and ≤ 40 % of its parent.
 
-import { BALANCE, MAP_W } from '../../shared/constants';
+import { BALANCE, MAP_W, UNREST_TICKS } from '../../shared/constants';
 import { rebelColor } from '../../data/palette';
 import type { SimGame, SimPlayer } from '../../shared/simapi';
 import { cx, cy, emitStage, type ActiveEvent, type EventEnv } from './common';
 
-const WARNING_TICKS = 300;
 const AFTERMATH_TICKS = 600;
+const REBELLION_GAP = 7_200;
+const NUCLEAR_CAUSE_TICKS = 2_400;
+const MIN_REGION = 40;
 
-/** How ripe `p` is for a rebellion (0 = not at all). */
-export function unrest(env: EventEnv, p: SimPlayer): number {
+export type UnrestCause = 'occupation' | 'exhaustion' | 'nuclear';
+
+/** The cause that makes `p` ripe for a rebellion now, or null (§5.12). */
+export function rebellionCause(env: EventEnv, p: SimPlayer): UnrestCause | null {
   const g = env.g;
-  if (!p.alive || !p.spawned || (p.kind !== 'nation' && p.kind !== 'human') || p.tiles < 1500) return 0;
-  const fill = p.troops / Math.max(1, p.maxTroops);
-  const past = env.pastTiles.get(p.id) ?? p.tiles;
-  const growth = Math.min(2, Math.max(0, (p.tiles - past) / Math.max(4000, past)));
-  const share = p.tiles / Math.max(1, g.world.landTiles);
-  // Size, sprawl and speed of conquest breed unrest; a thin garrison makes it worse.
-  let s = Math.log10(p.tiles) * (1 + growth * 2.5) * (1 + share * 6) * (1.3 - Math.min(1, fill) * 0.6);
-  let incoming = 0;
-  for (const a of g.incomingAttacks(p.id)) incoming += a.troops;
-  s *= 1 + Math.min(1, incoming / Math.max(1, p.troops));
-  if (p.capitalTile < 0) s *= 1.5;
-  return s;
+  if (!p.alive || !p.spawned || (p.kind !== 'nation' && p.kind !== 'human') || p.tiles < 300) return null;
+  if (g.tick - (env.lastRebellion.get(p.id) ?? -1_000_000) < REBELLION_GAP) return null;
+  if (p.occupied > p.tiles * 0.2) return 'occupation';
+  if (g.war.exhaustion(p.id) > 60) return 'exhaustion';
+  const n = env.nuked.get(p.id);
+  if (n && g.tick - n.tick < NUCLEAR_CAUSE_TICKS) return 'nuclear';
+  return null;
+}
+
+/** Ripeness score used to pick among candidates (0 = no cause). */
+export function unrest(env: EventEnv, p: SimPlayer): number {
+  const cause = rebellionCause(env, p);
+  if (!cause) return 0;
+  const g = env.g;
+  const base = cause === 'occupation' ? 2 + (p.occupied / Math.max(1, p.tiles)) * 5 : cause === 'exhaustion' ? 2 + (g.war.exhaustion(p.id) - 60) / 10 : 3;
+  return base * (1 + Math.log10(Math.max(10, p.tiles)) / 4);
 }
 
 export class Rebellion implements ActiveEvent {
   readonly kind = 'rebellion' as const;
   private t = 0;
   private rebel = 0;
-  private readonly x: number;
-  private readonly y: number;
-  private radius = 12;
+  private x: number;
+  private y: number;
+  private radius = 8;
+  private region: number[] = [];
+  private cause: UnrestCause | null = null;
+  private erupted = false;
 
   constructor(readonly id: number, private readonly parent: number, private readonly seed: number, private readonly warn: boolean) {
     this.x = cx(seed);
@@ -45,13 +59,27 @@ export class Rebellion implements ActiveEvent {
 
   step(env: EventEnv): boolean {
     const g = env.g;
-    const warnTicks = this.warn ? WARNING_TICKS : 0;
-    if (this.t === 0 && this.warn) emitStage(env, this.id, this.kind, 'warning', this.x, this.y, this.radius, 0, [this.parent]);
-    if (this.t === warnTicks) {
-      if (!this.erupt(env)) {
-        g.setWorldEventState(this.id, null);
-        emitStage(env, this.id, this.kind, 'end', this.x, this.y, this.radius, 0, [this.parent]);
-        return false;
+    const p = g.player(this.parent);
+    if (this.t === 0) {
+      // Unrest: the region, the cause and the tiles at risk, announced UNREST_TICKS ahead.
+      this.cause = p ? rebellionCause(env, p) : null;
+      if (!p || !this.cause) return false;
+      this.region = regionFor(env, p, this.cause, this.seed);
+      if (this.region.length < MIN_REGION) return false;
+      this.place();
+      const until = g.tick + (this.warn ? UNREST_TICKS : 0);
+      g.emit({ type: 'unrest', tick: g.tick, owner: this.parent, region: this.region.slice(), cause: this.cause, stage: 'start', untilTick: until, x: this.x, y: this.y });
+      emitStage(env, this.id, this.kind, 'warning', this.x, this.y, this.radius, 0, [this.parent]);
+    }
+    const warnTicks = this.warn ? UNREST_TICKS : 0;
+    if (!this.erupted) {
+      // The cause must still hold (checked every 20 ticks and at the end).
+      if ((this.t % 20 === 0 || this.t >= warnTicks) && (!p || !p.alive || rebellionCause(env, p) === null)) return this.cancel(env);
+      if (this.t >= warnTicks) {
+        // A front raised to «alta» near the region halves the chance (§5.12).
+        if (this.raisedFrontNear(env) && env.rng.next() < 0.5) return this.cancel(env);
+        if (!this.erupt(env)) return this.cancel(env);
+        this.erupted = true;
       }
     }
     this.t++;
@@ -59,7 +87,7 @@ export class Rebellion implements ActiveEvent {
     if (this.t % 10 === 0) {
       g.setWorldEventState(this.id, {
         kind: this.kind, x: this.x, y: this.y, radius: this.radius, progress: Math.min(1, this.t / life),
-        magnitude: this.t < warnTicks ? 0 : 1, players: this.rebel ? [this.parent, this.rebel] : [this.parent], heading: 0,
+        magnitude: this.erupted ? 1 : 0, players: this.rebel ? [this.parent, this.rebel] : [this.parent], heading: 0,
       });
     }
     if (this.t >= life) {
@@ -70,80 +98,142 @@ export class Rebellion implements ActiveEvent {
     return true;
   }
 
-  /** The province breaks away. False when the parent no longer holds the region. */
+  private cancel(env: EventEnv): boolean {
+    const g = env.g;
+    g.emit({ type: 'unrest', tick: g.tick, owner: this.parent, region: [], cause: this.cause ?? 'occupation', stage: 'cancelled', untilTick: g.tick, x: this.x, y: this.y });
+    g.setWorldEventState(this.id, null);
+    emitStage(env, this.id, this.kind, 'end', this.x, this.y, this.radius, 0, [this.parent]);
+    return false;
+  }
+
+  private place(): void {
+    const r = this.region;
+    const x0 = cx(r[0]);
+    let sx = 0, sy = 0;
+    for (const t of r) {
+      let dx = cx(t) - x0;
+      if (dx > MAP_W / 2) dx -= MAP_W;
+      if (dx < -MAP_W / 2) dx += MAP_W;
+      sx += dx;
+      sy += cy(t);
+    }
+    this.x = (((x0 + sx / r.length) % MAP_W) + MAP_W) % MAP_W;
+    this.y = sy / r.length;
+    let maxD = 0;
+    for (let i = 0; i < r.length; i += 5) {
+      let dx = Math.abs(cx(r[i]) - this.x);
+      if (dx > MAP_W / 2) dx = MAP_W - dx;
+      maxD = Math.max(maxD, Math.hypot(dx, cy(r[i]) - this.y));
+    }
+    this.radius = Math.max(4, maxD);
+  }
+
+  private raisedFrontNear(env: EventEnv): boolean {
+    const g = env.g;
+    for (const f of g.fronts.frontsOf(this.parent)) {
+      const s = f.a === this.parent ? 0 : 1;
+      if (f.priority[s] !== 2) continue;
+      let dx = Math.abs(f.x - this.x);
+      if (dx > MAP_W / 2) dx = MAP_W - dx;
+      if (Math.hypot(dx, f.y - this.y) <= this.radius + 20) return true;
+    }
+    return false;
+  }
+
+  /** The region breaks away (what the parent still holds of it). False when too little is left. */
   private erupt(env: EventEnv): boolean {
     const g = env.g;
     const p = g.player(this.parent);
     if (!p || !p.alive || p.tiles < 300) return false;
-    let seed = this.seed;
-    if (g.ownerOf(seed) !== p.id) {
-      seed = -1;
-      for (let k = 0; k < 40 && seed < 0; k++) {
-        const a = env.rng.next() * Math.PI * 2, r = env.rng.next() * 20;
-        const t = Math.floor(this.y + Math.sin(a) * r) * MAP_W + (((Math.floor(this.x + Math.cos(a) * r)) % MAP_W) + MAP_W) % MAP_W;
-        if (t >= 0 && t < g.world.terrain.length && g.ownerOf(t) === p.id) seed = t;
-      }
-      if (seed < 0) return false;
-    }
-    // Bigger empires lose bigger provinces (a sprawling superpower can lose a whole region).
-    const size = Math.round(Math.max(150, Math.min(Math.max(5000, Math.min(12_000, p.tiles * 0.1)), p.tiles * (0.07 + env.rng.next() * 0.07))));
-    const region = growRegion(g, p.id, seed, size, p.capitalTile);
-    if (region.length < 60) return false;
-
-    const countryIdx = g.world.country[seed];
+    const region = this.region.filter((t) => g.ownerOf(t) === p.id);
+    if (region.length < MIN_REGION) return false;
+    const countryIdx = g.world.country[region[0]];
     const country = countryIdx > 0 ? g.world.countries[countryIdx] : undefined;
     const name = country ? `${country.nameEs} Libre` : `${p.name} Libre`;
     // DESIGN_V2 §10.2: the parent's hue rotated 25°, lightness 0.64 (never a dark grey successor state).
     const color = rebelColor(p.color);
     const rid = g.addPlayer({ name, kind: 'rebel', personality: 'conqueror', color, countryIndex: 0 });
     if (rid <= 0) return false;
-    // The local garrison defects (with interest: the province rises as one), the uprising has momentum for a
-    // while and the rebels dig in hard on their own ground.
+    // The local garrison defects with the province.
     const share = region.length / Math.max(1, p.tiles);
-    const defectors = p.troops * Math.max(0.2, Math.min(0.3, share * 3));
+    const defectors = p.troops * Math.max(0.1, Math.min(0.3, share * 2));
     g.addTroops(p.id, -defectors);
-    g.transferTiles(region, rid);
-    const density = p.troops / Math.max(1, p.tiles);
-    const army = defectors * 1.5 + region.length * Math.max(60, density * 0.5) + 30_000;
+    g.transferTiles(region, rid, 'rebellion');
+    const army = defectors * 1.2 + region.length * 60 + 20_000;
     g.addTroops(rid, army);
-    // A province in arms fields far more soldiers than its land would normally feed: lift the troop cap for a few
-    // minutes (otherwise the surplus would bleed away), after which the rebel state lives on its own means.
     const naturalCap = (BALANCE.troopCapBase + Math.pow(region.length, 0.6) * BALANCE.troopCapPerTile) * 0.6;
-    g.setModifier(rid, 'maxTroops', Math.max(1, Math.min(25, army / Math.max(1, naturalCap))), 1200);
+    g.setModifier(rid, 'maxTroops', Math.max(1, Math.min(10, army / Math.max(1, naturalCap))), 2400);
     g.addGold(rid, Math.min(p.gold * share, 3_000_000) + 250_000);
-    g.setModifier(rid, 'defensePower', 2.2, 1500);
-    g.setModifier(rid, 'attackPower', 1.15, 600);
-    // The loyalist army is demoralised for a while.
+    g.setModifier(rid, 'defensePower', 1.5, 1500);
     g.setModifier(p.id, 'troopGrowth', 0.85, 1200);
-    g.setModifier(p.id, 'attackPower', 0.9, 900);
+    // The rebel movement is at war with its parent and mobilizes 60 ticks before its first offensive.
+    g.war.declare(rid, p.id, 'liberation', 'war.reason.rebellion', { force: true });
+    env.lastRebellion.set(p.id, g.tick);
     this.rebel = rid;
-    // Visual extent of the province.
-    let maxD = 0;
-    for (let i = 0; i < region.length; i += 7) {
-      const t = region[i];
-      let dx = Math.abs(cx(t) - this.x);
-      if (dx > MAP_W / 2) dx = MAP_W - dx;
-      const d = Math.hypot(dx, cy(t) - this.y);
-      if (d > maxD) maxD = d;
-    }
-    this.radius = Math.max(6, maxD);
+    g.emit({ type: 'unrest', tick: g.tick, owner: this.parent, region: [], cause: this.cause ?? 'occupation', stage: 'rebellion', untilTick: g.tick, x: this.x, y: this.y });
     emitStage(env, this.id, this.kind, 'start', this.x, this.y, this.radius, region.length, [this.parent, rid]);
     return true;
   }
 }
 
-/** Breadth-first blob of `owner`'s tiles around `seed` (never within 8 tiles of the capital). */
-function growRegion(g: SimGame, owner: number, seed: number, size: number, capital: number): number[] {
+/**
+ * The region at risk: the largest cluster of occupied land (occupation), the land around the last nuclear strike
+ * (nuclear), or a province far from the capital (exhaustion); grown inside the parent's land and capped at
+ * ≤ 40 % of the parent and ≤ 15 % of the world (T20).
+ */
+function regionFor(env: EventEnv, p: SimPlayer, cause: UnrestCause, seed: number): number[] {
+  const g = env.g;
+  const cap = Math.floor(Math.min(p.tiles * 0.4, g.world.landTiles * 0.15));
+  if (cause === 'occupation') {
+    const occ: number[] = [];
+    for (const t of g.borderTiles(p.id)) if (g.isOccupied(t)) occ.push(t);
+    // Occupied land is where the front passed: start from occupied border tiles and flood through occupied land.
+    const cluster = floodOccupied(g, p.id, occ, cap);
+    if (cluster.length >= MIN_REGION) return grow(g, p.id, cluster, Math.min(cap, Math.round(cluster.length * 1.3)), p.capitalTile);
+    return cluster;
+  }
+  if (cause === 'nuclear') {
+    const n = env.nuked.get(p.id);
+    const start = n && g.ownerOf(n.tile) === p.id ? n.tile : seed;
+    return grow(g, p.id, [start], Math.min(cap, Math.max(150, Math.round(p.tiles * 0.08))), p.capitalTile);
+  }
+  return grow(g, p.id, [seed], Math.min(cap, Math.max(150, Math.round(p.tiles * (0.07 + env.rng.next() * 0.05)))), p.capitalTile);
+}
+
+function floodOccupied(g: SimGame, owner: number, seeds: number[], cap: number): number[] {
+  const seen = new Set<number>();
+  let best: number[] = [];
+  for (const s of seeds) {
+    if (seen.has(s)) continue;
+    const comp: number[] = [s];
+    seen.add(s);
+    for (let i = 0; i < comp.length && comp.length < cap; i++) {
+      const t = comp[i];
+      const x = t % MAP_W;
+      for (const n of [x === 0 ? t + MAP_W - 1 : t - 1, x === MAP_W - 1 ? t - MAP_W + 1 : t + 1, t - MAP_W, t + MAP_W]) {
+        if (n < 0 || n >= g.world.terrain.length || seen.has(n)) continue;
+        if (g.ownerOf(n) !== owner || !g.isOccupied(n)) continue;
+        seen.add(n);
+        comp.push(n);
+      }
+    }
+    if (comp.length > best.length) best = comp;
+  }
+  return best;
+}
+
+/** Breadth-first blob of `owner`'s tiles from `seeds` (never within 8 tiles of the capital). */
+function grow(g: SimGame, owner: number, seeds: number[], size: number, capital: number): number[] {
   const out: number[] = [];
-  const seen = new Set<number>([seed]);
-  const queue = [seed];
+  const seen = new Set<number>(seeds);
+  const queue = seeds.slice();
   const capX = capital >= 0 ? capital % MAP_W : -1e9, capY = capital >= 0 ? (capital / MAP_W) | 0 : -1e9;
   for (let head = 0; head < queue.length && out.length < size; head++) {
     const t = queue[head];
+    if (g.ownerOf(t) !== owner) continue;
     out.push(t);
     const x = t % MAP_W;
-    const nb = [x === 0 ? t + MAP_W - 1 : t - 1, x === MAP_W - 1 ? t - MAP_W + 1 : t + 1, t - MAP_W, t + MAP_W];
-    for (const n of nb) {
+    for (const n of [x === 0 ? t + MAP_W - 1 : t - 1, x === MAP_W - 1 ? t - MAP_W + 1 : t + 1, t - MAP_W, t + MAP_W]) {
       if (n < 0 || n >= g.world.terrain.length || seen.has(n)) continue;
       seen.add(n);
       if (g.ownerOf(n) !== owner) continue;
@@ -169,9 +259,8 @@ export function rebellionSeed(env: EventEnv, p: SimPlayer): number {
   for (const t of border) {
     if (k++ < i) continue;
     i += step;
-    // Far from the capital, and preferably on the coast (a province with sea access cannot simply be encircled).
     let score = cap >= 0 ? distTiles(t, cap) : env.rng.next() * 100;
-    if (g.isShore(t)) score *= 1.6;
+    if (g.isOccupied(t)) score *= 2;
     score *= 0.8 + env.rng.next() * 0.4;
     if (score > bestScore) {
       bestScore = score;

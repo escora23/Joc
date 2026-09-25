@@ -10,8 +10,8 @@
 // Everything random comes from `rng` (seeded from GameConfig.seed) or its forks. No Date / Math.random here.
 
 import {
-  BALANCE, HUMAN_ID, MAP_H, MAP_W, MAX_PLAYER_ID, OCCUPATION_TICKS, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, WIN_LAND_SHARE,
-  structureCost,
+  BALANCE, HUMAN_ID, MAP_H, MAP_W, MAX_PLAYER_ID, OCCUPATION_TICKS, POP_PER_CITY_LEVEL, POP_PER_TILE, STRUCTURE_DEFS,
+  TILE_COUNT, UNIT_DEFS, DURATION_RULES, structureCost,
 } from '../shared/constants';
 import {
   PF, PLAYER_STRIDE, UF, UNIT_STRIDE, packTileOwner, type PlayerCommand, type PlayerMeta, type SimDebugAction,
@@ -47,7 +47,12 @@ import { UnitSystem } from './units';
 import { WaterNav } from './water';
 import { WarSystem } from './war';
 import { WeaponSystem, type Scar } from './weapons';
-import { SaveError, type SaveReader, type SaveWriter } from './save';
+import { GAME_VERSION, SAVE_FORMAT_VERSION, SAVE_MAGIC, SaveError, worldHash, type SaveReader, type SaveWriter } from './save';
+import { readGraph, writeGraph, type GraphSpec } from './snapshot';
+import { StaticGrid as SGrid, DynamicGrid as DGrid } from './spatial';
+import { TileHeap } from './heap';
+import { Rng as RngClass } from '../shared/rng';
+import { EVENT_CLASSES } from './events';
 
 /** Event types kept in intermediate fast-forward updates (the rest are visual/audio noise when skipping time). */
 export const FF_EVENT_TYPES = new Set<SimEvent['type']>([
@@ -264,14 +269,47 @@ export class Game implements SimGame {
   /** Harness / pace-audit: run the §4.17 invariant checker (off in the browser build). */
   static checkInvariants = false;
 
-  /** v2 (W1c): serialise the whole game state (§12.8). */
-  serialize(_w: SaveWriter): void {
-    throw new SaveError('save not available yet');
+  /**
+   * v2 (§12.8): serialise the whole game state: header (magic, format and game version, world hash, config), then the
+   * object graph of the game, the AI director's memory and the world-event director (snapshot.ts).
+   */
+  serialize(w: SaveWriter): void {
+    w.str(SAVE_MAGIC);
+    w.u32(SAVE_FORMAT_VERSION);
+    w.str(GAME_VERSION);
+    w.u32(worldHash(this.world));
+    w.json(this.config);
+    w.section('graph');
+    writeGraph(w, SAVE_SPEC, [this, this.ai.snapshotState?.() ?? null, this.worldEvents.snapshotState?.() ?? null]);
+    w.section('end');
   }
 
-  /** v2 (W1c): rebuild a game from a save blob. */
-  static restore(_r: SaveReader, _world: WorldInit): Game {
-    throw new SaveError('load not available yet');
+  /** Rebuild a game from a save blob (refused with a clear SaveError on another format or another world). */
+  static restore(r: SaveReader, world: WorldInit): Game {
+    let magic = '';
+    try {
+      magic = r.str();
+    } catch {
+      throw new SaveError('not a FRONT ULTRA save');
+    }
+    if (magic !== SAVE_MAGIC) throw new SaveError('not a FRONT ULTRA save');
+    const format = r.u32();
+    if (format !== SAVE_FORMAT_VERSION) throw new SaveError(`save format ${format} is not supported (this version reads ${SAVE_FORMAT_VERSION})`);
+    r.str();
+    if (r.u32() !== worldHash(world)) throw new SaveError('the save was made on a different world map');
+    const config = r.json<GameConfig>();
+    r.section('graph');
+    const g = new Game(config, world);
+    const [, ai, ev] = readGraph(r, SAVE_SPEC, [g, null, null], SAVE_MERGE);
+    if (ai !== null) g.ai.restoreState?.(ai);
+    if (ev !== null) g.worldEvents.restoreState?.(ev);
+    r.section('end');
+    g.forceFull = true;
+    g.structuresDirty = g.attacksDirty = g.alliancesDirty = g.worldEventsDirty = g.scarsDirty = true;
+    g.war.dirty = g.war.trucesDirty = true;
+    g.fronts.dirty = true;
+    g.enclaves.siegesDirty = true;
+    return g;
   }
 
   private reportError(msg: string, err: unknown): void {
@@ -679,16 +717,18 @@ export class Game implements SimGame {
     this.hostility.set(this.pairKey(a, b), this.tick);
   }
 
-  /** Two players are "at war": they fought recently, embargo each other, or one targets the other. */
+  /**
+   * v2 (§4.1): two players shoot at each other's units only in a declared war. Independent territories are outside
+   * the war system: with them it is recent fighting that counts.
+   */
   isHostile(a: number, b: number): boolean {
     if (a === b || a <= 0 || b <= 0) return false;
     if (this.isAllied(a, b)) return false;
     if (this.war.atWar(a, b)) return true;
-    const last = this.hostility.get(this.pairKey(a, b));
-    if (last !== undefined && this.tick - last < HOSTILITY_TICKS) return true;
     const pa = this.playerById[a], pb = this.playerById[b];
-    if (pa?.targetPlayer === b || pb?.targetPlayer === a) return true;
-    return pa?.embargoes.has(b) === true || pb?.embargoes.has(a) === true;
+    if (pa?.kind !== 'tribe' && pb?.kind !== 'tribe') return false;
+    const last = this.hostility.get(this.pairKey(a, b));
+    return last !== undefined && this.tick - last < HOSTILITY_TICKS;
   }
 
   // =================================================================================================
@@ -735,7 +775,21 @@ export class Game implements SimGame {
       pp.border.delete(tile);
       if (coastal) pp.shore.delete(tile);
       if (fallout) pp.falloutTiles--;
-      pp.civilians = Math.max(0, pp.civilians - CIVILIANS_PER_TILE * 0.5);
+    }
+    // Population moves with the land (§6.7): the old owner loses the tile's share of its people, the new owner gains
+    // the tile's people at its own pop / target ratio, so the transfer itself changes neither side's ratio (conquest
+    // never lowers the conqueror's recruitment, acceptance 17).
+    const tgt = this.tileTarget(tile);
+    if (pp) {
+      const share = pp.popTarget > 0 ? (pp.pop * tgt) / pp.popTarget : 0;
+      pp.pop = Math.max(0, pp.pop - share);
+      pp.popTarget = Math.max(0, pp.popTarget - tgt);
+      pp.civilians = pp.pop;
+    }
+    if (np) {
+      np.pop += tgt * (np.popTarget > 0 ? Math.min(1, np.pop / np.popTarget) : 1);
+      np.popTarget += tgt;
+      np.civilians = np.pop;
     }
     if (np) {
       np.tiles++;
@@ -772,6 +826,14 @@ export class Game implements SimGame {
     this.occupy(tile, pp, np);
     // Capital lost?
     if (pp && pp.capitalTile === tile) this.onCapitalLost(pp, newOwner, tile);
+  }
+
+  /** Population target of one tile (§6.7): 25,000 plus 800,000 per level of a built city standing on it. */
+  tileTarget(tile: number): number {
+    const sid = this.structAt[tile];
+    if (sid === 0) return POP_PER_TILE;
+    const s = this.structureMap.get(sid);
+    return POP_PER_TILE + (s && s.type === StructureType.City && s.built >= 1 ? POP_PER_CITY_LEVEL * s.level : 0);
   }
 
   /** Treaty transfers (cessions, capitulations): legal at peace and between former enemies (§4.13, §4.15). */
@@ -1162,8 +1224,13 @@ export class Game implements SimGame {
         if (!p.spawned && p.kind !== 'rebel') this.spawn(p, this.randomFreeLand());
       }
       this.phase = 'playing';
-      for (const p of this.playerArr) p.civilians = p.tiles * CIVILIANS_PER_TILE;
       this.economy.refreshAll();
+      // Population starts at its target (§6.7).
+      for (const p of this.playerArr) {
+        p.popTarget = this.economy.popTargetOf(p);
+        p.pop = p.popTarget;
+        p.civilians = p.pop;
+      }
       this.labels.update();
       this.emit({ type: 'phaseChanged', tick: this.tick, phase: 'playing' });
     }
@@ -1202,21 +1269,49 @@ export class Game implements SimGame {
     this.emit({ type: 'nationEliminated', tick: this.tick, playerId: p.id, by });
   }
 
+  /** v2 (§4.18): the hegemony countdown (leader 0 = none). */
+  hegemony = { leader: 0, since: 0 };
+
   private checkWin(): void {
     if (this.winner || this.phase !== 'playing') return;
-    const need = this.landTiles * WIN_LAND_SHARE;
+    const rules = DURATION_RULES[this.config.duration ?? 'normal'] ?? DURATION_RULES.normal;
+    const need = this.landTiles * rules.domination;
     let aliveMajor = 0;
     let lastMajor: Player | null = null;
     let top: Player | null = null;
+    let first: Player | null = null, second: Player | null = null;
     for (const p of this.playerArr) {
       if (!p.alive || !p.spawned) continue;
       if (p.tiles >= need) return this.end(p.id, 'domination');
       if (p.kind === 'human' || p.kind === 'nation') {
         aliveMajor++;
         lastMajor = p;
+        if (!first || p.tiles > first.tiles) {
+          second = first;
+          first = p;
+        } else if (!second || p.tiles > second.tiles) second = p;
       }
       if (!top || p.tiles > top.tiles) top = p;
     }
+    // Hegemony: ≥ share of the land and ≥ ratio × the second power, held for holdTicks, with a public countdown.
+    if (this.tick % 10 === 0) {
+      const leads = !!first && first.tiles >= this.landTiles * rules.hegemony && first.tiles >= (second?.tiles ?? 0) * rules.hegemonyRatio;
+      const h = this.hegemony;
+      if (leads && h.leader !== first!.id) {
+        if (h.leader) this.emit({ type: 'hegemony', tick: this.tick, leader: h.leader, stage: 'broken', untilTick: 0 });
+        h.leader = first!.id;
+        h.since = this.tick;
+        this.emit({ type: 'hegemony', tick: this.tick, leader: h.leader, stage: 'start', untilTick: this.tick + rules.holdTicks });
+      } else if (!leads && h.leader) {
+        this.emit({ type: 'hegemony', tick: this.tick, leader: h.leader, stage: 'broken', untilTick: 0 });
+        h.leader = 0;
+      } else if (leads && this.tick - h.since >= rules.holdTicks) {
+        this.emit({ type: 'hegemony', tick: this.tick, leader: h.leader, stage: 'won', untilTick: this.tick });
+        return this.end(h.leader, 'hegemony');
+      }
+    }
+    // Time limit: the largest nation wins.
+    if (rules.timeLimit > 0 && this.tick >= rules.timeLimit && first) return this.end(first.id, 'timeLimit');
     const human = this.playerById[HUMAN_ID]!;
     if (!human.alive) {
       let best: Player | null = null;
@@ -1429,3 +1524,31 @@ export function neighbors4(tile: number, out: Int32Array): number {
   if (tile < TILE_COUNT - MAP_W) out[n++] = tile + MAP_W;
   return n;
 }
+
+// -------------------------------------------------------------------------------------------------
+// Save registry (§12.8): every class reachable from the game graph (append only: the index is the format), the
+// systems merged into a fresh game on load, and the fields that are derived, scratch or map-sized and never saved.
+// -------------------------------------------------------------------------------------------------
+type SaveCtor = abstract new (...args: never[]) => unknown;
+const SAVE_MERGE = new Set<SaveCtor>([
+  Game, AttackSystem, UnitSystem, WeaponSystem, EconomySystem, Diplomacy, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav,
+]);
+const SAVE_SPEC: GraphSpec = {
+  classes: [
+    Game, Player, Structure, Unit, Attack, RngClass, SGrid, DGrid, TileHeap, AttackSystem, UnitSystem, WeaponSystem, EconomySystem,
+    Diplomacy, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES,
+  ],
+  skip: new Map<SaveCtor, ReadonlySet<string>>([
+    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'onError', 'frontStamp', 'nb', 'nb2'])],
+    [AttackSystem, new Set(['terrainTime', 'terrainDef', 'nb', 'nb2', 'tc', 'ready', 'atkArmor', 'defArmor', 'posts'])],
+    [WeaponSystem, new Set(['falloutStamp', 'threats'])],
+    [EnclaveSystem, new Set(['stamp', 'stack', 'nb', 'nb2'])],
+    [UnitSystem, new Set(['comps', 'scratch'])],
+    [EconomySystem, new Set(['comps', 'comps2', 'atWarSet'])],
+    [FrontTracker, new Set(['nb'])],
+    [WaterNav, new Set([
+      'terrain', 'comp', 'compSize', 'coastal', 'node', 'nodeCount', 'nodeRep', 'adjStart', 'adjList', 'adjCost', 'ngen', 'nstamp',
+      'nclosed', 'ng', 'nparent', 'nheap', 'bgen', 'bstamp', 'bparent', 'bqueue', 'nb',
+    ])],
+  ]),
+};

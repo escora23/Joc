@@ -44,6 +44,8 @@ export interface PlanetUniforms {
   uCloudK: { value: THREE.Vector4 };
   /** 1 in &mask=owner shots. */
   uMaskMode: { value: number };
+  /** 1 during the spawn phase: free land glows with a slow pulse (§10.13). */
+  uSpawn: { value: number };
 }
 
 export function createPlanetUniforms(): PlanetUniforms {
@@ -65,6 +67,7 @@ export function createPlanetUniforms(): PlanetUniforms {
     uCloseK: { value: 0 },
     uCloudK: { value: new THREE.Vector4(1, 1, 1, 1) },
     uMaskMode: { value: 0 },
+    uSpawn: { value: 0 },
   };
 }
 
@@ -188,6 +191,7 @@ uniform float uShoreK;
 uniform float uCloseK;
 uniform vec4 uCloudK;
 uniform float uMaskMode;
+uniform float uSpawn;
 uniform vec4 uScars[MAX_SCARS];
 uniform int uScarCount;
 uniform vec4 uPatchCut;
@@ -541,7 +545,9 @@ void main() {
       // Neutral land: desaturated 50 % and darkened 18 % from orbit, so owned land stands out (the design's 35 % / 10 %
       // measured ΔE 2.9 against the plain globe at 3,000 km; the readability target is ≥ 5).
       float l = luma(albedo);
-      albedo = mix(albedo, mix(vec3(l), albedo, 0.5) * 0.82, uNeutralK * terr * landK);
+      albedo = mix(albedo, mix(vec3(l), albedo, 0.5) * 0.82, uNeutralK * terr * landK * (1.0 - uSpawn));
+      // Spawn phase: free land (where a capital can be founded) is brightened with a slow pulse.
+      albedo *= 1.0 + uSpawn * terr * landK * (0.22 + 0.14 * sin(uTime * 1.7));
     }
 
     // Contested land (front heat): narrow animated diagonal stripes, orange-red, 1.5 tiles deep (§10.1).

@@ -2,11 +2,15 @@
 // SAM interception, cruise missiles, naval shells, air-strike payloads, nuclear detonations, fallout and scars.
 // Owner: sim-core. Worker-only. Deterministic (rngCombat).
 
-import { BALANCE, HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, TILE_COUNT, TILE_KM, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick } from '../shared/constants';
+import {
+  AI_CRUISE_PER_PLAYER_TICKS, AI_CRUISE_WORLD_MAX, AI_CRUISE_WORLD_WINDOW, AI_FIRST_NUKE_TICK, AI_NUKES_IN_FLIGHT,
+  AI_NUKE_GAP_TICKS, AI_NUKE_PER_PLAYER_TICKS, BALANCE, HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, POP_PER_CITY_LEVEL, POP_PER_TILE,
+  TILE_COUNT, TILE_KM, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick,
+} from '../shared/constants';
 import type { NukeWeapon } from '../shared/protocol';
 import { StructureType, UnitState, UnitType, type WeaponType } from '../shared/types';
 import {
-  CIVILIANS_PER_CITY_LEVEL, CRUISE_RANGE, INTERCEPT_WEAPON_MUL, MIRV_SPLIT_T, MIRV_SPREAD, MIRV_WARHEADS,
+  CRUISE_RANGE, INTERCEPT_WEAPON_MUL, MIRV_SPLIT_T, MIRV_SPREAD, MIRV_WARHEADS,
   NUKE_ALLY_BREAK_TILES, SAM_COOLDOWN_TICKS, SILO_COOLDOWN_TICKS, TERMINAL_PHASE_T, WARSHIP_SHELL_DAMAGE, samRange,
 } from './balance';
 import type { Game } from './game';
@@ -34,6 +38,15 @@ export class WeaponSystem {
   private readonly engagedThisTick = new Map<number, number>();
   private falloutStamp: Uint32Array;
   private falloutGen = 1;
+  // --- v2 (W1): the AI caps of §5.10 and the nuclear record for retaliation ---
+  private lastAiNukeTick = -1_000_000;
+  private readonly aiNukeTick = new Map<number, number>();
+  private readonly aiCruiseTick = new Map<number, number>();
+  private readonly aiCruiseWorld: number[] = [];
+  /** victim -> (attacker -> last tick its nuclear weapon detonated on the victim's land). */
+  readonly nukedBy = new Map<number, Map<number, number>>();
+  /** Detonation ticks (doomsday measure, §5.11). */
+  readonly detonationTicks: number[] = [];
 
   constructor(private readonly g: Game) {
     this.falloutStamp = new Uint32Array(TILE_COUNT);
@@ -58,6 +71,13 @@ export class WeaponSystem {
     }
     if (to !== 0 && g.isAllied(p.id, to)) {
       g.message(p.id, 'msg.cannotNukeAlly');
+      return false;
+    }
+    // v2 (§5.10): the AI launches only at enemies, within its escalation level and the global caps; cruise missiles
+    // (conventional) need a war for everyone. The human may aim a nuclear weapon anywhere (§4.14).
+    const err = p.kind === 'human' ? this.humanLaunchError(p, weapon, to) : this.aiLaunchError(p, weapon, targetTile, to);
+    if (err) {
+      g.message(p.id, err);
       return false;
     }
     const tx = (targetTile % MAP_W) + 0.5, ty = ((targetTile / MAP_W) | 0) + 0.5;
@@ -102,8 +122,100 @@ export class WeaponSystem {
     silo.cooldownTicks = Math.round(weapon === UnitType.HydrogenBomb ? cd * 1.5 : weapon === UnitType.Mirv ? cd * 2.5 : weapon === UnitType.CruiseMissile ? cd * 0.5 : cd);
     g.structuresDirty = true;
     if (weapon === UnitType.Mirv) p.mirvsLaunched++;
-    this.launch(p.id, weapon, silo.tile, targetTile, silo.id);
+    const u = this.launch(p.id, weapon, silo.tile, targetTile, silo.id);
+    if (u && p.kind !== 'human') {
+      if (weapon === UnitType.CruiseMissile) {
+        this.aiCruiseTick.set(p.id, g.tick);
+        this.aiCruiseWorld.push(g.tick);
+      } else {
+        this.lastAiNukeTick = g.tick;
+        this.aiNukeTick.set(p.id, g.tick);
+      }
+    }
+    if (u && to > 0) g.invariants?.onHostileLaunch(p.id, to, weapon === UnitType.CruiseMissile ? 'cruise missile' : 'nuclear launch');
+    // The human's first nuclear weapon in a war raises its escalation (announced).
+    if (u && p.kind === 'human' && to > 0 && weapon !== UnitType.CruiseMissile && g.war.atWar(p.id, to)) {
+      g.war.raiseEscalation(p.id, to, weapon === UnitType.AtomBomb ? 3 : 4, 'escalation.reason.player');
+    }
     return true;
+  }
+
+  private humanLaunchError(p: Player, weapon: WeaponType, to: number): string | null {
+    const g = this.g;
+    if (weapon !== UnitType.CruiseMissile || to === 0) return null;
+    const D = g.playerById[to];
+    if (D && D.kind !== 'tribe' && !g.war.atWar(p.id, to)) return 'msg.notAtWar';
+    return null;
+  }
+
+  /** Was `p` (or one of its allies) hit by a nuclear weapon of `by` (retaliation, §5.10)? */
+  nukedByEnemy(p: number, by: number, since = 0): boolean {
+    const g = this.g;
+    const hit = (v: number) => (this.nukedBy.get(v)?.get(by) ?? -1) >= since;
+    if (hit(p)) return true;
+    const P = g.playerById[p];
+    if (P) for (const a of P.allies) if (hit(a)) return true;
+    return false;
+  }
+
+  /** AI nuclear weapons in flight (a MIRV's warheads count once per owner). */
+  private aiNukesInFlight(): number {
+    const g = this.g;
+    let n = 0;
+    const warheadOwners = new Set<number>();
+    for (const u of g.unitMap.values()) {
+      if (u.owner === HUMAN_ID) continue;
+      if (u.type === UnitType.AtomBomb || u.type === UnitType.HydrogenBomb || u.type === UnitType.Mirv) n++;
+      else if (u.type === UnitType.MirvWarhead) warheadOwners.add(u.owner);
+    }
+    return n + warheadOwners.size;
+  }
+
+  /** Why the AI may not launch this weapon here now (§5.10 and invariant 6), or null. */
+  aiLaunchError(p: Player, weapon: WeaponType, targetTile: number, to: number): string | null {
+    const g = this.g;
+    const tick = g.tick;
+    const D = g.playerById[to];
+    if (!D || to === 0 || !g.war.atWar(p.id, to)) return 'msg.notAtWar';
+    if (weapon === UnitType.CruiseMissile) {
+      if (tick - (this.aiCruiseTick.get(p.id) ?? -1_000_000) < AI_CRUISE_PER_PLAYER_TICKS) return 'msg.cooldown';
+      while (this.aiCruiseWorld.length && this.aiCruiseWorld[0] <= tick - AI_CRUISE_WORLD_WINDOW) this.aiCruiseWorld.shift();
+      if (this.aiCruiseWorld.length >= AI_CRUISE_WORLD_MAX) return 'msg.cooldown';
+      if (g.war.escalation(p.id, to) < 1) return 'msg.escalationLocked';
+      return null;
+    }
+    const need = weapon === UnitType.AtomBomb ? 3 : 4;
+    if (g.war.escalation(p.id, to) < need) return 'msg.escalationLocked';
+    const retaliation = this.nukedByEnemy(p.id, to);
+    if (tick < AI_FIRST_NUKE_TICK && !retaliation) return 'msg.escalationLocked';
+    if (tick - this.lastAiNukeTick < AI_NUKE_GAP_TICKS) return 'msg.cooldown';
+    if (tick - (this.aiNukeTick.get(p.id) ?? -1_000_000) < AI_NUKE_PER_PLAYER_TICKS) return 'msg.cooldown';
+    if (this.aiNukesInFlight() >= AI_NUKES_IN_FLIGHT) return 'msg.cooldown';
+    // Invariant 6: the outer radius (a MIRV: its spread plus a warhead's outer radius) covers only enemies or nobody.
+    const def = NUKE_DEFS[weapon === UnitType.Mirv ? UnitType.MirvWarhead : weapon];
+    const r = weapon === UnitType.Mirv ? MIRV_SPREAD + def.outerRadius : def.outerRadius;
+    for (const o of this.ownersInRadius(targetTile, r)) if (o !== 0 && !g.war.atWar(p.id, o)) return 'msg.nukeSpill';
+    return null;
+  }
+
+  /** Owners of the playable land within `r` tiles (surface-true) of a tile. */
+  ownersInRadius(tile: number, r: number): Set<number> {
+    const g = this.g;
+    const out = new Set<number>();
+    const cx = (tile % MAP_W) + 0.5, cy = ((tile / MAP_W) | 0) + 0.5;
+    const cosLat = Math.max(0.12, Math.cos((90 - (cy / MAP_H) * 180) * DEG));
+    const rx = Math.ceil(r / cosLat), ry = Math.ceil(r);
+    const x0 = Math.floor(cx), y0 = Math.floor(cy), r2 = r * r;
+    for (let dy = -ry; dy <= ry; dy++) {
+      const y = y0 + dy;
+      if (y < 0 || y >= MAP_H) continue;
+      for (let dx = -rx; dx <= rx; dx++) {
+        const t = y * MAP_W + ((x0 + dx + MAP_W) % MAP_W);
+        if (!g.playable[t] || surfDist2(cx, cy, (t % MAP_W) + 0.5, y + 0.5) > r2) continue;
+        out.add(g.owner[t]);
+      }
+    }
+    return out;
   }
 
   /** Create the missile and put it in flight (no cost / silo checks: shots & debug use this directly). */
@@ -213,7 +325,7 @@ export class WeaponSystem {
     const victim = bus.targetPlayer;
     const cx = bus.toX, cy = bus.toY;
     const picks: number[] = [];
-    const minSep2 = 8 * 8;
+    const minSep2 = 3 * 3;
     const far = (t: number) => {
       const x = (t % MAP_W) + 0.5, y = ((t / MAP_W) | 0) + 0.5;
       for (const q of picks) if (dist2(x, y, (q % MAP_W) + 0.5, ((q / MAP_W) | 0) + 0.5) < minSep2) return false;
@@ -535,6 +647,12 @@ export class WeaponSystem {
   // =================================================================================================
   // Detonation
   // =================================================================================================
+  /**
+   * v2 (§4.14): a detonation never changes ownership. It kills the garrison share of the land it hits (60 % inner,
+   * 25 % outer), 70 % / 20 % of the population living on those tiles (the per-tile share of §6.7), destroys structures
+   * inside the inner radius and damages them outside, kills units caught in it and leaves fallout (inner tiles for the
+   * weapon's duration, outer ×0.5). Cruise missiles are conventional: a precision strike on the aim point.
+   */
   private detonate(u: Unit): void {
     const g = this.g;
     const weapon = u.type as NukeWeapon;
@@ -543,18 +661,14 @@ export class WeaponSystem {
     const tile = Math.floor(cy) * MAP_W + Math.floor(cx);
     const inner = def.innerRadius, outer = def.outerRadius;
     const isNuke = weapon !== UnitType.CruiseMissile;
-    const rng = g.rngCombat;
-    const hits = new Map<number, number>();
-    const before = new Map<number, number>();
-    const civBefore = new Map<number, number>();
     const tick = g.tick;
-    const falloutEnd = tick + def.falloutTicks;
-    // Tiles (surface-true circle: x shrinks with latitude).
+    const innerN = new Map<number, number>();
+    const outerN = new Map<number, number>();
+    const civ = new Map<number, number>();
     const cosLat = Math.max(0.12, Math.cos((90 - (cy / MAP_H) * 180) * DEG));
     const rx = Math.ceil(outer / cosLat), ry = Math.ceil(outer);
     const x0 = Math.floor(cx), y0 = Math.floor(cy);
     const inner2 = inner * inner, outer2 = outer * outer;
-    const ph1 = rng.next() * 6.283, ph2 = rng.next() * 6.283, ph3 = rng.next() * 6.283;
     for (let dy = -ry; dy <= ry; dy++) {
       const y = y0 + dy;
       if (y < 0 || y >= MAP_H) continue;
@@ -564,60 +678,65 @@ export class WeaponSystem {
         if (d2 > outer2 || !g.playable[t]) continue;
         const o = g.owner[t];
         const innerHit = d2 <= inner2;
-        const w = innerHit ? 1 : 0.5;
         if (o > 0) {
-          if (!before.has(o)) {
+          (innerHit ? innerN : outerN).set(o, ((innerHit ? innerN : outerN).get(o) ?? 0) + 1);
+          if (isNuke) {
             const p = g.playerById[o]!;
-            before.set(o, p.tiles);
-            civBefore.set(o, p.civilians);
+            const sid = g.structAt[t];
+            const st = sid ? g.structureMap.get(sid) : undefined;
+            const target = POP_PER_TILE + (st && st.type === StructureType.City && st.built >= 1 ? POP_PER_CITY_LEVEL * st.level : 0);
+            const share = (p.pop * target) / Math.max(1, p.popTarget);
+            civ.set(o, (civ.get(o) ?? 0) + share * (innerHit ? 0.7 : 0.2));
           }
-          hits.set(o, (hits.get(o) ?? 0) + w);
         }
         if (!isNuke) continue;
-        // The crater edge is ragged but contiguous: a low-frequency noisy radius between inner and outer.
-        let destroy = innerHit;
-        if (!destroy) {
-          const ang = Math.atan2(y + 0.5 - cy, wdx(cx, (t % MAP_W) + 0.5));
-          const n = 0.5 + 0.22 * Math.sin(ang * 3 + ph1) + 0.16 * Math.sin(ang * 5 + ph2) + 0.12 * Math.sin(ang * 9 + ph3);
-          destroy = Math.sqrt(d2) < inner + (outer - inner) * 0.55 * n;
-        }
-        const until = innerHit ? falloutEnd : tick + Math.round(def.falloutTicks * 0.55);
-        if (destroy && o !== 0) g.setOwner(t, 0);
+        const until = tick + (innerHit ? def.falloutTicks : Math.round(def.falloutTicks * 0.5));
         if (g.falloutUntil[t] < until) {
           const wasClean = g.falloutUntil[t] <= tick;
           g.falloutUntil[t] = until;
-          const no = g.owner[t];
-          if (wasClean && no > 0) g.playerById[no]!.falloutTiles++;
+          if (wasClean && o > 0) g.playerById[o]!.falloutTiles++;
         }
       }
     }
-    // Casualties per affected nation.
+    // Casualties per affected nation: the garrison share of the land hit, the people living there.
     let casualties = 0;
     const attacker = g.playerById[u.owner];
-    for (const [o, h] of hits) {
+    const owners = new Set<number>([...innerN.keys(), ...outerN.keys()]);
+    for (const o of owners) {
       const p = g.playerById[o];
       if (!p || !p.alive) continue;
-      const tilesBefore = Math.max(1, before.get(o) ?? p.tiles);
-      const frac = def.troopLoss * (1 - Math.exp((-5 * h) / tilesBefore)) + (isNuke ? 0.02 : 0);
-      const killed = p.troops * Math.min(0.95, frac);
+      const ni = innerN.get(o) ?? 0, no = outerN.get(o) ?? 0;
+      const share = isNuke ? (ni * def.troopLoss + no * 0.25) / Math.max(1, p.tiles) : (ni * def.troopLoss * 0.25) / Math.max(1, p.tiles);
+      const killed = p.troops * Math.min(0.9, share);
       p.troops -= killed;
       p.stats.troopsLost += killed;
       if (attacker && o !== u.owner) attacker.stats.troopsKilled += killed;
+      // Offensives of the victim whose corridor lies in the blast.
       for (const a of g.attackList) {
-        if (a.attacker === o && !a.ended) {
-          const k = a.troops * Math.min(0.9, frac * 0.8);
-          a.troops -= k;
-          p.stats.troopsLost += k;
-        }
+        if (a.ended || a.attacker !== o) continue;
+        const d2 = surfDist2(cx, cy, a.originX, a.originY);
+        if (d2 > outer2 * 2.25) continue;
+        const k = a.troops * (isNuke ? (d2 <= inner2 * 2.25 ? def.troopLoss : 0.25) : 0.05);
+        a.troops -= k;
+        p.stats.troopsLost += k;
       }
-      const civ = civBefore.get(o) ?? p.civilians;
-      const civKilled = isNuke ? Math.min(civ * 0.9, civ * Math.min(1, (h / tilesBefore) * 2.2)) : 0;
-      p.civilians = Math.max(0, p.civilians - civKilled);
+      const civKilled = Math.min(p.pop, civ.get(o) ?? 0);
+      p.pop -= civKilled;
+      p.civilians = p.pop;
       casualties += killed + civKilled;
       if (o !== u.owner) {
         g.markHostile(u.owner, o);
-        if (g.isAllied(u.owner, o) && h > NUKE_ALLY_BREAK_TILES) g.diplomacy.breakAlliance(g.playerById[u.owner]!, o);
+        if (isNuke) {
+          let m = this.nukedBy.get(o);
+          if (!m) this.nukedBy.set(o, (m = new Map()));
+          m.set(u.owner, tick);
+        }
+        if (isNuke && g.isAllied(u.owner, o) && ni + no > NUKE_ALLY_BREAK_TILES / 4) g.diplomacy.breakAlliance(g.playerById[u.owner]!, o);
       }
+    }
+    if (isNuke) {
+      g.invariants?.onNuclearDetonation(u.owner, owners);
+      this.detonationTicks.push(tick);
     }
     // Structures.
     g.structGrid.query(cx, cy, outer / cosLat, (s) => {
@@ -628,14 +747,6 @@ export class WeaponSystem {
         if (d2 <= 2.25) this.damageStructure(s, 1.2, u.owner);
         else if (d2 <= inner2) this.damageStructure(s, 0.4, u.owner);
         return;
-      }
-      if (s.type === StructureType.City && s.owner > 0) {
-        const p = g.playerById[s.owner];
-        if (p) {
-          const civ = Math.min(p.civilians, CIVILIANS_PER_CITY_LEVEL * s.level * (d2 <= inner2 ? 0.8 : 0.3));
-          p.civilians -= civ;
-          casualties += civ;
-        }
       }
       if (d2 <= inner2) g.economy.destroyStructure(s, u.owner);
       else this.damageStructure(s, 1.3 * (1 - (Math.sqrt(d2) - inner) / Math.max(1, outer - inner)) + 0.2, u.owner);
@@ -656,7 +767,7 @@ export class WeaponSystem {
       else g.unitSys.damage(o, 400, u.owner);
     }
     if (isNuke && def.falloutTicks > 0) {
-      g.scars.push({ id: u.id, x: cx, y: cy, radius: outer, weapon, tick, until: falloutEnd });
+      g.scars.push({ id: u.id, x: cx, y: cy, radius: outer, weapon, tick, until: tick + def.falloutTicks });
       g.scarsDirty = true;
     }
     g.emit({
@@ -664,7 +775,7 @@ export class WeaponSystem {
       outerRadius: outer, targetOwner: tile >= 0 && tile < TILE_COUNT ? (u.targetPlayer > 0 ? u.targetPlayer : g.owner[tile]) : 0,
       casualties: Math.round(casualties),
     });
-    if (isNuke && hits.has(HUMAN_ID) && u.owner !== HUMAN_ID) g.message(HUMAN_ID, 'msg.nukeHit', 'danger', { weapon });
+    if (isNuke && owners.has(HUMAN_ID) && u.owner !== HUMAN_ID) g.message(HUMAN_ID, 'msg.nukeHit', 'danger', { weapon });
     g.unitSys.remove(u, false);
   }
 

@@ -16,7 +16,7 @@ import { HUMAN_ID } from '../../shared/constants';
 import type { SimEvent } from '../../shared/protocol';
 import type { SimGame, WorldEventDirector } from '../../shared/simapi';
 import { tileToLatLon } from '../../shared/geo';
-import { StructureType, type WorldEventKind } from '../../shared/types';
+import { StructureType, UnitType, type WorldEventKind } from '../../shared/types';
 import { cx, cy, nearestLand, placeTile, type ActiveEvent, type EventEnv } from './common';
 import { DoomsdayClock } from './doomsday';
 import { Earthquake } from './earthquake';
@@ -26,10 +26,13 @@ import { Pandemic } from './pandemic';
 import { CYCLONE_BASINS, GOLD_FIELDS, SEISMIC } from './places';
 import { Rebellion, rebellionSeed, unrest } from './rebellion';
 
-/** First event after ~2-3 minutes, then one every ~2-3.5 minutes. */
-const FIRST_EVENT = 1200;
-const GAP_MIN = 1200;
-const GAP_RAND = 900;
+/** Classes of the running world events (the save registry needs them). */
+export const EVENT_CLASSES = [Earthquake, Hurricane, GoldRush, Pandemic, Rebellion, DoomsdayClock] as const;
+
+/** v2 (T26): the first event after >= 6,000 ticks (25 days), then >= 4,800 ticks (20 days) apart. */
+const FIRST_EVENT = 6000;
+const GAP_MIN = 4800;
+const GAP_RAND = 1200;
 const MAX_CONCURRENT = 2;
 
 const HUMAN_REBELLION_WEIGHT = { easy: 0.3, normal: 0.65, hard: 0.9, insane: 1 } as const;
@@ -39,11 +42,12 @@ export interface ForcibleWorldEventDirector extends WorldEventDirector {
 }
 
 export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirector {
-  const rng = game.rng.fork('world-events');
-  const env: EventEnv = { g: game, rng, pastTiles: new Map() };
-  const active: ActiveEvent[] = [];
-  const clock = new DoomsdayClock();
-  const snapshots: Map<number, number>[] = [];
+  // `let`: a save restores these objects wholesale (restoreState), keeping every internal reference consistent.
+  let rng = game.rng.fork('world-events');
+  let env: EventEnv = { g: game, rng, pastTiles: new Map(), nuked: new Map(), lastRebellion: new Map() };
+  let active: ActiveEvent[] = [];
+  let clock = new DoomsdayClock();
+  let snapshots: Map<number, number>[] = [];
   let nextAt = FIRST_EVENT + rng.int(600);
   /** Shuffled bag of kinds so every kind shows up over a game (drawn in order, skipping kinds that do not fit). */
   let bag: WorldEventKind[] = [];
@@ -149,7 +153,7 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
     }
     const cands = game.players()
       .map((p) => ({ p, u: unrest(env, p) * (p.id === HUMAN_ID ? HUMAN_REBELLION_WEIGHT[game.difficulty] : 1) }))
-      .filter((c) => c.u > 2);
+      .filter((c) => c.u > 0);
     if (cands.length === 0) return null;
     const pick = rng.pickWeighted(cands, (c) => c.u * c.u * c.u);
     const seed = rebellionSeed(env, pick.p);
@@ -175,8 +179,8 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
     switch (kind) {
       case 'pandemic': return t > 3000;
       case 'rebellion': {
-        if (t < 3600) return false;
-        for (const p of game.players()) if (unrest(env, p) > 2) return true;
+        // v2 (§5.12): only where there is a cause.
+        for (const p of game.players()) if (unrest(env, p) > 0) return true;
         return false;
       }
       default: return true;
@@ -192,9 +196,8 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
 
   /** Next kind from the bag (refilled and reshuffled when empty; hurricanes and quakes are the most common). */
   function pickKind(): WorldEventKind | null {
-    // Empires that sprawl across continents crack: a runaway leader makes rebellions far more likely.
-    const lead = leaderShare();
-    if (lead > 0.3 && fits('rebellion') && rng.next() < Math.min(0.8, (lead - 0.2) * 2)) return 'rebellion';
+    // Where a rebellion has a cause (occupation, exhaustion, a nuclear strike) it comes first.
+    if (fits('rebellion') && rng.next() < 0.5) return 'rebellion';
     if (bag.length === 0) bag = rng.shuffle(['earthquake', 'hurricane', 'goldRush', 'pandemic', 'rebellion', 'earthquake', 'hurricane', 'goldRush', 'rebellion'] as WorldEventKind[]);
     for (let i = 0; i < bag.length; i++) {
       if (fits(bag[i])) return bag.splice(i, 1)[0];
@@ -211,8 +214,7 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
         if (!active[i].step(env)) active.splice(i--, 1);
       }
       if (t >= nextAt) {
-        // A world on the brink of domination gets more turbulent.
-        nextAt = t + Math.round((GAP_MIN + rng.int(GAP_RAND)) * (leaderShare() > 0.4 ? 0.6 : 1));
+        nextAt = t + GAP_MIN + rng.int(GAP_RAND);
         if (active.length >= MAX_CONCURRENT) return;
         for (let k = 0; k < 3; k++) {
           const kind = pickKind();
@@ -227,6 +229,22 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
     },
     onEvent(e: SimEvent) {
       clock.onEvent(e);
+      if (e.type === 'nukeDetonated' && e.targetOwner > 0 && e.weapon !== UnitType.CruiseMissile) env.nuked.set(e.targetOwner, { tick: e.tick, tile: e.tile });
+    },
+    // v2 (§12.8): the director's state for saves.
+    snapshotState() {
+      return { rng, env, active, clock, snapshots, nextAt, bag };
+    },
+    restoreState(state: unknown) {
+      const s = state as { rng: object; env: EventEnv; active: ActiveEvent[]; clock: DoomsdayClock; snapshots: Map<number, number>[]; nextAt: number; bag: WorldEventKind[] };
+      rng = s.rng as typeof rng;
+      env = s.env;
+      env.g = game;
+      active = s.active;
+      clock = s.clock;
+      snapshots = s.snapshots;
+      nextAt = s.nextAt;
+      bag = s.bag;
     },
     force(kind: WorldEventKind, tile: number) {
       if (kind === 'doomsday') {

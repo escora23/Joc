@@ -378,7 +378,8 @@ export function createNationLabels(ctx: GameContext, font: SdfFont | null): Nati
         const raw = (extentPx * 1.5) / Math.max(4, s.wName * 1.9);
         const isHuman = p.id === HUMAN_ID;
         const rel = relations.relationTo(p.id);
-        const important = isHuman || rel === 'war';
+        // In the spawn phase every AI nation is labelled (§10.13): the player chooses where to start among them.
+        const important = isHuman || rel === 'war' || (view.phase === 'spawn' && p.kind === 'nation');
         // Size 12-28 px by the nation's land as seen at this zoom; the human and its enemies never go below 16 px.
         const px = Math.min(s.indep ? 20 : 28, Math.max(important ? 16 : 12, raw));
         // Nations too small at this zoom stay unlabelled (the human and its enemies always get a label).

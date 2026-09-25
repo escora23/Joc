@@ -1077,6 +1077,8 @@ relief, and they stand on a foundation pad whose skirt reaches the lowest ground
     owner** (offensive, cession, capitulation, rebellion) `share(t)` moves with it from the old owner to the new one.
     The loser's `pop / target` ratio is unchanged and the winner gains people with the land, so conquest never lowers
     the conqueror's recruitment (the v1 formula would have dropped it to ~0.67 after a large conquest, read as a bug).
+    (W1: the winner receives the tile's target population at **its own** ratio, so neither side's ratio moves on a
+    transfer, acceptance 17; land taken from nobody arrives the same way.)
   * **Population factor** `f_pop = clamp(pop / target, 0.3, 1)` multiplies tile taxes. **Recruitment** = `f_pop × (1 −
     0.5 × occupiedTiles / tiles)`: occupied land recruits at 50 % for its 720 ticks (§4.13). Recruitment multiplies
     troop growth (§4.6).

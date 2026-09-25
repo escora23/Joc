@@ -26,6 +26,29 @@ export function thinkNaval(ctx: AiContext, b: Brain, p: SimPlayer): void {
   if (boats >= 2) return;
 
   const reach = Math.min(420, 90 + g.tick / 18) * (0.75 + 0.25 * b.prof.naval);
+  // v2 (T39): unclaimed islands within reach get a small landing party (settlers, not an army).
+  if (rng.next() < 0.6) {
+    let target = -1, bd = reach * reach;
+    for (const isl of ctx.index.islands) {
+      let beach = -1;
+      for (const t of isl.coast) {
+        if (g.ownerOf(t) === 0) {
+          beach = t;
+          break;
+        }
+      }
+      if (beach < 0) continue;
+      const d = dist2(beach, base);
+      if (d < bd) {
+        bd = d;
+        target = beach;
+      }
+    }
+    if (target >= 0 && g.issue(p.id, { type: 'boatAttack', targetTile: target, ratio: 0.1 })) {
+      b.lastBoatTick = g.tick;
+      return;
+    }
+  }
   const origins: number[] = [base];
   for (const t of b.front.shoreSample) origins.push(t);
   let best = -1, bestScore = 0, bestOwner = -1;
