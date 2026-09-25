@@ -106,9 +106,83 @@ export type WorldInit = Omit<WorldData, 'relief'>;
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'insane';
 export const DIFFICULTIES: readonly Difficulty[] = ['easy', 'normal', 'hard', 'insane'];
 
-/** 0 = paused. The sim runs `speed` ticks per 100 ms of wall time. */
-export type GameSpeed = 0 | 1 | 2 | 4;
-export const GAME_SPEEDS: readonly GameSpeed[] = [0, 1, 2, 4];
+/**
+ * 0 = paused. v2: the strategic clock runs speed × 1 game hour per real second (10 ticks per real second at 1x);
+ * crisis and observation time slow the whole world down whatever the speed (DESIGN_V2 §2.2).
+ */
+export type GameSpeed = 0 | 0.5 | 1 | 2 | 4;
+export const GAME_SPEEDS: readonly GameSpeed[] = [0, 0.5, 1, 2, 4];
+
+// --- v2 (W1): clock -----------------------------------------------------------------------------
+/** Which clock drives the world (§2.2). Precedence: tactical/travel > crisis = observation > strategic. */
+export type ClockMode = 'strategic' | 'crisis' | 'observation' | 'tactical' | 'travel';
+/** Clock state sent with every update. rate = game seconds per real second (0 when paused). */
+export interface ClockView {
+  mode: ClockMode;
+  rate: number;
+  /** Wall-clock milliseconds per tick at the current rate (0 when paused). */
+  tickPeriodMs: number;
+  /** Travel time is being held back by terrain streaming (command mode). */
+  throttled?: boolean;
+  /** The strategic speed chosen by the player (restored when crisis / observation ends). */
+  speed: GameSpeed;
+}
+/** Setup option «Duración»: victory thresholds and the time limit (§4.18). */
+export type GameDuration = 'short' | 'normal' | 'long';
+export const GAME_DURATIONS: readonly GameDuration[] = ['short', 'normal', 'long'];
+
+// --- v2 (W1): war -------------------------------------------------------------------------------
+/** The state between two players (§4.1). Independent territories and unclaimed land are outside it. */
+export type PairState = 'peace' | 'war' | 'truce';
+export type TreatyKind = 'alliance' | 'nap' | 'trade' | 'openBorders';
+export type WarGoal = 'border' | 'tribute' | 'conquest' | 'retaliation' | 'coalition' | 'liberation' | 'defense' | 'incursion';
+export interface WarView {
+  id: number;
+  /** Side A (declared the war) and side B (its target). */
+  aggressor: number;
+  target: number;
+  /** A call-to-arms war joins this one (0 = none). */
+  parentWar: number;
+  startTick: number;
+  goal: WarGoal;
+  /** i18n key of the stated reason (war.reason.*). */
+  reasonKey: string;
+  /** The aggressor may not start offensives before this tick. */
+  mobilizeUntilTick: number;
+  /** Escalation level 0..4 of each side (§5.10). */
+  escalationA: number;
+  escalationB: number;
+  /** War score of side A, -100..100 (side B's is the opposite). */
+  scoreA: number;
+  exhaustionA: number;
+  exhaustionB: number;
+  /** Net tiles side A has taken from side B in this war (negative: lost). */
+  tilesA: number;
+  casualtiesA: number;
+  casualtiesB: number;
+  /** Tiles of the defender side still allowed this logistics window (§4.5), per side. */
+  logisticsA: number;
+  logisticsB: number;
+}
+export interface PeaceTerms {
+  kind: 'white' | 'cede' | 'tribute' | 'capitulation';
+  tiles?: number;
+  gold?: number;
+  incomeShare?: number;
+  ticks?: number;
+}
+/** A besieged pocket (§4.12). */
+export interface SiegeView {
+  owner: number;
+  by: number[];
+  x: number;
+  y: number;
+  tiles: number;
+  sinceTick: number;
+}
+/** Offensive life cycle (§4.3–§4.11). */
+export type AttackState =
+  | 'mobilizing' | 'embarking' | 'sailing' | 'landing' | 'contact' | 'advancing' | 'consolidating' | 'stalled' | 'retreating';
 
 export type Personality = 'conqueror' | 'turtle' | 'trader' | 'nuker' | 'opportunist';
 export const PERSONALITIES: readonly Personality[] = ['conqueror', 'turtle', 'trader', 'nuker', 'opportunist'];
@@ -141,6 +215,8 @@ export interface GameConfig {
   instantStart: boolean;
   /** Shots/playtests: the AI director also plays the human nation (build, expand, attack). */
   humanAutopilot: boolean;
+  /** v2 (W1): «Duración» (victory thresholds and time limit, §4.18). Default 'normal'. */
+  duration?: GameDuration;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -226,7 +302,7 @@ export const EMOTES = [
 ] as const;
 export type EmoteId = (typeof EMOTES)[number];
 
-export type GameOverReason = 'domination' | 'lastStanding' | 'eliminated';
+export type GameOverReason = 'domination' | 'lastStanding' | 'eliminated' | 'hegemony' | 'timeLimit';
 
 /** Per-player cumulative counters (end screen, leaderboard). */
 export interface PlayerStatsCounters {
@@ -346,7 +422,32 @@ export interface AttackView {
   defender: number;
   troops: number;
   naval: boolean;
+  /** v2: the tick the offensive starts pushing (end of the aggressor's mobilization for a queued offensive). */
   startTick: number;
+  // --- v2 (W1) ---
+  /** Axis point (the click) and the corridor origin, continuous tile coords. */
+  x: number;
+  y: number;
+  originX: number;
+  originY: number;
+  /** Stable key of the front it pushes on (0 = none yet / unclaimed land). */
+  frontKey: number;
+  /** Corridor width in tiles (§4.3). */
+  frontageTiles: number;
+  tilesTaken: number;
+  tilesLost: number;
+  /** Force ratio R = Pa / Pd (0 for unclaimed land). */
+  ratio: number;
+  /** Measured depth speed, km per game hour (EMA of what actually fell, §4.5). */
+  advanceKmh: number;
+  /** Troops committed so far (initial + reinforcements). */
+  committed: number;
+  /** Ticks until the next milestone of the state (mobilization end, landing...), -1 = n/a. */
+  etaTicks: number;
+  state: AttackState;
+  /** The defender's garrison power facing this offensive (Pd), for the odds display. */
+  defensePower: number;
+  attackPower: number;
 }
 
 export interface FrontView {
@@ -369,6 +470,38 @@ export interface FrontView {
   dirY: number;
   /** Polyline samples along the contact line: [x0, y0, x1, y1, ...] in continuous tile coords (<= 64 points). */
   samples: Float32Array;
+  // --- v2 (W1): fronts are first-class (§4.3, §4.4, §14.2) ---
+  /** Stable key (survives re-clustering). */
+  key: number;
+  /** -1..1, + = side a gaining ground. */
+  momentum: number;
+  /** Measured depth speed of the fastest offensive on this front, km per game hour. */
+  advanceKmh: number;
+  startTick: number;
+  /** Power of the offensive(s) of side a and of side b's garrison (+ counter-offensive) on this front. */
+  pa: number;
+  pd: number;
+  /** Garrison Gf of each side on this front (troops), published for quiet fronts too. */
+  garrisonA: number;
+  garrisonB: number;
+  /** Current and target garrison shares of each side (0..1) and the priority each side set (0 baja, 1, 2 alta). */
+  shareA: number;
+  shareB: number;
+  targetShareA: number;
+  targetShareB: number;
+  priorityA: number;
+  priorityB: number;
+  casualtiesA: number;
+  casualtiesB: number;
+  divisionsA: number;
+  divisionsB: number;
+  /** At war but no offensive on it. */
+  quiet: boolean;
+  /** Attack id of each side's offensive on this front (0 = none). */
+  offensiveA: number;
+  offensiveB: number;
+  /** Per polyline vertex: pressure progress (p/θ × 255) of the tile being taken; only near the observation focus. */
+  progress?: Uint8Array;
 }
 
 export interface ScarView {

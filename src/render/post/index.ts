@@ -10,6 +10,7 @@ import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import type { FrameInfo, GameContext, PostApi } from '../../shared/api';
 import type { QualityProfile } from '../../shared/quality';
 import { clamp01 } from '../../shared/math';
+import { presentationTime, shotView } from '../../shared/shots';
 import { COMPOSITE_FRAG, DOWNSAMPLE_FRAG, FS_VERT, UPSAMPLE_FRAG } from './shaders';
 
 interface PostSettings {
@@ -160,6 +161,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
     uFade: { value: 0 },
     uSaturation: { value: 1.06 },
     uCinematic: { value: 1 },
+    uRaw: { value: 0 },
   };
   const compMat = new THREE.ShaderMaterial({
     vertexShader: FS_VERT, fragmentShader: COMPOSITE_FRAG, depthTest: false, depthWrite: false, toneMapped: false,
@@ -248,6 +250,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
     }
   }
 
+  (window as unknown as { __post?: unknown }).__post = { ca: () => compUniforms.uCA.value };
   const api: PostApi = {
     async init(progress) {
       applyConfig(ctx.quality);
@@ -299,7 +302,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
       }
       flashLevel = Math.max(0, flashLevel - realDt * flashDecay);
       caPulse = Math.max(0, caPulse - realDt * caDecay);
-      compUniforms.uTime.value = frame.time;
+      compUniforms.uTime.value = presentationTime(frame.time);
     },
     render(scene: THREE.Scene, camera: THREE.Camera, _frame: FrameInfo) {
       if (slowGpu) {
@@ -315,12 +318,25 @@ export function createPostPipeline(ctx: GameContext): PostApi {
       renderer.autoClear = true;
       renderer.render(scene, camera);
 
+      if (shotView.mask && scene === ctx.scene) {
+        // &mask=owner: the flat owner-id image straight to the canvas (no bloom, grading, grain or AA).
+        compUniforms.uRaw.value = 1;
+        pass(compMat, null);
+        compUniforms.uRaw.value = 0;
+        renderer.setRenderTarget(null);
+        renderer.autoClear = prevAuto;
+        return;
+      }
+
       if (cfg.bloom && bloomLevels > 0) renderBloom();
 
       const f = flashLevel;
       compUniforms.uFlash.value = Math.min(1.6, f);
       compUniforms.uFlashColor.value.copy(flashColor);
-      compUniforms.uCA.value = (cfg.cinematic ? 0.0022 : 0) + caPulse;
+      // No chromatic aberration in the strategic view (text and borders never get RGB fringes, DESIGN_V2 §10.10):
+      // only command mode and cinematic camera shots keep the lens look.
+      const lensLook = ctx.app.state === 'command' || ctx.cameraRig.mode === 'cinematic';
+      compUniforms.uCA.value = lensLook ? (cfg.cinematic ? 0.0022 : 0) + caPulse : 0;
       compUniforms.uExposure.value = exposure * (1 + Math.min(f, 1) * 0.6);
       compUniforms.uFade.value = fade;
 

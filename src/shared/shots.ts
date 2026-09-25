@@ -7,6 +7,7 @@
 // fixed world time, speed 0 when motion would make the image non-reproducible.
 
 import type { GameContext } from './api';
+import type { CloudMode } from './settings';
 
 export type ShotOwner =
   | 'data' | 'sim-core' | 'sim-ai' | 'globe' | 'units' | 'battle' | 'command' | 'ui' | 'audio' | 'app' | 'shared';
@@ -68,13 +69,82 @@ export function shotParams(): URLSearchParams {
   }
 }
 
+// =================================================================================================
+// Measurement view flags (DESIGN_V2 §14.8, §16.3). Read once from the URL of a ?shot= page and adjustable at
+// runtime through window.__shotView (tools/readability.mjs captures every variant of one staged frame).
+//   &freeze=1       fixed presentation time (shader animation, film grain, pulses), cloud offset and sun
+//   &territory=0    the ground shows no territory overlay (fills, borders, stripes); labels and icons stay
+//   &clouds=hidden|strategic|realistic   force a cloud mode
+//   &mask=owner     the same frame as flat owner-id false colour (see OWNER_MASK below), nothing else drawn
+// =================================================================================================
+
+export type ShotMask = 'owner' | null;
+
+export interface ShotView {
+  freeze: boolean;
+  territory: boolean;
+  clouds: CloudMode | null;
+  mask: ShotMask;
+  /** Incremented on every change (consumers re-apply their state). */
+  rev: number;
+}
+
+/**
+ * Owner-mask encoding written by the ground shader in &mask=owner (exact 8-bit values, no tone mapping):
+ *   space / sky                  (0, 0, 0)
+ *   water                        (0, 0, 40)
+ *   ice / unplayable land        (0, 0, 80)
+ *   neutral land                 (0, 0, 120)
+ *   owned land                   (owner & 255, owner >> 8, 160)
+ * +20 on blue on the night side (sun below the horizon): class = floor(B / 40), night = B % 40 >= 20.
+ * tools/readability.mjs decodes it.
+ */
+export const OWNER_MASK = { water: 40, ice: 80, neutral: 120, owned: 160, night: 20 } as const;
+
+/** Presentation time (s) used while frozen: every time-driven shader animation shows the same frame. */
+export const FROZEN_TIME_SEC = 1000;
+
+function parseShotView(): ShotView {
+  const v: ShotView = { freeze: false, territory: true, clouds: null, mask: null, rev: 0 };
+  try {
+    const q = new URLSearchParams(location.search);
+    if (!q.get('shot')) return v;
+    v.freeze = q.get('freeze') === '1';
+    v.territory = q.get('territory') !== '0';
+    const c = q.get('clouds');
+    if (c === 'hidden' || c === 'strategic' || c === 'realistic') v.clouds = c;
+    if (q.get('mask') === 'owner') v.mask = 'owner';
+  } catch {
+    /* no location (worker/tests) */
+  }
+  return v;
+}
+
+export const shotView: ShotView = parseShotView();
+
+/** Change measurement flags at runtime (tools). */
+export function setShotView(patch: Partial<Omit<ShotView, 'rev'>>): void {
+  Object.assign(shotView, patch);
+  shotView.rev++;
+}
+
+/** Real seconds for presentation animation, or a constant while &freeze=1. */
+export function presentationTime(realSec: number): number {
+  return shotView.freeze ? FROZEN_TIME_SEC : realSec;
+}
+
 declare global {
   interface Window {
+    __shotView?: { get(): ShotView; set(patch: Partial<Omit<ShotView, 'rev'>>): void };
     __shotReady?: boolean;
     __ready?: boolean;
     __fps?: number;
     __shotError?: string;
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.__shotView = { get: () => ({ ...shotView }), set: setShotView };
 }
 
 export function markShotReady(): void {

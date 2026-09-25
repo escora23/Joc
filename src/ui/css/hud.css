@@ -647,3 +647,16 @@
   .fu-tb-stat.is-pop { min-width: 7.6rem; }
   .fu-tb-nation { min-width: 10rem; }
 }
+
+/* --- v2 (W1): clock — «DÍA n», 24-segment hour bar, scale chip (DESIGN_V2 §2.7) --------------------------------- */
+.fu-daybox { display: flex; flex-direction: column; gap: 0.22rem; min-width: 4.6rem; cursor: help; }
+.fu-day-label { font-size: 0.98rem; letter-spacing: 0.08em; color: var(--fu-text); line-height: 1; }
+.fu-hourbar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 1px; height: 4px; }
+.fu-hourbar i { display: block; background: rgba(255, 255, 255, 0.1); }
+.fu-hourbar i.is-on { background: linear-gradient(180deg, #9fe9ff, #4fb8ff); box-shadow: 0 0 0.25rem rgba(79, 184, 255, 0.6); }
+.fu-clockchip { align-self: stretch; text-align: center; font-size: 0.7rem; letter-spacing: 0.12em; padding: 0.22rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: var(--fu-text-dim); border-radius: 2px; cursor: help; transition: background 0.3s, color 0.3s, border-color 0.3s; }
+.fu-clockchip[data-mode='crisis'] { color: #ffcf6b; border-color: rgba(255, 190, 70, 0.6); background: rgba(255, 170, 40, 0.14); animation: fu-pulse 1.4s ease-in-out infinite; }
+.fu-clockchip[data-mode='observation'] { color: #8ff0d8; border-color: rgba(90, 230, 200, 0.5); background: rgba(60, 220, 190, 0.1); }
+.fu-clockchip[data-mode='tactical'] { color: #ff9b8b; border-color: rgba(255, 110, 90, 0.5); background: rgba(255, 90, 70, 0.1); }
+.fu-clockchip[data-mode='travel'] { color: #b9c8ff; border-color: rgba(140, 160, 255, 0.5); background: rgba(120, 140, 255, 0.1); }
+.fu-time.is-paused .fu-clockchip { color: #fff; border-color: var(--fu-accent-2); }

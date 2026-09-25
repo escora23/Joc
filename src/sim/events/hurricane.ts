@@ -6,7 +6,7 @@
 // wrecks ports and naval yards on the coast, hurts the garrison, and weakens quickly over land until it
 // dissipates. The renderable state carries position, heading, radius and category (1-5) every few ticks.
 
-import { MAP_H } from '../../shared/constants';
+import { MAP_H, kmhToTilesPerTick } from '../../shared/constants';
 import { StructureType, UnitType } from '../../shared/types';
 import { dist, emitStage, nearestLand, wrapTile, type ActiveEvent, type EventEnv } from './common';
 
@@ -32,7 +32,8 @@ export class Hurricane implements ActiveEvent {
     const rng = env.rng;
     this.peak = 2.5 + rng.next() * 2.5;
     this.lifetime = 1300 + rng.int(700);
-    this.speed = 0.2 + rng.next() * 0.1;
+    // Tropical cyclones track at 15-27 km/h (and speed up to ~1.5x once they recurve into the westerlies).
+    this.speed = kmhToTilesPerTick(15 + rng.next() * 12);
     this.radius = 11 + rng.next() * 6;
   }
 
@@ -59,7 +60,7 @@ export class Hurricane implements ActiveEvent {
     this.heading += angleDiff(this.heading, target) * (absLat > 20 ? 0.004 : 0.0008);
     this.heading += (rng.next() - 0.5) * 0.01;
     const sp = this.speed * (absLat > 30 ? 1.5 : 1);
-    this.x += Math.sin(this.heading) * sp;
+    this.x += (Math.sin(this.heading) * sp) / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
     this.y -= Math.cos(this.heading) * sp;
     if (this.x < 0) this.x += 1600;
     if (this.x >= 1600) this.x -= 1600;

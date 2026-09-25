@@ -6,7 +6,7 @@
 // the province with it. The AI director gives the rebels a brain that fights their former masters.
 
 import { BALANCE, MAP_W } from '../../shared/constants';
-import { mixHex } from '../../shared/color';
+import { rebelColor } from '../../data/palette';
 import type { SimGame, SimPlayer } from '../../shared/simapi';
 import { cx, cy, emitStage, type ActiveEvent, type EventEnv } from './common';
 
@@ -93,7 +93,8 @@ export class Rebellion implements ActiveEvent {
     const countryIdx = g.world.country[seed];
     const country = countryIdx > 0 ? g.world.countries[countryIdx] : undefined;
     const name = country ? `${country.nameEs} Libre` : `${p.name} Libre`;
-    const color = mixHex(p.color, 0x7a1616, 0.55);
+    // DESIGN_V2 §10.2: the parent's hue rotated 25°, lightness 0.64 (never a dark grey successor state).
+    const color = rebelColor(p.color);
     const rid = g.addPlayer({ name, kind: 'rebel', personality: 'conqueror', color, countryIndex: 0 });
     if (rid <= 0) return false;
     // The local garrison defects (with interest: the province rises as one), the uprising has momentum for a

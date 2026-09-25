@@ -4,7 +4,7 @@
 
 import type { Lang } from './i18n';
 import type { QualityLevel } from './quality';
-import type { Difficulty, GameSpeed } from './types';
+import type { Difficulty, GameDuration, GameSpeed } from './types';
 
 export interface SetupPrefs {
   playerName: string;
@@ -15,7 +15,15 @@ export interface SetupPrefs {
   speed: GameSpeed;
   nukes: boolean;
   worldEvents: boolean;
+  /** v2 (W1): «Duración» of the game (victory thresholds and time limit). */
+  duration: GameDuration;
 }
+
+/**
+ * Cloud layer mode (DESIGN_V2 §10.5): 'strategic' thins clouds over the player's land, fronts and (from high
+ * orbit) all land so territory stays readable; 'realistic' is the plain satellite cloud cover; 'hidden' removes it.
+ */
+export type CloudMode = 'strategic' | 'realistic' | 'hidden';
 
 export interface Settings {
   language: Lang;
@@ -37,6 +45,15 @@ export interface Settings {
   screenShake: boolean;
   /** Last skirmish setup, restored in the setup screen. */
   setup: SetupPrefs;
+  // --- v2 (W1): clock settings (DESIGN_V2 §8.5; the worker decides crisis and observation time from them) ---
+  /** Crisis time while nuclear weapons fly: always (default), only if it concerns me, never. */
+  crisisTime: 'always' | 'mine' | 'off';
+  /** Observation time: the world runs at 1 game minute per real second while the camera is below ~70 km. */
+  observationTime: boolean;
+  /** Cloud layer mode (default 'strategic'). */
+  clouds: CloudMode;
+  /** Historical (real-world) borders overlay below 1,000 km (default off, DESIGN_V2 §10.3). */
+  historicalBorders: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -54,14 +71,19 @@ export const DEFAULT_SETTINGS: Settings = {
   screenShake: true,
   setup: {
     playerName: 'Comandante',
-    playerColor: 0x3fa9ff,
+    playerColor: 0xe48821,
     difficulty: 'normal',
     aiCount: 24,
     tribeCount: 40,
     speed: 1,
     nukes: true,
     worldEvents: true,
+    duration: 'normal',
   },
+  crisisTime: 'always',
+  observationTime: true,
+  clouds: 'strategic',
+  historicalBorders: false,
 };
 
 const STORAGE_KEY = 'frontultra.settings.v1';

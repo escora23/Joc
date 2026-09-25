@@ -3,7 +3,7 @@
 // subsystem sees one consistent state per frame. Re-emits sim events on the bus, raises nuke alarms for the
 // human, and records the stats history (every 5 s of game time) and the timelapse (400x200 RLE frames every 10 s).
 
-import { HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS, TICK_MS, TILE_COUNT, UNIT_DEFS, UPDATE_INTERVAL_MS, structureCost } from '../shared/constants';
+import { GAME_SECONDS_PER_TICK, HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, structureCost } from '../shared/constants';
 import { playerName, t } from '../shared/i18n';
 import type { GameBus } from '../shared/events';
 import type { GameView, ProgressFn, SimClientApi } from '../shared/api';
@@ -11,11 +11,12 @@ import {
   PF, PLAYER_STRIDE, UF, UNIT_STRIDE, unpackOwner, unpackTile,
   type FromWorker, type PlayerCommand, type SimEvent, type TickUpdate, type ToWorker,
 } from '../shared/protocol';
-import { clamp01 } from '../shared/math';
+import { clamp01, lerpAngle } from '../shared/math';
 import {
-  UnitType, emptyStats, type AllianceRequestView, type AllianceView, type AttackView, type FrontView, type GameConfig,
-  type GamePhase, type GameSpeed, type PlayerView, type ScarView, type StatsSample, type StructureType,
-  type StructureView, type Timelapse, type UnitState, type UnitView, type WorldData, type WorldEventView,
+  UnitType, emptyStats, type AllianceRequestView, type AllianceView, type AttackView, type ClockView, type FrontView,
+  type GameConfig, type GamePhase, type GameSpeed, type PairState, type PlayerView, type ScarView, type SiegeView,
+  type StatsSample, type StructureType, type StructureView, type Timelapse, type UnitState, type UnitView, type WarView,
+  type WorldData, type WorldEventView,
 } from '../shared/types';
 import { worldInit } from '../data';
 import { unitPrice } from './balance';
@@ -108,6 +109,35 @@ class ClientView implements GameView {
   tickMs = 0;
   /** MIRVs the human launched (MIRV price escalates). */
   humanMirvs = 0;
+  // --- v2 (W1) ---
+  clock: ClockView = { mode: 'strategic', rate: 3600, tickPeriodMs: 100, speed: 1 };
+  gameHours = 0;
+  wars: WarView[] = [];
+  sieges: SiegeView[] = [];
+  frontByKey = new Map<number, FrontView>();
+  /** Occupied tiles (mirror of the sim's occupation set). */
+  readonly occupied = new Uint8Array(TILE_COUNT);
+  readonly occupiedTiles = new Set<number>();
+
+  isOccupied(tile: number): boolean {
+    return this.occupied[tile] === 1;
+  }
+  occupiedCount(player: number): number {
+    let n = 0;
+    for (const t of this.occupiedTiles) if (this.owner[t] === player) n++;
+    return n;
+  }
+  warBetween(a: number, b: number): WarView | null {
+    for (const w of this.wars) if ((w.aggressor === a && w.target === b) || (w.aggressor === b && w.target === a)) return w;
+    return null;
+  }
+  /** Truces are published on the war list's companion: a pair with no war is at peace unless a truce view exists. */
+  truces: { a: number; b: number; untilTick: number }[] = [];
+  pairState(a: number, b: number): PairState {
+    if (this.warBetween(a, b)) return 'war';
+    for (const t of this.truces) if (((t.a === a && t.b === b) || (t.a === b && t.b === a)) && t.untilTick > this.tick) return 'truce';
+    return 'peace';
+  }
 
   ownerAt(tile: number): number {
     return this.owner[tile];
@@ -150,6 +180,14 @@ class ClientView implements GameView {
     this.timelapse.clear();
     this.tickMs = 0;
     this.humanMirvs = 0;
+    this.clock = { mode: 'strategic', rate: 3600, tickPeriodMs: 100, speed: 1 };
+    this.gameHours = 0;
+    this.wars = [];
+    this.sieges = [];
+    this.truces = [];
+    this.frontByKey.clear();
+    this.occupied.fill(0);
+    this.occupiedTiles.clear();
   }
 }
 
@@ -157,8 +195,55 @@ export function createSimClient(bus: GameBus): SimClientApi {
   registerSimStrings();
   const view = new ClientView();
   let worker: Worker | null = null;
-  const queue: FromWorker[] = [];
-  let lastUpdateAt = 0;
+  /** Worker messages with their arrival time (the interpolation runs on wall time, not on frame time). */
+  const queue: { msg: FromWorker; at: number }[] = [];
+  // v2 interpolation (§2.5): every update that carries ticks starts a segment from the position the units are drawn
+  // at right now to the new sim position, spanning max(1, ticks) × the clock's tick period. Starting from the drawn
+  // position (not the previous sample) keeps motion continuous when updates arrive early or late; a clock change
+  // mid-segment rebases the span so the interpolation factor never jumps.
+  let segStartMs = 0;
+  let segSpanMs = 100;
+  let segTicks = 1;
+  let segStartTick = 0;
+  let frozenAlpha = -1;
+  let saveSeq = 1;
+  const saveWaiters = new Map<number, (r: { blob: ArrayBuffer; tick: number }) => void>();
+  let loadWaiter: { resolve: () => void; reject: (e: Error) => void } | null = null;
+  let clockSettings: { crisisTime: 'always' | 'mine' | 'off'; observationTime: boolean } | null = null;
+
+  function onWorkerMessage(msg: FromWorker, mySession: number): void {
+    if (mySession !== session) return;
+    // The clock is metadata: expose it as soon as it arrives (a stalled frame must not delay "what clock runs now").
+    if (msg.kind === 'update' && msg.u.clock) view.clock = msg.u.clock;
+    queue.push({ msg, at: performance.now() });
+  }
+
+  function segmentAlpha(now: number): number {
+    if (frozenAlpha >= 0) return frozenAlpha;
+    if (segSpanMs <= 0) return 1;
+    return clamp01((now - segStartMs) / segSpanMs);
+  }
+
+  /** Tick period the running segment is timed with (the view's clock may already be newer: it updates on arrival). */
+  let segClock: ClockView = { mode: 'strategic', rate: 3600, tickPeriodMs: 100, speed: 1 };
+  function applyClock(c: ClockView, now: number): void {
+    const prev = segClock;
+    segClock = c;
+    if (c.rate <= 0) {
+      // Paused: the world freezes where it is drawn.
+      if (frozenAlpha < 0) frozenAlpha = segmentAlpha(now);
+      return;
+    }
+    const newSpan = Math.max(1, segTicks) * c.tickPeriodMs;
+    if (frozenAlpha >= 0) {
+      segStartMs = now - frozenAlpha * newSpan;
+      frozenAlpha = -1;
+    } else if (prev.tickPeriodMs !== c.tickPeriodMs) {
+      const a = segmentAlpha(now);
+      segStartMs = now - a * newSpan;
+    }
+    segSpanMs = newSpan;
+  }
   let readyResolve: (() => void) | null = null;
   let ffSeq = 1;
   const ffWaiters = new Map<number, { resolve: () => void; progress?: ProgressFn }>();
@@ -193,7 +278,17 @@ export function createSimClient(bus: GameBus): SimClientApi {
   let pendingSpeedAt = 0;
 
   function apply(u: TickUpdate, now: number): void {
-    view.prevTick = view.tick;
+    // Where the units are drawn right now (before this update): the start of the new segment.
+    const a0 = segmentAlpha(now);
+    const drawnTick = segStartTick + (view.tick - segStartTick) * a0;
+    const resync = !!u.fullOwners;
+    if (u.ticks > 0 || resync) {
+      view.prevTick = resync ? u.tick : view.tick;
+      segStartTick = resync ? u.tick : drawnTick;
+      segStartMs = now;
+      segTicks = Math.max(1, u.ticks);
+      frozenAlpha = -1;
+    }
     view.tick = u.tick;
     if (pendingSpeed === null || u.speed === pendingSpeed || now - pendingSpeedAt > 2000) {
       view.speed = u.speed;
@@ -201,7 +296,9 @@ export function createSimClient(bus: GameBus): SimClientApi {
     }
     view.phase = u.phase;
     view.tickMs = u.tickMs ?? 0;
-    lastUpdateAt = now;
+    if (u.clock) applyClock(u.clock, now);
+    if (u.ticks > 0 && !resync) segSpanMs = segTicks * (segClock.tickPeriodMs || 100);
+    if (u.clock && u.clock.rate <= 0 && u.ticks > 0) frozenAlpha = 0;
 
     // Tiles.
     if (u.fullOwners) {
@@ -265,10 +362,26 @@ export function createSimClient(bus: GameBus): SimClientApi {
         };
         view.units.set(id, un);
       } else {
-        un.prevX = un.x;
-        un.prevY = un.y;
-        un.prevHeading = un.heading;
-        un.prevAlt = un.alt;
+        if (resync) {
+          un.prevX = x;
+          un.prevY = y;
+          un.prevHeading = h;
+          un.prevAlt = alt;
+        } else if (u.ticks > 0) {
+          // The new segment starts where the unit is drawn now.
+          un.prevX = un.prevX + (un.x - un.prevX) * a0;
+          un.prevY = un.prevY + (un.y - un.prevY) * a0;
+          un.prevHeading = lerpAngle(un.prevHeading, un.heading, a0);
+          un.prevAlt = un.prevAlt + (un.alt - un.prevAlt) * a0;
+        } else if (x !== un.x || y !== un.y) {
+          // Moved without a tick (staging, command-mode sub-steps): no segment to glide along.
+          un.prevX = x;
+          un.prevY = y;
+          un.prevHeading = h;
+          un.prevAlt = alt;
+        }
+        if (un.prevX >= MAP_W) un.prevX -= MAP_W;
+        else if (un.prevX < 0) un.prevX += MAP_W;
         // Keep interpolation continuous across the horizontal wrap.
         if (x - un.prevX > MAP_W / 2) un.prevX += MAP_W;
         else if (un.prevX - x > MAP_W / 2) un.prevX -= MAP_W;
@@ -296,7 +409,32 @@ export function createSimClient(bus: GameBus): SimClientApi {
       for (const s of u.structures) view.structures.set(s.id, s);
     }
     if (u.attacks) view.attacks = u.attacks;
-    if (u.fronts) view.fronts = u.fronts;
+    if (u.fronts) {
+      view.fronts = u.fronts;
+      view.frontByKey.clear();
+      for (const f of u.fronts) view.frontByKey.set(f.key, f);
+    }
+    if (u.wars) view.wars = u.wars;
+    if (u.sieges) view.sieges = u.sieges;
+    if (u.occupiedFull) {
+      view.occupied.fill(0);
+      view.occupiedTiles.clear();
+      for (const t of u.occupiedFull) {
+        view.occupied[t] = 1;
+        view.occupiedTiles.add(t);
+      }
+    } else if (u.occupied) {
+      for (const v of u.occupied) {
+        const t = Math.abs(v) - 1;
+        if (v > 0) {
+          view.occupied[t] = 1;
+          view.occupiedTiles.add(t);
+        } else {
+          view.occupied[t] = 0;
+          view.occupiedTiles.delete(t);
+        }
+      }
+    }
     if (u.scars) view.scars = u.scars;
     if (u.worldEvents) view.worldEvents = u.worldEvents;
     if (u.alliances) view.alliances = u.alliances;
@@ -349,7 +487,9 @@ export function createSimClient(bus: GameBus): SimClientApi {
     if (e.type === 'nukeLaunched') {
       if (e.owner === HUMAN_ID && e.weapon === UnitType.Mirv) view.humanMirvs++;
       if (e.targetOwner === HUMAN_ID && e.owner !== HUMAN_ID) {
-        bus.emit('nukeAlarm', { unitId: e.unitId, targetTile: e.targetTile, etaSec: (e.flightTicks * TICK_MS) / 1000, weapon: e.weapon });
+        // Real seconds to impact at the clock now running (crisis time: one tick every 6 s, §2.2).
+        const period = view.clock.rate > 0 ? (GAME_SECONDS_PER_TICK * 1000) / view.clock.rate : 100;
+        bus.emit('nukeAlarm', { unitId: e.unitId, targetTile: e.targetTile, etaSec: (e.flightTicks * period) / 1000, weapon: e.weapon });
       }
     }
   }
@@ -368,13 +508,47 @@ export function createSimClient(bus: GameBus): SimClientApi {
       session++;
       worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'front-ultra-sim' });
       const mySession = session;
-      worker.onmessage = (ev: MessageEvent<FromWorker>) => {
-        if (mySession === session) queue.push(ev.data);
-      };
+      worker.onmessage = (ev: MessageEvent<FromWorker>) => onWorkerMessage(ev.data, mySession);
       worker.onerror = (ev) => console.error('[sim] worker error', ev.message);
       const p = new Promise<void>((resolve) => (readyResolve = resolve));
       postToWorker({ kind: 'init', config, world: worldInit(world) });
+      if (clockSettings) postToWorker({ kind: 'settings', ...clockSettings });
       return p;
+    },
+    load(blob: ArrayBuffer, world: WorldData): Promise<void> {
+      this.stop();
+      view.reset();
+      view.world = world;
+      session++;
+      worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'front-ultra-sim' });
+      const mySession = session;
+      worker.onmessage = (ev: MessageEvent<FromWorker>) => onWorkerMessage(ev.data, mySession);
+      worker.onerror = (ev) => console.error('[sim] worker error', ev.message);
+      const p = new Promise<void>((resolve, reject) => {
+        readyResolve = resolve;
+        loadWaiter = { resolve, reject };
+      });
+      worker.postMessage({ kind: 'load', blob, world: worldInit(world) } satisfies ToWorker, [blob]);
+      if (clockSettings) postToWorker({ kind: 'settings', ...clockSettings });
+      return p;
+    },
+    save(): Promise<{ blob: ArrayBuffer; tick: number }> {
+      const requestId = saveSeq++;
+      return new Promise((resolve, reject) => {
+        if (!worker) {
+          reject(new Error('no game running'));
+          return;
+        }
+        saveWaiters.set(requestId, resolve);
+        postToWorker({ kind: 'save', requestId });
+      });
+    },
+    setClock(mode, rate, focus, throttled) {
+      postToWorker({ kind: 'clock', mode, rate, focus, throttled });
+    },
+    setClockSettings(crisisTime, observationTime) {
+      clockSettings = { crisisTime, observationTime };
+      postToWorker({ kind: 'settings', crisisTime, observationTime });
     },
     send(cmd: PlayerCommand): void {
       postToWorker({ kind: 'command', playerId: HUMAN_ID, cmd });
@@ -402,10 +576,11 @@ export function createSimClient(bus: GameBus): SimClientApi {
     },
     pump(now: number): void {
       while (queue.length) {
-        const msg = queue.shift()!;
+        const { msg, at } = queue.shift()!;
         switch (msg.kind) {
           case 'update':
-            apply(msg.u, now);
+            // Segments start when the update arrived, so motion depends on wall time only (not on frame timing).
+            apply(msg.u, Math.min(now, at));
             if (readyResolve) {
               readyResolve();
               readyResolve = null;
@@ -423,13 +598,26 @@ export function createSimClient(bus: GameBus): SimClientApi {
           case 'error':
             console.error('[sim] worker error:', msg.message, msg.stack ?? '');
             break;
+          case 'saved': {
+            const w = saveWaiters.get(msg.requestId);
+            saveWaiters.delete(msg.requestId);
+            w?.({ blob: msg.blob, tick: msg.tick });
+            break;
+          }
+          case 'loadFailed':
+            loadWaiter?.reject(new Error(msg.message));
+            loadWaiter = null;
+            readyResolve = null;
+            break;
           case 'ready':
             break;
         }
       }
-      view.alpha = view.speed === 0 || view.phase !== 'playing' ? 1 : clamp01((now - lastUpdateAt) / UPDATE_INTERVAL_MS);
-      const t = view.prevTick + (view.tick - view.prevTick) * view.alpha;
-      view.simTime = (t * TICK_MS) / 1000;
+      view.alpha = view.phase !== 'playing' ? 1 : segmentAlpha(now);
+      const t = view.phase !== 'playing' ? view.tick : segStartTick + (view.tick - segStartTick) * view.alpha;
+      // Presentation seconds = game hours = ticks / 10 (1 per real second at 1x, §2.5).
+      view.simTime = t / 10;
+      view.gameHours = t / 10;
     },
     stop(): void {
       if (worker) {

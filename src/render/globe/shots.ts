@@ -7,6 +7,7 @@ import { UnitType } from '../../shared/types';
 import { registerShot, type ShotContext } from '../../shared/shots';
 import { setMenuWorldTimeOverride } from '../camera';
 import { setGlobeWorldTimeOverride } from './index';
+import './readshots';
 
 function num(params: URLSearchParams, key: string, def: number): number {
   const v = params.get(key);

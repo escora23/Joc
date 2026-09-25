@@ -185,3 +185,33 @@ export const GLSL_COLOR = /* glsl */ `
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 vec3 srgbToLinear(vec3 c) { return pow(c, vec3(2.2)); }
 `;
+
+/**
+ * Territory fill (DESIGN_V2 §10.1), shared by the globe surface, its near patch and the battle terrain rim so owned
+ * land looks the same everywhere (no seam between them): the owner colour is mixed into the ground keeping 30 % of
+ * the ground's luminance variation, so relief and land cover still read through the colour.
+ * Needs GLSL_COLOR (luma). `owner` is linear RGB; `fill` comes from territoryFillAmount() (CPU) or uFill.
+ */
+export const GLSL_TERRITORY_FILL = /* glsl */ `
+#define TERR_LUM_AVG 0.15
+vec3 territoryFill(vec3 ground, vec3 owner, float fill) {
+  float k = clamp(0.7 + 0.3 * luma(ground) / TERR_LUM_AVG, 0.6, 1.4);
+  return mix(ground, owner * k, fill);
+}
+`;
+
+/**
+ * Base fill strength by camera altitude (DESIGN_V2 §10.1), log-interpolated: ≥ 6,000 km 0.55; 1,500 km 0.45;
+ * 300 km 0.35; ≤ 40 km 0.25. Add 0.05 for the human's land and 0.08 under the hover.
+ */
+export function territoryFillAmount(altKm: number): number {
+  const K: readonly [number, number][] = [[40, 0.25], [300, 0.35], [1500, 0.45], [6000, 0.55]];
+  if (altKm <= K[0][0]) return K[0][1];
+  for (let i = 1; i < K.length; i++) {
+    if (altKm <= K[i][0]) {
+      const t = Math.log(altKm / K[i - 1][0]) / Math.log(K[i][0] / K[i - 1][0]);
+      return K[i - 1][1] + (K[i][1] - K[i - 1][1]) * t;
+    }
+  }
+  return K[K.length - 1][1];
+}

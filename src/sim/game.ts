@@ -44,6 +44,7 @@ import { Attack, Player, Structure, Unit } from './state';
 import { UnitSystem } from './units';
 import { WaterNav } from './water';
 import { WeaponSystem, type Scar } from './weapons';
+import { SaveError, type SaveReader, type SaveWriter } from './save';
 
 /** Event types kept in intermediate fast-forward updates (the rest are visual/audio noise when skipping time). */
 export const FF_EVENT_TYPES = new Set<SimEvent['type']>([
@@ -111,6 +112,13 @@ export class Game implements SimGame {
   private usingFallbackAi = false;
   /** Reports non-fatal errors (AI exceptions) to the host (worker posts them to the main thread). */
   onError: ((message: string, stack?: string) => void) | null = null;
+  /**
+   * v2 (W1): observation focus (tile coords of the camera's ground point) while the main thread runs observation
+   * time; fronts publish sub-tile progress near it (§11.5). null = none.
+   */
+  observationFocus: { x: number; y: number } | null = null;
+  /** v2 (W1): command-mode systems advanced between ticks (§2.2, §9.3). Headless runs never sub-step. */
+  private readonly subSteppers: ((dtGameSec: number) => void)[] = [];
 
   // --- output -----------------------------------------------------------------------------------
   private nextId = 1;
@@ -217,6 +225,16 @@ export class Game implements SimGame {
 
   /** Tests / harness: replace the AI director by the sim-core fallback AI before setup. */
   static withFallbackAi = false;
+
+  /** v2 (W1c): serialise the whole game state (§12.8). */
+  serialize(_w: SaveWriter): void {
+    throw new SaveError('save not available yet');
+  }
+
+  /** v2 (W1c): rebuild a game from a save blob. */
+  static restore(_r: SaveReader, _world: WorldInit): Game {
+    throw new SaveError('load not available yet');
+  }
 
   private reportError(msg: string, err: unknown): void {
     const e = err as Error;
@@ -530,6 +548,37 @@ export class Game implements SimGame {
       this.worldEvents.onEvent(e);
     } catch (err) {
       this.worldEventFault(err);
+    }
+  }
+
+  /**
+   * v2 (W1): an event for the client only (clock changes decided by the worker): queued with the tick's events but not
+   * dispatched to the AI or world-event directors, so headless and browser runs stay identical.
+   */
+  pushClientEvent(e: SimEvent): void {
+    this.events.push(e);
+  }
+
+  /**
+   * v2 (W1): register a command-mode system that advances between ticks (W5: the controlled unit, incursion timers,
+   * quick-reaction forces). The worker calls subStep(dtGameSec) every loop in tactical and travel time.
+   */
+  registerSubStep(fn: (dtGameSec: number) => void): () => void {
+    this.subSteppers.push(fn);
+    return () => {
+      const i = this.subSteppers.indexOf(fn);
+      if (i >= 0) this.subSteppers.splice(i, 1);
+    };
+  }
+
+  subStep(dtGameSec: number): void {
+    if (this.phase !== 'playing' || dtGameSec <= 0) return;
+    for (const fn of this.subSteppers) {
+      try {
+        fn(dtGameSec);
+      } catch (err) {
+        this.reportError('subStep failed', err);
+      }
     }
   }
 
@@ -849,6 +898,11 @@ export class Game implements SimGame {
       case 'spawnUnit':
         this.unitSys.debugSpawn(a.unit, a.owner, a.tile, a.targetTile);
         break;
+      case 'removeUnit': {
+        const u = this.unitMap.get(a.unitId);
+        if (u) this.unitSys.remove(u, false);
+        break;
+      }
       case 'launchNuke':
         this.weapons.launch(a.owner, a.weapon, a.fromTile, a.targetTile, 0);
         break;
@@ -1091,6 +1145,8 @@ export class Game implements SimGame {
       players,
       units: this.packUnits(),
       events: this.events.splice(0),
+      // The worker replaces it with the live clock; headless runs report the strategic clock of their speed.
+      clock: { mode: 'strategic', rate: 3600 * this.speed, tickPeriodMs: this.speed > 0 ? 100 / this.speed : 0, speed: this.speed },
     };
     if (full) u.fullOwners = this.owner.slice();
     if (playerMeta.length) u.playerMeta = playerMeta;
@@ -1105,7 +1161,11 @@ export class Game implements SimGame {
       this.attacksDirty = false;
       const list: AttackView[] = [];
       for (const a of this.attackList) {
-        if (!a.ended) list.push({ id: a.id, attacker: a.attacker, defender: a.defender, troops: Math.floor(a.troops), naval: a.naval, startTick: a.startTick });
+        if (!a.ended) list.push({
+          id: a.id, attacker: a.attacker, defender: a.defender, troops: Math.floor(a.troops), naval: a.naval, startTick: a.startTick,
+          x: a.clickX, y: a.clickY, originX: a.clickX, originY: a.clickY, frontKey: 0, frontageTiles: 0, tilesTaken: 0, tilesLost: 0,
+          ratio: 0, advanceKmh: 0, committed: Math.floor(a.troops), etaTicks: -1, state: 'advancing', defensePower: 0, attackPower: 0,
+        });
       }
       u.attacks = list;
     }

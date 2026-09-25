@@ -32,7 +32,8 @@ const WEAPON_HOTKEYS: Record<string, WeaponType> = {
   c: UnitType.Mirv as WeaponType,
   v: UnitType.CruiseMissile as WeaponType,
 };
-const SPEEDS: GameSpeed[] = [1, 2, 4];
+/** `+` / `-` step through these strategic speeds (§2.7). */
+const SPEEDS: GameSpeed[] = [0.5, 1, 2, 4];
 
 export function wireController(hs: HudShared, hooks: ControllerHooks): void {
   const ctx = hs.ctx;
@@ -231,7 +232,8 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       case '=': {
         const sp = ctx.sim.view.speed;
         const i = SPEEDS.indexOf(sp as GameSpeed);
-        ctx.app.setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, i + 1)] ?? 1);
+        // From pause, + resumes at the slowest speed above it.
+        ctx.app.setSpeed(i < 0 ? 1 : SPEEDS[Math.min(SPEEDS.length - 1, i + 1)]);
         hs.sound('click');
         return;
       }
@@ -239,7 +241,7 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       case '_': {
         const sp = ctx.sim.view.speed;
         const i = SPEEDS.indexOf(sp as GameSpeed);
-        ctx.app.setSpeed(SPEEDS[Math.max(0, i - 1)] ?? 1);
+        ctx.app.setSpeed(i < 0 ? 0.5 : SPEEDS[Math.max(0, i - 1)]);
         hs.sound('click');
         return;
       }

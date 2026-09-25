@@ -2,7 +2,7 @@
 // fighter squadrons, bombers, drone swarms and trains. Owner: sim-core. Worker-only.
 // Missiles, nukes, SAM interceptors and shells are flown by weapons.ts (they share the unit maps).
 
-import { HUMAN_ID, MAP_H, MAP_W, TILE_COUNT, UNIT_DEFS } from '../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, TILE_COUNT, TILE_KM, UNIT_DEFS, kmhToKmPerTick } from '../shared/constants';
 import { StructureType, UnitState, UnitType, type BuildableUnit } from '../shared/types';
 import {
   AIRBASE_CAPACITY, AIRBASE_INTERCEPT_RANGE, AIRCRAFT_FUEL_TICKS, AIRCRAFT_STRIKE_RANGE, ARMY_BASE_CAPACITY, MAX_BOATS,
@@ -11,7 +11,7 @@ import {
 } from './balance';
 import type { Game } from './game';
 import { Attack, Mode, Player, Structure, Unit } from './state';
-import { dist2, wdx, wrapXf } from './spatial';
+import { advanceKm, dist2, latCos, wdx, wrapXf } from './spatial';
 
 const AIR_TYPES = new Set<number>([UnitType.FighterSquadron, UnitType.Bomber, UnitType.DroneSwarm]);
 const PROJECTILES = new Set<number>([
@@ -522,42 +522,27 @@ export class UnitSystem {
   // =================================================================================================
   // Movement helpers
   // =================================================================================================
-  /** Move toward (tx, ty) by `speed` tiles; returns true on arrival. Updates heading. */
-  private moveToward(u: Unit, tx: number, ty: number, speed: number): boolean {
-    const dx = wdx(u.x, tx), dy = ty - u.y;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d > 1e-6) u.heading = Math.atan2(dx, -dy);
-    if (d <= speed) {
-      u.x = wrapXf(tx);
-      u.y = ty;
-      return true;
-    }
-    u.x = wrapXf(u.x + (dx / d) * speed);
-    u.y += (dy / d) * speed;
-    return false;
+  /**
+   * Move toward (tx, ty) by `km` kilometres in the local metric (v2 §2.5: speeds are km per game hour, the same at
+   * every latitude); returns true on arrival. Updates heading.
+   */
+  private moveToward(u: Unit, tx: number, ty: number, km: number): boolean {
+    return advanceKm(u, tx, ty, km);
   }
 
-  /** Follow u.path; returns true when the last waypoint is reached. */
-  private followPath(u: Unit, speed: number): boolean {
+  /** Follow u.path spending `km` kilometres this tick; returns true when the last waypoint is reached. */
+  private followPath(u: Unit, km: number): boolean {
     const path = u.path;
     if (!path) return true;
-    let budget = speed;
+    let budget = km;
     while (budget > 1e-6 && u.pathI < path.length) {
       const t = path[u.pathI];
       const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
-      const dx = wdx(u.x, tx), dy = ty - u.y;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > 1e-6) u.heading = Math.atan2(dx, -dy);
-      if (d <= budget) {
-        u.x = wrapXf(tx);
-        u.y = ty;
-        budget -= d;
+      const before = kmBetween(u.x, u.y, tx, ty);
+      if (advanceKm(u, tx, ty, budget)) {
+        budget -= before;
         u.pathI++;
-      } else {
-        u.x = wrapXf(u.x + (dx / d) * budget);
-        u.y += (dy / d) * budget;
-        budget = 0;
-      }
+      } else budget = 0;
     }
     return u.pathI >= path.length;
   }
@@ -648,7 +633,7 @@ export class UnitSystem {
     }
     if (!u.path) return;
     u.state = u.mode === Mode.Return ? UnitState.Returning : UnitState.Moving;
-    if (!this.followPath(u, UNIT_DEFS[UnitType.TransportShip].speed)) return;
+    if (!this.followPath(u, KM_PER_TICK[UnitType.TransportShip])) return;
     const a = g.attackList.find((x) => x.id === u.attackId && !x.ended);
     const p = g.playerById[u.owner];
     if (u.mode === Mode.Return || u.aux < 0) {
@@ -682,7 +667,7 @@ export class UnitSystem {
       return;
     }
     u.state = UnitState.Moving;
-    if (!this.followPath(u, UNIT_DEFS[UnitType.TradeShip].speed)) return;
+    if (!this.followPath(u, KM_PER_TICK[UnitType.TradeShip])) return;
     const dest = g.structureMap.get(u.targetStructure);
     const owner = g.playerById[u.owner];
     if (dest && owner && owner.alive && dest.type === StructureType.Port) {
@@ -740,7 +725,7 @@ export class UnitSystem {
   private stepWarship(u: Unit): void {
     const g = this.g;
     if (u.cooldown > 0) u.cooldown--;
-    const speed = UNIT_DEFS[UnitType.Warship].speed;
+    const speed = KM_PER_TICK[UnitType.Warship];
     // Healing near own naval yards / ports.
     if (g.tick - u.lastHitTick > 60 && u.hp < u.maxHp) {
       let heal = 0.15;
@@ -852,7 +837,7 @@ export class UnitSystem {
     const g = this.g;
     const p = g.playerById[u.owner];
     if (!p) return;
-    const speed = UNIT_DEFS[UnitType.ArmoredDivision].speed;
+    const speed = KM_PER_TICK[UnitType.ArmoredDivision];
     const here = Math.floor(u.y) * MAP_W + Math.floor(u.x);
     const hereOwner = g.owner[here];
     if (hereOwner !== u.owner && !g.isAllied(u.owner, hereOwner)) {
@@ -926,30 +911,32 @@ export class UnitSystem {
     }
   }
 
-  /** Drive toward (toX, toY) staying on own/allied land. Returns true when at the objective or blocked. */
-  private advanceOverOwnLand(u: Unit, speed: number): boolean {
+  /**
+   * Drive `km` kilometres toward (toX, toY) staying on own/allied land. Returns true when at the objective or
+   * blocked (v2: km per tick in the local metric, so a division makes 40 km/h at every latitude).
+   */
+  private advanceOverOwnLand(u: Unit, km: number): boolean {
     const g = this.g;
-    const dx = wdx(u.x, u.toX), dy = u.toY - u.y;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d < 0.6) return true;
-    const step = Math.min(speed, d);
-    const nx = wrapXf(u.x + (dx / d) * step), ny = u.y + (dy / d) * step;
-    const t = Math.floor(ny) * MAP_W + Math.floor(nx);
-    u.heading = Math.atan2(dx, -dy);
+    const d = kmBetween(u.x, u.y, u.toX, u.toY);
+    if (d < 0.6 * TILE_KM) return true;
+    const probe = { x: u.x, y: u.y, heading: u.heading };
+    advanceKm(probe, u.toX, u.toY, Math.min(km, d));
+    const t = Math.floor(probe.y) * MAP_W + Math.floor(probe.x);
+    u.heading = probe.heading;
     if (t >= 0 && t < TILE_COUNT && g.playable[t] && (g.owner[t] === u.owner || g.isAllied(u.owner, g.owner[t]))) {
-      u.x = nx;
-      u.y = ny;
+      u.x = probe.x;
+      u.y = probe.y;
       return false;
     }
     // Blocked by the front line (or water): try to slide along it.
+    const c = latCos(u.y);
+    const stepTiles = (Math.min(km, d) * 0.7) / TILE_KM;
     for (const ang of [0.6, -0.6, 1.2, -1.2]) {
-      const h = Math.atan2(dx, -dy) + ang;
-      const sx = wrapXf(u.x + Math.sin(h) * step * 0.7), sy = u.y - Math.cos(h) * step * 0.7;
+      const h = probe.heading + ang;
+      const sx = wrapXf(u.x + (Math.sin(h) * stepTiles) / c), sy = u.y - Math.cos(h) * stepTiles;
       const st = Math.floor(sy) * MAP_W + Math.floor(sx);
       if (st >= 0 && st < TILE_COUNT && g.playable[st] && g.owner[st] === u.owner) {
-        const before = dist2(u.x, u.y, u.toX, u.toY);
-        const after = dist2(sx, sy, u.toX, u.toY);
-        if (after < before) {
+        if (kmBetween(sx, sy, u.toX, u.toY) < d) {
           u.x = sx;
           u.y = sy;
           return false;
@@ -1002,7 +989,7 @@ export class UnitSystem {
     switch (u.mode) {
       case Mode.Strike: {
         u.state = UnitState.Moving;
-        if (this.moveToward(u, u.toX, u.toY, def.speed)) {
+        if (this.moveToward(u, u.toX, u.toY, KM_PER_TICK[u.type])) {
           if (u.type === UnitType.DroneSwarm) {
             g.weapons.airStrikeImpact(u, 'drone');
             this.remove(u, false);
@@ -1024,18 +1011,18 @@ export class UnitSystem {
           return;
         }
         u.state = UnitState.Attacking;
-        const arrived = this.moveToward(u, t.x, t.y, def.speed);
+        const arrived = this.moveToward(u, t.x, t.y, KM_PER_TICK[u.type]);
         if (arrived || dist2(u.x, u.y, t.x, t.y) < 2.5) this.dogfight(u, t);
         return;
       }
       case Mode.Cap: {
         u.state = UnitState.Moving;
         const dx = wdx(u.x, u.toX), dy = u.toY - u.y;
-        if (dx * dx + dy * dy > 30) this.moveToward(u, u.toX, u.toY, def.speed);
+        if (dx * dx + dy * dy > 30) this.moveToward(u, u.toX, u.toY, KM_PER_TICK[u.type]);
         else {
           // Orbit the patrol point.
           const ang = Math.atan2(dy, dx) + 0.5;
-          this.moveToward(u, u.toX - Math.cos(ang) * 4, u.toY - Math.sin(ang) * 4, def.speed * 0.6);
+          this.moveToward(u, u.toX - Math.cos(ang) * 4, u.toY - Math.sin(ang) * 4, KM_PER_TICK[u.type] * 0.6);
         }
         if ((g.tick + u.id) % 4 === 0) {
           const hostile = this.findAirThreat(u, u.x, u.y, 20);
@@ -1056,7 +1043,7 @@ export class UnitSystem {
         }
         const d2 = dist2(u.x, u.y, home.x, home.y);
         if (d2 < 16) u.alt = Math.max(0.05, u.alt - 0.2);
-        if (this.moveToward(u, home.x, home.y, def.speed)) {
+        if (this.moveToward(u, home.x, home.y, KM_PER_TICK[u.type])) {
           u.mode = Mode.Docked;
           u.state = UnitState.Docked;
           u.alt = 0;
@@ -1137,8 +1124,7 @@ export class UnitSystem {
       return;
     }
     u.state = UnitState.Moving;
-    const speed = UNIT_DEFS[UnitType.Train].speed;
-    let budget = speed;
+    let budget = KM_PER_TICK[UnitType.Train];
     while (budget > 1e-6 && u.pathI < path.length) {
       const sid = path[u.pathI];
       const s = u.aux < 0 ? null : g.structureMap.get(sid);
@@ -1147,19 +1133,11 @@ export class UnitSystem {
         this.remove(u, false); // the line was cut
         return;
       }
-      const dx = wdx(u.x, tx), dy = ty - u.y;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > 1e-6) u.heading = Math.atan2(dx, -dy);
-      if (d <= budget) {
-        u.x = wrapXf(tx);
-        u.y = ty;
-        budget -= d;
+      const before = kmBetween(u.x, u.y, tx, ty);
+      if (advanceKm(u, tx, ty, budget)) {
+        budget -= before;
         u.pathI++;
-      } else {
-        u.x = wrapXf(u.x + (dx / d) * budget);
-        u.y += (dy / d) * budget;
-        budget = 0;
-      }
+      } else budget = 0;
     }
     if (u.pathI < path.length) return;
     const last = u.aux < 0 ? null : g.structureMap.get(path[path.length - 1]);
@@ -1242,5 +1220,17 @@ export class UnitSystem {
 }
 
 const NO_UNITS: readonly Unit[] = [];
+
+/** Kilometres each unit type covers per tick (from UNIT_DEFS.speedKmh, §2.3). */
+const KM_PER_TICK: Record<number, number> = Object.fromEntries(
+  Object.values(UNIT_DEFS).map((d) => [d.type, kmhToKmPerTick(d.speedKmh)]),
+);
+
+/** Local-metric km between two tile points (same metric as advanceKm). */
+function kmBetween(ax: number, ay: number, bx: number, by: number): number {
+  const c = latCos(ay);
+  const dx = wdx(ax, bx) * TILE_KM * c, dy = (by - ay) * TILE_KM;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 
 export { AIR_TYPES, PROJECTILES, RADAR_RANGE };

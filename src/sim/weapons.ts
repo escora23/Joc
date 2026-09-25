@@ -2,7 +2,7 @@
 // SAM interception, cruise missiles, naval shells, air-strike payloads, nuclear detonations, fallout and scars.
 // Owner: sim-core. Worker-only. Deterministic (rngCombat).
 
-import { BALANCE, HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, TILE_COUNT, UNIT_DEFS } from '../shared/constants';
+import { BALANCE, HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, TILE_COUNT, TILE_KM, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick } from '../shared/constants';
 import type { NukeWeapon } from '../shared/protocol';
 import { StructureType, UnitState, UnitType, type WeaponType } from '../shared/types';
 import {
@@ -11,7 +11,7 @@ import {
 } from './balance';
 import type { Game } from './game';
 import { Mode, Player, Structure, Unit } from './state';
-import { dist2, surfDist2, wdx, wrapXf } from './spatial';
+import { advanceKm, dist2, distKm, surfDist2, wdx, wrapXf } from './spatial';
 
 export interface Scar {
   id: number;
@@ -25,10 +25,13 @@ export interface Scar {
 }
 
 const BALLISTIC = new Set<number>([UnitType.AtomBomb, UnitType.HydrogenBomb, UnitType.Mirv, UnitType.MirvWarhead]);
+const CRUISE_KM_PER_TICK = kmhToKmPerTick(UNIT_DEFS[UnitType.CruiseMissile].speedKmh);
 const DEG = Math.PI / 180;
 
 export class WeaponSystem {
   private readonly threats: Unit[] = [];
+  /** SAM engagements per target this tick (a salvo spreads over at most 2-3 launchers per target). */
+  private readonly engagedThisTick = new Map<number, number>();
   private falloutStamp: Uint32Array;
   private falloutGen = 1;
 
@@ -119,16 +122,15 @@ export class WeaponSystem {
     u.toX = tx;
     u.toY = ty;
     u.state = UnitState.Launching;
-    const def = UNIT_DEFS[weapon];
-    const nd = NUKE_DEFS[weapon];
     if (weapon === UnitType.CruiseMissile) {
+      // Terrain-following waypoint route at the 600 km/h mission average (§2.3).
       u.mode = Mode.Cruise;
       u.alt = 0.05;
-      u.flightTicks = Math.max(nd.minFlightTicks, Math.ceil(Math.sqrt(dist2(fx, fy, tx, ty)) / def.speed));
+      u.flightTicks = Math.max(1, Math.ceil(distKm(fx, fy, tx, ty) / CRUISE_KM_PER_TICK));
     } else {
+      // Minimum-energy ballistic trajectory: 8..35 game minutes, flown in crisis time (§2.2, §2.3).
       u.mode = Mode.Ballistic;
-      const ang = greatCircleTiles(fx, fy, tx, ty);
-      u.flightTicks = Math.max(nd.minFlightTicks, Math.ceil(ang / def.speed));
+      u.flightTicks = ballisticFlightTicks(greatCircleTiles(fx, fy, tx, ty) * TILE_KM);
     }
     u.t = 0;
     if (p) p.stats.nukesLaunched += weapon === UnitType.CruiseMissile ? 0 : 1;
@@ -197,22 +199,12 @@ export class WeaponSystem {
   }
 
   private stepCruise(u: Unit): void {
-    const def = UNIT_DEFS[UnitType.CruiseMissile];
     u.t = Math.min(1, u.t + 1 / u.flightTicks);
     u.state = UnitState.InFlight;
-    const dx = wdx(u.x, u.toX), dy = u.toY - u.y;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d > 1e-6) u.heading = Math.atan2(dx, -dy);
+    const d = distKm(u.x, u.y, u.toX, u.toY) / TILE_KM;
     // Sea-skimming: climb out, cruise low, pop up before the dive.
     u.alt = d < 3 ? 0.25 * (d / 3) + 0.02 : Math.min(0.12, u.alt + 0.02);
-    if (d <= def.speed) {
-      u.x = wrapXf(u.toX);
-      u.y = u.toY;
-      this.detonate(u);
-      return;
-    }
-    u.x = wrapXf(u.x + (dx / d) * def.speed);
-    u.y += (dy / d) * def.speed;
+    if (advanceKm(u, u.toX, u.toY, CRUISE_KM_PER_TICK)) this.detonate(u);
   }
 
   private splitMirv(bus: Unit): void {
@@ -265,8 +257,8 @@ export class WeaponSystem {
       w.aux2From = Math.max(0.3, bus.alt);
       w.alt = w.aux2From;
       w.t = 0;
-      const ang = greatCircleTiles(w.fromX, w.fromY, w.toX, w.toY);
-      w.flightTicks = Math.max(NUKE_DEFS[UnitType.MirvWarhead].minFlightTicks + rng.int(12), Math.ceil(ang / UNIT_DEFS[UnitType.MirvWarhead].speed));
+      // Re-entry vehicles arrive with the rest of the bus's flight (plus a little dispersion in time).
+      w.flightTicks = Math.max(1, Math.ceil((1 - bus.t) * bus.flightTicks) + (rng.next() < 0.3 ? 1 : 0));
       w.state = UnitState.InFlight;
       g.emit({ type: 'unitSpawned', tick: g.tick, unitId: w.id, unit: w.type, owner: w.owner, x: w.x, y: w.y });
     }
@@ -281,6 +273,7 @@ export class WeaponSystem {
     // Collect airborne threats once per tick.
     const threats = this.threats;
     threats.length = 0;
+    this.engagedThisTick.clear();
     for (const u of g.unitMap.values()) {
       if (u.dead) continue;
       switch (u.type) {
@@ -324,7 +317,7 @@ export class WeaponSystem {
     for (const u of threats) {
       if (u.dead || u.owner === s.owner || g.isAllied(s.owner, u.owner)) continue;
       const maxEngaged = u.type === UnitType.HydrogenBomb || u.type === UnitType.Mirv ? 3 : 2;
-      if (u.engagedBy >= maxEngaged) continue;
+      if ((this.engagedThisTick.get(u.id) ?? 0) >= maxEngaged) continue;
       const aimD2 = dist2(s.x, s.y, u.toX, u.toY);
       const posD2 = dist2(s.x, s.y, u.x, u.y);
       let score: number;
@@ -352,42 +345,19 @@ export class WeaponSystem {
     }
   }
 
+  /**
+   * v2 (§2.3): a Mach 4 interceptor covers the SAM's range within the tick, so the engagement resolves on the tick:
+   * the hit is rolled now and the kill applied now. The 'combat' event carries the streak the renderer draws for at
+   * least MIN_VISUAL_SAM_SEC real seconds (it carries no sim state).
+   */
   private fireInterceptor(s: Structure, target: Unit, radar: boolean): void {
     const g = this.g;
-    const speed = UNIT_DEFS[UnitType.SamInterceptor].speed;
-    // Lead the target: find the earliest point on its trajectory the interceptor can reach in time.
-    let aimX = target.x, aimY = target.y;
-    if (BALLISTIC.has(target.type)) {
-      const tmp = { x: 0, y: 0 };
-      for (let k = 2; k < 80; k++) {
-        const t = Math.min(1, target.t + k / target.flightTicks);
-        slerpTiles(target.fromX, target.fromY, target.toX, target.toY, t, tmp);
-        const d = Math.sqrt(dist2(s.x, s.y, tmp.x, tmp.y));
-        if (d / speed <= k || t >= 1) {
-          aimX = tmp.x;
-          aimY = tmp.y;
-          break;
-        }
-      }
-    }
-    const u = g.unitSys.spawn(UnitType.SamInterceptor, s.owner, s.x, s.y, false);
-    u.mode = Mode.Intercept;
-    u.targetUnit = target.id;
-    u.home = s.id;
-    u.fromX = s.x;
-    u.fromY = s.y;
-    u.toX = aimX;
-    u.toY = aimY;
-    u.t = 0;
-    u.flightTicks = Math.max(3, Math.ceil(Math.sqrt(dist2(s.x, s.y, aimX, aimY)) / speed));
-    u.state = UnitState.InFlight;
-    u.alt = 0.05;
     const mul = INTERCEPT_WEAPON_MUL[target.type] ?? 0.7;
     const chance = Math.min(0.95, BALANCE.samInterceptChance * mul + (radar ? 0.1 : 0) + 0.04 * (s.level - 1));
-    u.aux = g.rngCombat.next() < chance ? 1 : 0;
-    target.engagedBy++;
-    g.emit({ type: 'unitSpawned', tick: g.tick, unitId: u.id, unit: u.type, owner: u.owner, x: u.x, y: u.y });
-    g.emit({ type: 'combat', tick: g.tick, kind: 'sam', owner: s.owner, fromX: s.x, fromY: s.y, toX: aimX, toY: aimY, hit: u.aux === 1 });
+    const hit = g.rngCombat.next() < chance;
+    this.engagedThisTick.set(target.id, (this.engagedThisTick.get(target.id) ?? 0) + 1);
+    g.emit({ type: 'combat', tick: g.tick, kind: 'sam', owner: s.owner, fromX: s.x, fromY: s.y, toX: target.x, toY: target.y, hit });
+    if (hit) this.intercept(target, s.owner, true);
   }
 
   private stepInterceptor(u: Unit): void {
@@ -440,30 +410,36 @@ export class WeaponSystem {
   // =================================================================================================
   // Shells & air strikes
   // =================================================================================================
-  /** Naval / defense-post gun: a shell flies to a unit; hit rolled now, damage applied on impact. */
+  /**
+   * Naval gun salvo at a unit. v2: the shell's flight (well under a tick) resolves on the tick; the 'combat' event is
+   * the tracer the renderer draws for at least MIN_VISUAL_PROJECTILE_SEC.
+   */
   fireShell(owner: number, x: number, y: number, target: Unit, damage: number): void {
     const g = this.g;
-    const u = g.unitSys.spawn(UnitType.Shell, owner, x, y, false);
-    this.initProjectile(u, target.x, target.y, UNIT_DEFS[UnitType.Shell].speed);
-    u.targetUnit = target.id;
-    u.cargo = damage > 0 ? damage : WARSHIP_SHELL_DAMAGE * (0.8 + g.rngCombat.next() * 0.4);
+    const dmg = damage > 0 ? damage : WARSHIP_SHELL_DAMAGE * (0.8 + g.rngCombat.next() * 0.4);
     const hitChance = target.type === UnitType.TransportShip ? 0.8 : 0.7;
-    u.aux = g.rngCombat.next() < hitChance ? 1 : 0;
+    const hit = g.rngCombat.next() < hitChance;
     g.markHostile(owner, target.owner);
-    g.emit({ type: 'combat', tick: g.tick, kind: 'shell', owner, fromX: x, fromY: y, toX: target.x, toY: target.y, hit: u.aux === 1 });
+    g.emit({ type: 'combat', tick: g.tick, kind: 'shell', owner, fromX: x, fromY: y, toX: target.x, toY: target.y, hit });
+    if (hit) g.unitSys.damage(target, dmg, owner);
   }
 
-  /** Shore bombardment of a land point (troops and structures of `victim`). */
+  /** Shore bombardment of a land point (troops and structures of `victim`), resolved on the tick. */
   fireShellAt(owner: number, x: number, y: number, tx: number, ty: number, victim: number): void {
     const g = this.g;
-    const u = g.unitSys.spawn(UnitType.Shell, owner, x, y, false);
-    this.initProjectile(u, tx, ty, UNIT_DEFS[UnitType.Shell].speed);
-    u.targetUnit = 0;
-    u.targetPlayer = victim;
-    u.aux = 1;
-    u.cargo = 0;
     g.markHostile(owner, victim);
     g.emit({ type: 'combat', tick: g.tick, kind: 'artillery', owner, fromX: x, fromY: y, toX: tx, toY: ty, hit: true });
+    const v = g.playerById[victim];
+    if (v && v.alive) {
+      const killed = Math.min(v.troops, 250 + v.troops * 0.0025);
+      v.troops -= killed;
+      v.stats.troopsLost += killed;
+      const k = g.playerById[owner];
+      if (k) k.stats.troopsKilled += killed;
+    }
+    g.structGrid.query(tx, ty, 1.6, (st) => {
+      if (st.owner === victim) this.damageStructure(st, 0.12, owner);
+    });
   }
 
   private stepShell(u: Unit): void {

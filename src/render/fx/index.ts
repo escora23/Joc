@@ -6,7 +6,8 @@
 
 import * as THREE from 'three';
 import type { ExplosionKind, FrameInfo, FxApi, GameContext } from '../../shared/api';
-import { EARTH_RADIUS_KM, NUKE_DEFS, TILE_KM } from '../../shared/constants';
+import { presentationTime } from '../../shared/shots';
+import { EARTH_RADIUS_KM, MIN_VISUAL_PROJECTILE_SEC, MIN_VISUAL_SAM_SEC, NUKE_DEFS, TILE_KM } from '../../shared/constants';
 import { greatCircleKm, latLonToVec3, tileAtXY, tileToLatLon, tileXYToLatLon } from '../../shared/geo';
 import type { NukeWeapon } from '../../shared/protocol';
 import { TerrainClass, TERRAIN_CLASS_MASK, UnitType, type LatLon } from '../../shared/types';
@@ -413,15 +414,25 @@ export function createFx(ctx: GameContext): FxApi {
     if (ctx.app.state === 'command') return;
     switch (e.kind) {
       case 'shell': {
-        // The Shell unit renders the flight; muzzle flash at the gun.
+        // v2 (W1): the salvo resolves on the tick; draw the shell's flight for at least MIN_VISUAL_PROJECTILE_SEC.
         tilePoint(e.fromX, e.fromY, tmp3, 0.1);
         flashAt(tmp3, visKm(tmp3, 0.6, 5));
+        tilePoint(e.fromX, e.fromY, tA, 0.1);
+        tilePoint(e.toX, e.toY, tB, 0.05);
+        {
+          const dKm = tA.distanceTo(tB) * EARTH_RADIUS_KM;
+          tracer3D(tA, tB, Math.max(MIN_VISUAL_PROJECTILE_SEC, Math.min(1.1, dKm / 300)), dKm * 0.12, 'shell', e.hit ? 'small' : null, visKm(tB, 1, 6));
+        }
         break;
       }
       case 'sam': {
         tilePoint(e.fromX, e.fromY, tmp3, 0.2);
         const km = visKm(tmp3, 1.2, 7);
         flashAt(tmp3, km);
+        // v2 (W1): the interception resolves on the tick; the streak is drawn for at least MIN_VISUAL_SAM_SEC.
+        tilePoint(e.fromX, e.fromY, tA, 0.2);
+        tilePoint(e.toX, e.toY, tB, 12);
+        tracer3D(tA, tB, Math.max(MIN_VISUAL_SAM_SEC, Math.min(1.2, (tA.distanceTo(tB) * EARTH_RADIUS_KM) / 400)), 6, 'tracer', e.hit ? 'air' : null, visKm(tB, 1.5, 9));
         const s = km / EARTH_RADIUS_KM;
         up.copy(tmp3).normalize();
         for (let i = 0; i < 6; i++) {
@@ -433,11 +444,11 @@ export function createFx(ctx: GameContext): FxApi {
       case 'artillery': {
         tilePoint(e.fromX, e.fromY, tA, 0.1);
         flashAt(tA, visKm(tA, 0.5, 4));
-        // Naval bombardment spawns its own Shell unit; land artillery gets an arcing tracer.
-        if (!isWaterXY(e.fromX, e.fromY)) {
+        // Land artillery and (v2: resolved on the tick) naval shore bombardment get an arcing tracer.
+        {
           tilePoint(e.toX, e.toY, tB, 0);
           const dKm = tA.distanceTo(tB) * EARTH_RADIUS_KM;
-          tracer3D(tA, tB, Math.min(1.4, Math.max(0.35, dKm / 120)), dKm * 0.18, 'shell', 'small', visKm(tB, 1.2, 7));
+          tracer3D(tA, tB, Math.min(1.4, Math.max(MIN_VISUAL_PROJECTILE_SEC, dKm / 120)), dKm * 0.18, 'shell', 'small', visKm(tB, 1.2, 7));
         }
         break;
       }
@@ -510,7 +521,7 @@ export function createFx(ctx: GameContext): FxApi {
       if (frame.frame === lastUpdateFrame) return;
       lastUpdateFrame = frame.frame;
       const paused = ctx.sim.running && ctx.sim.view.speed === 0;
-      refreshEnv(frame.frame, ctx.camera, ctx.canvas, (o) => ctx.globe.getSunDirection(o), ctx.cameraRig.getState(camState).altitudeKm, frame.time, paused, frame.now);
+      refreshEnv(frame.frame, ctx.camera, ctx.canvas, (o) => ctx.globe.getSunDirection(o), ctx.cameraRig.getState(camState).altitudeKm, presentationTime(frame.time), paused, frame.now);
       const now = env.fxTime;
       particles.setTime(now);
       trails.setTime(now);

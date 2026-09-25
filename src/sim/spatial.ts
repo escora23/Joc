@@ -1,7 +1,7 @@
 // FRONT ULTRA — spatial indexes for the simulation (structures: incremental; units: rebuilt every tick).
 // Owner: sim-core. Worker-only. Coordinates are continuous tile coords; x wraps around the planet.
 
-import { MAP_H, MAP_W } from '../shared/constants';
+import { MAP_H, MAP_W, TILE_KM } from '../shared/constants';
 
 const SCELL = 32;
 const SCW = MAP_W / SCELL;
@@ -136,4 +136,52 @@ export function surfDist2(ax: number, ay: number, bx: number, by: number): numbe
   const lat = (90 - ((ay + by) * 0.5 / MAP_H) * 180) * (Math.PI / 180);
   const dx = wdx(ax, bx) * Math.cos(lat), dy = by - ay;
   return dx * dx + dy * dy;
+}
+
+// --- v2 (W1): metric movement (DESIGN_V2 §2.5) -----------------------------------------------------------------
+// Tiles are 25.0 km north–south everywhere and 25.0·cos(lat) km east–west. Every mover advances a number of
+// KILOMETRES per tick toward its target in the local metric, so a unit's speed in km/h is the same at every latitude.
+
+const DEG_TO_RAD = Math.PI / 180;
+
+/** cos(latitude) at tile row y (continuous), floored at 0.2 so polar moves stay finite. */
+export function latCos(y: number): number {
+  return Math.max(0.2, Math.cos((90 - (y / MAP_H) * 180) * DEG_TO_RAD));
+}
+
+/** Local-metric distance in km between two tile-space points (fine up to a few hundred km). */
+export function distKm(ax: number, ay: number, bx: number, by: number): number {
+  const c = latCos((ay + by) * 0.5);
+  const dx = wdx(ax, bx) * TILE_KM * c, dy = (by - ay) * TILE_KM;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+export interface Mover {
+  x: number;
+  y: number;
+  heading: number;
+}
+
+/**
+ * Move `u` toward (tx, ty) by `km` kilometres in the local metric: a step of s km along the heading θ moves
+ * (s·sinθ / (TILE_KM·cos φ), −s·cosθ / TILE_KM) in tile coordinates (x east, y south). Updates the heading
+ * (0 = north, π/2 = east). Returns true on arrival (the unit is then exactly on the target).
+ */
+export function advanceKm(u: Mover, tx: number, ty: number, km: number): boolean {
+  const c = latCos(u.y);
+  const ex = wdx(u.x, tx) * TILE_KM * c; // km east
+  const ny = (u.y - ty) * TILE_KM; // km north
+  const d = Math.sqrt(ex * ex + ny * ny);
+  if (d > 1e-9) u.heading = Math.atan2(ex, ny);
+  if (d <= km) {
+    u.x = wrapXf(tx);
+    u.y = ty;
+    return true;
+  }
+  const f = km / d;
+  u.x = wrapXf(u.x + (ex * f) / (TILE_KM * c));
+  u.y -= (ny * f) / TILE_KM;
+  if (u.y < 0) u.y = 0;
+  else if (u.y > MAP_H - 1e-3) u.y = MAP_H - 1e-3;
+  return false;
 }

@@ -7,7 +7,7 @@ import { icon } from '../icons';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
 import type { GameSpeed } from '../../shared/types';
-import { formatCompact, formatDuration, formatNumber, t } from '../../shared/i18n';
+import { formatCompact, formatNumber, t } from '../../shared/i18n';
 
 export interface TopBar {
   el: HTMLElement;
@@ -46,11 +46,24 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   );
 
   // ---- time controls ------------------------------------------------------------------------------
-  const clock = h('span', { class: 'fu-mono fu-time-clock' }, '0:00');
+  // v2 (§2.7): «DÍA n» with a 24-segment bar that fills one segment per game hour (elapsed game time, never a time of
+  // day), the speed buttons (pause, 0.5x..4x) and the scale chip of the running clock mode.
+  const dayLabel = h('span', { class: 'fu-mono fu-day-label' }, t('clock.day', { day: 1 }));
+  const hourBar = h('div', { class: 'fu-hourbar' });
+  const hourSegs: HTMLElement[] = [];
+  for (let i = 0; i < 24; i++) {
+    const seg = h('i');
+    hourSegs.push(seg);
+    hourBar.append(seg);
+  }
+  const clock = h('div', { class: 'fu-time-clock fu-daybox' }, dayLabel, hourBar);
+  const chip = h('div', { class: 'fu-clockchip fu-mono' }, '');
   const speedBtns = new Map<GameSpeed, HTMLButtonElement>();
   const speeds = h('div', { class: 'fu-seg fu-time-seg' });
-  for (const sp of [0, 1, 2, 4] as GameSpeed[]) {
-    const b = h('button', { type: 'button', title: sp === 0 ? `${t('hud.pause')} (Space)` : `${sp}×` }, sp === 0 ? icon('pause') : `${sp}×`) as HTMLButtonElement;
+  for (const sp of [0, 0.5, 1, 2, 4] as GameSpeed[]) {
+    const label = sp === 0.5 ? t('hud.speed.half') : `${sp}×`;
+    const title = sp === 0 ? `${t('hud.pause')} (Space)` : t('hud.speed.tip', { speed: sp === 0.5 ? '0,5' : sp, per: perSecond(sp) });
+    const b = h('button', { type: 'button', title }, sp === 0 ? icon('pause') : label) as HTMLButtonElement;
     b.addEventListener('click', () => {
       hs.sound('click');
       if (sp === 0) ctx.app.togglePause();
@@ -74,8 +87,10 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   ctx.bus.on('gameTornDown', () => (doomMinutes = -1));
   const time = h('div', { class: 'fu-time fu-glass fu-interactive' },
     h('div', { class: 'fu-time-main' }, icon('clock'), clock, speeds, iconBtn('help', 'hud.help', actions.help), iconBtn('settings', 'menu.settings', actions.settings), iconBtn('menu', 'hud.menu', actions.pause)),
+    chip,
     doom,
   );
+  let lastDay = -1, lastHour = -1, lastChip = '', lastMode = '';
 
   let lastFlagColor = -1;
   function rebuildFlag(): void {
@@ -116,8 +131,48 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
     setText(pop.sub, p.attackingTroops > 0 ? `⚔ ${formatCompact(p.attackingTroops)}` : '');
     toggleClass(pop.sub, 'fu-warn', p.attackingTroops > 0);
 
-    setText(clock, formatDuration(view.simTime));
-    for (const [sp, b] of speedBtns) toggleClass(b, 'is-on', view.speed === sp);
+    // Day counter: elapsed game time (tick / 10 = game hours).
+    const hours = Math.max(0, Math.floor(view.gameHours));
+    const day = Math.floor(hours / 24) + 1, hourOfDay = hours % 24;
+    if (day !== lastDay) {
+      lastDay = day;
+      setText(dayLabel, t('clock.day', { day }));
+    }
+    if (hourOfDay !== lastHour || day !== lastDay) {
+      lastHour = hourOfDay;
+      for (let i = 0; i < 24; i++) toggleClass(hourSegs[i], 'is-on', i < hourOfDay);
+      clock.title = t('clock.day.tip', { day, hours });
+    }
+    // Scale chip: what one real second means right now.
+    const c = view.clock;
+    let chipText: string, tip: string;
+    const sp = view.speed;
+    const spLabel = sp === 0.5 ? (t('hud.speed.half').replace('×', '')) : String(sp);
+    switch (c.mode) {
+      case 'crisis': chipText = t('clock.chip.crisis'); tip = t('clock.tip.crisis'); break;
+      case 'observation': chipText = t('clock.chip.observation'); tip = t('clock.tip.observation'); break;
+      case 'tactical': chipText = t('clock.chip.tactical'); tip = t('clock.tip.tactical'); break;
+      case 'travel': chipText = t(c.throttled ? 'clock.chip.travelThrottled' : 'clock.chip.travel', { rate: Math.round(c.rate) }); tip = t('clock.tip.travel'); break;
+      default:
+        if (sp === 0) {
+          chipText = t('clock.chip.paused');
+          tip = t('clock.tip.paused');
+        } else {
+          chipText = t('clock.chip.strategic', { speed: spLabel, per: perSecond(sp) });
+          tip = t('clock.tip.strategic', { speed: spLabel, per: perSecond(sp) });
+        }
+    }
+    if (sp === 0 && c.mode !== 'strategic') chipText = `${t('clock.chip.paused')} · ${chipText}`;
+    if (chipText !== lastChip) {
+      lastChip = chipText;
+      setText(chip, chipText);
+      chip.title = tip;
+    }
+    if (c.mode !== lastMode) {
+      lastMode = c.mode;
+      chip.dataset.mode = c.mode;
+    }
+    for (const [spd, b] of speedBtns) toggleClass(b, 'is-on', view.speed === spd);
     toggleClass(time, 'is-paused', view.speed === 0);
     const d = view.doomsday;
     toggleClass(doom, 'fu-hidden', !(d > 0));
@@ -131,4 +186,10 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   }
 
   return { el: bar, time, refresh, rebuildFlag };
+}
+
+/** Game time per real second at a strategic speed ("30 min", "1 h", "4 h"). */
+function perSecond(sp: GameSpeed): string {
+  if (sp === 0.5) return t('clock.per.30min');
+  return t('clock.per.hours', { n: sp });
 }

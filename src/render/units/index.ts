@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
+import { presentationTime } from '../../shared/shots';
 import { EARTH_RADIUS_KM, MAP_W, TILE_KM } from '../../shared/constants';
 import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, wrapDX } from '../../shared/geo';
 import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
@@ -1045,7 +1046,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (!built) return;
       const fx = fxInternal(ctx);
       const paused = ctx.sim.running && ctx.sim.view.speed === 0;
-      refreshEnv(frame.frame, ctx.camera, ctx.canvas, (o) => ctx.globe.getSunDirection(o), ctx.cameraRig.getState(camState).altitudeKm, frame.time, paused, frame.now);
+      refreshEnv(frame.frame, ctx.camera, ctx.canvas, (o) => ctx.globe.getSunDirection(o), ctx.cameraRig.getState(camState).altitudeKm, presentationTime(frame.time), paused, frame.now);
       if (fx) {
         fx.trails.setTime(env.fxTime);
         fx.particles.setTime(env.fxTime);

@@ -14,9 +14,23 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CACHE_DIR = path.join(ROOT, 'node_modules/.cache/front-ultra-sim');
 
+/**
+ * Only what the data pipeline reads decides the cache key: src/data, the textures, and from src/shared the grid and
+ * terrain definitions (not the time or balance constants, which change often and never affect the world).
+ */
+function sharedDataSlice() {
+  const read = (f) => (fs.existsSync(path.join(ROOT, f)) ? fs.readFileSync(path.join(ROOT, f), 'utf8') : '');
+  const constants = read('src/shared/constants.ts');
+  const grid = constants.slice(constants.indexOf('// --- Grid & geometry'), constants.indexOf('// --- Time'));
+  const types = read('src/shared/types.ts');
+  const terrain = types.slice(types.indexOf('export const TerrainClass'), types.indexOf('export const TERRAIN_CLASS_MASK'));
+  return grid + terrain + read('src/shared/geo.ts') + read('src/shared/color.ts') + read('src/shared/terrain.ts');
+}
+
 function sourceHash() {
   const h = createHash('sha1');
-  const dirs = ['src/data', 'src/shared', 'public/textures'];
+  h.update(sharedDataSlice());
+  const dirs = ['src/data', 'public/textures'];
   for (const d of dirs) {
     const abs = path.join(ROOT, d);
     if (!fs.existsSync(abs)) continue;

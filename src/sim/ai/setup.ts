@@ -6,12 +6,11 @@
 // capital: small, earthy-colored clans with regional names that grab land early and are easy prey later.
 
 import { HUMAN_ID, MAP_W, TILE_COUNT } from '../../shared/constants';
-import { colorDistance, hslToHex } from '../../shared/color';
 import { latLonToTile } from '../../shared/geo';
 import type { Rng } from '../../shared/rng';
 import type { SimGame } from '../../shared/simapi';
 import type { CountryDef, Personality } from '../../shared/types';
-import { NATION_PALETTE } from '../../data/palette';
+import { independentColor, planNationColors } from '../../data/palette';
 import { PREFERRED_COLORS } from '../../data/countries';
 import { dist2, tileAt, tx, ty, type MapIndex } from './mapindex';
 import { personalityDeck } from './profiles';
@@ -80,34 +79,6 @@ function findSpawn(g: SimGame, tile: number, country: number, avoid: readonly nu
   return fallback;
 }
 
-/** Palette color for a nation: its signature color when free and distinct from nearby nations and the human. */
-function pickColor(pref: number | undefined, capital: number, placed: { tile: number; color: number }[], human: number, used: Set<number>): number {
-  let best = -1, bs = -Infinity;
-  for (let i = 0; i < NATION_PALETTE.length; i++) {
-    if (used.has(i)) continue;
-    const col = NATION_PALETTE[i];
-    let dNear = 2;
-    for (const p of placed) {
-      const d = dist2(p.tile, capital);
-      if (d > 260 * 260) continue;
-      // Closer nations must differ more.
-      const w = d < 90 * 90 ? 1 : 0.6;
-      dNear = Math.min(dNear, colorDistance(col, p.color) / w);
-    }
-    const dh = colorDistance(col, human);
-    let score = Math.min(dNear, 0.35) * 3 + Math.min(dh, 0.3) * 2.5;
-    if (dh < 0.12) score -= 5;
-    if (pref !== undefined) score -= colorDistance(col, pref) * 3.2;
-    if (score > bs) {
-      bs = score;
-      best = i;
-    }
-  }
-  if (best < 0) return hslToHex((placed.length * 137.5) % 360, 0.62, 0.5);
-  used.add(best);
-  return NATION_PALETTE[best];
-}
-
 export function setupWorld(g: SimGame, rng: Rng, index: MapIndex): SetupResult {
   const res: SetupResult = { nations: [], tribes: [] };
   const w = g.world;
@@ -134,25 +105,25 @@ export function setupWorld(g: SimGame, rng: Rng, index: MapIndex): SetupResult {
       picks.push({ name, country: Math.max(0, country), lat, lon, weight, iso3: country > 0 ? w.countries[country].iso3 : '' });
     }
   }
-  // Big nations pick colors (and spawn) first.
+  // Big nations spawn first.
   picks.sort((a, b) => b.weight - a.weight || a.country - b.country);
   const deck = personalityDeck(picks.length, () => rng.next());
-  const placed: { tile: number; color: number }[] = [];
-  const used = new Set<number>();
+  // Colours (DESIGN_V2 §10.2): a hue graph colouring over bordering home countries, every hue ≥ 30° from the
+  // human's colour, signature hues kept where they fit. Planned from the capitals before anyone spawns.
+  const colors = planNationColors(
+    w, picks.map((pk) => ({ country: pk.country, tile: latLonToTile(pk.lat, pk.lon), preferred: PREFERRED_COLORS[pk.iso3] })), humanColor,
+  );
   const avoid: number[] = [];
   const human = humanTile >= 0 && humanTile < TILE_COUNT ? humanTile : -1;
   picks.forEach((pk, i) => {
     let tile = findSpawn(g, latLonToTile(pk.lat, pk.lon), pk.country, avoid, 8, 45, human);
     for (let k = 0; k < 6 && tile < 0; k++) tile = findSpawn(g, index.randomPlayable(rng), 0, avoid, 8, 30, human);
-    const color = pickColor(PREFERRED_COLORS[pk.iso3], tile >= 0 ? tile : latLonToTile(pk.lat, pk.lon), placed, humanColor, used);
+    const color = colors[i];
     const personality = deck[i];
     const id = g.addPlayer({ name: pk.name, kind: 'nation', personality, color, countryIndex: pk.country });
     if (id <= 0) return;
     res.nations.push({ id, personality });
-    if (tile >= 0 && g.issue(id, { type: 'spawn', tile })) {
-      avoid.push(tile);
-      placed.push({ tile, color });
-    }
+    if (tile >= 0 && g.issue(id, { type: 'spawn', tile })) avoid.push(tile);
   });
 
   // Tribes: empty land far from every capital, spread out.
@@ -174,7 +145,10 @@ export function setupWorld(g: SimGame, rng: Rng, index: MapIndex): SetupResult {
     const { lat, lon } = tileLatLon(tile);
     const [pre, post] = TRIBE_NAMES[regionOf(lat, lon)];
     const name = rng.pick(pre) + rng.pick(post);
-    const color = hslToHex(18 + rng.int(38), 0.16 + rng.next() * 0.14, 0.36 + rng.next() * 0.16);
+    // Independent territories: muted earth tones (three draws, as in v1, so the rng stream is unchanged).
+    const r1 = rng.int(38) / 38, r2 = rng.next();
+    rng.next();
+    const color = independentColor(r1, r2);
     const id = g.addPlayer({ name, kind: 'tribe', personality: null, color, countryIndex: 0 });
     if (id <= 0) continue;
     if (g.issue(id, { type: 'spawn', tile })) {

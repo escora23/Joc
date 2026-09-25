@@ -6,12 +6,21 @@
 // Shading: Blue Marble albedo, relief lighting from the topology-derived slope map (+ procedural detail up
 // close), GGX ocean with sun glint, fresnel sky reflection and animated micro-normals, cloud shadows,
 // night lights with a warm twilight band, aerial perspective (single scattering) and the territory overlay
-// (fills, anti-aliased glowing borders, hot front lines, capture flashes, ally hatching, fallout scars, hover).
+// (DESIGN_V2 §10.1-10.4, §10.11): owner fills mixed into the ground by altitude, desaturated neutral land, smooth
+// borders from a quadratic B-spline coverage of the owner grid (no 25 km staircase) with constant pixel widths,
+// war-border cores, attacker-coloured conquest flashes, contested stripes, occupied stipple, ally hatch, rebel
+// stripes, a readable night side, small-island shorelines, historical borders, fallout scars and the hover.
+// In &mask=owner shots it writes the flat owner-id false colour instead (shared/shots.ts OWNER_MASK).
 
 import * as THREE from 'three';
 import { EARTH_RADIUS_KM, MAP_H, MAP_W, RELIEF_EXAGGERATION, TOPO_MAX_METERS } from '../../shared/constants';
-import { GLSL_ATMOSPHERE, GLSL_COLOR, GLSL_CONSTANTS, GLSL_GEO, GLSL_NOISE } from './glsl';
-import { MAX_SCARS, PAL_ALLY, PAL_ALIVE, PAL_HUMAN, PAL_TRAITOR, type TerritoryLayer } from './territory';
+import { HUMAN_ID } from '../../shared/constants';
+import { OWNER_MASK } from '../../shared/shots';
+import { GLSL_ATMOSPHERE, GLSL_COLOR, GLSL_CONSTANTS, GLSL_GEO, GLSL_NOISE, GLSL_TERRITORY_FILL } from './glsl';
+import {
+  MAX_SCARS, OWN_ISLAND, OWN_OCCUPIED, OWN_PLAYABLE, OWN_WATER, PAL_ALLY, PAL_ALIVE, PAL_HUMAN, PAL_INDEP, PAL_REBEL,
+  PAL_TRAITOR, type TerritoryLayer,
+} from './territory';
 import { SLOPE_RANGE, type PlanetTextures } from './textures';
 
 export interface PlanetUniforms {
@@ -24,6 +33,17 @@ export interface PlanetUniforms {
   uNormalBoost: { value: number };
   uNightE: { value: number };
   uHaze: { value: number };
+  /** Territory look by camera altitude (set by the globe every frame, DESIGN_V2 §10.1-10.4). */
+  uFill: { value: number };
+  uNeutralK: { value: number };
+  uNightFloor: { value: number };
+  uBorderNoise: { value: number };
+  uShoreK: { value: number };
+  uCloseK: { value: number };
+  /** Cloud thinning factors (human land, other land, ocean, fronts) for the current mode and altitude (§10.5). */
+  uCloudK: { value: THREE.Vector4 };
+  /** 1 in &mask=owner shots. */
+  uMaskMode: { value: number };
 }
 
 export function createPlanetUniforms(): PlanetUniforms {
@@ -37,8 +57,28 @@ export function createPlanetUniforms(): PlanetUniforms {
     uNormalBoost: { value: 2.5 },
     uNightE: { value: 4.0 },
     uHaze: { value: 1.0 },
+    uFill: { value: 0.5 },
+    uNeutralK: { value: 1 },
+    uNightFloor: { value: 0.22 },
+    uBorderNoise: { value: 0 },
+    uShoreK: { value: 1 },
+    uCloseK: { value: 0 },
+    uCloudK: { value: new THREE.Vector4(1, 1, 1, 1) },
+    uMaskMode: { value: 0 },
   };
 }
+
+/**
+ * Cloud thinning (DESIGN_V2 §10.5) from the cloud mask texel (R human land, G front heat, B land) and the factors
+ * (x human land, y other land, z ocean, w fronts). Shared by the cloud layer and the cloud shadows on the ground.
+ */
+export const GLSL_CLOUD_THIN = /* glsl */ `
+float cloudThin(vec4 m, vec4 k) {
+  float landF = mix(k.y, k.x, m.r);
+  landF = mix(landF, k.w, smoothstep(0.08, 0.35, m.g));
+  return mix(k.z, landF, smoothstep(0.02, 0.45, m.b));
+}
+`;
 
 const vert = /* glsl */ `
 ${GLSL_CONSTANTS}
@@ -101,8 +141,21 @@ ${GLSL_NOISE}
 ${GLSL_GEO}
 ${GLSL_ATMOSPHERE}
 ${GLSL_COLOR}
+${GLSL_TERRITORY_FILL}
+${GLSL_CLOUD_THIN}
 #define SLOPE_RANGE ${SLOPE_RANGE.toFixed(1)}
 #define MAX_SCARS ${MAX_SCARS}
+#define HUMAN_ID ${HUMAN_ID}
+#define OWN_WATER ${OWN_WATER}
+#define OWN_ISLAND ${OWN_ISLAND}
+#define OWN_OCCUPIED ${OWN_OCCUPIED}
+#define OWN_PLAYABLE ${OWN_PLAYABLE}
+#define PAL_HUMAN ${PAL_HUMAN}
+#define PAL_ALLY ${PAL_ALLY}
+#define PAL_TRAITOR ${PAL_TRAITOR}
+#define PAL_ALIVE ${PAL_ALIVE}
+#define PAL_INDEP ${PAL_INDEP}
+#define PAL_REBEL ${PAL_REBEL}
 uniform sampler2D uDay;
 uniform sampler2D uNight;
 uniform sampler2D uRelief;
@@ -111,7 +164,9 @@ uniform sampler2D uClouds;
 uniform sampler2D uOwner;
 uniform sampler2D uPalette;
 uniform sampler2D uHeat;
-uniform sampler2D uGlow;
+uniform sampler2D uWarPairs;
+uniform sampler2D uCountry;
+uniform sampler2D uCloudMask;
 uniform vec3 uSunDir;
 uniform float uSunE;
 uniform float uSkyE;
@@ -120,10 +175,19 @@ uniform vec2 uCloudOffset;
 uniform float uCloudShadow;
 uniform float uNormalBoost;
 uniform float uNightE;
-uniform float uTick;
+uniform float uFlashNow;
 uniform float uHoverOwner;
 uniform float uHoverAmt;
 uniform float uTerritoryOpacity;
+uniform float uHistorical;
+uniform float uFill;
+uniform float uNeutralK;
+uniform float uNightFloor;
+uniform float uBorderNoise;
+uniform float uShoreK;
+uniform float uCloseK;
+uniform vec4 uCloudK;
+uniform float uMaskMode;
 uniform vec4 uScars[MAX_SCARS];
 uniform int uScarCount;
 uniform vec4 uPatchCut;
@@ -140,15 +204,27 @@ vec2 decodeSlope(vec2 e) {
   return sign(e) * e * e * SLOPE_RANGE;
 }
 
-int ownerAt(ivec2 p, out float stamp) {
+// Owner texel: id (11 bits), flags (G bits 3-7) and the conquest-flash stamp (1/32 s units).
+void ownerTexel(ivec2 p, out int id, out int flags, out float stamp) {
   p.x = p.x - ${MAP_W} * int(floor(float(p.x) / ${MAP_W}.0));
   p.y = clamp(p.y, 0, ${MAP_H - 1});
   vec4 t = texelFetch(uOwner, p, 0);
+  int g = int(t.g * 255.0 + 0.5);
+  id = int(t.r * 255.0 + 0.5) + (g & 7) * 256;
+  flags = g & 248;
   stamp = floor(t.b * 255.0 + 0.5) + floor(t.a * 255.0 + 0.5) * 256.0;
-  return int(t.r * 255.0 + 0.5) + int(t.g * 255.0 + 0.5) * 256;
 }
 
 vec4 paletteAt(int id) { return texelFetch(uPalette, ivec2(id, 0), 0); }
+bool atWarPair(int a, int b) { return texelFetch(uWarPairs, ivec2(a & 511, b & 511), 0).r > 0.5; }
+int countryAt(ivec2 p) {
+  p.x = p.x - ${MAP_W} * int(floor(float(p.x) / ${MAP_W}.0));
+  p.y = clamp(p.y, 0, ${MAP_H - 1});
+  vec4 t = texelFetch(uCountry, p, 0);
+  return int(t.r * 255.0 + 0.5) + int(t.g * 255.0 + 0.5) * 256;
+}
+// Pixel-footprint overlap of [s - 0.5, s + 0.5] with the band [a, b] (box-filtered line coverage).
+float bandCov(float s, float a, float b) { return clamp(min(s + 0.5, b) - max(s - 0.5, a), 0.0, 1.0); }
 
 // Soft cast shadows from the relief: march the heightmap toward the sun (curvature-aware). Mountain ranges
 // throw long shadows at low sun angles, from orbit down to the ground.
@@ -255,43 +331,149 @@ void main() {
   vec3 N = normalize(up - east * slope.x - north * slope.y);
 
   // --- territory -------------------------------------------------------------------------------
+  // Owner coverage from a cubic B-spline over the 4x4 nearest owner texels, land texels only (coasts follow the
+  // real coastline and never get a border). The winner O and the runner-up Q decide the fill; their coverage
+  // difference f = cO - cQ is zero on the border and its analytic gradient gives the distance in pixels, so corners
+  // round off and the 25 km staircase disappears at every altitude (DESIGN_V2 §10.3).
   vec3 emissive = vec3(0.0);
   float terr = uTerritoryOpacity;
-  if (terr > 0.001) {
-    vec2 tp = vec2(uv.x * ${MAP_W}.0, uvT.y * ${MAP_H}.0) - 0.5;
-    vec2 fw = fwidth(tp);
-    float pxT = max(max(fw.x, fw.y), 1e-4);
-    ivec2 i0 = ivec2(floor(tp));
-    vec2 f = tp - floor(tp);
-    float st00, st10, st01, st11;
-    int o00 = ownerAt(i0, st00);
-    int o10 = ownerAt(i0 + ivec2(1, 0), st10);
-    int o01 = ownerAt(i0 + ivec2(0, 1), st01);
-    int o11 = ownerAt(i0 + ivec2(1, 1), st11);
-    float w00 = (1.0 - f.x) * (1.0 - f.y), w10 = f.x * (1.0 - f.y), w01 = (1.0 - f.x) * f.y, w11 = f.x * f.y;
-    float s00 = w00 + (o10 == o00 ? w10 : 0.0) + (o01 == o00 ? w01 : 0.0) + (o11 == o00 ? w11 : 0.0);
-    float s10 = w10 + (o00 == o10 ? w00 : 0.0) + (o01 == o10 ? w01 : 0.0) + (o11 == o10 ? w11 : 0.0);
-    float s01 = w01 + (o00 == o01 ? w00 : 0.0) + (o10 == o01 ? w10 : 0.0) + (o11 == o01 ? w11 : 0.0);
-    float s11 = w11 + (o00 == o11 ? w00 : 0.0) + (o10 == o11 ? w10 : 0.0) + (o01 == o11 ? w01 : 0.0);
-    int O = o00; float best = s00; float stamp = st00;
-    if (s10 > best) { O = o10; best = s10; stamp = st10; }
-    if (s01 > best) { O = o01; best = s01; stamp = st01; }
-    if (s11 > best) { O = o11; best = s11; stamp = st11; }
-    float a = o00 == O ? 1.0 : 0.0, b = o10 == O ? 1.0 : 0.0, c = o01 == O ? 1.0 : 0.0, d = o11 == O ? 1.0 : 0.0;
-    float fO = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-    vec2 g = vec2(mix(b - a, d - c, f.y), mix(c - a, d - b, f.x));
-    float gl = length(g);
-    float distT = gl > 1e-4 ? max(fO - 0.5, 0.0) / gl : 3.0;
-    float distPx = distT / pxT;
+  float landK = 1.0 - water;
+  int O = 0, Q = -1;
+  float distPx = 1e4, distT = 1e4;
+  float occ = 0.0, flash = 0.0, isl = 0.0, landCov = 1.0, shorePx = 1e4;
+  bool playableHere = water < 0.5;
+  vec2 tp0 = vec2(uv.x * ${MAP_W}.0, uvT.y * ${MAP_H}.0);
+  vec2 tp = tp0;
+  float pxT = 1.0;
+  if (terr > 0.001 || uMaskMode > 0.5) {
+    if (uBorderNoise > 0.0) {
+      // A real border wanders: a few km of noise up close, none from orbit.
+      vec3 q = vWorld * 1300.0;
+      tp += uBorderNoise * vec2(vnoise(q) + 0.5 * vnoise(q * 2.3 + 7.1), vnoise(q + 19.3) + 0.5 * vnoise(q * 2.3 + 3.7));
+    }
+    vec2 x = tp - 0.5;
+    vec2 dxdX = dFdx(x), dxdY = dFdy(x);
+    pxT = max(length(vec2(dxdX.x, dxdY.x)), length(vec2(dxdX.y, dxdY.y)));
+    vec2 i0 = floor(x);
+    vec2 u = x - i0;
+    ivec2 c = ivec2(i0);
+    // Cubic B-spline weights (texels i0-1 .. i0+2) and their derivatives.
+    vec2 u2 = u * u, u3 = u2 * u, v = 1.0 - u;
+    vec4 wx = vec4(v.x * v.x * v.x, 3.0 * u3.x - 6.0 * u2.x + 4.0, -3.0 * u3.x + 3.0 * u2.x + 3.0 * u.x + 1.0, u3.x) / 6.0;
+    vec4 wy = vec4(v.y * v.y * v.y, 3.0 * u3.y - 6.0 * u2.y + 4.0, -3.0 * u3.y + 3.0 * u2.y + 3.0 * u.y + 1.0, u3.y) / 6.0;
+    vec4 dwx = vec4(-v.x * v.x, 3.0 * u2.x - 4.0 * u.x, -3.0 * u2.x + 2.0 * u.x + 1.0, u2.x) * 0.5;
+    vec4 dwy = vec4(-v.y * v.y, 3.0 * u2.y - 4.0 * u.y, -3.0 * u2.y + 2.0 * u.y + 1.0, u2.y) * 0.5;
+    int ids[16];
+    float W[16];
+    vec2 G[16];
+    vec2 FO[16];
+    float Lsum = 0.0;
+    vec2 dL = vec2(0.0);
+    int nearK = (u.x < 0.5 ? 1 : 2) + (u.y < 0.5 ? 1 : 2) * 4;
+    for (int j = 0; j < 4; j++) {
+      for (int i = 0; i < 4; i++) {
+        int k = j * 4 + i;
+        int id, fl;
+        float st;
+        ownerTexel(c + ivec2(i - 1, j - 1), id, fl, st);
+        bool land = (fl & OWN_WATER) == 0;
+        float w = land ? wx[i] * wy[j] : 0.0;
+        vec2 g = land ? vec2(dwx[i] * wy[j], wx[i] * dwy[j]) : vec2(0.0);
+        ids[k] = land ? id : -1;
+        W[k] = w;
+        G[k] = g;
+        Lsum += w;
+        dL += g;
+        if ((fl & OWN_ISLAND) != 0 && i > 0 && i < 3 && j > 0 && j < 3) isl = 1.0;
+        if (k == nearK) playableHere = (fl & OWN_PLAYABLE) != 0;
+        // Conquest flash: full at capture, gone 2 real seconds later.
+        float age = mod(uFlashNow - st, 65536.0) / 32.0;
+        float fk = age < 2.0 ? (1.0 - age * 0.5) * (1.0 - age * 0.5) : 0.0;
+        FO[k] = vec2(fk, (fl & OWN_OCCUPIED) != 0 ? 1.0 : 0.0);
+      }
+    }
+    landCov = Lsum;
+    if (Lsum > 1e-4) {
+      // Candidates: the 2x2 texels around the fragment, then any other owner in the 4x4 as runner-up.
+      int cand[4];
+      cand[0] = ids[nearK]; cand[1] = ids[5]; cand[2] = ids[6]; cand[3] = ids[9];
+      int cand4 = ids[10];
+      float bestC = -1.0, secondC = -1.0;
+      vec2 bestG = vec2(0.0), secondG = vec2(0.0);
+      int best = -1, second = -1;
+      for (int a = 0; a < 5; a++) {
+        int A = a < 4 ? cand[a] : cand4;
+        if (A < 0 || A == best || A == second) continue;
+        float S = 0.0;
+        vec2 dS = vec2(0.0);
+        for (int k = 0; k < 16; k++) {
+          if (ids[k] == A) { S += W[k]; dS += G[k]; }
+        }
+        float cA = S / Lsum;
+        vec2 gA = (dS * Lsum - S * dL) / (Lsum * Lsum);
+        if (cA > bestC) {
+          second = best; secondC = bestC; secondG = bestG;
+          best = A; bestC = cA; bestG = gA;
+        } else if (cA > secondC) {
+          second = A; secondC = cA; secondG = gA;
+        }
+      }
+      for (int k = 0; k < 16; k++) {
+        int A = ids[k];
+        if (A < 0 || A == best || A == second) continue;
+        float S = 0.0;
+        vec2 dS = vec2(0.0);
+        for (int m = 0; m < 16; m++) {
+          if (ids[m] == A) { S += W[m]; dS += G[m]; }
+        }
+        float cA = S / Lsum;
+        if (cA > secondC) {
+          second = A; secondC = cA; secondG = (dS * Lsum - S * dL) / (Lsum * Lsum);
+        }
+      }
+      O = max(best, 0);
+      if (second >= 0) {
+        Q = second;
+        float fd = bestC - secondC;
+        vec2 gf = bestG - secondG;
+        float gl = length(vec2(dot(gf, dxdX), dot(gf, dxdY)));
+        distPx = gl > 1e-6 ? fd / gl : 1e4;
+        float glT = length(gf);
+        distT = glT > 1e-6 ? fd / glT : 1e4;
+      }
+      // Flash and occupation averaged over O's texels with the same weights: soft, never square.
+      float so = 0.0;
+      for (int k = 0; k < 16; k++) {
+        if (ids[k] == O) {
+          so += W[k];
+          flash += W[k] * FO[k].x;
+          occ += W[k] * FO[k].y;
+        }
+      }
+      if (so > 1e-5) {
+        flash /= so;
+        occ /= so;
+      }
+    }
+    // Land coverage isoline: the rounded outline of small islands (white shoreline from orbit, §10.6). The 0.3 level
+    // keeps single-tile islands (peak 0.44 with the cubic kernel) and sits just off the coast of larger ones.
+    float glS = length(vec2(dot(dL, dxdX), dot(dL, dxdY)));
+    shorePx = glS > 1e-6 ? (landCov - 0.3) / glS : 1e4;
+  }
 
+  // Line layers composited after lighting (borders stay emissive by day and by night, §10.4).
+  vec3 lineCol = vec3(0.0);
+  float lineCov = 0.0, coreCov = 0.0, outlineCov = 0.0, shoreCov = 0.0, histCov = 0.0;
+  vec3 nightFill = vec3(0.0);
+  if (terr > 0.001 && uMaskMode < 0.5) {
     // Fallout scars (also over unowned land).
     float scar = 0.0, scarRim = 0.0;
     for (int i = 0; i < MAX_SCARS; i++) {
       if (i >= uScarCount) break;
       vec4 s = uScars[i];
-      float dx = tp.x + 0.5 - s.x;
+      float dx = tp0.x - s.x;
       dx -= ${MAP_W}.0 * floor((dx + ${MAP_W / 2}.0) / ${MAP_W}.0);
-      float dy = tp.y + 0.5 - s.y;
+      float dy = tp0.y - s.y;
       float dd = length(vec2(dx * cos(lat), dy)) / s.z;
       float wob = 0.12 * fbm3(vec3(dx, dy, float(i) * 7.0) * 0.35);
       scar = max(scar, s.w * (1.0 - smoothstep(0.45, 1.0, dd + wob)));
@@ -301,70 +483,136 @@ void main() {
       float landS = 1.0 - water * 0.75;
       albedo = mix(albedo, vec3(0.022, 0.026, 0.016), 0.85 * scar * terr * landS);
       float pulse = 0.8 + 0.2 * sin(uTime * 2.1);
-      float n = 0.5 + 0.5 * fbm3(vec3(tp * 0.9, uTime * 0.12));
+      float n = 0.5 + 0.5 * fbm3(vec3(tp0 * 0.9, uTime * 0.12));
       float specks = pow(n, 9.0) * 3.0;
       vec3 toxic = vec3(0.42, 1.0, 0.1);
       emissive += toxic * (scar * (0.012 + 0.05 * n * n + specks * 0.35) + scarRim * 0.3) * pulse * terr * landS;
     }
+
+    float heat = texture2D(uHeat, uvT).r;
+    vec3 natO = vec3(0.5);
+    int flagsO = 0;
+    float hoverO = 0.0;
     if (O > 0) {
       vec4 pal = paletteAt(O);
-      int flags = int(pal.a * 255.0 + 0.5);
-      vec3 nat = srgbToLinear(pal.rgb);
-      bool isHuman = (flags & ${PAL_HUMAN}) != 0;
-      bool isAlly = (flags & ${PAL_ALLY}) != 0;
-      bool isTraitor = (flags & ${PAL_TRAITOR}) != 0;
-      bool alive = (flags & ${PAL_ALIVE}) != 0;
-      float hover = (abs(float(O) - uHoverOwner) < 0.5 ? uHoverAmt : 0.0);
-      float human = isHuman ? 1.0 : 0.0;
+      flagsO = int(pal.a * 255.0 + 0.5);
+      natO = srgbToLinear(pal.rgb);
+      bool isHuman = (flagsO & PAL_HUMAN) != 0;
+      bool alive = (flagsO & PAL_ALIVE) != 0;
+      hoverO = abs(float(O) - uHoverOwner) < 0.5 ? uHoverAmt : 0.0;
+      float fillA = (uFill + (isHuman ? 0.05 : 0.0) + 0.08 * hoverO) * (alive ? 1.0 : 0.5);
+      // Occupied land: a dot stipple in the owner's colour over 70 % fill (§10.1).
+      fillA *= mix(1.0, 0.7, occ);
+      fillA *= terr * landK;
+      vec3 ground = albedo;
+      albedo = territoryFill(albedo, natO, fillA);
+      nightFill = natO * clamp(0.7 + 0.3 * luma(ground) / TERR_LUM_AVG, 0.6, 1.4) * fillA;
+      emissive += natO * 0.05 * hoverO * terr * landK * (0.8 + 0.2 * sin(uTime * 4.0));
 
-      // Fill: keep the terrain's luminance, take the nation's hue.
-      float fill = (0.26 + 0.05 * human + 0.07 * hover) * (alive ? 1.0 : 0.5) * terr;
-      float la = luma(albedo);
-      // Keep the terrain's luminance and part of its own hue, wash it with the nation's color.
-      vec3 tinted = nat * clamp(la / max(luma(nat), 0.03), 0.0, 3.0);
-      tinted = mix(mix(vec3(la), albedo, 0.35) * 1.05, tinted, 0.75);
-      albedo = mix(albedo, tinted, fill);
-      emissive += nat * 0.05 * hover * terr * (0.8 + 0.2 * sin(uTime * 4.0));
-
-      if (isAlly) {
-        float k = (tp.x - tp.y) * 0.35;
+      if ((flagsO & PAL_ALLY) != 0) {
+        // Allies: a wide diagonal hatch in the ally's colour.
+        float k = (tp0.x - tp0.y) * 0.35;
         float s = abs(fract(k) - 0.5);
         float aa = fwidth(k) * 1.5;
-        float hatch = smoothstep(0.16 + aa, 0.16 - aa, s) * smoothstep(1.2, 0.35, pxT);
-        albedo = mix(albedo, vec3(0.9, 0.95, 1.0) * la * 1.6 + nat * 0.1, hatch * 0.35 * terr);
+        float hatch = smoothstep(0.1 + aa, 0.1 - aa, s) * smoothstep(1.2, 0.35, pxT);
+        albedo = mix(albedo, mix(natO, vec3(1.0), 0.5) * 1.1, hatch * 0.28 * terr * landK);
       }
-
-      // Borders: crisp anti-aliased line + inner glow band + wide soft glow.
-      float lineW = clamp(0.22 / pxT, 0.75, 2.4) * (1.0 + 0.35 * human + 0.5 * hover);
-      float line = 1.0 - smoothstep(lineW - 0.8, lineW + 0.8, distPx);
-      line *= clamp(1.6 / pxT, 0.35, 1.0);
-      float inner = exp(-distT * 2.2) * step(distT, 2.5);
-      float glow = smoothstep(0.03, 0.55, texture2D(uGlow, uvT).r);
-      float lum = 1.0 + 0.5 * human + 0.9 * hover;
-      float pulseH = 1.0 + 0.12 * human * sin(uTime * 2.2);
-      vec3 borderCol = mix(nat, vec3(1.0), 0.18) * 2.4;
-      if (isTraitor) borderCol = mix(borderCol, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));
-      emissive += borderCol * line * lum * pulseH * terr;
-      emissive += nat * (inner * 0.35 + glow * 0.22) * lum * pulseH * terr;
-      // Night side: territories keep a faint glow (strategic readability, DEFCON vibe).
-      float nightK = smoothstep(0.05, -0.2, muS);
-      emissive += nat * 0.035 * nightK * fill;
-
-      // Hot front lines where the sim reports fighting, and flashing freshly-captured ground.
-      float heat = texture2D(uHeat, uvT).r;
-      if (heat > 0.01) {
-        // Fire running along the contact line: flickering embers, pulsing core, smouldering band behind it.
-        float t = uTime;
-        float fire = vnoise(vec3(tp * 0.55, t * 1.9)) * 0.5 + 0.5;
-        float embers = pow(vnoise(vec3(tp * 2.3, t * 3.1)) * 0.5 + 0.5, 4.0) * 2.0;
-        float pulse = 0.7 + 0.3 * sin(t * 5.0 + (tp.x + tp.y) * 0.35);
-        vec3 hot = vec3(4.2, 1.25, 0.22) * pulse * (0.55 + 0.6 * fire);
-        emissive += hot * heat * (line * 1.25 + inner * 0.3 * (0.4 + embers) + glow * 0.08) * terr;
+      if ((flagsO & PAL_REBEL) != 0) {
+        // Rebels: thin stripes.
+        float k = (tp0.x + tp0.y) * 1.1;
+        float s = abs(fract(k) - 0.5);
+        float aa = fwidth(k) * 1.5;
+        float st = smoothstep(0.1 + aa, 0.1 - aa, s) * smoothstep(1.0, 0.3, pxT);
+        albedo = mix(albedo, natO * 0.35, st * 0.55 * terr * landK);
       }
-      float age = mod(uTick - stamp, 65536.0);
-      if (age < 60.0) {
-        float fresh = exp(-age / 9.0);
-        emissive += mix(nat * 1.4, vec3(3.2, 1.3, 0.35), 0.35 + 0.4 * heat) * fresh * 0.9 * terr;
+      if (occ > 0.01) {
+        vec2 g = tp0 * 2.5;
+        g.x += 0.5 * mod(floor(g.y), 2.0);
+        vec2 f = fract(g) - 0.5;
+        float aa = max(fwidth(g.x), 1e-4) * 0.8;
+        float dotm = smoothstep(0.24 + aa, 0.24 - aa, length(f));
+        float vis = smoothstep(3.0, 6.0, 0.4 / pxT);
+        albedo = mix(albedo, natO * 1.15, mix(0.3, dotm, vis) * occ * 0.9 * terr * landK);
+      }
+      // Conquest flash in the attacker's (new owner's) colour, 2 s.
+      emissive += mix(natO, vec3(1.0), 0.25) * 1.7 * flash * terr * landK;
+    } else if (landK > 0.0 && playableHere) {
+      // Neutral land: desaturated 35 % and darkened 10 % from orbit, so owned land stands out.
+      float l = luma(albedo);
+      albedo = mix(albedo, mix(vec3(l), albedo, 0.65) * 0.9, uNeutralK * terr * landK);
+    }
+
+    // Contested land (front heat): narrow animated diagonal stripes, orange-red, 1.5 tiles deep (§10.1).
+    float contested = smoothstep(0.1, 0.22, heat) * (1.0 - smoothstep(1.1, 1.5, distT)) * landK * terr;
+    if (contested > 0.001 && Q >= 0) {
+      float k = (tp0.x + tp0.y) / 0.75 - uTime * 0.5;
+      float s = abs(fract(k) - 0.5);
+      float aa = fwidth(k) * 1.2;
+      float stripe = smoothstep(0.22 + aa, 0.22 - aa, s);
+      stripe = mix(0.45, stripe, smoothstep(4.0, 7.0, 0.75 / pxT));
+      vec3 hot = vec3(0.95, 0.26, 0.07);
+      albedo = mix(albedo, hot, stripe * contested * 0.6);
+      emissive += hot * stripe * contested * 0.35;
+    }
+
+    // Borders: constant pixel widths, 1.4 px (human 2.4 px), split between the two owners' colours; a dark core
+    // between players at war; a dark outline up close (ground-projected 2-3 px lines, §10.11).
+    if (Q >= 0 && distPx < 10.0 && (O > 0 || Q > 0)) {
+      vec3 natQ = vec3(0.5);
+      int flagsQ = 0;
+      float hoverQ = 0.0;
+      if (Q > 0) {
+        vec4 pq = paletteAt(Q);
+        flagsQ = int(pq.a * 255.0 + 0.5);
+        natQ = srgbToLinear(pq.rgb);
+        hoverQ = abs(float(Q) - uHoverOwner) < 0.5 ? uHoverAmt : 0.0;
+      }
+      bool humanB = O == HUMAN_ID || Q == HUMAN_ID;
+      bool indep = (O == 0 || (flagsO & PAL_INDEP) != 0) && (Q == 0 || (flagsQ & PAL_INDEP) != 0);
+      float Wpx = humanB ? 2.4 : (indep ? 1.0 : 1.4);
+      Wpx = mix(Wpx, humanB ? 3.0 : 2.2, uCloseK);
+      float hO = O > 0 ? (Q > 0 ? Wpx * 0.5 : Wpx) : 0.0;
+      float hQ = Q > 0 ? (O > 0 ? Wpx * 0.5 : Wpx) : 0.0;
+      float s = distPx;
+      float cO = bandCov(s, 0.0, hO), cQ = bandCov(s, -hQ, 0.0);
+      float nightL = 1.0 - smoothstep(-0.12, 0.06, muS);
+      float E = mix(1.5, 2.4, nightL);
+      vec3 colO = mix(natO, vec3(1.0), 0.35) * E * (1.0 + 0.25 * float(O == HUMAN_ID) + 0.5 * hoverO);
+      vec3 colQ = mix(natQ, vec3(1.0), 0.35) * E * (1.0 + 0.25 * float(Q == HUMAN_ID) + 0.5 * hoverQ);
+      if ((flagsO & PAL_TRAITOR) != 0) colO = mix(colO, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));
+      if ((flagsQ & PAL_TRAITOR) != 0) colQ = mix(colQ, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));
+      float fadeW = smoothstep(0.85, 0.35, water) * terr;
+      lineCov = (cO + cQ) * fadeW;
+      lineCol = (colO * cO + colQ * cQ) / max(cO + cQ, 1e-4);
+      if (O > 0 && Q > 0 && atWarPair(O, Q)) coreCov = bandCov(s, -0.42, 0.42) * fadeW;
+      outlineCov = (bandCov(s, hO, hO + 0.9) + bandCov(s, -hQ - 0.9, -hQ)) * fadeW * uCloseK;
+      // The human's border: a 3 px inner glow.
+      if (O == HUMAN_ID) emissive += natO * 0.45 * (1.0 - smoothstep(0.0, 3.0 + Wpx * 0.5, s)) * terr * landK;
+    }
+
+    // Small islands: a 1 px white shoreline from orbit (§10.6).
+    if (isl > 0.5 && uShoreK > 0.0) shoreCov = bandCov(shorePx, -0.5, 0.5) * uShoreK * terr;
+
+    // Historical (real-world) borders: 0.8 px dotted grey lines below 1,000 km when enabled (§10.3).
+    if (uHistorical > 0.001 && landK > 0.2) {
+      vec2 hx = tp0 - 0.5;
+      ivec2 h0 = ivec2(floor(hx));
+      vec2 hf = hx - floor(hx);
+      int c00 = countryAt(h0), c10 = countryAt(h0 + ivec2(1, 0)), c01 = countryAt(h0 + ivec2(0, 1)), c11 = countryAt(h0 + ivec2(1, 1));
+      int C = hf.x < 0.5 ? (hf.y < 0.5 ? c00 : c01) : (hf.y < 0.5 ? c10 : c11);
+      if (C > 0) {
+        float a = (c00 == C || c00 == 0) ? 1.0 : 0.0, b = (c10 == C || c10 == 0) ? 1.0 : 0.0;
+        float cc = (c01 == C || c01 == 0) ? 1.0 : 0.0, d = (c11 == C || c11 == 0) ? 1.0 : 0.0;
+        if (a + b + cc + d < 3.5) {
+          float fC = mix(mix(a, b, hf.x), mix(cc, d, hf.x), hf.y);
+          vec2 g = vec2(mix(b - a, d - cc, hf.y), mix(cc - a, d - b, hf.x));
+          vec2 gpx = vec2(dot(g, dFdx(hx)), dot(g, dFdy(hx)));
+          float gl = length(gpx);
+          float hd = gl > 1e-6 ? (fC - 0.5) / gl : 1e4;
+          vec2 along = gl > 1e-6 ? vec2(-gpx.y, gpx.x) / gl : vec2(1.0, 0.0);
+          float dash = step(0.45, fract(dot(gl_FragCoord.xy, along) / 5.0));
+          histCov = bandCov(hd, -0.4, 0.4) * dash * uHistorical * landK * terr;
+        }
       }
     }
   }
@@ -379,6 +627,8 @@ void main() {
     vec2 sd = vec2(dot(L, east), dot(L, north)) / tanS * (CLOUD_R - 1.0);
     vec2 suv = uv + uCloudOffset + vec2(sd.x / (TAU * max(cos(lat), 0.05)), sd.y / PI);
     float cs = texture2D(uClouds, suv).a;
+    // Cloud shadows thin exactly like the clouds casting them (strategic mode, §10.5).
+    cs *= cloudThin(texture2D(uCloudMask, uvT), uCloudK);
     cloudShade = 1.0 - 0.6 * cs * uCloudShadow;
   }
 #endif
@@ -465,7 +715,22 @@ void main() {
     col += lights * vec3(1.0, 0.9, 0.72) * uNightE * nightF;
   }
 
+  // Night side (DESIGN_V2 §10.4): a bluish floor light so land, coasts and islands stay readable, and the territory
+  // fill re-emitted at 70 % of its day brightness so nations keep their colours in the dark.
+  float nightK = 1.0 - smoothstep(-0.12, 0.06, muS);
+  if (nightK > 0.0) {
+    col += albedo * vec3(0.55, 0.72, 1.0) * uNightFloor * nightK * (0.45 + 0.55 * landK);
+    emissive += nightFill * uSunE * 0.75 * 0.7 * nightK;
+  }
   col += emissive;
+
+  // Line layers on top of the lit ground: borders (HDR, glow through bloom), war cores, close-up outlines,
+  // island shorelines, historical borders.
+  col = mix(col, lineCol, clamp(lineCov, 0.0, 1.0));
+  col = mix(col, vec3(0.012, 0.01, 0.01), clamp(coreCov, 0.0, 1.0) * 0.9);
+  col = mix(col, vec3(0.01), clamp(outlineCov, 0.0, 1.0) * 0.6);
+  col = mix(col, vec3(1.7), clamp(shoreCov, 0.0, 1.0) * 0.85);
+  col = mix(col, vec3(0.55), clamp(histCov, 0.0, 1.0) * 0.8);
 
   // --- aerial perspective -----------------------------------------------------------------------
 #if ATM_Q >= 1
@@ -475,6 +740,17 @@ void main() {
   col = mix(col, vec3(0.3, 0.55, 1.0) * dayK * 0.8, rim * 0.6);
 #endif
 
+  if (uMaskMode > 0.5) {
+    // Flat owner-id false colour for tools/readability.mjs (shared/shots.ts OWNER_MASK), written raw.
+    float nightB = muS < -0.02 ? ${OWNER_MASK.night}.0 : 0.0;
+    vec3 m;
+    if (water > 0.5) m = vec3(0.0, 0.0, ${OWNER_MASK.water}.0 + nightB);
+    else if (O > 0) m = vec3(float(O & 255), float(O >> 8), ${OWNER_MASK.owned}.0 + nightB);
+    else if (playableHere) m = vec3(0.0, 0.0, ${OWNER_MASK.neutral}.0 + nightB);
+    else m = vec3(0.0, 0.0, ${OWNER_MASK.ice}.0 + nightB);
+    gl_FragColor = vec4(m / 255.0, 1.0);
+    return;
+  }
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

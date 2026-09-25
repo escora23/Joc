@@ -10,9 +10,9 @@ import type { PlayerCommand, SimDebugAction } from './protocol';
 import type { QualityProfile } from './quality';
 import type { SettingsStore } from './settings';
 import type {
-  AllianceRequestView, AllianceView, AttackView, CommandKind, Difficulty, FrontView, GameConfig, GamePhase,
-  GameSpeed, LatLon, PlayerView, ScarView, StatsSample, StructureType, StructureView, Timelapse, UnitType,
-  UnitView, WorldData, WorldEventView,
+  AllianceRequestView, AllianceView, AttackView, ClockView, CommandKind, Difficulty, FrontView, GameConfig, GamePhase,
+  GameSpeed, LatLon, PairState, PlayerView, ScarView, SiegeView, StatsSample, StructureType, StructureView, Timelapse,
+  UnitType, UnitView, WarView, WorldData, WorldEventView,
 } from './types';
 
 // =================================================================================================
@@ -40,6 +40,11 @@ export interface FrameInfo {
   simTime: number;
   /** Game-time delta of this frame in seconds (0 when paused; dt * speed otherwise). */
   simDt: number;
+  // --- v2 (W1): clocks for renderers (DESIGN_V2 §2.5) ---
+  /** Interpolated game hours since the session started (tick / 10): the war clock and ETAs. */
+  gameHours: number;
+  /** Real seconds of this frame when the game is not paused, else 0: animation that looks the same at every speed. */
+  visualDt: number;
 }
 
 export type ProgressFn = (fraction: number, label?: string) => void;
@@ -111,6 +116,23 @@ export interface GameView {
   unitCost(type: UnitType): number;
   /** Worker-side ms for the last update's ticks (debug overlay). */
   readonly tickMs: number;
+  // --- v2 (W1) ---
+  /** The clock driving the world (mode, rate in game s per real s, tick period). */
+  readonly clock: ClockView;
+  /** Interpolated game hours since the session started (same as FrameInfo.gameHours). */
+  readonly gameHours: number;
+  /** Active wars, besieged pockets. */
+  readonly wars: readonly WarView[];
+  readonly sieges: readonly SiegeView[];
+  /** Fronts by stable key. */
+  readonly frontByKey: ReadonlyMap<number, FrontView>;
+  /** Captured land still under occupation (72 h after capture, §4.13); the sim is the source of truth. */
+  isOccupied(tile: number): boolean;
+  occupiedCount(player: number): number;
+  /** Pair state between two players ('peace' when none of war/truce applies). */
+  pairState(a: number, b: number): PairState;
+  /** The war between a and b (either side), or null. */
+  warBetween(a: number, b: number): WarView | null;
 }
 
 export interface SimClientApi {
@@ -129,6 +151,18 @@ export interface SimClientApi {
   pump(nowMs: number): void;
   /** Terminate the worker and reset the view. */
   stop(): void;
+  // --- v2 (W1) ---
+  /**
+   * Request a clock mode (§2.2, §14.6): 'observation' from the camera altitude (focus = camera ground point, tile
+   * coords), 'tactical' / 'travel' from command mode with a rate in game s per real s. Crisis is decided by the worker.
+   */
+  setClock(mode: 'strategic' | 'observation' | 'tactical' | 'travel', rate?: number, focus?: { x: number; y: number }, throttled?: boolean): void;
+  /** The player's crisis / observation settings (the worker decides crisis time from them, §8.5). Kept across sessions. */
+  setClockSettings(crisisTime: 'always' | 'mine' | 'off', observationTime: boolean): void;
+  /** Serialise the running game (§12.8); resolves with the save blob. */
+  save(): Promise<{ blob: ArrayBuffer; tick: number }>;
+  /** Start a session from a save blob instead of a config (resolves once the restored world is shown). */
+  load(blob: ArrayBuffer, world: WorldData): Promise<void>;
 }
 
 // =================================================================================================

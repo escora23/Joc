@@ -12,7 +12,7 @@ import type { GameContext } from '../shared/api';
 import { hexToCss } from '../shared/color';
 import type { UiSoundKind } from '../shared/events';
 import { formatNumber, getLanguage, t } from '../shared/i18n';
-import { DIFFICULTIES, type Difficulty, type GameSpeed } from '../shared/types';
+import { DIFFICULTIES, type Difficulty, type GameDuration, type GameSpeed } from '../shared/types';
 
 type Sound = (k: UiSoundKind) => void;
 
@@ -105,7 +105,7 @@ export function createSetup(ctx: GameContext, sound: Sound): HTMLElement {
     setText(pvName, s.playerName || t('setup.namePlaceholder'));
     const c = NATION_COLORS.find((x) => x.hex === s.playerColor);
     setText(pvColorName, c ? (getLanguage() === 'es' ? c.es : c.en) : hexToCss(s.playerColor).toUpperCase());
-    setText(pvSummary, `${t(`difficulty.${s.difficulty}`).toUpperCase()} · ${s.aiCount} IA · ${s.tribeCount} ${t('setup.tribesShort')} · ${s.speed}×`);
+    setText(pvSummary, `${t(`difficulty.${s.difficulty}`).toUpperCase()} · ${s.aiCount} IA · ${s.tribeCount} ${t('setup.tribesShort')} · ${s.speed === 0.5 ? t('hud.speed.half') : `${s.speed}×`} · ${t(`setup.duration.${s.duration ?? 'normal'}`)}`);
     card.style.setProperty('--nation', hexToCss(s.playerColor));
   };
 
@@ -171,9 +171,17 @@ export function createSetup(ctx: GameContext, sound: Sound): HTMLElement {
   const tribes = slider({ min: 0, max: 120, step: 5, value: s.tribeCount, format: (v) => String(v), sound: snd, amber: true, onInput: (v) => { s.tribeCount = v; refreshPreview(); } });
   tribes.input.addEventListener('change', save);
   const speed = segmented<GameSpeed>(
-    ([1, 2, 4] as GameSpeed[]).map((v) => ({ value: v, label: `${v}×` })),
+    ([0.5, 1, 2, 4] as GameSpeed[]).map((v) => ({ value: v, label: v === 0.5 ? t('hud.speed.half') : `${v}×` })),
     s.speed,
     (v) => { s.speed = v; refreshPreview(); save(); },
+    snd,
+  );
+  // v2 (W1): «Duración» (§4.18): victory thresholds and the time limit.
+  if (!s.duration) s.duration = 'normal';
+  const duration = segmented<GameDuration>(
+    (['short', 'normal', 'long'] as GameDuration[]).map((v) => ({ value: v, labelKey: `setup.duration.${v}`, title: t(`setup.duration.tip.${v}`) })),
+    s.duration,
+    (v) => { s.duration = v; refreshPreview(); save(); },
     snd,
   );
   const nukes = toggleSwitch(s.nukes, (v) => { s.nukes = v; save(); }, snd);
@@ -224,6 +232,7 @@ export function createSetup(ctx: GameContext, sound: Sound): HTMLElement {
         field('setup.aiCount', ai.el, tx('setup.aiCount.hint', undefined, 'small')),
         field('setup.tribes', tribes.el, tx('setup.tribes.hint', undefined, 'small')),
         field('setup.speed', speed.el),
+        field('setup.duration', duration.el),
         field('setup.rules',
           h('div', { class: 'fu-toggle-row' }, icon('radiation'), h('span', null, tx('setup.nukes'), tx('setup.nukes.hint', undefined, 'small')), nukes.el),
           h('div', { class: 'fu-toggle-row' }, icon('hurricane'), h('span', null, tx('setup.events'), tx('setup.events.hint', undefined, 'small')), events.el),

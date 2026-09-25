@@ -44,7 +44,11 @@ export class FrontTracker {
   /** Fresh FrontRecords (new typed arrays each call: they are transferred to the main thread). */
   take(): FrontRecord[] {
     this.dirty = false;
-    return this.list.map((f) => ({ ...f, samples: Float32Array.from(f.samples) }));
+    return this.list.map((f) => ({
+      key: f.id, momentum: 0, advanceKmh: 0, startTick: 0, pa: 0, pd: 0, garrisonA: 0, garrisonB: 0, shareA: 0, shareB: 0,
+      targetShareA: 0, targetShareB: 0, priorityA: 1, priorityB: 1, casualtiesA: 0, casualtiesB: 0, divisionsA: 0,
+      divisionsB: 0, quiet: false, offensiveA: 0, offensiveB: 0, ...f, samples: Float32Array.from(f.samples),
+    }));
   }
 
   get current(): readonly FrontData[] {

@@ -83,6 +83,12 @@ export function openSettings(ctx: GameContext, sound: Sound, onClose?: () => voi
     game: h('div', { class: 'fu-form' },
       formRow('settings.language', lang.el),
       formRow('settings.tutorial', sw('tutorial'), 'settings.tutorial.hint'),
+      // v2 (W1): clock settings; the worker decides crisis and observation time from them (§8.5).
+      formRow('settings.crisisTime', segmented<'always' | 'mine' | 'off'>(
+        (['always', 'mine', 'off'] as const).map((v) => ({ value: v, labelKey: `settings.crisisTime.${v}` })),
+        s.crisisTime ?? 'always', (v) => ctx.settings.set({ crisisTime: v }), snd,
+      ).el, 'settings.crisisTime.tip'),
+      formRow('settings.observationTime', toggleSwitch(s.observationTime ?? true, (v) => ctx.settings.set({ observationTime: v }), snd).el, 'settings.observationTime.tip'),
     ),
   };
   const tabs = h('div', { class: 'fu-tabs' });

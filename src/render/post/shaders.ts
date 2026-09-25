@@ -88,6 +88,7 @@ uniform float uTime;
 uniform float uFade;
 uniform float uSaturation;
 uniform float uCinematic;
+uniform float uRaw;
 varying vec2 vUv;
 
 const mat3 ACES_IN = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
@@ -138,6 +139,11 @@ vec3 ghosts(vec2 uv) {
 }
 void main() {
   vec2 uv = vUv;
+  if (uRaw > 0.5) {
+    // Measurement mask (&mask=owner): the scene values, untouched.
+    gl_FragColor = vec4(texture2D(tScene, uv).rgb, 1.0);
+    return;
+  }
   vec2 dc = uv - 0.5;
   vec3 col;
   if (uCA > 1e-5) {

@@ -9,12 +9,15 @@ import { EARTH_RADIUS_KM, RELIEF_EXAGGERATION, TOPO_MAX_METERS } from '../../sha
 import { latLonToTile, sunDirection, surfaceRadius, vec3ToLatLon } from '../../shared/geo';
 import type { QualityProfile } from '../../shared/quality';
 import type { LatLon } from '../../shared/types';
-import { clamp, damp, smoothstep } from '../../shared/math';
+import { clamp, damp, lerp, smoothstep } from '../../shared/math';
+import { presentationTime, shotView } from '../../shared/shots';
+import type { CloudMode } from '../../shared/settings';
 import { sampleElevation } from '../../data';
 import { createEarth, createPlanetUniforms, earthDefines, PATCH_RES, PATCH_WARP, type Earth } from './earth';
 import { buildSdfFont, type SdfFont } from './font';
 import { createNationLabels, type NationLabels } from './labels';
 import { createAtmosphereLayers, type AtmosphereLayers } from './layers';
+import { territoryFillAmount } from './glsl';
 import { createSpaceBackdrop } from './sky';
 import { createTerritoryLayer } from './territory';
 import { applyTextureSize, loadPlanetTextures, type PlanetTextures } from './textures';
@@ -28,6 +31,20 @@ export function setGlobeWorldTimeOverride(t: number | null): void {
 }
 
 const RELIEF_TOP = 1 + (TOPO_MAX_METERS * RELIEF_EXAGGERATION) / (EARTH_RADIUS_KM * 1000);
+/** Camera layer holding only the ground (the &mask=owner measurement renders just that). */
+export const MASK_LAYER = 30;
+/** Cloud drift offset while frozen (&freeze=1). */
+const FROZEN_CLOUD_U = 0.37;
+
+/**
+ * Cloud thinning factors for a mode and camera altitude (DESIGN_V2 §10.5): x = the human's land, y = other land,
+ * z = ocean, w = fronts. Strategic: > 2,500 km 0 / 0.2 / 0.85 / 0; < 800 km 0.6 / 0.6 / 1 / 0.3; lerp between.
+ */
+export function cloudFactors(mode: CloudMode, altKm: number, out: THREE.Vector4): THREE.Vector4 {
+  if (mode !== 'strategic') return out.set(1, 1, 1, 1);
+  const t = smoothstep(800, 2500, altKm);
+  return out.set(lerp(0.6, 0, t), lerp(0.6, 0.2, t), lerp(1, 0.85, t), lerp(0.3, 0, t));
+}
 
 export function createGlobe(ctx: GameContext): GlobeApi {
   const root = new THREE.Group();
@@ -48,6 +65,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
   let territoryOpacity = 0;
   let territoryTarget = 0;
   let hoverTile = -1;
+  let historical = 0;
 
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
@@ -123,8 +141,10 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       space.bake(ctx.renderer);
 
       earth = createEarth(t, planet, territory, earthDefines(quality), quality.globeDetail);
+      earth.sphere.layers.enable(MASK_LAYER);
+      earth.patch.layers.enable(MASK_LAYER);
       root.add(earth.sphere, earth.patch);
-      layers = createAtmosphereLayers(planet, t.clouds, quality.atmosphere, quality.globeDetail);
+      layers = createAtmosphereLayers(planet, t.clouds, quality.atmosphere, quality.globeDetail, territory.uniforms.uCloudMask);
       root.add(layers.clouds, layers.cloudsInner, layers.atmosphere);
       labels = createNationLabels(ctx, font);
       root.add(labels.mesh);
@@ -159,26 +179,43 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       const worldTime = worldTimeOverride ?? frame.worldTime;
       sunDirection(worldTime, sunDir);
       planet.uSunDir.value.copy(sunDir);
-      planet.uTime.value = frame.time;
-      const cloudU = (worldTime / CLOUD_PERIOD_SEC) % 1;
-      planet.uCloudOffset.value.set(quality.clouds >= 1 ? cloudU : 0, 0);
+      planet.uTime.value = presentationTime(frame.time);
+      const cloudU = shotView.freeze ? FROZEN_CLOUD_U : (worldTime / CLOUD_PERIOD_SEC) % 1;
+      planet.uCloudOffset.value.set(quality.clouds >= 1 || shotView.freeze ? cloudU : 0, 0);
 
       const cam = ctx.camera;
       const camDist = cam.position.length();
       const altKm = (camDist - 1) * EARTH_RADIUS_KM;
+      // Zoom level for the readability tables: the rig's distance to its target (what the player dials in).
+      const zoomKm = ctx.cameraRig.getState(camState).altitudeKm;
       planet.uNormalBoost.value = 0.65 + 0.45 * smoothstep(150, 7000, altKm);
       planet.uHaze.value = 0.3 + 0.7 * smoothstep(80, 3000, altKm);
+      planet.uFill.value = territoryFillAmount(zoomKm);
+      planet.uNeutralK.value = smoothstep(600, 1000, zoomKm);
+      planet.uNightFloor.value = lerp(0.1, 0.22, smoothstep(600, 1000, zoomKm));
+      // Border noise (tiles): ~2-6 km wander, faded in below 1,500 km (sub-pixel from higher up).
+      planet.uBorderNoise.value = 0.16 * (1 - smoothstep(600, 1500, zoomKm));
+      planet.uShoreK.value = smoothstep(1200, 1500, zoomKm);
+      planet.uCloseK.value = 1 - smoothstep(150, 300, zoomKm);
+      planet.uMaskMode.value = shotView.mask === 'owner' ? 1 : 0;
+      cam.layers.set(shotView.mask === 'owner' ? MASK_LAYER : 0);
 
       territoryOpacity = damp(territoryOpacity, territoryTarget, 5, dt);
       if (Math.abs(territoryOpacity - territoryTarget) < 0.002) territoryOpacity = territoryTarget;
-      territory.uniforms.uTerritoryOpacity.value = territoryOpacity;
-      territory.update(dt);
+      territory.uniforms.uTerritoryOpacity.value = shotView.territory ? territoryOpacity : 0;
+      const wantHist = ctx.settings.get().historicalBorders && ctx.sim.view.phase !== 'none' ? 1 - smoothstep(800, 1000, zoomKm) : 0;
+      historical = shotView.freeze ? wantHist : damp(historical, wantHist, 6, dt);
+      territory.uniforms.uHistorical.value = historical < 0.002 ? 0 : historical;
+      territory.update(dt, frame.now / 1000);
       if (hoverTile >= 0 && ctx.sim.view.phase !== 'none') territory.setHoverOwner(ctx.sim.view.owner[hoverTile] ?? 0);
 
       placePatch();
+      const cloudMode: CloudMode = shotView.clouds ?? ctx.settings.get().clouds ?? 'strategic';
+      cloudFactors(ctx.sim.view.phase === 'none' ? 'realistic' : cloudMode, zoomKm, planet.uCloudK.value);
+      const cloudFade = cloudMode === 'hidden' ? 0 : smoothstep(45, 320, altKm);
       layers?.update(camDist);
-      layers?.setCloudFade(smoothstep(45, 320, altKm));
-      planet.uCloudShadow.value = smoothstep(45, 320, altKm);
+      layers?.setCloudFade(cloudFade);
+      planet.uCloudShadow.value = cloudFade;
 
       // Stars fade in a daylit sky (camera inside the atmosphere with the sun up).
       camUp.copy(cam.position).normalize();

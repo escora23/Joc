@@ -6,7 +6,9 @@ import * as THREE from 'three';
 import type {
   AppController, AppState, CommandEnterParams, FrameInfo, GameContext, ScriptedGameOptions, Subsystem,
 } from '../shared/api';
-import { DEFAULT_START_WORLD_TIME, HUMAN_ID, MAP_H, MAP_W, MENU_WORLD_TIME_SCALE, TICK_MS, UNIT_DEFS } from '../shared/constants';
+import {
+  DEFAULT_START_WORLD_TIME, HUMAN_ID, MAP_H, MAP_W, MENU_WORLD_TIME_SCALE, OBSERVATION_ENTER_KM, OBSERVATION_LEAVE_KM, TICK_MS, UNIT_DEFS,
+} from '../shared/constants';
 import { EventBus, type GameEvents } from '../shared/events';
 import { latLonToTile, tileAtXY, tileToLatLon, tileX, tileY, wrapX } from '../shared/geo';
 import { setLanguage } from '../shared/i18n';
@@ -29,6 +31,7 @@ import { createUi } from '../ui';
 import { createAudio } from '../audio';
 import { createInputRouter } from './input';
 import { createWorldFx } from './worldfx';
+import { installProbes } from './probes';
 import { registerAllShots } from './shots';
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -57,7 +60,10 @@ export async function bootstrap(): Promise<void> {
   const scene = new THREE.Scene();
   scene.name = 'world';
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.001, 200);
-  const frame: FrameInfo = { now: performance.now(), dt: 0, time: 0, frame: 0, worldTime: DEFAULT_START_WORLD_TIME, simAlpha: 1, simTime: 0, simDt: 0 };
+  const frame: FrameInfo = {
+    now: performance.now(), dt: 0, time: 0, frame: 0, worldTime: DEFAULT_START_WORLD_TIME, simAlpha: 1, simTime: 0, simDt: 0,
+    gameHours: 0, visualDt: 0,
+  };
   const isShot = shotNameFromUrl() !== null;
 
   let state: AppState = 'boot';
@@ -78,6 +84,8 @@ export async function bootstrap(): Promise<void> {
     async startGame(config) {
       if (!ctx.world) throw new Error('world not loaded');
       if (ctx.sim.running) teardownSession();
+      const cs = settings.get();
+      ctx.sim.setClockSettings(cs.crisisTime ?? 'always', cs.observationTime ?? true);
       await ctx.sim.start(config, ctx.world);
       for (const s of systems) s.onGameStart?.();
       bus.emit('gameStarted', { config });
@@ -181,6 +189,7 @@ export async function bootstrap(): Promise<void> {
         speed: s.speed,
         nukes: s.nukes,
         worldEvents: s.worldEvents,
+        duration: s.duration ?? 'normal',
         startWorldTimeSec: DEFAULT_START_WORLD_TIME,
         spawnTimeoutTicks: 900,
         autoSpawnTile: -1,
@@ -209,7 +218,9 @@ export async function bootstrap(): Promise<void> {
   const input = createInputRouter(ctx);
   const worldFx = createWorldFx(ctx);
   const systems: Subsystem[] = [ctx.cameraRig, ctx.post, ctx.globe, ctx.units, ctx.fx, ctx.battle, worldFx, ctx.command, ctx.audio, ctx.ui];
-  (window as unknown as { __front: unknown }).__front = { ctx, app };
+  const frontHook: Record<string, unknown> = { ctx, app };
+  (window as unknown as { __front: unknown }).__front = frontHook;
+  installProbes(ctx, frontHook);
   registerAllShots();
 
   function setState(next: AppState): void {
@@ -323,6 +334,9 @@ export async function bootstrap(): Promise<void> {
       bus.emit('languageChanged', { lang: s.language });
     }
     if (changed.includes('quality')) applyQuality(qualityProfile(s.quality));
+    if (changed.includes('crisisTime') || changed.includes('observationTime')) {
+      ctx.sim.setClockSettings(s.crisisTime ?? 'always', s.observationTime ?? true);
+    }
     bus.emit('settingsChanged', { settings: s, changed });
   });
 
@@ -376,6 +390,8 @@ export async function bootstrap(): Promise<void> {
     frame.simAlpha = view.alpha;
     frame.simTime = inSession ? view.simTime : 0;
     frame.simDt = inSession ? Math.max(0, frame.simTime - prevSimTime) : 0;
+    frame.gameHours = inSession ? view.gameHours : 0;
+    frame.visualDt = inSession && view.clock.rate <= 0 ? 0 : dt;
     frame.worldTime = inSession
       ? (view.config?.startWorldTimeSec ?? DEFAULT_START_WORLD_TIME) + frame.simTime
       : frame.worldTime + dt * MENU_WORLD_TIME_SCALE;
@@ -415,6 +431,47 @@ export async function bootstrap(): Promise<void> {
     }
   }
   const waitFrames = (n: number) => new Promise<void>((resolve) => frameWaiters.push({ n, resolve }));
+
+  // ---------------------------------------------------------------------------------------------
+  // v2 (W1): observation time (§2.2) — looking closely slows the whole world down. Below 60 km of camera altitude the
+  // worker runs the world at 1 game minute per real second (0.5 s ramp); above 85 km it returns to the chosen speed.
+  // The camera's ground point is the focus where fronts publish their sub-tile progress (§11.5).
+  // ---------------------------------------------------------------------------------------------
+  let observing = false;
+  let focusSentAt = 0;
+  let focusX = -1, focusY = -1;
+  const camState = { lat: 0, lon: 0, altitudeKm: 0, tilt: 0, heading: 0 };
+  // Checked on a 100 ms timer rather than per frame: the camera state is set immediately on input, and a slow frame
+  // must not delay the clock change.
+  setInterval(() => updateObservationClock(performance.now()), 100);
+  function updateObservationClock(now: number): void {
+    const view = ctx.sim.view;
+    const eligible = state === 'playing' && view.phase === 'playing';
+    if (!eligible) {
+      if (observing) {
+        observing = false;
+        if (state !== 'command') ctx.sim.setClock('strategic');
+      }
+      return;
+    }
+    ctx.cameraRig.getState(camState);
+    const alt = camState.altitudeKm;
+    const want = observing ? alt < OBSERVATION_LEAVE_KM : alt < OBSERVATION_ENTER_KM;
+    const fx = ((camState.lon + 180) / 360) * MAP_W, fy = ((90 - camState.lat) / 180) * MAP_H;
+    if (want !== observing) {
+      observing = want;
+      focusX = fx;
+      focusY = fy;
+      focusSentAt = now;
+      if (want) ctx.sim.setClock('observation', undefined, { x: fx, y: fy });
+      else ctx.sim.setClock('strategic');
+    } else if (observing && now - focusSentAt > 500 && Math.hypot(fx - focusX, fy - focusY) > 0.5) {
+      focusX = fx;
+      focusY = fy;
+      focusSentAt = now;
+      ctx.sim.setClock('observation', undefined, { x: fx, y: fy });
+    }
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Boot -> loading -> menu

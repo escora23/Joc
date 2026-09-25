@@ -3,11 +3,13 @@
 // from space, blue sky and horizon haze from low altitude, sunset colors at the terminator). Premultiplied
 // blend (inscatter + background * transmittance) so stars dim behind the limb.
 // Clouds: NASA cloud cover drifting slowly, sun-lit with forward-scattering silver lining, dark on the night
-// side, broken up by procedural erosion up close, with the same aerial perspective as the ground.
+// side, broken up by procedural erosion up close, with the same aerial perspective as the ground. In the
+// strategic cloud mode (DESIGN_V2 §10.5) one extra sample of the territory cloud mask thins the deck over the
+// player's land, fronts and (from high orbit) all land, so territory stays readable under the weather.
 
 import * as THREE from 'three';
 import { ATMOSPHERE, GLSL_ATMOSPHERE, GLSL_COLOR, GLSL_CONSTANTS, GLSL_GEO, GLSL_NOISE } from './glsl';
-import type { PlanetUniforms } from './earth';
+import { GLSL_CLOUD_THIN, type PlanetUniforms } from './earth';
 
 /** Shell geometry radius: room for the artistic halo beyond the physical atmosphere top. */
 const HALO_R = 1.12;
@@ -110,7 +112,10 @@ ${GLSL_NOISE}
 ${GLSL_GEO}
 ${GLSL_ATMOSPHERE}
 ${GLSL_COLOR}
+${GLSL_CLOUD_THIN}
 uniform sampler2D uClouds;
+uniform sampler2D uCloudMask;
+uniform vec4 uCloudK;
 uniform vec2 uCloudOffset;
 uniform vec3 uSunDir;
 uniform float uSunE;
@@ -136,6 +141,8 @@ void main() {
     c = clamp((c - closeK * 0.45 * (1.0 - n)) / (1.0 - closeK * 0.3), 0.0, 1.0);
   }
   c = smoothstep(0.02, 0.85, c);
+  // The one extra texture sample: the territory cloud mask at the ground point under this fragment.
+  c *= cloudThin(texture2D(uCloudMask, vec2(vUv.x, 1.0 - vUv.y)), uCloudK);
   if (c < 0.004) discard;
   float muS = dot(up, L);
   vec3 sunT = vSunT;
@@ -167,7 +174,9 @@ export interface AtmosphereLayers {
   setCloudFade(v: number): void;
 }
 
-export function createAtmosphereLayers(planet: PlanetUniforms, clouds: THREE.Texture | null, atmQ: number, detail: number): AtmosphereLayers {
+export function createAtmosphereLayers(
+  planet: PlanetUniforms, clouds: THREE.Texture | null, atmQ: number, detail: number, cloudMask: { value: THREE.Texture },
+): AtmosphereLayers {
   const atmMaterial = new THREE.ShaderMaterial({
     vertexShader: shellVert,
     fragmentShader: atmFrag,
@@ -193,6 +202,8 @@ export function createAtmosphereLayers(planet: PlanetUniforms, clouds: THREE.Tex
     fragmentShader: cloudFrag,
     uniforms: {
       uClouds: { value: clouds },
+      uCloudMask: cloudMask,
+      uCloudK: planet.uCloudK,
       uCloudOffset: planet.uCloudOffset,
       uSunDir: planet.uSunDir,
       uSunE: planet.uSunE,
