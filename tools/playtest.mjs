@@ -230,12 +230,21 @@ async function resetUi() {
   }
 }
 /** Debug top-up between scripted actions so the short test survives the AI at 4x (see header). */
+let landGrants = 0;
 const reinforce = () => page.evaluate(() => {
   const s = window.__front.ctx.sim;
-  if (!s.view.human?.alive) return;
+  if (!s.view.human?.alive) return false;
+  let granted = false;
+  const home = s.view.human.capitalTile >= 0 && s.view.owner[s.view.human.capitalTile] === 1 ? s.view.human.capitalTile : window.__ptHome;
+  if (s.view.human.tiles < 400 && home >= 0) {
+    // A passive scripted player gets overrun; give it back a foothold so the remaining features can be exercised.
+    s.debug({ type: 'conquer', playerId: 1, centerTile: home, radius: 14 });
+    granted = true;
+  }
   s.debug({ type: 'addTroops', playerId: 1, amount: Math.max(0, s.view.human.maxTroops - s.view.human.troops) });
   if (s.view.human.gold < 20_000_000) s.debug({ type: 'addGold', playerId: 1, amount: 30_000_000 });
-});
+  return granted;
+}).then((g) => { if (g) { landGrants++; log('  (emergency land grant: the human had < 400 tiles)'); } });
 const humanStats = () => page.evaluate(() => {
   const h = window.__front.ctx.sim.view.human;
   return h ? { tiles: h.tiles, troops: Math.round(h.troops), gold: Math.round(h.gold), alive: h.alive } : null;
@@ -310,7 +319,7 @@ try {
       await clickTile(tile);
       if (await until(() => window.__front.ctx.sim.view.human?.spawned, null, 15000)) break;
     }
-    const cap = await page.evaluate(() => window.__front.ctx.sim.view.human?.capitalTile ?? -1);
+    const cap = await page.evaluate(() => (window.__ptHome = window.__front.ctx.sim.view.human?.capitalTile ?? -1));
     check(cap >= 0, 'human did not spawn');
     await waitState('playing', 120000);
     await sleep(2500);
@@ -356,7 +365,7 @@ try {
 
   await step('speed 4x (+ key), then 1x (button)', async () => {
     await page.keyboard.press('Equal');
-    await sleep(300);
+    await sleep(250);
     await page.keyboard.press('Equal');
     const sp = await until(() => window.__front.ctx.sim.view.speed === 4, null, 10000);
     check(sp, `speed is ${await page.evaluate(() => window.__front.ctx.sim.view.speed)}`);
@@ -428,6 +437,95 @@ try {
     return `unit ${tankId}`;
   });
 
+  // ---------------------------------------------------------------------------------------------- nukes
+  await until(() => [...window.__front.ctx.sim.view.structures.values()].some((s) => s.owner === 1 && s.type === 5 && s.built >= 1), null, 90000);
+  const nukeTarget = (minDist) => page.evaluate((minDist) => {
+    const v = window.__front.ctx.sim.view, pt = window.__pt;
+    const cap = v.human.capitalTile;
+    // The biggest non-allied nation whose label anchor is far enough from our capital and that does not border us
+    // (a neighbour answers a nuke by marching straight into our silo).
+    const neighbours = new Set();
+    for (const t of pt.humanTiles()) for (const n of [t - 1, t + 1, t - 1600, t + 1600]) if (v.owner[n] !== 1) neighbours.add(v.owner[n]);
+    const cands = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && !neighbours.has(p.id));
+    let best = null;
+    for (const p of cands) {
+      const t = Math.floor(p.labelY) * 1600 + Math.floor(p.labelX);
+      if (v.owner[t] !== p.id) continue;
+      const d = pt.dist(t, cap);
+      if (d < minDist || d > 450) continue;
+      if (!best || p.tiles > best.tiles) best = { id: p.id, tile: t, tiles: p.tiles, d };
+    }
+    return best;
+  }, minDist);
+
+  for (const [key, weapon, name, minDist, shotName] of [['z', 'AtomBomb', 'atom bomb', 50, '07-atom'], ['x', 'HydrogenBomb', 'hydrogen bomb', 90, '08-hydrogen']]) {
+    await step(`launch ${name} (${key.toUpperCase()} key)`, async () => {
+      const tgt = await nukeTarget(minDist);
+      check(tgt, 'no nuke target');
+      const ll = await tileLL(tgt.tile);
+      await lookAt(ll.lat, ll.lon, 2500);
+      const n0 = await countEvents('nukeLaunched', 'e.owner === 1');
+      await hoverTile(tgt.tile);
+      await page.keyboard.press(key);
+      await sleep(400);
+      await clickTile(tgt.tile);
+      const ev = await lastEvent('nukeLaunched', 'e.owner === 1', n0);
+      check(ev, 'no nukeLaunched (see sim messages in the report)');
+      // Follow it down: frame the target at an oblique angle and wait for detonation or interception.
+      await lookAt(ll.lat - 4, ll.lon, 1500, 0.95);
+      const end = await until((id) => window.__pt.events.find((e) => (e.type === 'nukeDetonated' || e.type === 'nukeIntercepted') && e.unitId === id), ev.unitId, 120000, 250);
+      check(end, 'nuke neither detonated nor was intercepted');
+      await sleep(end.type === 'nukeDetonated' ? 12000 : 500);
+      await shot(shotName);
+      return `${weapon} on player ${tgt.id} (${tgt.d.toFixed(0)} tiles away): ${end.type}${end.casualties ? `, ${end.casualties} casualties` : ''}`;
+    });
+  }
+
+  for (const ratio of ['50', '75']) {
+    await step(`attack a neighbouring nation at ${ratio}%`, async () => {
+      await page.locator('.fu-ar-tick', { hasText: new RegExp(`^${ratio}$`) }).click();
+      // Closest foreign-owned (nation or tribe) tile that touches our land.
+      const find = () => page.evaluate(() => {
+        const v = window.__front.ctx.sim.view, pt = window.__pt;
+        const cap = v.human.capitalTile;
+        let best = -1, bd = 1e9;
+        for (const t of pt.humanTiles()) {
+          for (const dir of [-1, 1, -1600, 1600]) {
+            // Two tiles deep into the neighbour, so a click that resolves one tile off still lands on it.
+            const n = t + dir, n2 = t + 2 * dir, n3 = t + 3 * dir;
+            const o = v.owner[n];
+            if (o && o !== 1 && v.owner[n2] === o && v.owner[n3] === o && pt.playable(n2) && !v.human.allies.includes(o)) {
+              const d = pt.dist(n2, cap);
+              if (d < bd) { bd = d; best = n2; }
+            }
+          }
+        }
+        return best;
+      });
+      let target = await find();
+      for (let i = 0; i < 20 && target < 0; i++) {
+        await sleep(3000);
+        target = await find();
+      }
+      check(target >= 0, 'no land neighbour to attack');
+      const ll = await tileLL(target);
+      await lookAt(ll.lat, ll.lon, 1800);
+      const n0 = await countEvents('attackStarted', 'e.attacker === 1');
+      const troops0 = (await humanStats()).troops;
+      const defender = await page.evaluate((t) => window.__front.ctx.sim.view.owner[t], target);
+      const sent0 = await page.evaluate((d) => window.__front.ctx.sim.view.attacks.filter((a) => a.attacker === 1 && a.defender === d).reduce((s, a) => s + a.troops, 0), defender);
+      await clickTile(target);
+      const ev = await lastEvent('attackStarted', 'e.attacker === 1', n0);
+      if (ev) return `vs player ${ev.defender}: ${ev.troops} troops (${((ev.troops / troops0) * 100).toFixed(0)}% of ${troops0})`;
+      // Clicking a nation we are already attacking reinforces that attack instead of opening a new one.
+      const sent1 = await page.evaluate((d) => window.__front.ctx.sim.view.attacks.filter((a) => a.attacker === 1 && a.defender === d).reduce((s, a) => s + a.troops, 0), defender);
+      check(sent1 > sent0 + troops0 * 0.2, 'no attackStarted and no reinforcement');
+      return `reinforced the attack on player ${defender}: +${Math.round(sent1 - sent0)} troops`;
+    });
+  }
+  await sleep(4000);
+  await shot('09-war');
+
   await step('select the tank and TAKE CONTROL -> command mode', async () => {
     const u = await page.evaluate((id) => { const u = window.__front.ctx.sim.view.units.get(id); return u && { x: u.x, y: u.y }; }, tankId);
     check(u, 'tank vanished');
@@ -455,7 +553,11 @@ try {
     await shot('10-selected-tank');
     await page.locator('.fu-take-control').click();
     await waitState('command', 180000);
-    await sleep(7000);
+    await sleep(3000);
+    await shot('11-command-intro');
+    // The dive-in intro (letterboxed title card) runs ~3 s of game frames; wait until the player has control.
+    await page.waitForFunction(() => !document.querySelector('.fu-cmd-cine'), null, { timeout: 120000, polling: 500 }).catch(() => {});
+    await sleep(3000);
     await shot('11-command-tank');
     // Drive and shoot a little.
     await page.keyboard.down('w');
@@ -472,11 +574,17 @@ try {
 
   await step('exit command mode (Esc) -> result applied', async () => {
     const n0 = await countEvents('commandResultApplied');
+    // First Esc ends the fight and shows the combat report; the second leaves right away.
     await page.keyboard.press('Escape');
+    await sleep(6000);
+    await shot('12b-command-debrief');
+    if ((await state()) === 'command') await page.keyboard.press('Escape');
     await waitState('playing', 120000);
     const ev = await lastEvent('commandResultApplied', null, n0, 20000);
     check(ev, 'no commandResultApplied');
-    await sleep(5000);
+    // Cinematic climb back to orbit.
+    await until(() => window.__front.ctx.cameraRig.getState().altitudeKm > 2000, null, 90000, 500);
+    await sleep(3000);
     await shot('13-back-to-orbit');
     return `killed ${ev.troopsKilled} troops, unitLost=${ev.unitLost}`;
   });
@@ -540,7 +648,7 @@ try {
     await clickTile(tgt.tile, 'right');
     await page.waitForSelector('.fu-radial:not(.fu-hidden) .fu-wedge', { timeout: 10000 });
     await sleep(900);
-    await shot('09-radial');
+    await shot('14b-radial');
     const n0 = await countEvents('allianceRequested', 'e.from === 1');
     await page.locator('.fu-radial .fu-wedge').nth(1).click({ force: true });
     const ev = await lastEvent('allianceRequested', 'e.from === 1', n0, 10000);
@@ -548,88 +656,6 @@ try {
     const reply = await until((to) => window.__pt.events.find((e) => (e.type === 'allianceFormed' && (e.a === to || e.b === to) && (e.a === 1 || e.b === 1)) || (e.type === 'allianceRejected' && ((e.to === 1 && e.from === to) || (e.from === 1 && e.to === to)))), ev.to, 30000);
     return `request to ${ev.to}: ${reply ? reply.type : 'no reply within 30 s'}`;
   });
-
-  for (const ratio of ['50', '75']) {
-    await step(`attack a neighbouring nation at ${ratio}%`, async () => {
-      await page.locator('.fu-ar-tick', { hasText: new RegExp(`^${ratio}$`) }).click();
-      // Closest foreign-owned (nation or tribe) tile that touches our land.
-      const find = () => page.evaluate(() => {
-        const v = window.__front.ctx.sim.view, pt = window.__pt;
-        const cap = v.human.capitalTile;
-        let best = -1, bd = 1e9;
-        for (const t of pt.humanTiles()) {
-          for (const n of [t - 1, t + 1, t - 1600, t + 1600]) {
-            const o = v.owner[n];
-            if (o && o !== 1 && pt.playable(n) && !v.human.allies.includes(o)) {
-              const d = pt.dist(n, cap);
-              if (d < bd) { bd = d; best = n; }
-            }
-          }
-        }
-        return best;
-      });
-      let target = await find();
-      for (let i = 0; i < 20 && target < 0; i++) {
-        await sleep(3000);
-        target = await find();
-      }
-      check(target >= 0, 'no land neighbour to attack');
-      const ll = await tileLL(target);
-      await lookAt(ll.lat, ll.lon, 1800);
-      const n0 = await countEvents('attackStarted', 'e.attacker === 1');
-      const troops0 = (await humanStats()).troops;
-      await clickTile(target);
-      const ev = await lastEvent('attackStarted', 'e.attacker === 1', n0);
-      check(ev, 'no attackStarted');
-      return `vs player ${ev.defender}: ${ev.troops} troops (${((ev.troops / troops0) * 100).toFixed(0)}% of ${troops0})`;
-    });
-  }
-  await sleep(4000);
-  await shot('14-war');
-
-  // ---------------------------------------------------------------------------------------------- nukes
-  await until(() => [...window.__front.ctx.sim.view.structures.values()].some((s) => s.owner === 1 && s.type === 5 && s.built >= 1), null, 90000);
-  const nukeTarget = (minDist) => page.evaluate((minDist) => {
-    const v = window.__front.ctx.sim.view, pt = window.__pt;
-    const cap = v.human.capitalTile;
-    // The biggest non-allied nation whose label anchor is far enough from our capital and that does not border us
-    // (a neighbour answers a nuke by marching straight into our silo).
-    const neighbours = new Set();
-    for (const t of pt.humanTiles()) for (const n of [t - 1, t + 1, t - 1600, t + 1600]) if (v.owner[n] !== 1) neighbours.add(v.owner[n]);
-    const cands = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && !neighbours.has(p.id));
-    let best = null;
-    for (const p of cands) {
-      const t = Math.floor(p.labelY) * 1600 + Math.floor(p.labelX);
-      if (v.owner[t] !== p.id) continue;
-      const d = pt.dist(t, cap);
-      if (d < minDist || d > 450) continue;
-      if (!best || p.tiles > best.tiles) best = { id: p.id, tile: t, tiles: p.tiles, d };
-    }
-    return best;
-  }, minDist);
-
-  for (const [key, weapon, name, minDist, shotName] of [['z', 'AtomBomb', 'atom bomb', 50, '07-atom'], ['x', 'HydrogenBomb', 'hydrogen bomb', 90, '08-hydrogen']]) {
-    await step(`launch ${name} (${key.toUpperCase()} key)`, async () => {
-      const tgt = await nukeTarget(minDist);
-      check(tgt, 'no nuke target');
-      const ll = await tileLL(tgt.tile);
-      await lookAt(ll.lat, ll.lon, 2500);
-      const n0 = await countEvents('nukeLaunched', 'e.owner === 1');
-      await hoverTile(tgt.tile);
-      await page.keyboard.press(key);
-      await sleep(400);
-      await clickTile(tgt.tile);
-      const ev = await lastEvent('nukeLaunched', 'e.owner === 1', n0);
-      check(ev, 'no nukeLaunched (see sim messages in the report)');
-      // Follow it down: frame the target at an oblique angle and wait for detonation or interception.
-      await lookAt(ll.lat - 4, ll.lon, 1500, 0.95);
-      const end = await until((id) => window.__pt.events.find((e) => (e.type === 'nukeDetonated' || e.type === 'nukeIntercepted') && e.unitId === id), ev.unitId, 120000, 250);
-      check(end, 'nuke neither detonated nor was intercepted');
-      await sleep(end.type === 'nukeDetonated' ? 12000 : 500);
-      await shot(shotName);
-      return `${weapon} on player ${tgt.id} (${tgt.d.toFixed(0)} tiles away): ${end.type}${end.casualties ? `, ${end.casualties} casualties` : ''}`;
-    });
-  }
 
   await step('pause/resume (Space)', async () => {
     await page.keyboard.press('Space');
@@ -670,6 +696,7 @@ for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name.padEnd
 console.log(`\nevents: ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ')}`);
 if (messages.length) console.log(`sim messages to the human: ${[...new Set(messages)].join(', ')}`);
 const realErrors = errors.filter((e) => !/favicon/i.test(e));
+console.log(`emergency land grants: ${landGrants}`);
 console.log(`console errors: ${realErrors.length}`);
 for (const e of realErrors.slice(0, 40)) console.log('   ', e.slice(0, 600));
 if (warnings.length) console.log(`console warnings: ${warnings.length} (first: ${warnings.slice(0, 3).map((w) => w.slice(0, 160)).join(' | ')})`);

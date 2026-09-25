@@ -187,10 +187,18 @@ export function createSimClient(bus: GameBus): SimClientApi {
     return p;
   }
 
+  // Speed set by the page but not yet echoed by the worker: updates already in flight still carry the old speed and
+  // must not undo it (a quick double '+' would otherwise read the stale speed and stop at 2x).
+  let pendingSpeed: GameSpeed | null = null;
+  let pendingSpeedAt = 0;
+
   function apply(u: TickUpdate, now: number): void {
     view.prevTick = view.tick;
     view.tick = u.tick;
-    view.speed = u.speed;
+    if (pendingSpeed === null || u.speed === pendingSpeed || now - pendingSpeedAt > 2000) {
+      view.speed = u.speed;
+      pendingSpeed = null;
+    }
     view.phase = u.phase;
     view.tickMs = u.tickMs ?? 0;
     lastUpdateAt = now;
@@ -376,6 +384,8 @@ export function createSimClient(bus: GameBus): SimClientApi {
     },
     setSpeed(speed: GameSpeed): void {
       view.speed = speed;
+      pendingSpeed = speed;
+      pendingSpeedAt = performance.now();
       postToWorker({ kind: 'speed', speed });
       bus.emit('speedChanged', { speed });
     },

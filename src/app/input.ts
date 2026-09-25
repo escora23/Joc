@@ -37,14 +37,15 @@ export function createInputRouter(ctx: GameContext): InputRouter {
 
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
-    down = { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button };
+    // Event timestamps (not handler time): on a slow frame both events can be handled late and far apart.
+    down = { x: e.clientX, y: e.clientY, t: e.timeStamp, button: e.button };
   });
   canvas.addEventListener('pointerup', (e) => {
     const d = down;
     down = null;
     if (!enabled || !d || d.button !== e.button) return;
     const moved = Math.hypot(e.clientX - d.x, e.clientY - d.y);
-    if (moved > CLICK_SLOP || performance.now() - d.t > CLICK_MS) return;
+    if (moved > CLICK_SLOP || e.timeStamp - d.t > CLICK_MS) return;
     ctx.bus.emit('worldClick', pick(e.button, e.clientX, e.clientY, e.shiftKey, e.ctrlKey || e.metaKey, e.altKey));
   });
   canvas.addEventListener('pointermove', (e) => {

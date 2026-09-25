@@ -173,6 +173,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
 
   // Effect state.
   let flashLevel = 0, flashDecay = 1;
+  let lastUpdateNow = 0;
   const flashColor = new THREE.Color(1, 1, 1);
   let caPulse = 0, caDecay = 1;
   let fade = 0;
@@ -281,8 +282,12 @@ export function createPostPipeline(ctx: GameContext): PostApi {
       }
     },
     update(frame: FrameInfo) {
+      // Screen-space timings (fades, flash) follow wall-clock time: frame.dt is clamped to 0.1 s, which would
+      // stretch a 2 s whiteout to half a minute on a slow (software-rendered) frame rate.
+      const realDt = lastUpdateNow > 0 ? Math.min(0.5, Math.max(0, (frame.now - lastUpdateNow) / 1000)) : frame.dt;
+      lastUpdateNow = frame.now;
       if (fadeAnim) {
-        fadeAnim.t += frame.dt * 1000;
+        fadeAnim.t += realDt * 1000;
         const k = clamp01(fadeAnim.t / fadeAnim.dur);
         const e = k * k * (3 - 2 * k);
         fade = fadeAnim.from + (fadeAnim.to - fadeAnim.from) * e;
@@ -292,8 +297,8 @@ export function createPostPipeline(ctx: GameContext): PostApi {
           f.resolve();
         }
       }
-      flashLevel = Math.max(0, flashLevel - frame.dt * flashDecay);
-      caPulse = Math.max(0, caPulse - frame.dt * caDecay);
+      flashLevel = Math.max(0, flashLevel - realDt * flashDecay);
+      caPulse = Math.max(0, caPulse - realDt * caDecay);
       compUniforms.uTime.value = frame.time;
     },
     render(scene: THREE.Scene, camera: THREE.Camera, _frame: FrameInfo) {
