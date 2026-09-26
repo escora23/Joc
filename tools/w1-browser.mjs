@@ -255,8 +255,8 @@ async function stageMovers(gameHoursPerRealSec, close = false) {
     const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
     for (const id of a.old) ctx.sim.debug({ type: 'removeUnit', unitId: id });
     const before = new Set(ctx.sim.view.units.keys());
-    // In crisis a ship covers ~13 km in the window: the lanes sit close together under a low camera.
-    const lanes = a.close ? [39.6, 39.9, 40.2, 40.5, 40.8, 41.1] : [36.5, 38.0, 39.5, 41.0, 42.5, 44.0];
+    // In crisis a ship covers ~13 km in the window: the lanes sit 5.5 km apart under a 90 km camera.
+    const lanes = a.close ? [40.1, 40.15, 40.2, 40.25, 40.3, 40.35] : [36.5, 38.0, 39.5, 41.0, 42.5, 44.0];
     lanes.forEach((lat, i) => ctx.sim.debug({ type: 'spawnUnit', unit: i % 2 ? 1 : 2, owner: 1, tile: tile(lat, -13.5), targetTile: tile(lat, -60) }));
     // The movers appear with the next worker update (a software renderer can take seconds per frame).
     for (let i = 0; i < 120; i++) {
@@ -268,17 +268,20 @@ async function stageMovers(gameHoursPerRealSec, close = false) {
   }, { old: staged, close });
   staged = r;
   // Frame the stretch from the spawn line (13.5 W) to where the fastest mover will be (1 deg lon = 85 km at 40 N).
-  if (close) await look(40.35, -13.6, 300);
+  // Crisis: 90 km up (above the 85 km observation exit, so the clock stays on crisis) keeps ~13 km of travel legible.
+  if (close) await look(40.225, -13.6, 90);
   else {
     const spanDeg = Math.max(4, travelKm / 85);
     await look(40.2, -13.5 - spanDeg / 2 + 0.5, Math.max(1500, spanDeg * 85 * 1.6));
   }
   return r;
 }
-async function motionWindow(label, gameHoursPerRealSec, extra = {}, afterStaging = null) {
+async function motionWindow(label, gameHoursPerRealSec, extra = {}, beforeStaging = null) {
+  // The clock must already run at the window's rate while the movers are staged: at 1x a warship covers 55 km per
+  // real second, so staging before a crisis starts would carry it out of the close crisis framing.
+  if (beforeStaging) await beforeStaging();
   const ids = await stageMovers(gameHoursPerRealSec, !!extra.crisis);
   await sleep(2500); // the movers get their paths, the camera settles
-  if (afterStaging) await afterStaging();
   const r = await ev((o) => window.__front.motionProbe(o), { seconds: MOTION_SEC, ids, minMeanPx: extra.minMeanPx, trace: !!args.trace });
   if (r.trace) for (const t of r.trace) log(`   trace ${JSON.stringify(t)}`);
   const worst = r.units.reduce((m, u) => Math.max(m, u.ratio), 0);
@@ -286,7 +289,8 @@ async function motionWindow(label, gameHoursPerRealSec, extra = {}, afterStaging
   const worstAll = r.units.reduce((m, u) => Math.max(m, u.ratioAll), 0);
   const detail = `${r.units.length}/${ids.length} movers judged, ${r.frames} frames (${r.droppedFrames} slower than 2x median dropped), frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)}, clock ${r.clock.mode}`;
   row('T40', `${label}: max/mean per-frame displacement (${detail})`, `${worst.toFixed(2)} (all frames incl. slow ${worstAll.toFixed(2)}; raw px per frame ${worstRaw.toFixed(2)})`, '<= 2 per frame / frame dt (steady and all frames), >= 3 movers', r.units.length >= 3 && r.pass && (extra.crisis ? r.clock.mode === 'crisis' : r.clock.mode === 'strategic'));
-  if (!r.pass || r.units.length < 3) for (const u of r.units) log(`   ${u.unit} #${u.id}: mean ${u.meanPx} px max ${u.maxPx} px over ${u.frames} frames, ratio ${u.ratio} all ${u.ratioAll} raw ${u.rawRatio}`);
+  if (r.units.length < ids.length) log(`   tracked on screen ${r.tracked ?? "?"} of ${ids.length} (${r.units.map((u) => u.unit).join(",")}); skipped: ${(r.skipped ?? []).join(', ') || 'none'}`);
+  if (!r.pass || r.units.length < 3 || extra.crisis) for (const u of r.units) log(`   ${u.unit} #${u.id}: mean ${u.meanPx} px max ${u.maxPx} px over ${u.frames} frames, ratio ${u.ratio} all ${u.ratioAll} raw ${u.rawRatio}`);
   return r;
 }
 if (want('motion')) {
@@ -304,7 +308,9 @@ if (want('motion')) {
   await setSpeed(1);
   // Crisis: a long ballistic flight keeps the world on the crisis clock (1 game min per real s) during the window.
   await ev(() => window.__front.ctx.settings.set({ crisisTime: 'always' }));
-  await motionWindow('crisis', 1 / 60, { crisis: true }, async () => {
+  // At 1 game min per real s a 30 km/h trade ship moves ~0.03 px per 60 fps frame even at 90 km: the 'parked' cut-off
+  // drops to 0.005 px (the staged ids are known movers; the judged ratio is per real second, independent of scale).
+  await motionWindow('crisis', 1 / 60, { crisis: true, minMeanPx: 0.005 }, async () => {
     await ev(() => {
       const { ctx } = window.__front;
       const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);

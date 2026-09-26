@@ -322,6 +322,7 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
     // second): with perfect interpolation a frame 1.8x the median still moves a unit 1.8x further, so the raw ratio
     // measures the renderer's frame pacing, the normalised one the motion itself (identical at a steady frame rate).
     const out: { id: number; unit: string; frames: number; dropped: number; meanPx: number; maxPx: number; rawRatio: number; ratio: number; ratioAll: number; pass: boolean }[] = [];
+    const skipped: string[] = [];
     for (const [id, tr] of tracks) {
       const d: number[] = [], v: number[] = [], vAll: number[] = [];
       for (let i = 0; i < tr.d.length; i++) {
@@ -330,9 +331,15 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
         d.push(tr.d[i]);
         v.push((tr.d[i] * 1000) / frameMs[tr.f[i]]);
       }
-      if (d.length < Math.max(minSamples, (frames - 1 - droppedFrames) * 0.5)) continue; // not on screen long enough
+      if (d.length < Math.max(minSamples, (frames - 1 - droppedFrames) * 0.5)) {
+        skipped.push(`#${id} on screen ${d.length} steady frames`);
+        continue; // not on screen long enough
+      }
       const mean = d.reduce((a, b) => a + b, 0) / d.length;
-      if (mean < minMean) continue; // parked
+      if (mean < minMean) {
+        skipped.push(`#${id} parked (mean ${mean.toFixed(3)} px)`);
+        continue;
+      }
       const max = Math.max(...d);
       const vMean = v.reduce((a, b) => a + b, 0) / v.length;
       const vMax = Math.max(...v);
@@ -342,6 +349,17 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       const ratioAll = Math.max(...vAll) / Math.max(1e-9, vAll.reduce((a, b) => a + b, 0) / vAll.length);
       out.push({ id, unit: UNIT_DEFS[tr.type].id, frames: d.length, dropped: tr.d.length - d.length, meanPx: +mean.toFixed(3), maxPx: +max.toFixed(3), rawRatio: +(max / mean).toFixed(2), ratio: +ratio.toFixed(2), ratioAll: +ratioAll.toFixed(2), pass: ratio <= 2 && ratioAll <= 2 });
     }
+    // Staged ids never tracked: say why (no drawn position, or where they project).
+    if (only) for (const id of only) {
+      if (tracks.has(id)) continue;
+      const u = ctx.sim.view.units.get(id);
+      if (!u) skipped.push(`#${id} gone`);
+      else if (!ctx.units.getUnitWorldPosition(id, tmp)) skipped.push(`#${id} ${UNIT_DEFS[u.type].id} not drawn`);
+      else {
+        tmp.project(cam);
+        skipped.push(`#${id} ${UNIT_DEFS[u.type].id} off screen (${tmp.x.toFixed(2)}, ${tmp.y.toFixed(2)}, ${tmp.z.toFixed(3)})`);
+      }
+    }
     const frameStats = { p50: median, p90: sorted[Math.floor(sorted.length * 0.9)] ?? 0, max: sorted[sorted.length - 1] ?? 0 };
     console.table(out);
     const first = tracks.get(out[0]?.id ?? -1);
@@ -349,6 +367,6 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       const i = first.f.indexOf(t.f);
       return { ...t, dt: Math.round(frameMs[t.f]), px: i >= 0 ? +first.d[i].toFixed(3) : null, v: i >= 0 ? +((first.d[i] * 1000) / frameMs[t.f]).toFixed(2) : null };
     }) : undefined;
-    return { frames, droppedFrames, frameMs: frameStats, trace: unitTrace, seconds: (performance.now() - t0) / 1000, clock: { ...ctx.sim.view.clock }, units: out, pass: out.length > 0 && out.every((r) => r.pass) };
+    return { frames, droppedFrames, frameMs: frameStats, trace: unitTrace, seconds: (performance.now() - t0) / 1000, clock: { ...ctx.sim.view.clock }, units: out, tracked: tracks.size, skipped, pass: out.length > 0 && out.every((r) => r.pass) };
   };
 }
