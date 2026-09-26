@@ -4,7 +4,7 @@
 
 import type { Lang } from './i18n';
 import type { QualityLevel } from './quality';
-import type { Difficulty, GameDuration, GameSpeed } from './types';
+import type { AutoPauseKind, Difficulty, GameDuration, GameSpeed } from './types';
 
 export interface SetupPrefs {
   playerName: string;
@@ -54,7 +54,18 @@ export interface Settings {
   clouds: CloudMode;
   /** Historical (real-world) borders overlay below 1,000 km (default off, DESIGN_V2 §10.3). */
   historicalBorders: boolean;
+  // --- v2 (W3): alerts and explanations (DESIGN_V2 §8.5, §12.5) ---
+  /** Pausa automática: which alerts pause the game. */
+  autoPause: Record<AutoPauseKind, boolean>;
+  /** Tutorial («Asesor militar») steps completed, as a bit set (saved across games). */
+  tutorialProgress: number;
 }
+
+/** §8.5 defaults: war on you, ultimatum, nuclear launch at you and capital threatened pause the game. */
+export const DEFAULT_AUTO_PAUSE: Record<AutoPauseKind, boolean> = {
+  warOnYou: true, ultimatum: true, nukeAtYou: true, capitalThreat: true,
+  invasion: false, proposal: false, peaceOffer: false, callToArms: false,
+};
 
 export const DEFAULT_SETTINGS: Settings = {
   language: 'es',
@@ -84,6 +95,8 @@ export const DEFAULT_SETTINGS: Settings = {
   observationTime: true,
   clouds: 'strategic',
   historicalBorders: false,
+  autoPause: { ...DEFAULT_AUTO_PAUSE },
+  tutorialProgress: 0,
 };
 
 const STORAGE_KEY = 'frontultra.settings.v1';
@@ -106,6 +119,7 @@ function load(): Settings {
       ...structuredClone(DEFAULT_SETTINGS),
       ...parsed,
       setup: { ...DEFAULT_SETTINGS.setup, ...(parsed.setup ?? {}) },
+      autoPause: { ...DEFAULT_AUTO_PAUSE, ...(parsed.autoPause ?? {}) },
     };
   } catch {
     return structuredClone(DEFAULT_SETTINGS);

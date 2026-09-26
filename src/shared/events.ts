@@ -9,7 +9,7 @@ import type { Lang } from './i18n';
 import type { QualityProfile } from './quality';
 import type { Settings } from './settings';
 import type { AppState, CameraState, CommandEnterParams, CommandResult } from './api';
-import type { GameConfig, GameOverReason, GameSpeed, StructureType, UnitType, WeaponType } from './types';
+import type { AutoPauseKind, GameConfig, GameOverReason, GameSpeed, StructureType, UnitType, WeaponType } from './types';
 
 export type Unsubscribe = () => void;
 
@@ -160,6 +160,55 @@ export interface AppEvents {
   nukeAlarm: { unitId: number; targetTile: number; etaSec: number; weapon: NukeWeapon };
   /** App: a ?shot= scene finished staging. */
   shotStaged: { name: string };
+
+  // --- v2 (W3): alerts, auto-pause, crisis, panels (DESIGN_V2 §8, §14.8) ---
+  /** Anyone -> UI: raise (or update, by groupKey) a located alert in the feed, log, minimap and globe. */
+  alert: { input: AlertInput };
+  /** UI: the game paused itself (§8.5) for this reason. */
+  autoPaused: { kind: AutoPauseKind; text: string };
+  /** UI crisis component: nuclear weapons in flight (red = the human's or an ally's land is the target). */
+  crisis: { active: boolean; red: boolean; secondsLeft: number };
+  /** App: the game was saved (autosave or a manual slot). */
+  saved: { key: string; day: number };
+  /** UI: a side panel opened or closed (nations, log, help). */
+  panelToggled: { panel: string; open: boolean };
+}
+
+// ---------------------------------------------------------------------------------------------
+// v2 (W3): alert model (DESIGN_V2 §8.1)
+// ---------------------------------------------------------------------------------------------
+export type AlertSeverity = 'info' | 'warning' | 'danger' | 'critical';
+
+export type { AutoPauseKind } from './types';
+export { AUTO_PAUSE_KINDS } from './types';
+
+export interface AlertInput {
+  /** Catalogue kind of §8.2 (warDeclared, offensive, frontLoss, invasionDetected, airRaid, proposal, unrest...). */
+  kind: string;
+  severity: AlertSeverity;
+  title: string;
+  body?: string;
+  /** Location (camera flies there on click; minimap ping and globe marker). */
+  lat?: number;
+  lon?: number;
+  /** Entries with the same key update one feed entry instead of stacking (one per front). */
+  groupKey?: string;
+  /** Players involved (flags). */
+  actors?: number[];
+  /** Icon name (ui/icons.ts). */
+  icon?: string;
+  /** This alert may pause the game (if the player's setting for the kind is on). */
+  autoPause?: AutoPauseKind;
+  /** Also show it in the world news ticker. */
+  ticker?: boolean;
+  /** Stay until acknowledged (critical alerts always do). */
+  sticky?: boolean;
+  /** Seconds the entry stays in the feed (default 20 real s, held while paused). */
+  ttlSec?: number;
+  /** An inbox item the entry opens (proposal id) instead of flying. */
+  proposalId?: number;
+  /** Tiles to outline on the globe while the alert is live (unrest region, a demanded band). */
+  tiles?: number[];
 }
 
 /** The complete main-thread vocabulary: app events + every sim event (keyed by SimEvent.type). */

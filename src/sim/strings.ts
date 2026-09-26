@@ -140,3 +140,6 @@ export function registerSimStrings(): void {
   registerDictionary('es', { ...FALLBACK_NAMES_ES, ...es });
   registerDictionary('en', { ...FALLBACK_NAMES_EN, ...en });
 }
+
+/** Test tooling: the sim's own dictionaries (tools/i18n-check). */
+export const SIM_STRINGS = { es, en };

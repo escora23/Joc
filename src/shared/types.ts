@@ -657,6 +657,26 @@ export interface ProposalView {
   /** A demand with a deadline and a threat of war (§5.4). */
   ultimatum?: boolean;
 }
+/**
+ * v2 (W3): the human's economy with its terms, for the top-bar breakdowns (§12.2, §6.7). Rates per game hour;
+ * `cap` and `income` terms are before the multiplier `mul` (kind, difficulty and world-event modifiers).
+ */
+export interface HumanEconomyView {
+  pop: number;
+  popTarget: number;
+  fPop: number;
+  recruitment: number;
+  tiles: number;
+  occupied: number;
+  fallout: number;
+  cityLevels: number;
+  armyLevels: number;
+  factoryLevels: number;
+  cap: { base: number; territory: number; cities: number; armyBases: number; mul: number };
+  income: { base: number; territory: number; cities: number; factories: number; mul: number };
+  growthPerHour: number;
+  atWar: boolean;
+}
 /** Auto-pause triggers (§8.5). */
 export type AutoPauseKind = 'warOnYou' | 'ultimatum' | 'nukeAtYou' | 'capitalThreat' | 'invasion' | 'proposal' | 'peaceOffer' | 'callToArms';
 export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'ultimatum', 'nukeAtYou', 'capitalThreat', 'invasion', 'proposal', 'peaceOffer', 'callToArms'];

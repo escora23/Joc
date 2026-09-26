@@ -143,6 +143,10 @@ export interface GameView {
   /** performance.now() when `proposals` was last updated (the real-time floor counts on between updates). */
   readonly proposalsAtMs: number;
   hasTreaty(a: number, b: number, kind: TreatyKind): boolean;
+  /** Truces in force (pairs at truce until untilTick, §4.15). */
+  readonly truces: readonly { a: number; b: number; untilTick: number }[];
+  /** The human's economy with its terms (top-bar breakdowns, §12.2); null before the first update. */
+  readonly economy: import('./types').HumanEconomyView | null;
   treatiesBetween(a: number, b: number): TreatyView[];
   // --- v2 (W4) ---
   /** Planned paths of units (tile waypoints: water paths, division land/rail routes, train lines). */
@@ -241,6 +245,11 @@ export interface GlobeApi extends Subsystem {
   setTerritoryOpacity(v: number): void;
   /** Small-island marker under a screen point (DESIGN_V2 §10.6): the island's tile and its hover line, or null. */
   pickIsland?(clientX: number, clientY: number): { tile: number; label: string } | null;
+  /**
+   * v2 (W3): outline a named set of tiles on the ground (a cession band previewed before sending, an unrest region,
+   * a demanded band). null clears the set.
+   */
+  setTileMarks?(key: string, tiles: ArrayLike<number> | null, color?: number, pulse?: boolean): void;
 }
 
 export interface PostApi extends Subsystem {
@@ -366,6 +375,8 @@ export interface UiApi extends Subsystem {
    * clear of them (DESIGN_V2 §10.10). Cheap to call every frame (refreshed at most 4 times a second).
    */
   getOccludedRects(): readonly DOMRect[];
+  /** v2 (W3): raise a located alert (same as the bus `alert` event). */
+  alert?(input: import('./events').AlertInput): void;
 }
 
 export type SfxCue =
@@ -437,6 +448,8 @@ export interface AppController {
   togglePause(): void;
   /** Build a GameConfig from defaults + settings.setup + overrides. */
   makeConfig(overrides?: Partial<GameConfig>): GameConfig;
+  /** v2 (W3, §12.8): resume a saved game (menu «Continuar» / «Cargar»); it opens paused. Rejects on a bad save. */
+  loadGame?(blob: ArrayBuffer): Promise<void>;
 }
 
 // =================================================================================================

@@ -62,6 +62,14 @@ export function createAudio(ctx: GameContext): AudioApi {
   let meter: AnalyserNode | null = null;
   let meterBuf: Float32Array<ArrayBuffer> | null = null;
 
+  // v2 (W3, §13): plays per cue, counted when the trigger fires (also before the audio unlocks).
+  const cueCounts: Record<string, number> = {};
+  let crisisOn = false;
+  const lastGroupCue = new Map<string, number>();
+  function cue(name: string, gain = 1): void {
+    cueCounts[name] = (cueCounts[name] ?? 0) + 1;
+    snd?.play(name, gain);
+  }
   // Read-only diagnostics for playtests and automation (window.__fuAudio.stats()).
   (window as unknown as { __fuAudio: unknown }).__fuAudio = {
     stats() {
@@ -76,7 +84,7 @@ export function createAudio(ctx: GameContext): AudioApi {
       return {
         state: ac?.state ?? 'none', unlocked, appState, mood, family: snd?.music.family ?? 'none',
         intensity: Math.round(intensity * 1000) / 1000, voices: snd?.eng.voices.length ?? 0,
-        vehicle: commandKind, sirens: sirenFor.size, rmsDb,
+        vehicle: commandKind, sirens: sirenFor.size, rmsDb, cues: { ...cueCounts }, crisis: crisisOn,
       };
     },
   };
@@ -128,7 +136,9 @@ export function createAudio(ctx: GameContext): AudioApi {
     let g = Math.max(minGain, heard.gain) * gain;
     if (appState === 'command') g *= 0.25;
     if (g < 0.02) return;
-    snd.play(cue, g, { pan: heard.pan, lowpass: heard.lowpass, dist: heard.dist, at: snd.now + delay });
+    // Crisis time (§13): the world's sounds are low-passed at 1.2 kHz under the drone.
+    const lowpass = crisisOn ? Math.min(1200, heard.lowpass) : heard.lowpass;
+    snd.play(cue, g, { pan: heard.pan, lowpass, dist: heard.dist, at: snd.now + delay });
   }
 
   function playTile(cue: string, tile: number, gain = 1, minGain = 0, delay = 0): void {
@@ -177,6 +187,36 @@ export function createAudio(ctx: GameContext): AudioApi {
     }
     snd.ui(k);
   });
+  // v2 (W3, §13): the alert cues, once per alert group (a front's klaxon does not repeat on every reinforcement).
+  const ALERT_CUE: Record<string, string> = {
+    warDeclared: 'warHorn', betrayal: 'warHorn', offensive: 'klaxon', invasionDetected: 'navalHorn', landing: 'klaxon',
+    capitalThreat: 'capitalSiren', ultimatum: 'drumHit', unitReady: 'readyBell', rebellion: 'klaxon',
+  };
+  bus.on('alert', (e) => {
+    const i = e.input;
+    let name = ALERT_CUE[i.kind];
+    if (i.kind === 'proposalAnswered') name = i.severity === 'info' ? 'chimeGood' : 'chimeBad';
+    if (!name) return;
+    const key = i.groupKey ?? `${i.kind}:${i.title}`;
+    const t = performance.now();
+    if (t - (lastGroupCue.get(key) ?? -1e9) < 120_000) return;
+    lastGroupCue.set(key, t);
+    cue(name, 1);
+    if (i.kind === 'warDeclared' || i.kind === 'betrayal' || i.kind === 'ultimatum') api.setMood('tension');
+  });
+  bus.on('orderAck', (e) => {
+    if (e.owner === HUMAN_ID && e.accepted.length > 0) cue('radioAck', 0.9);
+  });
+  bus.on('crisis', (e) => {
+    crisisOn = e.active;
+    if (e.active) {
+      nuclearUntil = now() + 3600;
+      syncMusic();
+      snd?.eng.dipMusic(0.5, 2);
+    } else {
+      nuclearUntil = now() + 20;
+    }
+  });
   bus.on('news', (e) => {
     snd?.play('newsBleep', e.severity === 'critical' ? 1 : 0.8, { size: e.severity === 'critical' ? 2 : 1 });
   });
@@ -184,6 +224,8 @@ export function createAudio(ctx: GameContext): AudioApi {
     if (e.unitIds.length > 0 && appState === 'playing') snd?.play('radio', 0.9);
   });
   bus.on('gameStarted', () => {
+    lastGroupCue.clear();
+    crisisOn = false;
     endCuePlayed = false;
     intensity = 0;
     nukeHeat = attackHeat = 0;
@@ -303,9 +345,6 @@ export function createAudio(ctx: GameContext): AudioApi {
   bus.on('goldBonus', (e) => {
     if (e.playerId === HUMAN_ID) snd?.play('coins', e.reason === 'train' ? 0.35 : 0.7);
   });
-  bus.on('emote', (e) => {
-    if (e.to === HUMAN_ID) snd?.ui('notify', 0.7);
-  });
   bus.on('worldEvent', (e) => {
     if (!snd || !inGame()) return;
     if (e.stage === 'warning') {
@@ -386,6 +425,31 @@ export function createAudio(ctx: GameContext): AudioApi {
     const tau = target > intensity ? 5 : 28;
     intensity += (target - intensity) * (1 - Math.exp(-dt / tau));
     snd?.music.setIntensity(intensity, snd.now, 2.5);
+  }
+
+  /**
+   * Music moods (§13): calm (no wars), tension (a tension, an ultimatum or a mobilization against you in the last
+   * 48 h), war (you are at war), nuclear (any war at L3+; crisis time handles the drone), and the defeat pressure while
+   * your capital is threatened (the war mood at its floor with the doomsday family).
+   */
+  let tensionTick = -1e9;
+  bus.on('tension', (e) => {
+    if (e.to === HUMAN_ID) tensionTick = e.tick;
+  });
+  bus.on('alert', (e) => {
+    if (e.input.kind === 'ultimatum' || e.input.kind === 'mobilization') tensionTick = ctx.sim.view.tick;
+    if (e.input.kind === 'capitalThreat') nuclearUntil = Math.max(nuclearUntil, now() + 30);
+  });
+  function updateMood(): void {
+    const v = ctx.sim.view;
+    let atWar = false, l3 = false;
+    for (const w of v.wars) {
+      if (Math.max(w.escalationA, w.escalationB) >= 3) l3 = true;
+      if (w.aggressor === HUMAN_ID || w.target === HUMAN_ID) atWar = true;
+    }
+    if (l3) nuclearUntil = Math.max(nuclearUntil, now() + 5);
+    const want: MusicMood = atWar ? 'war' : v.tick - tensionTick < 480 ? 'tension' : 'calm';
+    if (want !== mood) api.setMood(want);
   }
 
   function updateAmbience(dt: number): void {
@@ -534,6 +598,7 @@ export function createAudio(ctx: GameContext): AudioApi {
       flybyAcc += dt;
       if (tickAcc >= 0.5) {
         if (ctx.sim.view.config && inGame()) updateIntensity(tickAcc);
+        if (appState === 'playing' && ctx.sim.view.config) updateMood();
         const f = targetFamily();
         if (f !== snd.music.family && f !== 'victory' && f !== 'defeat') syncMusic();
         snd.eng.sweep();

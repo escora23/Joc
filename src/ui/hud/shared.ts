@@ -40,8 +40,11 @@ export class HudShared {
   hover: HoverInfo = { tile: -1, unitId: -1, structureId: -1, clientX: -1, clientY: -1, shift: false };
   radialOpen = false;
   /** Tutorial bookkeeping. */
-  flags = { ratioChanged: false, radialOpened: false, commandEntered: false };
+  flags = { ratioChanged: false, radialOpened: false, commandEntered: false, proposalSent: false, proposalAnswered: false, nationsOpened: false, speedUnderstood: false };
   private listeners = new Map<HudSignal, Set<() => void>>();
+  /** v2 (W3): open the nations drawer (on a nation's detail) / the inbox; set by the HUD assembly. */
+  openNations: (id?: number) => void = () => undefined;
+  openInbox: (proposalId?: number) => void = () => undefined;
 
   constructor(readonly ctx: GameContext, readonly sound: (k: UiSoundKind) => void) {}
 

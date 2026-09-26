@@ -58,6 +58,38 @@ export async function getSave(key: string): Promise<SaveRecord | null> {
   return rec;
 }
 
+/** v2 (W3): every save record (autosave + manual slots), newest first, without their blobs' contents being copied. */
+export async function listSaves(): Promise<SaveRecord[]> {
+  const db = await openDb();
+  const all = await new Promise<SaveRecord[]>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = () => resolve((req.result as SaveRecord[]) ?? []);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return all.sort((a, b) => b.savedAt - a.savedAt);
+}
+
+/** The most recent save of any slot (the menu's «Continuar»). */
+export async function latestSave(): Promise<SaveRecord | null> {
+  try {
+    return (await listSaves())[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** v2 (W3): manual save into a slot (`slot1`..`slot3`) from the pause menu. */
+export async function saveToSlot(ctx: GameContext, key: string): Promise<SaveRecord> {
+  const { blob, tick } = await ctx.sim.save();
+  const me = ctx.sim.view.players[HUMAN_ID];
+  const rec: SaveRecord = { key, blob, tick, day: Math.floor(tick / TICKS_PER_GAME_DAY) + 1, nation: me?.name ?? '', savedAt: Date.now() };
+  await putSave(rec);
+  ctx.bus.emit('saved', { key, day: rec.day });
+  return rec;
+}
+
 /** Start the autosave loop for this page (idempotent per context). */
 export function installAutosave(ctx: GameContext): void {
   let lastTick = -1;
@@ -77,7 +109,8 @@ export function installAutosave(ctx: GameContext): void {
       .then(({ blob, tick }) => {
         lastTick = tick;
         const me = view.players[HUMAN_ID];
-        return putSave({ key: 'autosave', blob, tick, day: Math.floor(tick / TICKS_PER_GAME_DAY) + 1, nation: me?.name ?? '', savedAt: Date.now() });
+        const day = Math.floor(tick / TICKS_PER_GAME_DAY) + 1;
+        return putSave({ key: 'autosave', blob, tick, day, nation: me?.name ?? '', savedAt: Date.now() }).then(() => ctx.bus.emit('saved', { key: 'autosave', day }));
       })
       .catch((err) => console.warn('[autosave] failed', err))
       .finally(() => (busy = false));

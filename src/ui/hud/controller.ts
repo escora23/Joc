@@ -25,6 +25,10 @@ export interface ControllerHooks {
   setBuildTab(tab: 'build' | 'arsenal'): void;
   ripple(x: number, y: number, kind: 'attack' | 'expand' | 'build' | 'order' | 'fire' | 'spawn' | 'bad'): void;
   modalOpen(): boolean;
+  /** v2 (W3): the nations drawer (N) and the alert log (L). closeNations returns true when it was open. */
+  toggleNations?(): void;
+  openLog?(): void;
+  closeNations?(): boolean;
 }
 
 const WEAPON_HOTKEYS: Record<string, WeaponType> = {
@@ -55,6 +59,10 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       if (!isPlayableTerrain(world.terrain[e.tile]) || (owner !== 0 && owner !== HUMAN_ID)) {
         hs.sound('error');
         hooks.ripple(e.clientX, e.clientY, 'bad');
+        // §12.6 (B02): say why, never a silent refusal.
+        const p = owner > 0 ? view.players[owner] : null;
+        const text = p ? t(p.kind === 'tribe' ? 'spawn.refuse.tribe' : 'spawn.refuse.nation', { name: hs.name(owner) }) : t('spawn.refuse.water');
+        bus.emit('toast', { text, kind: 'warning', durationMs: 6000 });
         return;
       }
       ctx.sim.send({ type: 'spawn', tile: e.tile });
@@ -178,6 +186,7 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         hs.setMode({ kind: 'none' });
         hs.sound('cancel');
       } else if (hooks.radialOpen()) hooks.closeRadial();
+      else if (hooks.closeNations?.()) return;
       else if (hs.selection.kind !== 'none') {
         hs.select({ kind: 'none' });
         hs.sound('close');
@@ -257,6 +266,12 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         return;
       case 'm':
         hooks.toggleMinimap();
+        return;
+      case 'n':
+        hooks.toggleNations?.();
+        return;
+      case 'l':
+        hooks.openLog?.();
         return;
       case 'h':
       case 'home': {

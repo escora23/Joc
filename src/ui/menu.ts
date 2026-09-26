@@ -1,7 +1,9 @@
 // FRONT ULTRA — main menu and skirmish setup screens (owner: ui). Both sit over the live, slowly rotating Earth.
 
 import { segmented, slider, toggleSwitch } from './controls';
-import { openCredits, openHowTo, openSettings } from './dialogs';
+import { loadSave, openCredits, openHelp, openLoadDialog, openSettings } from './dialogs';
+import { latestSave } from '../app/autosave';
+import { tip } from './tooltip';
 import { h, setText, toggleClass } from './dom';
 import { flag } from './flag';
 import { icon } from './icons';
@@ -33,9 +35,34 @@ export function createMainMenu(ctx: GameContext, sound: Sound): HTMLElement {
     });
     return b;
   };
+  // v2 (W3, §12.8): «Continuar» resumes the latest save (autosave or a slot), «Cargar» lists them all.
+  const cont = item('00', 'menu.continue', 'menu.continue.hint', () => {
+    void latestSave().then((r) => {
+      if (r) loadSave(ctx, r.blob);
+    });
+  }, true);
+  cont.classList.add('fu-hidden', 'fu-menu-continue');
+  const loadItem = item('05', 'menu.load', 'menu.load.hint', () => openLoadDialog(ctx, sound));
+  loadItem.classList.add('fu-hidden');
+  tip(cont, () => ({ title: t('menu.continue'), text: t('menu.continue.tip') }));
+  tip(loadItem, () => ({ title: t('menu.load'), text: t('menu.load.tip') }));
+  void latestSave().then((r) => {
+    if (!r) return;
+    const hint = cont.querySelector('small');
+    if (hint) {
+      const date = new Date(r.savedAt).toLocaleString(getLanguage() === 'es' ? 'es-ES' : 'en-US', { dateStyle: 'short', timeStyle: 'short' });
+      hint.removeAttribute('data-i18n');
+      hint.textContent = t('menu.continue.info', { nation: r.nation || '—', day: formatNumber(r.day), date });
+    }
+    cont.classList.remove('fu-hidden');
+    loadItem.classList.remove('fu-hidden');
+  });
+  const play = item('01', 'menu.play', 'menu.play.hint', () => ctx.app.goto('setup'), true);
   const nav = h('nav', { class: 'fu-menu-nav' },
-    item('01', 'menu.play', 'menu.play.hint', () => ctx.app.goto('setup'), true),
-    item('02', 'menu.howto', 'menu.howto.hint', () => openHowTo(sound)),
+    cont,
+    play,
+    loadItem,
+    item('02', 'menu.howto', 'menu.howto.hint', () => openHelp(ctx, sound)),
     item('03', 'menu.settings', 'menu.settings.hint', () => openSettings(ctx, sound)),
     item('04', 'menu.credits', 'menu.credits.hint', () => openCredits()),
   );
@@ -105,7 +132,7 @@ export function createSetup(ctx: GameContext, sound: Sound): HTMLElement {
     setText(pvName, s.playerName || t('setup.namePlaceholder'));
     const c = NATION_COLORS.find((x) => x.hex === s.playerColor);
     setText(pvColorName, c ? (getLanguage() === 'es' ? c.es : c.en) : hexToCss(s.playerColor).toUpperCase());
-    setText(pvSummary, `${t(`difficulty.${s.difficulty}`).toUpperCase()} · ${s.aiCount} IA · ${s.tribeCount} ${t('setup.tribesShort')} · ${s.speed === 0.5 ? t('hud.speed.half') : `${s.speed}×`} · ${t(`setup.duration.${s.duration ?? 'normal'}`)}`);
+    setText(pvSummary, `${t(`difficulty.${s.difficulty}`).toUpperCase()} · ${t('setup.aiShort', { n: s.aiCount })} · ${s.tribeCount} ${t('setup.tribesShort')} · ${s.speed === 0.5 ? t('hud.speed.half') : `${s.speed}×`} · ${t(`setup.duration.${s.duration ?? 'normal'}`)}`);
     card.style.setProperty('--nation', hexToCss(s.playerColor));
   };
 

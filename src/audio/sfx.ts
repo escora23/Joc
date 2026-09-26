@@ -537,6 +537,96 @@ export const CUES: Record<string, CueDef> = {
       }
     },
   },
+  // --- v2 (W3, DESIGN_V2 §13): alert cues -------------------------------------------------------------
+  /** War declared on you: two low brass blasts. */
+  warHorn: {
+    pri: 8, dur: 3.6, bus: 'sfx', gap: 2, wet: 0.5, echo: 0.5,
+    fn(e, v, t, g) {
+      brassStab(e, v, t, 0.55 * g, [33, 40, 45], 0.9, v.out, 0.7);
+      brassStab(e, v, t + 1.35, 0.6 * g, [33, 40, 45, 52], 1.2, v.out, 0.8);
+      drum(e, v, t, 0.5 * g, 45, 1.1, v.out);
+      drum(e, v, t + 1.35, 0.55 * g, 43, 1.3, v.out);
+    },
+  },
+  /** An offensive on you: a short klaxon (once per front). */
+  klaxon: {
+    pri: 7, dur: 1.6, bus: 'sfx', gap: 1.2, wet: 0.2,
+    fn(e, v, t, g) {
+      for (let i = 0; i < 3; i++) {
+        const t0 = t + i * 0.42;
+        const env = e.ahrGain(t0, 0.01, 0.22 * g, 0.26, 0.06, v.out);
+        const lp = e.filter('lowpass', 2400, 0.8, e.shaper(1.8, env));
+        e.osc(v, 'square', i % 2 ? 392 : 523.25, t0, 0.36, e.gain(0.5, lp));
+        e.osc(v, 'sawtooth', i % 2 ? 196 : 261.6, t0, 0.36, e.gain(0.35, lp));
+      }
+    },
+  },
+  /** A naval invasion detected: a deep double horn. */
+  navalHorn: {
+    pri: 7, dur: 5, bus: 'sfx', gap: 2, wet: 0.5, echo: 0.7,
+    fn(e, v, t, g) {
+      for (const [t0, hold] of [[0, 1.0], [1.4, 1.8]] as const) {
+        const env = e.ahrGain(t + t0, 0.15, 0.6 * g, hold, 0.8, v.out);
+        const lp = e.filter('lowpass', 420, 1.0, e.shaper(2.4, env));
+        for (const [f, lvl] of [[55, 0.45], [82.4, 0.35], [110, 0.15]] as const) {
+          const o = e.osc(v, 'sawtooth', f, t + t0, hold + 1, e.gain(lvl, lp));
+          o.detune.setValueAtTime(-35, t + t0);
+          o.detune.linearRampToValueAtTime(0, t + t0 + 0.2);
+        }
+      }
+    },
+  },
+  /** The capital threatened: a two-tone civil-defence siren (distinct from the nuclear wail). */
+  capitalSiren: {
+    pri: 8, dur: 4.2, bus: 'sfx', gap: 3, wet: 0.35, echo: 0.4,
+    fn(e, v, t, g) {
+      const env = e.ahrGain(t, 0.2, 0.3 * g, 3.4, 0.5, v.out);
+      const lp = e.filter('lowpass', 1800, 0.7, env);
+      const o = e.osc(v, 'triangle', 660, t, 4.1, e.gain(0.8, lp));
+      for (let i = 0; i < 8; i++) o.frequency.setValueAtTime(i % 2 ? 880 : 660, t + i * 0.5);
+      const o2 = e.osc(v, 'sawtooth', 330, t, 4.1, e.gain(0.2, lp));
+      for (let i = 0; i < 8; i++) o2.frequency.setValueAtTime(i % 2 ? 440 : 330, t + i * 0.5);
+    },
+  },
+  /** An ultimatum: one heavy drum hit. */
+  drumHit: {
+    pri: 7, dur: 2.2, bus: 'sfx', gap: 1, wet: 0.6,
+    fn(e, v, t, g) {
+      drum(e, v, t, 0.9 * g, 48, 1.8, v.out);
+      drum(e, v, t + 0.02, 0.4 * g, 96, 0.5, v.out);
+    },
+  },
+  /** A diplomatic answer: accepted (rising) / refused (falling, minor). */
+  chimeGood: {
+    pri: 5, dur: 2.2, bus: 'ui', gap: 0.5, wet: 0.5,
+    fn(e, v, t, g) {
+      [79, 83, 86].forEach((m, i) => bell(e, v, t + i * 0.09, 0.16 * g, midiToHz(m), 1.8, v.out, 0.5));
+    },
+  },
+  chimeBad: {
+    pri: 5, dur: 2.2, bus: 'ui', gap: 0.5, wet: 0.5,
+    fn(e, v, t, g) {
+      [79, 75, 70].forEach((m, i) => bell(e, v, t + i * 0.12, 0.16 * g, midiToHz(m), 1.8, v.out, 0.4));
+    },
+  },
+  /** An order acknowledged: a radio squelch and a short «recibido» blip. */
+  radioAck: {
+    pri: 4, dur: 0.6, bus: 'ui', gap: 0.2,
+    fn(e, v, t, g) {
+      const env = e.envGain(t, 0.002, 0.12 * g, 0.12, v.out);
+      e.noiseSrc(v, 'white', t, 0.15, e.filter('bandpass', 2200, 1.2, env));
+      const env2 = e.ahrGain(t + 0.12, 0.005, 0.1 * g, 0.12, 0.05, v.out);
+      e.osc(v, 'square', 1320, t + 0.12, 0.2, e.filter('lowpass', 3000, 0.7, env2));
+    },
+  },
+  /** A unit ready. */
+  readyBell: {
+    pri: 4, dur: 2, bus: 'ui', gap: 0.5, wet: 0.4,
+    fn(e, v, t, g) {
+      bell(e, v, t, 0.2 * g, midiToHz(84), 1.6, v.out, 0.7);
+      bell(e, v, t + 0.16, 0.14 * g, midiToHz(91), 1.4, v.out, 0.6);
+    },
+  },
   victory: {
     pri: 9, dur: 5, bus: 'music', gap: 3, wet: 0.4,
     fn(e, v, t, g) {

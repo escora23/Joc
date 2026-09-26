@@ -9,6 +9,7 @@ import './css/loading.css';
 import './css/menu.css';
 import './css/hud.css';
 import './css/end.css';
+import './css/w3.css';
 import { h, leave, setText } from './dom';
 import { createEndScreen, type EndScreen } from './end';
 import { fontsReady } from './fonts';
@@ -25,6 +26,8 @@ import type { UiSoundKind } from '../shared/events';
 import { registerDictionary } from '../shared/i18n';
 import { enW1, esW1 } from './i18n/w1';
 import { enW2, esW2 } from './i18n/w2';
+import { enW3, esW3 } from './i18n/w3';
+import { initTooltips } from './tooltip';
 import type { GameOverReason } from '../shared/types';
 
 /** The HUD instance of the running UI (shots stage panels through it). */
@@ -40,9 +43,12 @@ export function createUi(ctx: GameContext): UiApi {
   registerDictionary('en', enW1);
   registerDictionary('es', esW2);
   registerDictionary('en', enW2);
+  registerDictionary('es', esW3);
+  registerDictionary('en', enW3);
   const root = ctx.uiRoot;
   const sound = (kind: UiSoundKind) => ctx.bus.emit('uiSound', { kind });
   initModals(root, (k) => sound(k));
+  initTooltips(root);
 
   const screens = h('div', { class: 'fu-layer fu-screens' });
   const hud = createHud(ctx, sound);
@@ -115,6 +121,9 @@ export function createUi(ctx: GameContext): UiApi {
     },
     getOccludedRects() {
       return occlusion.rects();
+    },
+    alert(input) {
+      ctx.bus.emit('alert', { input });
     },
     setState(next: AppState) {
       state = next;

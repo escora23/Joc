@@ -4,7 +4,9 @@
 import { h, setStyle, setText, toggleClass } from '../dom';
 import { flag } from '../flag';
 import { icon } from '../icons';
+import { tip } from '../tooltip';
 import { tx } from '../tx';
+import { createBonusLedger, goldTip, popTip, territoryTip, troopsTip, warsTip } from './explain';
 import type { HudShared } from './shared';
 import type { GameSpeed } from '../../shared/types';
 import { HUMAN_ID } from '../../shared/constants';
@@ -17,7 +19,17 @@ export interface TopBar {
   rebuildFlag(): void;
 }
 
-export function createTopBar(hs: HudShared, actions: { pause(): void; settings(): void; help(): void }): TopBar {
+export interface TopBarActions {
+  pause(): void;
+  settings(): void;
+  help(): void;
+  /** v2 (W3): the nations drawer (N), the alert log (L) and the count of inbox items waiting. */
+  nations?(): void;
+  log?(): void;
+  pending?(): number;
+}
+
+export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
   const ctx = hs.ctx;
   const flagBox = h('div', { class: 'fu-tb-flag' });
   const nameEl = h('div', { class: 'fu-tb-name' });
@@ -39,11 +51,27 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   const gold = stat('gold', 'hud.gold', 'is-gold');
   const terr = stat('territory', 'hud.territory', 'is-terr');
   const pop = stat('population', 'hud.population', 'is-pop');
+  // v2 (W3, §12.2): every figure explains itself with its per-hour breakdown.
+  const ledger = createBonusLedger(hs);
+  tip(troops.el, () => troopsTip(hs));
+  tip(gold.el, () => goldTip(hs, ledger));
+  tip(terr.el, () => territoryTip(hs));
+  tip(pop.el, () => popTip(hs));
+  const warsN = h('span', { class: 'fu-tb-v fu-mono' }, '0');
+  const wars = h('div', { class: 'fu-tb-stat is-wars fu-interactive' },
+    h('div', { class: 'fu-tb-ico' }, icon('attack')),
+    h('div', { class: 'fu-tb-body' }, h('div', { class: 'fu-tb-k' }, tx('tb.wars')), h('div', { class: 'fu-tb-line' }, warsN)),
+  );
+  tip(wars, () => warsTip(hs));
+  wars.addEventListener('click', () => {
+    hs.sound('click');
+    actions.nations?.();
+  });
 
   const bar = h('div', { class: 'fu-topbar fu-glass fu-brackets' },
     h('div', { class: 'fu-tb-nation' }, flagBox, h('div', { class: 'fu-tb-nation-text' }, nameEl, rankEl)),
     h('div', { class: 'fu-tb-sep' }),
-    troops.el, gold.el, terr.el, pop.el,
+    troops.el, gold.el, terr.el, pop.el, wars,
   );
 
   // ---- time controls ------------------------------------------------------------------------------
@@ -64,7 +92,8 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   for (const sp of [0, 0.5, 1, 2, 4] as GameSpeed[]) {
     const label = sp === 0.5 ? t('hud.speed.half') : `${sp}×`;
     const title = sp === 0 ? `${t('hud.pause')} (Space)` : t('hud.speed.tip', { speed: sp === 0.5 ? '0,5' : sp, per: perSecond(sp) });
-    const b = h('button', { type: 'button', title }, sp === 0 ? icon('pause') : label) as HTMLButtonElement;
+    const b = h('button', { type: 'button' }, sp === 0 ? icon('pause') : label) as HTMLButtonElement;
+    tip(b, () => ({ title: sp === 0 ? t('hud.pause') : t('tb.speed.title', { speed: sp === 0.5 ? '0,5' : sp }), text: title, hotkey: sp === 0 ? t('keys.space') : '+ / −', lines: [t('tb.speed.line')] }));
     b.addEventListener('click', () => {
       hs.sound('click');
       if (sp === 0) ctx.app.togglePause();
@@ -73,14 +102,22 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
     speedBtns.set(sp, b);
     speeds.append(b);
   }
-  const iconBtn = (ico: string, titleKey: string, fn: () => void) => {
-    const b = h('button', { class: 'fu-btn fu-btn--ghost fu-btn--icon fu-time-btn', 'data-i18n-title': titleKey, title: t(titleKey) }, icon(ico));
+  const iconBtn = (ico: string, titleKey: string, fn: () => void, tipKey?: string, hotkey?: string) => {
+    const b = h('button', { class: 'fu-btn fu-btn--ghost fu-btn--icon fu-time-btn' }, icon(ico));
+    tip(b, () => ({ title: t(titleKey), text: tipKey ? t(tipKey) : undefined, hotkey }));
     b.addEventListener('click', () => {
       hs.sound('click');
       fn();
     });
     return b;
   };
+  const nationsBadge = h('span', { class: 'fu-tb-badge fu-mono fu-hidden' });
+  const nationsBtn = h('button', { class: 'fu-btn fu-btn--ghost fu-btn--icon fu-time-btn fu-nations-btn' }, icon('globe'), nationsBadge);
+  tip(nationsBtn, () => ({ title: t('nations.title'), text: t('tb.nations.tip'), hotkey: 'N', now: [[t('inbox.pending'), String(actions.pending?.() ?? 0)]] }));
+  nationsBtn.addEventListener('click', () => {
+    hs.sound('click');
+    actions.nations?.();
+  });
   const doomClock = h('b', { class: 'fu-mono' }, '23:45');
   const doom = h('div', { class: 'fu-doom fu-hidden' }, icon('radiation'), h('span', { class: 'fu-caps' }, tx('hud.doomsday')), doomClock);
   let doomMinutes = -1;
@@ -94,12 +131,17 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
   });
   ctx.bus.on('gameTornDown', () => (heg = { leader: 0, until: 0 }));
   const time = h('div', { class: 'fu-time fu-glass fu-interactive' },
-    h('div', { class: 'fu-time-main' }, icon('clock'), clock, speeds, iconBtn('help', 'hud.help', actions.help), iconBtn('settings', 'menu.settings', actions.settings), iconBtn('menu', 'hud.menu', actions.pause)),
+    h('div', { class: 'fu-time-main' }, icon('clock'), clock, speeds,
+      nationsBtn, iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
+      iconBtn('help', 'hud.help', actions.help, 'tb.help.tip', 'F1'), iconBtn('settings', 'menu.settings', actions.settings, 'tb.settings.tip'), iconBtn('menu', 'hud.menu', actions.pause, 'tb.menu.tip', 'Esc')),
     chip,
     hegChip,
     doom,
   );
   let lastDay = -1, lastHour = -1, lastChip = '', lastMode = '';
+  let dayTip = '', chipTip = '';
+  tip(clock, () => ({ title: t('tb.day.title'), text: dayTip }));
+  tip(chip, () => ({ title: t('tb.clock.title'), text: chipTip, lines: [t('tb.clock.air'), t('tb.clock.crisis')] }));
 
   let lastFlagColor = -1;
   function rebuildFlag(): void {
@@ -126,12 +168,19 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
     }
     setText(rankEl, p.alive ? t('hud.rank', { rank, total: alive }) : t('hud.eliminated'));
     setText(troops.v, `${formatCompact(p.troops)}`);
-    setText(troops.sub, `/ ${formatCompact(p.maxTroops)}  +${formatCompact(p.troopGrowth)}/s`);
+    setText(troops.sub, `/ ${formatCompact(p.maxTroops)}  +${formatCompact(p.troopGrowth)}/h`);
     const fill = p.maxTroops > 0 ? Math.min(1, p.troops / p.maxTroops) : 0;
     setStyle(troopBar, 'transform', `scaleX(${fill.toFixed(3)})`);
     toggleClass(troops.el, 'is-full', fill > 0.97);
     setText(gold.v, formatCompact(p.gold));
-    setText(gold.sub, `+${formatCompact(p.income)}/s`);
+    setText(gold.sub, `+${formatCompact(p.income)}/h`);
+    let nw = 0;
+    for (const w of view.wars) if (w.aggressor === HUMAN_ID || w.target === HUMAN_ID) nw++;
+    setText(warsN, String(nw));
+    toggleClass(wars, 'is-active', nw > 0);
+    const pend = actions.pending?.() ?? 0;
+    setText(nationsBadge, String(pend));
+    toggleClass(nationsBadge, 'fu-hidden', pend === 0);
     const land = view.world?.landTiles ?? 1;
     const pct = (p.tiles / land) * 100;
     setText(terr.v, `${pct < 10 ? pct.toFixed(2) : pct.toFixed(1)}%`);
@@ -150,32 +199,32 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
     if (hourOfDay !== lastHour || day !== lastDay) {
       lastHour = hourOfDay;
       for (let i = 0; i < 24; i++) toggleClass(hourSegs[i], 'is-on', i < hourOfDay);
-      clock.title = tn('clock.day.tip', hours, { day, hours: formatNumber(hours) });
+      dayTip = tn('clock.day.tip', hours, { day, hours: formatNumber(hours) });
     }
     // Scale chip: what one real second means right now.
     const c = view.clock;
-    let chipText: string, tip: string;
+    let chipText: string, tipTx: string;
     const sp = view.speed;
     const spLabel = sp === 0.5 ? (t('hud.speed.half').replace('×', '')) : String(sp);
     switch (c.mode) {
-      case 'crisis': chipText = t('clock.chip.crisis'); tip = t('clock.tip.crisis'); break;
-      case 'observation': chipText = t('clock.chip.observation'); tip = t('clock.tip.observation'); break;
-      case 'tactical': chipText = t('clock.chip.tactical'); tip = t('clock.tip.tactical'); break;
-      case 'travel': chipText = t(c.throttled ? 'clock.chip.travelThrottled' : 'clock.chip.travel', { rate: Math.round(c.rate) }); tip = t('clock.tip.travel'); break;
+      case 'crisis': chipText = t('clock.chip.crisis'); tipTx = t('clock.tip.crisis'); break;
+      case 'observation': chipText = t('clock.chip.observation'); tipTx = t('clock.tip.observation'); break;
+      case 'tactical': chipText = t('clock.chip.tactical'); tipTx = t('clock.tip.tactical'); break;
+      case 'travel': chipText = t(c.throttled ? 'clock.chip.travelThrottled' : 'clock.chip.travel', { rate: Math.round(c.rate) }); tipTx = t('clock.tip.travel'); break;
       default:
         if (sp === 0) {
           chipText = t('clock.chip.paused');
-          tip = t('clock.tip.paused');
+          tipTx = t('clock.tip.paused');
         } else {
           chipText = t('clock.chip.strategic', { speed: spLabel, per: perSecond(sp) });
-          tip = t('clock.tip.strategic', { speed: spLabel, per: perSecond(sp) });
+          tipTx = t('clock.tip.strategic', { speed: spLabel, per: perSecond(sp) });
         }
     }
     if (sp === 0 && c.mode !== 'strategic') chipText = `${t('clock.chip.paused')} · ${chipText}`;
     if (chipText !== lastChip) {
       lastChip = chipText;
       setText(chip, chipText);
-      chip.title = tip;
+      chipTip = tipTx;
     }
     if (c.mode !== lastMode) {
       lastMode = c.mode;

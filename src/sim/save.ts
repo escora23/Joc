@@ -206,3 +206,18 @@ export function worldHash(world: { terrain: Uint8Array; country: Uint16Array; la
   h ^= world.landTiles;
   return Math.imul(h, 0x01000193) >>> 0;
 }
+
+/** v2 (W3): read a save's header without restoring it (the main thread needs the config to show and resume it). */
+export function peekSaveHeader(blob: ArrayBuffer): { format: number; version: string; worldHash: number; config: unknown } | null {
+  try {
+    const r = new SaveReader(blob);
+    if (r.str() !== SAVE_MAGIC) return null;
+    const format = r.u32();
+    const version = r.str();
+    const worldHash = r.u32();
+    const config = r.json<unknown>();
+    return { format, version, worldHash, config };
+  } catch {
+    return null;
+  }
+}

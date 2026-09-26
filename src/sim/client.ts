@@ -3,6 +3,7 @@
 // subsystem sees one consistent state per frame. Re-emits sim events on the bus, raises nuke alarms for the
 // human, and records the stats history (every 5 s of game time) and the timelapse (400x200 RLE frames every 10 s).
 
+import { peekSaveHeader } from './save';
 import { GAME_SECONDS_PER_TICK, HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, structureCost } from '../shared/constants';
 import { hasKey, inSentence, playerName, t } from '../shared/i18n';
 import type { GameBus } from '../shared/events';
@@ -130,6 +131,8 @@ class ClientView implements GameView {
 
   // --- v2 (W3) ---
   treaties: TreatyView[] = [];
+  /** v2 (W3): the human's economy terms (top-bar breakdowns). */
+  economy: import('../shared/types').HumanEconomyView | null = null;
   /** The AIs' opinions of the human, by AI id. */
   opinions = new Map<number, OpinionView>();
   /** The human's proposals (open ones and the latest answered), by id. */
@@ -214,6 +217,7 @@ class ClientView implements GameView {
     this.truces = [];
     this.treaties = [];
     this.opinions.clear();
+    this.economy = null;
     this.proposals.clear();
     this.proposalsAtMs = 0;
     this.frontByKey.clear();
@@ -477,6 +481,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
     if (u.sieges) view.sieges = u.sieges;
     if (u.truces) view.truces = u.truces;
     if (u.treaties) view.treaties = u.treaties;
+    if (u.economy) view.economy = u.economy;
     if (u.opinions) {
       view.opinions.clear();
       for (const o of u.opinions) view.opinions.set(o.of, o);
@@ -595,6 +600,12 @@ export function createSimClient(bus: GameBus): SimClientApi {
       this.stop();
       view.reset();
       view.world = world;
+      // v2 (W3): the config travels in the save header; the HUD needs it (difficulty, duration, nukes).
+      const head = peekSaveHeader(blob);
+      if (head) {
+        view.config = head.config as GameConfig;
+        view.speed = 0;
+      }
       session++;
       worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'front-ultra-sim' });
       const mySession = session;

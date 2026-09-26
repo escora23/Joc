@@ -220,7 +220,9 @@ export class Game implements SimGame {
     this.flipTick = new Int32Array(TILE_COUNT).fill(-1);
     this.occupiedFlag = new Uint8Array(TILE_COUNT);
     this.contact = new Int32Array(this.contactCap * this.contactCap);
-    this.spawnDeadline = config.spawnTimeoutTicks;
+    // §12.6: a spawn timeout of 0 means the spawn phase waits for the human (single player); scripted sessions use
+    // autoSpawnTile or a finite timeout.
+    this.spawnDeadline = config.spawnTimeoutTicks > 0 ? config.spawnTimeoutTicks : Number.MAX_SAFE_INTEGER;
 
     this.rules = createSimRules(this);
     this.war = new WarSystem(this);
@@ -1178,6 +1180,22 @@ export class Game implements SimGame {
         if (u) this.unitSys.remove(u, false);
         break;
       }
+      case 'treaty':
+        this.diplomacy.debugSign(a.a, a.b, a.kind);
+        break;
+      case 'propose':
+        if (a.ultimatum && a.demand) this.diplomacy.issueUltimatum(a.from, a.to, a.demand);
+        else this.diplomacy.propose(a.from, a.to, a.kind, { terms: a.terms, demand: a.demand, against: a.against, system: true });
+        break;
+      case 'tension':
+        this.diplomacy.issueTension(a.from, a.to, a.reasonKey);
+        break;
+      case 'opinion':
+        this.diplomacy.addReason(a.of, a.toward, a.key, a.value);
+        break;
+      case 'command':
+        this.issue(a.playerId, a.cmd);
+        break;
       case 'launchNuke':
         this.weapons.launch(a.owner, a.weapon, a.fromTile, a.targetTile, 0);
         break;
@@ -1269,6 +1287,7 @@ export class Game implements SimGame {
     const human = this.playerById[HUMAN_ID]!;
     if (!human.spawned && this.tick >= this.spawnDeadline) {
       this.spawn(human, this.randomFreeLand());
+      this.message(HUMAN_ID, 'msg.autoSpawned', 'warning');
     }
     let start = false;
     if (human.spawned) {
@@ -1539,6 +1558,11 @@ export class Game implements SimGame {
     if (dip.proposalsDirty || full || (ticks > 0 && this.tick % 10 === 0 && dip.openProposals(HUMAN_ID).length > 0)) {
       dip.proposalsDirty = false;
       u.proposals = dip.proposalViews();
+    }
+    // v2 (W3): the human's economy terms for the top-bar breakdowns (§12.2).
+    if (full || (ticks > 0 && this.tick % 10 === 0)) {
+      const hp = this.playerById[HUMAN_ID];
+      if (hp && hp.spawned && hp.alive) u.economy = this.economy.breakdown(hp);
     }
     if (this.doomsdayDirty || full) {
       this.doomsdayDirty = false;

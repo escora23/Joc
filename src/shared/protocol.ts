@@ -318,6 +318,8 @@ export interface TickUpdate {
   opinions?: OpinionView[];
   /** Proposals involving the human: open ones and the latest answered (when changed). */
   proposals?: ProposalView[];
+  /** v2 (W3): the human's economy with its terms (every 10 ticks), for the top-bar breakdowns. */
+  economy?: import('./types').HumanEconomyView;
 }
 
 // =================================================================================================
@@ -347,7 +349,18 @@ export type SimDebugAction =
    */
   | { type: 'war'; a: number; b: number; goal?: WarGoal; mobilizeTicks?: number; peace?: boolean }
   /** v2: remove a unit silently (probes and staging clean up after themselves). */
-  | { type: 'removeUnit'; unitId: number };
+  | { type: 'removeUnit'; unitId: number }
+  // --- v2 (W3): diplomacy staging (shots, playtests, the diplomacy audit) ---
+  /** Sign a treaty between two players now. */
+  | { type: 'treaty'; a: number; b: number; kind: TreatyKind }
+  /** A proposal from `from` to `to` as if the sender had made it (an ultimatum when `ultimatum`). */
+  | { type: 'propose'; from: number; to: number; kind: ProposalKind; terms?: PeaceTerms; demand?: Demand; against?: number; ultimatum?: boolean }
+  /** A public tension statement from `from` toward `to`. */
+  | { type: 'tension'; from: number; to: number; reasonKey: string }
+  /** Remember an opinion reason of `of` toward `toward`. */
+  | { type: 'opinion'; of: number; toward: number; key: string; value?: number }
+  /** Execute a command as another player (staging an AI's offensive on the human for shots and the playtest). */
+  | { type: 'command'; playerId: number; cmd: PlayerCommand };
 
 export type ToWorker =
   | { kind: 'init'; config: GameConfig; world: WorldInit }

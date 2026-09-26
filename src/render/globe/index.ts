@@ -21,6 +21,7 @@ import { createAtmosphereLayers, type AtmosphereLayers } from './layers';
 import { territoryFillAmount } from './glsl';
 import { createSpaceBackdrop } from './sky';
 import { createTerritoryLayer } from './territory';
+import { createTileMarks, type TileMarks } from './marks';
 import { applyTextureSize, loadPlanetTextures, type PlanetTextures } from './textures';
 
 /** Cloud drift: one revolution per this many world seconds. */
@@ -69,6 +70,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
   let layers: AtmosphereLayers | null = null;
   let labels: NationLabels | null = null;
   let islands: IslandMarkers | null = null;
+  let marks: TileMarks | null = null;
   let font: SdfFont | null = null;
   let territoryOpacity = 0;
   let territoryTarget = 0;
@@ -165,6 +167,8 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       root.add(labels.mesh);
       islands = createIslandMarkers(ctx);
       root.add(islands.mesh);
+      marks = createTileMarks((lat, lon) => meshRadius(lat, lon));
+      root.add(marks.group);
       const isl = islands;
       (window as unknown as { __islands?: unknown }).__islands = { visible: () => isl.visible(), details: () => isl.details() };
       // Verification (tools/w2-verify.mjs): the historical-borders overlay strength actually sent to the shader.
@@ -195,6 +199,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       territory.clear();
       labels?.clear();
       islands?.clear();
+      marks?.clear();
       hoverTile = -1;
       territory.setHoverOwner(0);
     },
@@ -253,6 +258,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
 
       labels?.update(dt, territoryOpacity);
       islands?.update();
+      marks?.update(frame.time, ctx.renderer.domElement.clientHeight || window.innerHeight, ctx.camera.fov);
     },
     pickLatLon(clientX, clientY, out) {
       const r = ctx.canvas.getBoundingClientRect();
@@ -292,6 +298,9 @@ export function createGlobe(ctx: GameContext): GlobeApi {
     setHoverTile(tile) {
       hoverTile = tile;
       if (tile < 0) territory.setHoverOwner(0);
+    },
+    setTileMarks(key, tiles, color, pulse) {
+      marks?.set(key, tiles, color, pulse);
     },
     pickIsland(clientX, clientY) {
       return islands && islands.mesh.visible ? islands.pick(clientX, clientY) : null;

@@ -2,7 +2,9 @@
 // the full mid-game HUD (selection with TAKE CONTROL, leaderboard, ticker, toasts, tutorial), the radial
 // diplomacy menu, the nuclear alarm, settings, how-to-play and the end screens.
 
-import { openHowTo, openSettings } from './dialogs';
+import { openHelp, openLoadDialog, openSettings } from './dialogs';
+import { openDeclareWar } from './hud/declare';
+import { openPeaceDialog } from './hud/wardialogs';
 import { getHud } from './index';
 import { HUMAN_ID } from '../shared/constants';
 import { tileToLatLon, worldTimeForSubsolarLon } from '../shared/geo';
@@ -67,9 +69,9 @@ registerShot('settings', 'ui', 'Settings modal over the menu', async ({ wait, ct
   await wait(900);
 }, 10);
 
-registerShot('howto', 'ui', 'How-to-play modal', async ({ wait }) => {
+registerShot('howto', 'ui', 'Help: first section (DESIGN_V2 §12.3)', async ({ wait, ctx }) => {
   await wait(800);
-  openHowTo(sound);
+  openHelp(ctx, sound, 'time');
   await wait(1200);
 }, 10);
 
@@ -119,9 +121,9 @@ registerShot('hud', 'ui', 'Full in-game HUD mid-game (selection, leaderboard, ti
   const rn = (id: number) => playerName(view.players[id]!, view.world);
   const capLL = tileToLatLon(cap);
   ctx.bus.emit('news', { text: t('news.detonation', { a: rn(rival), w: t('news.art.hydrogenBomb'), place: t('news.capitalOf', { name: rn(second) }) }), severity: 'critical', lat: capLL.lat, lon: capLL.lon });
-  ctx.bus.emit('allianceRequested', { type: 'allianceRequested', tick: view.tick, from: second, to: HUMAN_ID });
+  ctx.sim.debug({ type: 'propose', from: second, to: HUMAN_ID, kind: 'alliance' });
   ctx.bus.emit('toast', { text: t('toast.underAttack', { name: rn(rival), n: '48K' }), kind: 'danger', durationMs: 60_000 });
-  hud.debug.showTutorial();
+  hud.debug.showTutorial('expand');
   if (vis) hud.shared.setHover({ button: -1, tile: vis.tile, lat: 0, lon: 0, unitId: -1, structureId: -1, clientX: vis.x, clientY: vis.y, shift: false, ctrl: false, alt: false });
   await waitFrames(20);
   await wait(1500);
@@ -167,4 +169,144 @@ registerShot('defeat', 'ui', 'Defeat screen', async ({ ctx, wait }) => {
   ctx.sim.debug({ type: 'endGame', winner: topRival(ctx), reason: 'domination' });
   await ended;
   await wait(3500);
+});
+
+// =================================================================================================
+// v2 (W3): diplomacy, alerts, crisis, onboarding, save (DESIGN_V2 §16.4 shots)
+// =================================================================================================
+
+/** The biggest AI nation sharing a border with the human. */
+function neighbour(ctx: ShotContext['ctx']): number {
+  const hud = getHud();
+  const list = ctx.sim.view.playerList.filter((p) => p.id !== HUMAN_ID && p.kind === 'nation' && p.alive).sort((a, b) => b.tiles - a.tiles);
+  for (const p of list) if (hud?.shared.borders(p.id)) return p.id;
+  return list[0]?.id ?? 0;
+}
+
+async function ticks(s: ShotContext, n: number): Promise<void> {
+  await s.ctx.sim.fastForward(n);
+  await s.waitFrames(4);
+}
+
+registerShot('diplomacy-panel', 'ui', 'Nations drawer: a neighbour\'s opinion of you with every reason, treaties and actions (§5, §8.3)', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const n = neighbour(ctx);
+  ctx.sim.debug({ type: 'treaty', a: HUMAN_ID, b: n, kind: 'trade' });
+  ctx.sim.debug({ type: 'opinion', of: n, toward: HUMAN_ID, key: 'gift', value: 12 });
+  await ticks(s, 240);
+  getHud()?.shared.openNations(n);
+  await wait(1500);
+});
+
+registerShot('inbox', 'ui', 'Inbox: an alliance offer, a call to arms and our proposal under study, with countdowns (§8.3)', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const view = ctx.sim.view;
+  const n = neighbour(ctx);
+  const others = view.playerList.filter((p) => p.kind === 'nation' && p.alive && p.id !== n).sort((a, b) => b.tiles - a.tiles);
+  const ally = others[0]?.id ?? 0, enemy = others[1]?.id ?? 0;
+  ctx.sim.debug({ type: 'treaty', a: HUMAN_ID, b: ally, kind: 'alliance' });
+  ctx.sim.debug({ type: 'war', a: enemy, b: ally, mobilizeTicks: 60 });
+  await ticks(s, 2);
+  ctx.sim.debug({ type: 'propose', from: n, to: HUMAN_ID, kind: 'nap' });
+  ctx.sim.send({ type: 'propose', target: others[2]?.id ?? n, kind: 'trade', gold: 50_000 });
+  await ticks(s, 12);
+  getHud()?.shared.openInbox();
+  await wait(1500);
+});
+
+registerShot('declare-war-dialog', 'ui', 'Declaration of war (§4.2): allies of the target, relations, betrayal and our mobilization', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const view = ctx.sim.view;
+  const n = neighbour(ctx);
+  const friend = view.playerList.filter((p) => p.kind === 'nation' && p.alive && p.id !== n).sort((a, b) => b.tiles - a.tiles)[0]?.id ?? 0;
+  ctx.sim.debug({ type: 'treaty', a: n, b: friend, kind: 'alliance' });
+  ctx.sim.debug({ type: 'treaty', a: HUMAN_ID, b: n, kind: 'nap' });
+  await ticks(s, 2);
+  const hud = getHud();
+  if (hud) openDeclareWar(hud.shared, n, view.players[n]?.capitalTile ?? -1, false);
+  await wait(1200);
+});
+
+registerShot('peace-dialog', 'ui', 'Peace terms (§4.15): demanding a cession with the band previewed on the map', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const n = neighbour(ctx);
+  ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: n, mobilizeTicks: 0 });
+  await ticks(s, 60);
+  const hud = getHud();
+  const m = hud ? openPeaceDialog(hud.shared, n) : null;
+  await wait(400);
+  (m?.el.querySelectorAll('.fu-peace-opts button')[1] as HTMLElement | undefined)?.click();
+  await wait(2600);
+});
+
+registerShot('alert-attack', 'ui', 'Alerts: war declared on us, then an offensive grouped per front with place and troops; globe marker and minimap ping', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  ctx.settings.set({ autoPause: { ...ctx.settings.get().autoPause, warOnYou: false } });
+  const n = neighbour(ctx);
+  const cap = ctx.sim.view.human?.capitalTile ?? -1;
+  ctx.sim.debug({ type: 'war', a: n, b: HUMAN_ID, mobilizeTicks: 0 });
+  await ticks(s, 2);
+  ctx.sim.debug({ type: 'addTroops', playerId: n, amount: 400_000 });
+  const tile = cap;
+  // The enemy attacks toward our capital (the sim's own offensive, through its command).
+  ctx.sim.debug({ type: 'command', playerId: n, cmd: { type: 'attack', target: HUMAN_ID, ratio: 0.5, tile } });
+  await ticks(s, 30);
+  const ll = tileToLatLon(cap);
+  ctx.cameraRig.setState({ lat: ll.lat + 3, lon: ll.lon + 6, altitudeKm: 3800, tilt: 0.2, heading: 0 });
+  await wait(2500);
+});
+
+registerShot('auto-pause', 'ui', 'Auto-pause banner: an ultimatum paused the game and says why (§8.5)', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  ctx.sim.setSpeed(1);
+  const n = neighbour(ctx);
+  ctx.sim.debug({ type: 'tension', from: n, to: HUMAN_ID, reasonKey: 'tension.border' });
+  ctx.sim.debug({ type: 'propose', from: n, to: HUMAN_ID, kind: 'demand', demand: { kind: 'cede', tiles: 40 }, ultimatum: true });
+  await wait(2500);
+});
+
+registerShot('crisis-banner', 'ui', 'Crisis component: the red nuclear alarm with every weapon in flight (§8.2)', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const view = ctx.sim.view;
+  const rival = topRival(ctx);
+  const other = view.playerList.filter((p) => p.kind === 'nation' && p.alive && p.id !== rival).sort((a, b) => b.tiles - a.tiles)[0]?.id ?? rival;
+  ctx.sim.debug({ type: 'war', a: rival, b: HUMAN_ID });
+  ctx.sim.debug({ type: 'war', a: rival, b: other });
+  ctx.sim.setSpeed(1);
+  const from = view.players[rival]?.capitalTile ?? 0;
+  ctx.sim.debug({ type: 'launchNuke', weapon: UnitType.HydrogenBomb, owner: rival, fromTile: from, targetTile: view.human?.capitalTile ?? 0 });
+  ctx.sim.debug({ type: 'launchNuke', weapon: UnitType.AtomBomb, owner: rival, fromTile: from, targetTile: view.players[other]?.capitalTile ?? 0 });
+  await wait(3000);
+});
+
+registerShot('unrest-alert', 'ui', 'Unrest in our land: cause, region outlined and remedy, before any rebellion (§5.12)', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const cap = ctx.sim.view.human?.capitalTile ?? -1;
+  ctx.sim.debug({ type: 'worldEvent', kind: 'rebellion', tile: cap + 3 });
+  await ticks(s, 2);
+  const ll = tileToLatLon(cap);
+  ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: 2600, tilt: 0.2, heading: 0 });
+  await wait(2500);
+});
+
+registerShot('tutorial-spawn', 'ui', 'Spawn phase with the advisor: found your capital, «Sugerir un lugar» highlighted (§12.5, §12.6)', async ({ ctx, waitFrames, wait }) => {
+  await ctx.app.startScriptedGame({ humanSpawn: null, stayInSpawn: true, worldTimeSec: worldTimeForSubsolarLon(15) });
+  ctx.cameraRig.setState({ lat: 35, lon: 15, altitudeKm: 12_000, tilt: 0, heading: 0 });
+  await waitFrames(10);
+  getHud()?.debug.showTutorial();
+  await wait(1500);
+});
+
+registerShot('save-menu', 'ui', 'Main menu with «Continuar» and the load dialog (§12.8)', async ({ ctx, wait }) => {
+  await wait(1500);
+  openLoadDialog(ctx, sound);
+  await wait(1500);
 });

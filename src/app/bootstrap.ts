@@ -165,6 +165,22 @@ export async function bootstrap(): Promise<void> {
       ctx.cameraRig.setMode('game');
       input.setEnabled(true);
     },
+    async loadGame(blob: ArrayBuffer) {
+      if (!ctx.world) throw new Error('world not loaded');
+      if (ctx.sim.running) teardownSession();
+      await ctx.sim.load(blob, ctx.world);
+      const config = ctx.sim.view.config ?? app.makeConfig();
+      for (const s of systems) s.onGameStart?.();
+      bus.emit('gameStarted', { config });
+      ctx.globe.setTerritoryOpacity(1);
+      ctx.cameraRig.setMode('game');
+      setState('playing');
+      const cap = ctx.sim.view.human?.capitalTile ?? -1;
+      if (cap >= 0) {
+        const ll = tileToLatLon(cap);
+        void ctx.cameraRig.flyTo({ lat: ll.lat, lon: ll.lon, altitudeKm: 4000, tilt: 0, heading: 0 }, 1200);
+      }
+    },
     returnToMenu() {
       teardownSession();
       setState('menu');
@@ -194,7 +210,8 @@ export async function bootstrap(): Promise<void> {
         duration: s.duration ?? 'normal',
         // Noon over the spawn view (§10.13).
         startWorldTimeSec: worldTimeForSubsolarLon(15),
-        spawnTimeoutTicks: 900,
+        // §12.6: single player waits for the human to found its capital (no random auto-spawn).
+        spawnTimeoutTicks: 0,
         autoSpawnTile: -1,
         instantStart: false,
         humanAutopilot: false,

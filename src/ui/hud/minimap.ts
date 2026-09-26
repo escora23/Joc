@@ -20,6 +20,11 @@ export interface Minimap {
   reset(): void;
   refresh(): void;
   toggle(): void;
+  /** v2 (W3): an expanding ring at a place for 1.5 s (§8.3). */
+  ping(lat: number, lon: number, severity: string): void;
+  /** Per frame: redraws the overlay while pings animate. */
+  frame(): void;
+  readonly pingCount: number;
 }
 
 export function createMinimap(hs: HudShared): Minimap {
@@ -176,6 +181,9 @@ export function createMinimap(hs: HudShared): Minimap {
 
   // ---- overlay ------------------------------------------------------------------------------------
   let blink = 0;
+  const pings: { x: number; y: number; t0: number; color: string }[] = [];
+  let pingTotal = 0;
+  const PING_MS = 1500;
   function drawOverlay(): void {
     const view = ctx.sim.view;
     const W = over.width, H = over.height;
@@ -262,6 +270,65 @@ export function createMinimap(hs: HudShared): Minimap {
         o.stroke();
       }
     }
+    // v2 (W3, §8.3): fronts on us as persistent red marks, enemy convoys heading to us as red triangles with dashed
+    // routes, and the alert pings (an expanding circle for 1.5 s).
+    for (const f of view.fronts) {
+      if (f.a !== HUMAN_ID && f.b !== HUMAN_ID) continue;
+      const enemy = f.a === HUMAN_ID ? f.b : f.a;
+      if (!enemy || view.pairState(HUMAN_ID, enemy) !== 'war') continue;
+      const sm = f.samples;
+      o.strokeStyle = f.quiet ? 'rgba(255,120,90,0.55)' : 'rgba(255,60,60,0.95)';
+      o.lineWidth = f.quiet ? 2 : 3;
+      o.beginPath();
+      for (let i = 0; i + 1 < sm.length; i += 2) {
+        const px = (sm[i] / MAP_W) * W, py = (sm[i + 1] / MAP_H) * H;
+        if (i === 0 || Math.abs(px - (sm[i - 2] / MAP_W) * W) > W / 2) o.moveTo(px, py);
+        else o.lineTo(px, py);
+      }
+      o.stroke();
+    }
+    for (const u of view.units.values()) {
+      if (u.type !== UnitType.TransportShip || u.owner === HUMAN_ID) continue;
+      const tt = Math.floor(u.targetY) * MAP_W + Math.floor(u.targetX);
+      if (view.owner[tt] !== HUMAN_ID) continue;
+      const ux = (u.x / MAP_W) * W, uy = (u.y / MAP_H) * H, txx = (u.targetX / MAP_W) * W, tyy = (u.targetY / MAP_H) * H;
+      o.strokeStyle = 'rgba(255,74,74,0.8)';
+      o.setLineDash([5, 4]);
+      o.lineWidth = 1.5;
+      o.beginPath();
+      o.moveTo(ux, uy);
+      o.lineTo(txx, tyy);
+      o.stroke();
+      o.setLineDash([]);
+      const a = Math.atan2(tyy - uy, txx - ux);
+      o.fillStyle = '#ff4a4a';
+      o.beginPath();
+      o.moveTo(ux + Math.cos(a) * 7, uy + Math.sin(a) * 7);
+      o.lineTo(ux + Math.cos(a + 2.5) * 6, uy + Math.sin(a + 2.5) * 6);
+      o.lineTo(ux + Math.cos(a - 2.5) * 6, uy + Math.sin(a - 2.5) * 6);
+      o.closePath();
+      o.fill();
+    }
+    const nowMs = performance.now();
+    for (let i = pings.length - 1; i >= 0; i--) {
+      const pg = pings[i];
+      const k = (nowMs - pg.t0) / PING_MS;
+      if (k >= 1) {
+        pings.splice(i, 1);
+        continue;
+      }
+      o.strokeStyle = pg.color;
+      o.globalAlpha = 1 - k;
+      o.lineWidth = 3;
+      o.beginPath();
+      o.arc(pg.x, pg.y, 4 + k * 30, 0, Math.PI * 2);
+      o.stroke();
+      o.beginPath();
+      o.arc(pg.x, pg.y, 3, 0, Math.PI * 2);
+      o.fillStyle = pg.color;
+      o.fill();
+      o.globalAlpha = 1;
+    }
     // Active world events
     for (const ev of view.worldEvents) {
       if (ev.radius <= 0) continue;
@@ -288,5 +355,20 @@ export function createMinimap(hs: HudShared): Minimap {
     fullRebuild();
   }
 
-  return { el, refresh, reset, toggle };
+  return {
+    el, refresh, reset, toggle,
+    ping(lat, lon, severity) {
+      pingTotal++;
+      const W = over.width, H = over.height;
+      const color = severity === 'info' ? '#3fd0ff' : severity === 'warning' ? '#ffb53d' : '#ff4a4a';
+      pings.push({ x: ((lon + 180) / 360) * W, y: ((90 - lat) / 180) * H, t0: performance.now(), color });
+      if (pings.length > 12) pings.shift();
+    },
+    frame() {
+      if (pings.length && !hidden) drawOverlay();
+    },
+    get pingCount() {
+      return pingTotal;
+    },
+  };
 }

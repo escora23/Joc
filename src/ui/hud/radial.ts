@@ -1,17 +1,21 @@
-// FRONT ULTRA — right-click radial menu (owner: ui). On a foreign nation: attack, alliance / break alliance,
-// embargo, donate (sub-ring), emote (sub-ring), mark as target, info. On your own land: quick build ring.
+// FRONT ULTRA — right-click radial menu (owner: ui; diplomacy ring reworked by W3, DESIGN_V2 §16.4). On a foreign
+// nation: declare war (or attack when at war), propose (sub-ring of treaties) or propose peace, demand, ask for help,
+// embargo, gift (sub-ring), the nation's panel. No emotes, no «Marcar objetivo» (§1.3, H02). On your own land: the
+// quick build ring. On unclaimed land: expand / land by sea. Every wedge has a tooltip and says why when disabled.
 // On unclaimed land: expand / land by sea. SVG annular wedges with icons, hover label in the hub.
 
 import { h, s, setText } from '../dom';
 import { flag } from '../flag';
-import { EMOTE_GLYPH, icon, STRUCTURE_ICON } from '../icons';
-import { attackNation, breakAlliance, donate, markTarget, nationRelation, requestAlliance, sendEmote, toggleEmbargo } from './diplomacy';
+import { icon, STRUCTURE_ICON } from '../icons';
+import { tip } from '../tooltip';
+import { askHelp, attackNation, donate, nationRelation, propose, toggleEmbargo, whyNotPropose } from './diplomacy';
 import { needsDeclaration, openDeclareWar } from './declare';
+import { openDemandDialog, openPeaceDialog } from './wardialogs';
 import type { HudShared } from './shared';
 import { HUMAN_ID, STRUCTURE_DEFS } from '../../shared/constants';
 import { hexToCss } from '../../shared/color';
 import { formatCompact, t } from '../../shared/i18n';
-import { EMOTES, STRUCTURE_TYPES, type EmoteId } from '../../shared/types';
+import { STRUCTURE_TYPES, type TreatyKind } from '../../shared/types';
 
 interface RadialItem {
   id: string;
@@ -21,6 +25,9 @@ interface RadialItem {
   sub?: string;
   tone?: 'danger' | 'success' | 'amber';
   disabled?: boolean;
+  /** Tooltip text (purpose, numbers) and why it is disabled. */
+  tipText?: string;
+  why?: string | null;
   run(): void | RadialItem[];
 }
 
@@ -98,6 +105,7 @@ export function createRadial(hs: HudShared): Radial {
           render(res);
         } else close();
       };
+      tip(path, () => ({ title: it.label, text: it.tipText ?? it.sub ?? '', whyNot: it.disabled ? it.why ?? null : null }));
       path.addEventListener('pointerenter', enter);
       path.addEventListener('pointerleave', leaveFn);
       path.addEventListener('click', click);
@@ -112,38 +120,48 @@ export function createRadial(hs: HudShared): Radial {
   }
 
   function nationItems(id: number, tile: number): RadialItem[] {
+    const view = ctx.sim.view;
     const rel = nationRelation(hs, id);
-    const p = ctx.sim.view.players[id]!;
+    const p = view.players[id]!;
     const me = hs.human;
-    const ally = rel === 'ally';
+    const war = view.pairState(HUMAN_ID, id) === 'war';
+    const nation = p.kind === 'nation';
+    const troopsSub = me ? `${Math.round(hs.attackRatio * 100)}% · ${formatCompact(me.troops * hs.attackRatio)}` : '';
+    const treatyItem = (k: TreatyKind): RadialItem => {
+      const why = whyNotPropose(hs, id, k);
+      return { id: k, label: t(`nations.propose.${k}`), ico: k, disabled: !!why, why, tipText: t(`treaty.${k}.effect`), sub: why ?? t(`treaty.${k}.accepts`), run: () => void propose(hs, id, k) };
+    };
+    const enemies = view.wars.filter((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID).map((w) => (w.aggressor === HUMAN_ID ? w.target : w.aggressor));
+    // «Pedir ayuda»: against this enemy (to all our allies), or to this ally against our enemies.
+    const helpWhy = war ? (me && me.allies.some((a) => !whyNotPropose(hs, a, 'callToArms', 0, id)) ? null : t('why.help.noAlly')) : rel === 'ally' ? (enemies.some((e) => !whyNotPropose(hs, id, 'callToArms', 0, e)) ? null : t('why.call.noWar')) : t('why.help.notAllyNotWar');
     const items: RadialItem[] = [
+      war
+        ? { id: 'attack', label: t('dip.attack'), ico: 'attack', tone: 'danger', sub: troopsSub, tipText: t('radial.attack.tip'), run: () => void attackNation(hs, id, tile) }
+        : { id: 'declare', label: t('nations.declare'), ico: 'attack', tone: 'danger', disabled: !nation && p.kind !== 'rebel', sub: troopsSub, tipText: t('radial.declare.tip'), run: () => void attackNation(hs, id, tile) },
+      war
+        ? { id: 'peace', label: t('nations.peace'), ico: 'peace', tone: 'success', disabled: !nation, why: t('msg.cannotPropose'), tipText: t('nations.peace.tip'), run: () => void openPeaceDialog(hs, id) }
+        : { id: 'propose', label: t('radial.propose'), ico: 'scroll', tone: 'success', disabled: !nation, why: t('msg.cannotAllyTribe'), tipText: t('radial.propose.tip'), run: () => (['alliance', 'nap', 'trade', 'openBorders'] as TreatyKind[]).map(treatyItem) },
+      { id: 'demand', label: t('nations.demand'), ico: 'demand', tone: 'amber', disabled: war || !nation, why: war ? t('msg.demandAtWar') : t('msg.cannotPropose'), tipText: t('nations.demand.tip'), run: () => void openDemandDialog(hs, id) },
       {
-        id: 'attack', label: t('dip.attack'), ico: 'attack', tone: 'danger', disabled: ally,
-        sub: me ? `${Math.round(hs.attackRatio * 100)}% · ${formatCompact(me.troops * hs.attackRatio)}` : '',
-        run: () => void attackNation(hs, id, tile),
+        id: 'help', label: t('nations.help'), ico: 'helpCall', disabled: !!helpWhy, why: helpWhy, tipText: t('radial.help.tip'),
+        run: () => {
+          if (war) askHelp(hs, id);
+          else for (const e of enemies) askHelp(hs, e, id);
+        },
       },
-      ally
-        ? { id: 'break', label: t('dip.break'), ico: 'breakAlliance', tone: 'amber', sub: t('dip.break.sub'), run: () => breakAlliance(hs, id) }
-        : { id: 'ally', label: t('dip.alliance'), ico: 'alliance', tone: 'success', disabled: p.kind !== 'nation', run: () => requestAlliance(hs, id) },
-      { id: 'embargo', label: t(rel === 'embargoed' ? 'dip.embargoOff' : 'dip.embargo'), ico: 'embargo', run: () => toggleEmbargo(hs, id) },
+      { id: 'embargo', label: t(rel === 'embargoed' || me?.embargoes.includes(id) ? 'dip.embargoOff' : 'dip.embargo'), ico: 'embargo', tipText: t('nations.embargo.tip'), run: () => toggleEmbargo(hs, id) },
       {
-        id: 'donate', label: t('dip.donate'), ico: 'donate', disabled: !ally, sub: ally ? '' : t('dip.donate.allies'),
+        id: 'donate', label: t('dip.donate'), ico: 'donate', disabled: war, why: t('why.gift.war'), tipText: t('nations.gift.tip'),
         run: () => [
-          { id: 'g25', label: t('dip.donateGoldPct', { p: 25 }), ico: 'gold', sub: me ? formatCompact(me.gold * 0.25) : '', run: () => donate(hs, id, 'gold', 0.25) },
-          { id: 'g50', label: t('dip.donateGoldPct', { p: 50 }), ico: 'gold', sub: me ? formatCompact(me.gold * 0.5) : '', run: () => donate(hs, id, 'gold', 0.5) },
-          { id: 't25', label: t('dip.donateTroopsPct', { p: 25 }), ico: 'troops', sub: me ? formatCompact(me.troops * 0.25) : '', run: () => donate(hs, id, 'troops', 0.25) },
-          { id: 't50', label: t('dip.donateTroopsPct', { p: 50 }), ico: 'troops', sub: me ? formatCompact(me.troops * 0.5) : '', run: () => donate(hs, id, 'troops', 0.5) },
+          { id: 'g10', label: t('dip.donateGoldPct', { p: 10 }), ico: 'gold', sub: me ? formatCompact(me.gold * 0.1) : '', tipText: t('nations.gift.tip'), run: () => donate(hs, id, 'gold', 0.1) },
+          { id: 'g25', label: t('dip.donateGoldPct', { p: 25 }), ico: 'gold', sub: me ? formatCompact(me.gold * 0.25) : '', tipText: t('nations.gift.tip'), run: () => donate(hs, id, 'gold', 0.25) },
+          { id: 't10', label: t('dip.donateTroopsPct', { p: 10 }), ico: 'troops', disabled: rel !== 'ally', why: t('msg.donateAlliesOnly'), sub: me ? formatCompact(me.troops * 0.1) : '', tipText: t('radial.troops.tip'), run: () => donate(hs, id, 'troops', 0.1) },
         ],
       },
-      { id: 'emote', label: t('dip.emote'), ico: 'emote', run: () => emoteItems(id) },
-      { id: 'target', label: t('dip.target'), ico: 'target', tone: 'amber', disabled: ally, run: () => markTarget(hs, id) },
-      { id: 'info', label: t('dip.info'), ico: 'info', run: () => hs.select({ kind: 'nation', id }) },
+      { id: 'info', label: t('radial.nation'), ico: 'info', tipText: t('radial.nation.tip'), run: () => hs.openNations(id) },
     ];
+    for (const it of items) if (it.disabled && !it.sub) it.sub = it.why ?? '';
     return items;
-  }
-
-  function emoteItems(id: number): RadialItem[] {
-    return EMOTES.map((e: EmoteId) => ({ id: e, label: t(`emote.${e}`), glyph: EMOTE_GLYPH[e], run: () => sendEmote(hs, id, e) }));
   }
 
   function buildItems(tile: number): RadialItem[] {
@@ -152,7 +170,7 @@ export function createRadial(hs: HudShared): Radial {
       const d = STRUCTURE_DEFS[st];
       const why = hs.buildError(st, tile);
       return {
-        id: d.id, label: t(`structure.${d.id}`), ico: STRUCTURE_ICON[st], disabled: !!why,
+        id: d.id, label: t(`structure.${d.id}`), ico: STRUCTURE_ICON[st], disabled: !!why, why: why ? t(why) : null, tipText: t(`structure.${d.id}.desc`),
         sub: why ? t(why) : `${formatCompact(view.structureCost(st))} · [${d.hotkey}]`,
         run: () => {
           ctx.sim.send({ type: 'build', structure: st, tile });
@@ -165,9 +183,9 @@ export function createRadial(hs: HudShared): Radial {
   function neutralItems(tile: number): RadialItem[] {
     const me = hs.human;
     return [
-      { id: 'expand', label: t('dip.expand'), ico: 'attack', tone: 'success', sub: me ? `${Math.round(hs.attackRatio * 100)}% · ${formatCompact(me.troops * hs.attackRatio)}` : '', run: () => void attackNation(hs, 0, tile) },
+      { id: 'expand', label: t('dip.expand'), ico: 'attack', tone: 'success', tipText: t('radial.expand.tip'), sub: me ? `${Math.round(hs.attackRatio * 100)}% · ${formatCompact(me.troops * hs.attackRatio)}` : '', run: () => void attackNation(hs, 0, tile) },
       {
-        id: 'boat', label: t('dip.boat'), ico: 'boat', sub: '[B]',
+        id: 'boat', label: t('dip.boat'), ico: 'boat', sub: '[B]', tipText: t('radial.boat.tip'),
         run: () => {
           if (needsDeclaration(hs, ctx.sim.view.owner[tile])) openDeclareWar(hs, ctx.sim.view.owner[tile], tile, true);
           else ctx.sim.send({ type: 'boatAttack', targetTile: tile, ratio: hs.attackRatio });

@@ -303,6 +303,38 @@ export class EconomySystem {
     return { maxTroops, growth, income, recruitment };
   }
 
+  /** v2 (W3): the terms behind yieldOf for the human's top-bar breakdowns (§12.2, §6.7). Rates per game hour. */
+  breakdown(p: Player): import('../shared/types').HumanEconomyView {
+    const g = this.g;
+    const tick = g.tick;
+    const diff = g.difficulty;
+    const fPop = p.popTarget > 0 ? Math.min(1, Math.max(0.3, p.pop / p.popTarget)) : 1;
+    const occ = Math.min(p.occupied, p.tiles);
+    const fallout = Math.min(p.falloutTiles, p.tiles);
+    const eff = Math.max(0, p.tiles - fallout * 0.8 - occ * 0.5);
+    const effTax = Math.max(0, p.tiles - fallout - occ * 0.75);
+    const cityLv = p.structLevels[StructureType.City];
+    const armyLv = p.structLevels[StructureType.ArmyBase];
+    const facLv = p.structLevels[StructureType.Factory];
+    let atWar = false;
+    for (const w of g.war.list()) if (w.a === p.id || w.b === p.id) atWar = true;
+    const y = this.yieldOf(p, atWar);
+    const base = p.kind === 'tribe' ? GOLD_BASE_PER_TICK * 0.5 : GOLD_BASE_PER_TICK;
+    return {
+      pop: p.pop, popTarget: p.popTarget, fPop, recruitment: y.recruitment, tiles: p.tiles, occupied: occ, fallout,
+      cityLevels: cityLv, armyLevels: armyLv, factoryLevels: facLv,
+      cap: {
+        base: BALANCE.troopCapBase, territory: Math.pow(eff, 0.6) * BALANCE.troopCapPerTile, cities: cityLv * BALANCE.troopCapPerCityLevel,
+        armyBases: armyLv * 60_000, mul: kindCapMul(p.kind, diff) * p.mod('maxTroops', tick),
+      },
+      income: {
+        base: base * 10, territory: GOLD_PER_TILE_PER_TICK * effTax * fPop * 10, cities: GOLD_PER_CITY_LEVEL_PER_TICK * cityLv * 10,
+        factories: facLv * BALANCE.goldPerFactoryPerSec, mul: kindGoldMul(p.kind, diff) * p.mod('goldIncome', tick),
+      },
+      growthPerHour: y.growth * 10, atWar,
+    };
+  }
+
   // =================================================================================================
   // Tick
   // =================================================================================================
