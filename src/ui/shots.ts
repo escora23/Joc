@@ -3,6 +3,7 @@
 // diplomacy menu, the nuclear alarm, settings, how-to-play and the end screens.
 
 import { openHelp, openLoadDialog, openSettings } from './dialogs';
+import { saveToSlot } from '../app/autosave';
 import { openDeclareWar } from './hud/declare';
 import { openPeaceDialog } from './hud/wardialogs';
 import { getHud } from './index';
@@ -320,7 +321,11 @@ registerShot('tutorial-spawn', 'ui', 'Spawn phase with the advisor: found your c
 });
 
 registerShot('save-menu', 'ui', 'Main menu with «Continuar» and the load dialog (§12.8)', async ({ ctx, wait }) => {
-  await wait(1500);
+  // A real save to show: a short staged game saved to slot 1, then back to the menu.
+  await ctx.app.startScriptedGame({ ticks: 600, speed: 0 });
+  await saveToSlot(ctx, 'slot1').catch(() => undefined);
+  ctx.app.returnToMenu();
+  await wait(2500);
   openLoadDialog(ctx, sound);
   await wait(1500);
 });

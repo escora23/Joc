@@ -56,6 +56,9 @@ export function createMainMenu(ctx: GameContext, sound: Sound): HTMLElement {
     }
     cont.classList.remove('fu-hidden');
     loadItem.classList.remove('fu-hidden');
+    // Number the visible entries in the order they are shown (01 Continuar, 02 Jugar, 03 Cargar...).
+    let n = 0;
+    for (const b of nav.querySelectorAll('.fu-menu-item:not(.fu-hidden) .fu-menu-n')) b.textContent = String(++n).padStart(2, '0');
   });
   const play = item('01', 'menu.play', 'menu.play.hint', () => ctx.app.goto('setup'), true);
   const nav = h('nav', { class: 'fu-menu-nav' },

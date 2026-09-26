@@ -44,7 +44,8 @@ export function unitLabel(type: UnitType, serial: number): string {
   return t('unit.named', { n: serial, ord: g === 'f' ? '.ª' : '.º', name: base, suffix: ordSuffix(serial) });
 }
 
-const decimal = (v: number) => (Math.round(v * 10) / 10).toString().replace('.', t('num.dec'));
+/** One decimal («0,4»); a ratio that rounds to zero reads «<0,1» rather than a misleading «0». */
+const decimal = (v: number) => (v < 0.05 ? `<${(0.1).toString().replace('.', t('num.dec'))}` : (Math.round(v * 10) / 10).toString().replace('.', t('num.dec')));
 
 export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): void {
   const ctx = hs.ctx;

@@ -213,6 +213,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       }
     }
     if (fresh && input.ticker) center.onTicker?.(input.title + (input.body ? ` · ${input.body}` : ''), input.severity === 'critical' || input.severity === 'danger' ? 'critical' : input.severity === 'warning' ? 'warning' : 'info', input.lat, input.lon);
+    // The globe marker (or its edge arrow) appears in the same frame as the entry, not at the next 10 Hz projection.
+    if (fresh && input.lat !== undefined && inGame()) projectMarkers();
     if (fresh && input.autoPause) maybeAutoPause(a, input.autoPause);
     ctx.bus.emit('uiSound', { kind: input.severity === 'info' ? 'notify' : 'alert' });
     refreshCount();

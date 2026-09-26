@@ -407,7 +407,10 @@ try {
       return best;
     }, minD);
     const details = [];
+    const started = Date.now();
     for (const [i, ratio] of [[0, '25'], [1, '60'], [2, '60'], [3, '60']]) {
+      // A slow software renderer: two pushes are enough when the clicks take long (the step is bounded to 240 s).
+      if (i >= 2 && Date.now() - started > 120_000) break;
       if (ratio === '25') await page.locator('.fu-ar-tick', { hasText: /^25$/ }).click();
       else await page.locator('.fu-ar input[type=range]').fill(ratio);
       const target = await findNeutral(2);
@@ -422,7 +425,7 @@ try {
       if (ev) details.push(`${ratio}%: ${ev.troops}/${troops0}`);
       await sleep(2500);
     }
-    await until(() => (window.__front.ctx.sim.view.human?.tiles ?? 0) > 260, null, 45000, 1000);
+    await until(() => (window.__front.ctx.sim.view.human?.tiles ?? 0) > 260, null, 30000, 1000);
     const st = await humanStats();
     return `${details.join(', ')} -> ${st.tiles} tiles`;
   });

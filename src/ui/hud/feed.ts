@@ -64,8 +64,16 @@ export function createTicker(hs: HudShared): Ticker {
     el,
     push(item) {
       if (item.severity === 'critical') {
-        queue.unshift(item);
-        if (current && current.severity !== 'critical') left = Math.min(left, 0.3);
+        // Breaking news pre-empts a routine item at once, even while paused (an auto-pause follows most of them):
+        // the routine item goes back to the front of the queue.
+        if (current && current.severity !== 'critical') {
+          queue.unshift(current);
+          show(item);
+          return;
+        }
+        let at = 0;
+        while (at < queue.length && queue[at]!.severity === 'critical') at++;
+        queue.splice(at, 0, item);
       } else {
         queue.push(item);
         if (queue.length > 6) queue.splice(0, queue.length - 6);
