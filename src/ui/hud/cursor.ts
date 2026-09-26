@@ -266,6 +266,9 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
         orderKey = pk;
         const pv = previewOrders(hs, ids, tile, hv.unitId, hv.structureId, hv.shift, forced);
         orderPv = pv;
+        (window as unknown as { __fuOrderPreview?: unknown }).__fuOrderPreview = pv
+          ? { tile, n: pv.n, m: pv.m, order: pv.order, plans: pv.plans.map((p) => ({ unitId: p.unitId, order: p.order, targetId: p.targetId, ok: !p.issue || !!p.issue.confirm, key: p.issue?.key ?? null })) }
+          : null;
         if (pv) {
           const txt = chipText(hs, pv);
           const key = `o${txt.title}|${txt.line}|${txt.bad}`;

@@ -1567,6 +1567,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       // unitModels: models in view (frustum + horizon); unitModelInstances: every instance written this frame.
       unitModels: modelView.n, unitModelInstances: unitModels, unitModelMinPx: Number.isFinite(modelView.minPx) ? +modelView.minPx.toFixed(1) : 0,
       unitModelsInView: modelView.list.map((m) => ({ ...m })), structureModels,
+      rings: overlays ? overlays.drawn.map((r) => ({ ...r })) : [], hourglasses: icons?.lastHourglasses ?? 0,
       liveUnits: view.units.size, liveStructures: view.structures.size, ...(icons ? icons.stats : {}),
     };
   }

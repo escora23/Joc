@@ -119,6 +119,8 @@ export class Overlays {
   private aX: THREE.InstancedBufferAttribute;
   private attrs: THREE.InstancedBufferAttribute[];
   private n = 0;
+  /** v2 (W4): rings drawn last frame, with their colours (verification of the effect rings). */
+  readonly drawn: { color: number; radiusKm: number; style: number }[] = [];
   readonly path: SurfaceRibbon;
   private ghosts = new Map<string, THREE.InstancedMesh>();
   private ghostMat: THREE.ShaderMaterial;
@@ -182,11 +184,13 @@ export class Overlays {
 
   begin(): void {
     this.n = 0;
+    this.drawn.length = 0;
   }
 
   ring(s: RingSpec, radiusAt: (lat: number, lon: number) => number): void {
     if (this.n >= MAX_RINGS) return;
     const i = this.n++;
+    this.drawn.push({ color: s.color, radiusKm: s.radiusKm, style: s.style });
     tangentFrame(s.lat, s.lon, this.e, this.no, this.u);
     const r = radiusAt(s.lat, s.lon);
     const o = i * 4;

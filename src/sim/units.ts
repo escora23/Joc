@@ -1832,8 +1832,10 @@ export class UnitSystem {
         const done = this.followDivisionPath(u);
         u.state = u.mode === Mode.Return ? UnitState.Returning : UnitState.Moving;
         if ((g.tick + u.id) % 5 === 0) u.eta = this.pathEta(u);
-        const here = tileOf(u.x, u.y);
-        if (!canTransit(g.rules, u.owner, g.owner[here]) && g.playable[here]) {
+        // The land ahead changed hands (the next waypoint): stop there. (The current tile is not checked: a diagonal
+        // step grazes the corner of a neighbouring tile.)
+        const ahead = u.path && u.pathI < u.path.length ? u.path[u.pathI] : -1;
+        if (ahead >= 0 && g.playable[ahead] && !canTransit(g.rules, u.owner, g.owner[ahead]) && !(u.pathRail && u.pathRail[u.pathI] === 1)) {
           this.stopDivision(u);
           if (u.owner === HUMAN_ID) g.message(HUMAN_ID, 'msg.divisionBlocked', 'warning');
           return;

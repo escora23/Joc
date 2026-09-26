@@ -325,6 +325,15 @@ export const esW4: Record<string, string> = {
   'alert.strike.front': 'guarnición enemiga −{n} soldados',
   'alert.strike.none': 'el objetivo ya no estaba',
   'alert.order.refused': 'Orden rechazada: {why}',
+  // ---- help and keys ----------------------------------------------------------------------------------------------
+  'keys.rightClick': 'Con unidades seleccionadas: la orden según el lugar. Sin selección: menú de diplomacia',
+  'keys.shiftClick': 'Añadir o quitar una unidad de la selección',
+  'keys.box': 'Seleccionar tus unidades dentro del recuadro',
+  'keys.doubleClick': 'Seleccionar todas tus unidades de ese tipo en pantalla',
+  'keys.forces': 'Panel de fuerzas',
+  'keys.idle': 'Siguiente unidad en espera',
+  'help.units.body': 'Cada unidad tiene un trabajo. Las divisiones acorazadas (bases del ejército) se unen a un frente: +25 % de potencia y avance ×1,5 si atacas, +25 % de defensa y avance enemigo más lento si defiendes; se desgastan en combate (≈ 20 días) y se reparan en un frente tranquilo o junto a una base. Los cazas mantienen una patrulla aérea de 150 km que intercepta bombarderos, drones y misiles; los bombarderos y drones atacan objetivos dentro de su alcance y del nivel de escalada, y el golpe llega cuando el avión llega. Los buques de guerra patrullan, bloquean el comercio enemigo, bombardean costas y escoltan convoyes.\nSelecciona con clic (Mayús para añadir, Mayús+arrastrar para un recuadro, doble clic para todas las de un tipo) y da órdenes con clic derecho: el cursor te enseña antes la orden, la distancia, el tiempo de llegada y, si no se puede, por qué. El panel Fuerzas (U) lo reúne todo, también lo que se está produciendo.',
+  'help.structures.body': 'Cada estructura tiene un propósito y cifras por nivel (la ficha muestra «Ahora» y el nivel siguiente, y cuánto oro te falta para mejorar). Puertos y fábricas pagan una tasa por hora mientras sus mercantes y trenes viajan; las ciudades, impuestos y tropas; el radar detecta convoyes, incursiones aéreas y concentraciones de tropas y amplía el alcance de SAM y cazas; los puestos defensivos frenan y desangran las ofensivas en su zona; las bases alojan, producen y reparan unidades. Al mejorar, el modelo crece: más muelles, naves, pistas o lanzadores.',
 };
 
 export const enW4: Record<string, string> = {
@@ -636,4 +645,12 @@ export const enW4: Record<string, string> = {
   'alert.strike.front': 'enemy garrison −{n} soldiers',
   'alert.strike.none': 'the target was gone',
   'alert.order.refused': 'Order refused: {why}',
+  'keys.rightClick': 'With units selected: the order that fits the place. With none: diplomacy menu',
+  'keys.shiftClick': 'Add or remove a unit from the selection',
+  'keys.box': 'Select your units inside the box',
+  'keys.doubleClick': 'Select all your units of that type on screen',
+  'keys.forces': 'Forces panel',
+  'keys.idle': 'Next idle unit',
+  'help.units.body': 'Every unit has a job. Armored divisions (army bases) attach to a front: +25 % power and ×1.5 advance when attacking, +25 % defence and a slower enemy advance when defending; they wear down in combat (≈ 20 days) and recover on a quiet front or near a base. Fighters keep a 150 km air patrol that intercepts bombers, drones and missiles; bombers and drones strike targets within their reach and the escalation level, and the hit lands when the aircraft arrives. Warships patrol, blockade enemy trade, bombard coasts and escort convoys.\nSelect with a click (Shift to add, Shift+drag for a box, double click for all of a type) and give orders with a right click: the cursor shows the order, the distance, the arrival time and, when it cannot be done, why. The Forces panel (U) brings it all together, production included.',
+  'help.structures.body': 'Every structure has a purpose and numbers per level (its card shows «Now» and the next level, and how much gold you still need to upgrade). Ports and factories pay a rate per hour while their ships and trains travel; cities pay taxes and add troops; radar detects convoys, air raids and massing troops and extends SAM and fighter reach; defense posts slow and bleed offensives in their zone; bases host, produce and repair units. Upgrading grows the model: more berths, halls, runways or launchers.',
 };

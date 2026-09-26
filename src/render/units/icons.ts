@@ -738,6 +738,8 @@ export class IconLayer {
     this.uRes.value.set(width, height);
     this.n = 0;
     this.extras.length = 0;
+    this.lastHourglasses = this.hourglasses;
+    this.hourglasses = 0;
   }
 
   /**
@@ -925,6 +927,9 @@ export class IconLayer {
   ownerColor: (owner: number) => number = () => 0xcccccc;
 
   private readonly extras: number[] = [];
+  /** v2 (W4): hourglass badges drawn since begin() (verification). */
+  hourglasses = 0;
+  lastHourglasses = 0;
 
   /** A red cross where a ship sank (drawn in the unit batch, not pickable). Call between begin() and end(). */
   addCross(x: number, y: number, alpha: number): void {
@@ -945,6 +950,7 @@ export class IconLayer {
 
   /** An hourglass badge (a structure building, upgrading or producing units), amber on a dark pill. */
   addHourglass(x: number, y: number): void {
+    this.hourglasses++;
     this.extras.push(1, x, y, 1, 0xffc24a, G.HOURGLASS, -1, -1, -1);
   }
 
