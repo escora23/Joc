@@ -725,6 +725,15 @@ therefore **capitulations and cessions**:
   (members that capitulate hand their land to it).
 * **Tuning rule**: T14 is tuned through the capitulation thresholds, the AI war goals and the hegemony numbers, never
   by loosening T1–T5, T16, T17 or T19.
+* **W1c measurement (stub build, open for W3/W7).** With every other §3 target met (`game --seed 11`, Normal), the world
+  consolidates but does not converge: 12 of 24 AIs capitulate, the survivors form three or four continental powers
+  that end the 400 days at 15–20 % of the land each (seed 11: Myanmar 20.2 %, Libya 20.2 %, Argentina 15.1 %), and the
+  game ends by the time limit. What holds it: a power can only open a war at the §4.6 odds, which against a peer with
+  one front needs ~2× its troops; peers sit on different continents (only landings reach them); and the troop cap grows
+  with land, so the leader never outgrows the second by 3×. Lowering the hegemony numbers does not help (the ratio
+  between the first two powers stays ~1.0–1.3). The candidate levers for W3/W7 are diplomatic, not military: offensive
+  alliances and calls to arms by the aggressor ("Pedir ayuda contra X", §5.5), vassal-like capitulations, and
+  coalitions that split a peer's garrisons. W1 did not loosen T1–T5, T16, T17 or T19 to force it.
 
 ---
 
@@ -908,14 +917,14 @@ what the pipeline does about it:
   of `1.5 × √(enemy tiles)` tiles, within its commit ratio), opens a second corridor on another front against an enemy
   of ≥ 4,000 tiles, tops offensives up on their own axis, and pulls back one that stalls below `R 1.15` when it cannot
   feed it (cooldown 600 ticks on that enemy). **Tempo:** one new operation (offensive, landing, or the queued offensive
-  of a declaration) per staff per 600 ticks. On Easy and Normal the AI never brings more than the launch odds against
-  the human (§4.16).
+  of a declaration) per staff per 600 ticks. The AI never brings more than the launch odds against the human, on every
+  difficulty (§4.16; difficulty already shortens the grace, the tension lead and the mobilization).
 * **Failed wars end.** An aggressor whose war produced no offensive for 1,800 ticks after mobilization, having gained
   nothing, offers a white peace. Winners press on: a war we are clearly winning (score ≥ 40, enemy capital held) is
   fought to capitulation by every personality but turtles and traders; a `conquest` goal refuses every peace but
   capitulation until exhaustion 70.
-* **Pacing limits** (within step 7's maxima): 1 declaration per AI per 1,200 ticks; worldwide 1 new AI war per 360
-  ticks before tick 18,000 and per 240 after (T17 counts calls to arms too, ~40 % of all declarations).
+* **Pacing limits** (within step 7's maxima): 1 declaration per AI per 1,200 ticks; worldwide 1 new AI war per 480
+  ticks before tick 18,000 and per 360 after (T17 counts calls to arms too, ~40 % of all declarations).
 
 ### 5.8 Personalities
 
@@ -1630,6 +1639,8 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
 
 * At game start the client computes land components once (4-connected playable tiles). Components of ≤ 20 tiles
   (~480 of the 557) get a **marker**.
+  (W2: only components in the sea get one: touching ocean water and not diagonally attached to a larger land mass,
+  so salt pans and dry lakes of the water mask do not scatter rings over the Sahara and Arabia.)
 * Marker: a screen-space ring of diameter `max(8 px, projected island size + 4 px)`, 1.5 px stroke; filled with the
   owner colour when owned, white outline when neutral; above clouds; hidden once the island itself is larger than 16 px.
   Markers within 10 px of each other merge into one archipelago marker with a count.

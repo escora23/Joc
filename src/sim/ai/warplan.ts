@@ -139,15 +139,16 @@ function rawGarrison(ctx: AiContext, p: SimPlayer, q: SimPlayer, contact: number
  * decision; every one stays above the launch odds. Easy 1.8, Normal 2.3, Hard 2.6, Insane 2.7.
  */
 export function targetRatio(ctx: AiContext, b: Brain, q: SimPlayer): number {
-  // Protecting the human (§4.16, §5.9): on Easy and Normal the AI never brings overwhelming force against the human;
-  // it fights at the launch odds, so a war on the human is a contest, not an execution.
+  // Protecting the human (§4.16): the AI never brings overwhelming force against the human, whatever the difficulty;
+  // it fights at the launch odds, so a war on the human is a contest, not an execution (the warning times of T7b hold:
+  // difficulty already shortens the grace, the tension lead and the mobilization).
   if (restrained(ctx, b, q)) return LAUNCH_RATIO;
   return LAUNCH_RATIO + 2 * (b.diff.efficiency - 0.5);
 }
 
-/** Easy/Normal restraint against the human (see targetRatio): no extra width or ratio beyond the launch odds. */
-function restrained(ctx: AiContext, b: Brain, q: SimPlayer): boolean {
-  return q.id === HUMAN_ID && DIFFICULTY_INDEX[ctx.g.difficulty] <= 1 && b.kind !== 'autopilot';
+/** Restraint against the human (see targetRatio): no extra width or ratio beyond the launch odds. */
+function restrained(_ctx: AiContext, b: Brain, q: SimPlayer): boolean {
+  return q.id === HUMAN_ID && b.kind !== 'autopilot';
 }
 
 /** Share of home troops `p` must commit for an offensive at `ratio` against a garrison `G` (> MAX_COMMIT = cannot). */
@@ -222,7 +223,7 @@ function mayDeclare(ctx: AiContext, b: Brain, p: SimPlayer): boolean {
   if (g.tick + AI_MOBILIZE_TICKS[DIFFICULTY_INDEX[g.difficulty]] - b.lastOffensiveTick < OFFENSIVE_TEMPO) return false;
   if (g.war.exhaustion(p.id) > 50) return false;
   if (offensiveWars(ctx, p) >= maxOffensiveWars(b)) return false;
-  const gap = g.tick < 18_000 ? 360 : 240;
+  const gap = g.tick < 18_000 ? 480 : 360;
   if (g.tick - ctx.world.lastAiWarTick < gap) return false;
   return true;
 }

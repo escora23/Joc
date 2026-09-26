@@ -195,7 +195,9 @@ registerShot('front-night', 'battle', 'The same battle after dusk: tracers, fire
 registerShot('front-auto', 'battle', 'Unstaged: the camera simply descends over the hottest front of a running war and the battlefield streams in by itself', async (s) => {
   const { ctx, params } = s;
   s.setUiVisible(params.get('hud') === '1');
-  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 1500), speed: 1 });
+  // v2 (W1c): wars follow a declaration, a tension lead and a mobilization; by tick 12,000 (50 game days) a dozen are
+  // running (1,500 was still the land race).
+  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 12000), speed: 1 });
   await s.waitFrames(6);
   // The hottest, longest land front of the running war.
   let best: FrontView | null = null, bestScore = -1;

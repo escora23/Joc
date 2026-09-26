@@ -132,7 +132,14 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: t(40.9, -1.2), radius: 22 });
       ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.Airbase, owner: HUMAN_ID, tile: t(40.42, -3.7), level: 3 });
       for (const s of staged) ctx.sim.debug({ type: 'spawnUnit', unit: s.type, owner: HUMAN_ID, tile: t(...s.from), targetTile: t(...s.to) });
-      // Let the spawns reach the client and paths get planned.
+      // Let the spawns reach the client and paths get planned (a slow renderer takes the messages late: wait for them).
+      const t1 = performance.now();
+      while (performance.now() - t1 < 30_000) {
+        let n = 0;
+        for (const u of view.units.values()) if (u.owner === HUMAN_ID && !before.has(u.id)) n++;
+        if (n >= staged.length - 1) break;
+        await wait(250);
+      }
       await wait(1200);
     }
     // Sim positions as the updates ARRIVE (the render interpolates between exactly these samples, so the on-screen
@@ -210,29 +217,37 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
     }
     if (opts.stage !== false) for (const id of probe.keys()) ctx.sim.debug({ type: 'removeUnit', unitId: id });
     // Second phase, a real front for the depth reading (after the units, so a war does not change their behaviour):
-    // the last AI nation holds southern France, at war with us, and we attack it for the same window.
+    // we hold a plains strip in southern Siberia, the last AI nation the strip east of it, at war with us, and we attack
+    // it for the same window (far from the views the other checks look at).
     if (opts.stage !== false) {
       let enemy = 0;
       for (const p of view.playerList) if (p.alive && p.kind === 'nation' && p.id > enemy) enemy = p.id;
       if (enemy > 0) {
-        ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: t(45.6, 1.5), radius: 12 });
+        ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: t(54.5, 72.0), radius: 10 });
+        ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: t(54.5, 76.5), radius: 10 });
         ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, mobilizeTicks: 0 });
         ctx.sim.debug({ type: 'addTroops', playerId: HUMAN_ID, amount: 1_500_000 });
         await wait(600);
-        ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.6, tile: t(46.5, 1.5) });
+        ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.6, tile: t(54.5, 78.5) });
         depth.clear();
+        // Sampled once the offensive has pushed for 60 ticks (its measured speed starts from 0 and the first plains
+        // tile needs ~31 ticks), for twice the window: the steady speed of the front.
+        const since = new Map<number, number>();
         const prev = ctx.sim.onArrival;
         ctx.sim.onArrival = (u, at) => {
           prev?.(u, at);
           for (const at2 of view.attacks) {
             if (at2.defender === 0 || (at2.state !== 'advancing' && at2.state !== 'consolidating')) continue;
+            if (!since.has(at2.id)) since.set(at2.id, u.tick);
+            if (u.tick - since.get(at2.id)! < 60) continue;
             const d = depth.get(at2.id) ?? { sum: 0, n: 0, attacker: at2.attacker, defender: at2.defender };
             d.sum += at2.advanceKmh ?? 0;
             d.n++;
             depth.set(at2.id, d);
           }
         };
-        await wait(seconds * 1000);
+        const t2 = performance.now();
+        while (performance.now() - t2 < 60_000 && [...depth.values()].reduce((m, d) => Math.max(m, d.n), 0) < seconds * 20) await wait(500);
         ctx.sim.onArrival = prev;
         ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, peace: true });
       }

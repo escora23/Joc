@@ -169,8 +169,21 @@ if (want('crisis')) {
   row('§14.6', 'worker logs each settings message', settingsLogged, '>= 3 (start + 2 changes)', settingsLogged >= 3);
 }
 
+/** Measurements of motion need the strategic clock: wait out any crisis (a flight still in the air) first. */
+async function waitStrategic(maxSec = 90) {
+  const t = Date.now();
+  while (Date.now() - t < maxSec * 1000) {
+    const c = await clock();
+    if (c.mode === 'strategic' && c.rate >= 3599 * Math.max(0.5, c.speed || 1) - 1) return true;
+    await sleep(500);
+  }
+  log('clock never returned to strategic');
+  return false;
+}
+
 // --- T27b: on-screen speeds at 1x -------------------------------------------------------------------
 if (want('speed')) {
+  await waitStrategic();
   await look(42, -8, 3500);
   await setSpeed(1);
   await sleep(1000);
@@ -189,6 +202,7 @@ if (want('motion')) {
     ctx.sim.debug({ type: 'spawnUnit', unit: 13, owner: 1, tile: tile(40.4, -3.7), targetTile: tile(41.4, 2.2) });
   });
   await look(40, -7, 2200);
+  await waitStrategic();
   for (const sp of [0.5, 1, 2, 4]) {
     await setSpeed(sp);
     await sleep(1500);

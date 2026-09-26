@@ -315,9 +315,11 @@ function conquestRun(mult, maxTicks = 5000) {
     if (a && rel === OFFENSIVE_CONTACT_TICKS + 1) R0.launch = a.ratio;
     if (a && half < 0 && rel > OFFENSIVE_CONTACT_TICKS + 1) minRBeforeHalf = Math.min(minRBeforeHalf, a.ratio);
     if (rel % 10 === 0) series.push({ rel, R: a ? +a.ratio.toFixed(2) : 0, att: Math.round(a ? a.troops : 0), def: Math.round(D.troops), tiles: D.tiles, state: a?.state ?? '-', kmh: a ? +a.advanceKmh.toFixed(2) : 0 });
-    if (rel > 0 && rel % 200 === 0 && a) {
+    if (rel > 0 && rel % 200 === 0) {
+      // As an AI war plan does: re-aim the offensive, or open a new one when its corridor has run out (§4.9, §5.7).
       const aim = aimPoint(g, H);
-      if (aim >= 0) g.attacks.setAxis(a, aim);
+      if (aim >= 0 && a) g.attacks.setAxis(a, aim);
+      else if (aim >= 0 && P.troops > 1000) g.attacks.command(P, H, 1, aim);
     }
     if (rel >= maxTicks || ninety >= 0) break;
   }
