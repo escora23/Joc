@@ -198,7 +198,7 @@ function loop(): void {
   if (n === 0) {
     const before = g.pendingEventCount;
     try {
-      g.flushHumanCommands();
+      g.flushHumanCommandsBetweenTicks();
     } catch (err) {
       postError(String(err));
     }
@@ -267,7 +267,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         break;
       case 'debug':
         if (game) {
-          game.applyDebug(msg.action);
+          game.applyDebugBetweenTicks(msg.action);
           forcePost = true;
         }
         break;

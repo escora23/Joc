@@ -40,6 +40,7 @@ export class UnitSystem {
     const u = new Unit(g.allocId(), type, owner, wrapXf(x), Math.min(MAP_H - 0.01, Math.max(0, y)), UNIT_DEFS[type].maxHp);
     u.toX = u.x;
     u.toY = u.y;
+    u.bornTick = g.tick;
     g.unitMap.set(u.id, u);
     let list = g.unitsByOwner.get(owner);
     if (!list) g.unitsByOwner.set(owner, (list = []));

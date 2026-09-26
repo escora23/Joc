@@ -273,6 +273,10 @@ export class WeaponSystem {
   // Flight
   // =================================================================================================
   stepProjectile(u: Unit): void {
+    // A weapon launched during this tick (a command, the AI, a debug launch) stays on its pad until the next one: the
+    // flight lasts its full flightTicks after the launch tick, however it was launched (T28: Madrid -> Paris 2 crisis
+    // ticks = 12 real s; stepping in the launch tick made it one).
+    if (u.state === UnitState.Launching && u.bornTick === this.g.tick && u.t === 0) return;
     switch (u.type) {
       case UnitType.AtomBomb:
       case UnitType.HydrogenBomb:

@@ -135,9 +135,10 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       // Let the spawns reach the client and paths get planned (a slow renderer takes the messages late: wait for them).
       const t1 = performance.now();
       while (performance.now() - t1 < 30_000) {
-        let n = 0;
-        for (const u of view.units.values()) if (u.owner === HUMAN_ID && !before.has(u.id)) n++;
-        if (n >= staged.length - 1) break;
+        // Every staged class (a launched weapon appears one tick after the others: launches run inside a tick).
+        const types = new Set<UnitType>();
+        for (const u of view.units.values()) if (u.owner === HUMAN_ID && !before.has(u.id)) types.add(u.type);
+        if (staged.every((s) => types.has(s.type))) break;
         await wait(250);
       }
       await wait(1200);
@@ -270,58 +271,84 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
   /**
    * T40: for every unit moving on screen, the largest per-frame screen displacement must stay <= 2x its mean over the
    * window. Positions are what the units renderer drew this frame, projected with the strategic camera.
+   *
+   * One slow frame must not decide the result (a software renderer stalls now and then, and a long frame moves every
+   * unit further by construction): frames whose duration is more than 2x the window's median frame time are left out
+   * of both the per-frame ratio and the per-real-second ratio, and reported as `droppedFrames`. A unit is judged only
+   * with >= `minSamples` steady frames. `ids` restricts the probe to staged movers.
    */
-  target.motionProbe = async (opts: { seconds?: number; minMeanPx?: number } = {}) => {
+  target.motionProbe = async (opts: { seconds?: number; minMeanPx?: number; ids?: number[]; minSamples?: number; trace?: boolean } = {}) => {
     const seconds = opts.seconds ?? 10;
+    const only = opts.ids ? new Set(opts.ids) : null;
     const cam = ctx.camera;
     const tmp = new THREE.Vector3();
-    const tracks = new Map<number, { last: { x: number; y: number } | null; d: number[]; v: number[]; type: UnitType }>();
+    // Per unit: displacement and the frame index it belongs to (to look up that frame's duration afterwards).
+    const tracks = new Map<number, { last: { x: number; y: number; f: number } | null; d: number[]; f: number[]; type: UnitType }>();
     const w = ctx.canvas.clientWidth, h = ctx.canvas.clientHeight;
     const t0 = performance.now();
     let now = t0, frames = 0, prevNow = t0;
     const frameMs: number[] = [];
+    const trace: { f: number; ms: number; tick: number; alpha: number }[] = [];
     while (now - t0 < seconds * 1000) {
       now = await nextFrame();
-      const dtMs = Math.max(1, now - prevNow);
-      if (frames > 0) frameMs.push(dtMs);
+      frameMs.push(Math.max(1, now - prevNow)); // frameMs[i]: duration of frame i (frame 0: since the probe began)
       prevNow = now;
-      frames++;
+      const f = frames++;
+      if (opts.trace) trace.push({ f, ms: Math.round(now - t0), tick: ctx.sim.view.tick, alpha: +ctx.sim.view.alpha.toFixed(3) });
       for (const u of ctx.sim.view.units.values()) {
+        if (only && !only.has(u.id)) continue;
         if (!ctx.units.getUnitWorldPosition(u.id, tmp)) continue;
         tmp.project(cam);
         if (tmp.z > 1 || Math.abs(tmp.x) > 1.1 || Math.abs(tmp.y) > 1.1) continue;
         const sx = (tmp.x * 0.5 + 0.5) * w, sy = (0.5 - tmp.y * 0.5) * h;
         let tr = tracks.get(u.id);
-        if (!tr) tracks.set(u.id, (tr = { last: null, d: [], v: [], type: u.type }));
-        if (tr.last) {
-          const d = Math.hypot(sx - tr.last.x, sy - tr.last.y);
-          tr.d.push(d);
-          tr.v.push((d * 1000) / dtMs);
+        if (!tr) tracks.set(u.id, (tr = { last: null, d: [], f: [], type: u.type }));
+        // Only consecutive frames make a per-frame displacement (a unit that left the view and came back does not).
+        if (tr.last && tr.last.f === f - 1) {
+          tr.d.push(Math.hypot(sx - tr.last.x, sy - tr.last.y));
+          tr.f.push(f);
         }
-        tr.last = { x: sx, y: sy };
+        tr.last = { x: sx, y: sy, f };
       }
     }
-    // ratio: per-frame displacement (the T40 definition; includes the renderer's frame-time jitter).
-    // speedRatio: the same on screen velocity (px per real second): the interpolation's own smoothness.
-    const out: { id: number; unit: string; frames: number; meanPx: number; maxPx: number; ratio: number; speedRatio: number; pass: boolean }[] = [];
+    const sorted = frameMs.slice(1).sort((a, b) => a - b);
+    const median = sorted[sorted.length >> 1] ?? 0;
+    const steady = (f: number) => frameMs[f] <= 2 * median;
+    const droppedFrames = frameMs.slice(1).filter((ms) => ms > 2 * median).length;
+    const minSamples = opts.minSamples ?? 8;
     const minMean = opts.minMeanPx ?? 0.05;
+    // rawRatio: max / mean per-frame displacement over the steady frames, as drawn.
+    // ratio (judged): the same per frame, each frame's displacement divided by that frame's duration (px per real
+    // second): with perfect interpolation a frame 1.8x the median still moves a unit 1.8x further, so the raw ratio
+    // measures the renderer's frame pacing, the normalised one the motion itself (identical at a steady frame rate).
+    const out: { id: number; unit: string; frames: number; dropped: number; meanPx: number; maxPx: number; rawRatio: number; ratio: number; ratioAll: number; pass: boolean }[] = [];
     for (const [id, tr] of tracks) {
-      if (tr.d.length < frames * 0.5) continue;
-      const mean = tr.d.reduce((a, b) => a + b, 0) / tr.d.length;
-      if (mean < minMean) continue;
-      const max = Math.max(...tr.d);
-      const vMean = tr.v.reduce((a, b) => a + b, 0) / tr.v.length;
-      const vMax = Math.max(...tr.v);
-      out.push({ id, unit: UNIT_DEFS[tr.type].id, frames: tr.d.length, meanPx: +mean.toFixed(2), maxPx: +max.toFixed(2), ratio: +(max / mean).toFixed(2), speedRatio: +(vMax / Math.max(1e-9, vMean)).toFixed(2), pass: max <= 2 * mean });
+      const d: number[] = [], v: number[] = [], vAll: number[] = [];
+      for (let i = 0; i < tr.d.length; i++) {
+        vAll.push((tr.d[i] * 1000) / frameMs[tr.f[i]]);
+        if (!steady(tr.f[i])) continue;
+        d.push(tr.d[i]);
+        v.push((tr.d[i] * 1000) / frameMs[tr.f[i]]);
+      }
+      if (d.length < Math.max(minSamples, (frames - 1 - droppedFrames) * 0.5)) continue; // not on screen long enough
+      const mean = d.reduce((a, b) => a + b, 0) / d.length;
+      if (mean < minMean) continue; // parked
+      const max = Math.max(...d);
+      const vMean = v.reduce((a, b) => a + b, 0) / v.length;
+      const vMax = Math.max(...v);
+      const ratio = vMax / Math.max(1e-9, vMean);
+      // Cross-check with every frame, the slow ones included: a stutter hidden in a dropped frame (a jump when an
+      // update lands) would show here as a velocity spike.
+      const ratioAll = Math.max(...vAll) / Math.max(1e-9, vAll.reduce((a, b) => a + b, 0) / vAll.length);
+      out.push({ id, unit: UNIT_DEFS[tr.type].id, frames: d.length, dropped: tr.d.length - d.length, meanPx: +mean.toFixed(3), maxPx: +max.toFixed(3), rawRatio: +(max / mean).toFixed(2), ratio: +ratio.toFixed(2), ratioAll: +ratioAll.toFixed(2), pass: ratio <= 2 && ratioAll <= 2 });
     }
-    frameMs.sort((a, b) => a - b);
-    const frameStats = { p50: frameMs[frameMs.length >> 1] ?? 0, p90: frameMs[Math.floor(frameMs.length * 0.9)] ?? 0, max: frameMs[frameMs.length - 1] ?? 0 };
-    // With a steady frame rate the per-frame displacement is the T40 measure. When the renderer's own frame times vary
-    // by more than 2× inside the window (a software renderer), a long frame moves every unit further by construction;
-    // the displacement per real second (frame-time normalized) is then what tells a stutter from the renderer's jitter.
-    const jitter = frameStats.p50 > 0 && frameStats.max > 2 * frameStats.p50;
-    if (jitter) for (const r of out) r.pass = r.pass || r.speedRatio <= 2;
+    const frameStats = { p50: median, p90: sorted[Math.floor(sorted.length * 0.9)] ?? 0, max: sorted[sorted.length - 1] ?? 0 };
     console.table(out);
-    return { frames, frameMs: frameStats, jitter, seconds: (performance.now() - t0) / 1000, clock: { ...ctx.sim.view.clock }, units: out, pass: out.every((r) => r.pass) };
+    const first = tracks.get(out[0]?.id ?? -1);
+    const unitTrace = opts.trace && first ? trace.map((t) => {
+      const i = first.f.indexOf(t.f);
+      return { ...t, dt: Math.round(frameMs[t.f]), px: i >= 0 ? +first.d[i].toFixed(3) : null, v: i >= 0 ? +((first.d[i] * 1000) / frameMs[t.f]).toFixed(2) : null };
+    }) : undefined;
+    return { frames, droppedFrames, frameMs: frameStats, trace: unitTrace, seconds: (performance.now() - t0) / 1000, clock: { ...ctx.sim.view.clock }, units: out, pass: out.length > 0 && out.every((r) => r.pass) };
   };
 }

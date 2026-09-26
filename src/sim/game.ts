@@ -153,6 +153,8 @@ export class Game implements SimGame {
   private spawnDeadline: number;
   private humanSpawnTick = -1;
   private pendingHuman: PlayerCommand[] = [];
+  /** Debug launches waiting for the next tick (applyDebugBetweenTicks; not saved). */
+  private tickDebug: SimDebugAction[] = [];
   /** Rng streams for the systems (forked once, in a fixed order). */
   readonly rngCombat: Rng;
   readonly rngUnits: Rng;
@@ -492,9 +494,33 @@ export class Game implements SimGame {
 
   /** Apply queued human commands now (also used while paused so the player can act on a frozen world). */
   flushHumanCommands(): void {
+    if (this.tickDebug.length > 0) for (const a of this.tickDebug.splice(0)) this.applyDebug(a);
     if (this.pendingHuman.length === 0) return;
     const list = this.pendingHuman.splice(0);
     for (const cmd of list) this.issue(HUMAN_ID, cmd);
+  }
+
+  /**
+   * The worker's flush between ticks (no tick ran this loop: paused, 0.5x, crisis). Launches stay queued for the next
+   * tick: crisis time starts on the launch tick (§2.2), so the client spreads that tick over the crisis tick period and
+   * everything on screen keeps moving; a launch between ticks froze the world for a whole crisis tick (6 real s, T40).
+   */
+  flushHumanCommandsBetweenTicks(): void {
+    if (this.pendingHuman.length === 0) return;
+    const keep: PlayerCommand[] = [];
+    for (const cmd of this.pendingHuman.splice(0)) {
+      if (cmd.type === 'launch') keep.push(cmd);
+      else this.issue(HUMAN_ID, cmd);
+    }
+    this.pendingHuman.push(...keep);
+  }
+
+  /** Debug actions from the worker: launches run at the start of the next tick, like a player's launch (see above). */
+  applyDebugBetweenTicks(a: SimDebugAction): void {
+    const launch = a.type === 'launchNuke' || (a.type === 'spawnUnit' && (a.unit === UnitType.AtomBomb
+      || a.unit === UnitType.HydrogenBomb || a.unit === UnitType.Mirv || a.unit === UnitType.CruiseMissile));
+    if (launch && this.phase === 'playing') this.tickDebug.push(a);
+    else this.applyDebug(a);
   }
 
   issue(playerId: number, cmd: PlayerCommand): boolean {
@@ -1556,7 +1582,7 @@ const SAVE_SPEC: GraphSpec = {
     Diplomacy, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES,
   ],
   skip: new Map<SaveCtor, ReadonlySet<string>>([
-    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'onError', 'frontStamp', 'nb', 'nb2'])],
+    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug'])],
     [AttackSystem, new Set(['terrainTime', 'terrainDef', 'nb', 'nb2', 'tc', 'ready', 'atkArmor', 'defArmor', 'posts'])],
     [WeaponSystem, new Set(['falloutStamp', 'threats'])],
     [EnclaveSystem, new Set(['stamp', 'stack', 'nb', 'nb2'])],

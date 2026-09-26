@@ -231,6 +231,11 @@ Purely visual projectiles (shells, SAM streaks, tracers from `combat` events) ge
   `prev*` taken from the previous update as today. The span is 100 ms at 1x, 2x and 4x (one update carries 1, 2 or 4
   ticks), 200 ms at 0.5x and 6,000 ms in crisis and observation time, so units glide through the whole interval
   instead of freezing for half or three quarters of it (the flaw of dividing by the tick period alone at 2x and 4x).
+  **Jitter buffer** (fix pass 1, T40): the span is `max(1, ticksInLastUpdate) × tickPeriodMs + 100 ms` (one worker loop).
+  Each segment starts from the drawn position, so the steady velocity on screen is still exactly the sim's and the
+  display only trails 0.1 s more; an update that arrives up to 100 ms late no longer makes every unit stop and then jump.
+  Launches are always executed inside a tick (a launch between ticks waits for the next one), so crisis time starts on
+  the launch tick and that tick is drawn over the crisis tick period: nothing freezes when crisis begins.
   Between two ticks of a slow clock (crisis, observation, travel) positions are extrapolated from the same two samples;
   nothing is invented.
 * **Three clocks for renderers**, all in `FrameInfo`:

@@ -176,6 +176,8 @@ export class Unit implements SimUnit {
   /** Missiles / interceptors: flight progress. */
   t = 0;
   flightTicks = 0;
+  /** Tick the unit was created on (a weapon launched in a tick starts flying on the next one). */
+  bornTick = 0;
   fromX = 0;
   fromY = 0;
   toX = 0;

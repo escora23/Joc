@@ -201,6 +201,11 @@ export function createSimClient(bus: GameBus): SimClientApi {
   // at right now to the new sim position, spanning max(1, ticks) × the clock's tick period. Starting from the drawn
   // position (not the previous sample) keeps motion continuous when updates arrive early or late; a clock change
   // mid-segment rebases the span so the interpolation factor never jumps.
+  // Jitter buffer (§2.5): every segment lasts one worker loop longer than the time its ticks cover. Segments start from
+  // the drawn position, so the steady on-screen velocity is still exactly the sim's (the display trails 0.1 s more), and
+  // an update that arrives up to 100 ms late (a busy worker or main thread) no longer stops every unit for a frame
+  // and then makes it jump (T40).
+  const INTERP_BUFFER_MS = 100;
   let segStartMs = 0;
   let segSpanMs = 100;
   let segTicks = 1;
@@ -236,7 +241,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
       if (frozenAlpha < 0) frozenAlpha = segmentAlpha(now);
       return;
     }
-    const newSpan = Math.max(1, segTicks) * c.tickPeriodMs;
+    const newSpan = Math.max(1, segTicks) * c.tickPeriodMs + INTERP_BUFFER_MS;
     if (frozenAlpha >= 0) {
       segStartMs = now - frozenAlpha * newSpan;
       frozenAlpha = -1;
@@ -299,7 +304,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
     view.phase = u.phase;
     view.tickMs = u.tickMs ?? 0;
     if (u.clock) applyClock(u.clock, now);
-    if (u.ticks > 0 && !resync) segSpanMs = segTicks * (segClock.tickPeriodMs || 100);
+    if (u.ticks > 0 && !resync) segSpanMs = segTicks * (segClock.tickPeriodMs || 100) + INTERP_BUFFER_MS;
     if (u.clock && u.clock.rate <= 0 && u.ticks > 0) frozenAlpha = 0;
 
     // Tiles.

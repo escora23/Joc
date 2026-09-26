@@ -7,7 +7,8 @@
 // <= 4 real s after the detonation), crisisTime 'mine' (a launch between two AIs does not change the clock), T41 clock
 // (below 60 km observation at rate 60; above 85 km strategic within 1 s), T27b (__front.speedProbe at 1x), T40
 // (__front.motionProbe at 0.5x/1x/2x/4x and in crisis), the top bar («DÍA n», 24 segments, tooltip, scale chip).
-// SwiftShader renders slowly: T40 is reported both per frame and per real second (frame-time jitter is the renderer's).
+// SwiftShader renders slowly: T40 leaves out frames slower than 2x the window's median frame time (one stalled frame
+// must not decide it), judges only windows with >= 3 staged movers on screen, and also reports the per-real-second ratio.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -192,39 +193,80 @@ if (want('speed')) {
 }
 
 // --- T40: interpolation smoothness -------------------------------------------------------------------
-if (want('motion')) {
-  await ev(() => {
+// Before every window the previous movers are removed and fresh ones are staged in the open Atlantic west of Iberia,
+// sailing due west on routes longer than the window (warships 55 km/h, trade ships 30 km/h); the camera is fitted to
+// the stretch they cover in that window, so every mover stays moving and on screen. A window is judged only with >= 3
+// movers; frames slower than 2x the median frame time are left out (see motionProbe).
+const MOTION_SEC = 10;
+let staged = [];
+async function stageMovers(gameHoursPerRealSec, close = false) {
+  const travelKm = 55 * gameHoursPerRealSec * (MOTION_SEC + 4); // the fastest mover over the settle + probe window
+  const r = await ev(async (a) => {
     const { ctx } = window.__front;
     const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
-    ctx.sim.debug({ type: 'conquer', playerId: 1, centerTile: tile(40.9, -1.2), radius: 22 });
-    for (let i = 0; i < 4; i++) ctx.sim.debug({ type: 'spawnUnit', unit: 2, owner: 1, tile: tile(39 + i * 0.6, -12 - i), targetTile: tile(40, -60) });
-    // More warships (unit 2), spread further south: movers that keep sailing through all four speed windows.
-    for (let i = 0; i < 3; i++) ctx.sim.debug({ type: 'spawnUnit', unit: 2, owner: 1, tile: tile(37.5 + i * 0.7, -11 - i), targetTile: tile(35, -70) });
-    for (let i = 0; i < 3; i++) ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: tile(40.4 + i * 0.3, -3.7), targetTile: tile(41.4, 2.2) });
-    ctx.sim.debug({ type: 'spawnUnit', unit: 13, owner: 1, tile: tile(40.4, -3.7), targetTile: tile(41.4, 2.2) });
-  });
-  await look(40, -7, 2200);
+    for (const id of a.old) ctx.sim.debug({ type: 'removeUnit', unitId: id });
+    const before = new Set(ctx.sim.view.units.keys());
+    // In crisis a ship covers ~13 km in the window: the lanes sit close together under a low camera.
+    const lanes = a.close ? [39.6, 39.9, 40.2, 40.5, 40.8, 41.1] : [36.5, 38.0, 39.5, 41.0, 42.5, 44.0];
+    lanes.forEach((lat, i) => ctx.sim.debug({ type: 'spawnUnit', unit: i % 2 ? 1 : 2, owner: 1, tile: tile(lat, -13.5), targetTile: tile(lat, -60) }));
+    // The movers appear with the next worker update (a software renderer can take seconds per frame).
+    for (let i = 0; i < 120; i++) {
+      await new Promise((res) => setTimeout(res, 250));
+      const ids = [...ctx.sim.view.units.values()].filter((u) => !before.has(u.id) && u.owner === 1 && (u.type === 1 || u.type === 2)).map((u) => u.id);
+      if (ids.length >= lanes.length) return ids;
+    }
+    return [...ctx.sim.view.units.values()].filter((u) => !before.has(u.id) && u.owner === 1).map((u) => u.id);
+  }, { old: staged, close });
+  staged = r;
+  // Frame the stretch from the spawn line (13.5 W) to where the fastest mover will be (1 deg lon = 85 km at 40 N).
+  if (close) await look(40.35, -13.6, 300);
+  else {
+    const spanDeg = Math.max(4, travelKm / 85);
+    await look(40.2, -13.5 - spanDeg / 2 + 0.5, Math.max(1500, spanDeg * 85 * 1.6));
+  }
+  return r;
+}
+async function motionWindow(label, gameHoursPerRealSec, extra = {}, afterStaging = null) {
+  const ids = await stageMovers(gameHoursPerRealSec, !!extra.crisis);
+  await sleep(2500); // the movers get their paths, the camera settles
+  if (afterStaging) await afterStaging();
+  const r = await ev((o) => window.__front.motionProbe(o), { seconds: MOTION_SEC, ids, minMeanPx: extra.minMeanPx, trace: !!args.trace });
+  if (r.trace) for (const t of r.trace) log(`   trace ${JSON.stringify(t)}`);
+  const worst = r.units.reduce((m, u) => Math.max(m, u.ratio), 0);
+  const worstRaw = r.units.reduce((m, u) => Math.max(m, u.rawRatio), 0);
+  const worstAll = r.units.reduce((m, u) => Math.max(m, u.ratioAll), 0);
+  const detail = `${r.units.length}/${ids.length} movers judged, ${r.frames} frames (${r.droppedFrames} slower than 2x median dropped), frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)}, clock ${r.clock.mode}`;
+  row('T40', `${label}: max/mean per-frame displacement (${detail})`, `${worst.toFixed(2)} (all frames incl. slow ${worstAll.toFixed(2)}; raw px per frame ${worstRaw.toFixed(2)})`, '<= 2 per frame / frame dt (steady and all frames), >= 3 movers', r.units.length >= 3 && r.pass && (extra.crisis ? r.clock.mode === 'crisis' : r.clock.mode === 'strategic'));
+  if (!r.pass || r.units.length < 3) for (const u of r.units) log(`   ${u.unit} #${u.id}: mean ${u.meanPx} px max ${u.maxPx} px over ${u.frames} frames, ratio ${u.ratio} all ${u.ratioAll} raw ${u.rawRatio}`);
+  return r;
+}
+if (want('motion')) {
+  // Smoothness is a property of the interpolation, not of the resolution: the software renderer of this container
+  // draws a 1280x720 'high' frame in seconds, so the windows run at 640x360 and 'low' quality to get enough frames
+  // in 10 real s (restored afterwards).
+  const q0 = await ev(() => window.__front.ctx.settings.get().quality);
+  await page.setViewportSize({ width: 640, height: 360 });
+  await ev(() => window.__front.ctx.settings.set({ quality: 'low' }));
   await waitStrategic();
   for (const sp of [0.5, 1, 2, 4]) {
     await setSpeed(sp);
-    await sleep(1500);
-    const r = await ev(() => window.__front.motionProbe({ seconds: 10 }));
-    const worst = r.units.reduce((m, u) => Math.max(m, u.ratio), 0);
-    const worstV = r.units.reduce((m, u) => Math.max(m, u.speedRatio), 0);
-    row('T40', `${sp}x: max/mean per-frame displacement (${r.units.length} units, ${r.frames} frames, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, r.jitter ? '<= 2 (frame times vary > 2x: judged per real second)' : '<= 2', r.units.length > 0 && r.pass);
+    await motionWindow(`${sp}x`, sp);
   }
   await setSpeed(1);
-  // Crisis: a long flight keeps the world on the crisis clock during the probe.
-  await ev(() => {
-    const { ctx } = window.__front;
-    const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
-    ctx.sim.debug({ type: 'launchNuke', weapon: 9, owner: 2, fromTile: tile(38.9, -77.0), targetTile: tile(55.75, 37.6) });
+  // Crisis: a long ballistic flight keeps the world on the crisis clock (1 game min per real s) during the window.
+  await ev(() => window.__front.ctx.settings.set({ crisisTime: 'always' }));
+  await motionWindow('crisis', 1 / 60, { crisis: true }, async () => {
+    await ev(() => {
+      const { ctx } = window.__front;
+      const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
+      ctx.sim.debug({ type: 'launchNuke', weapon: 9, owner: 2, fromTile: tile(38.9, -77.0), targetTile: tile(55.75, 37.6) });
+    });
+    for (let i = 0; i < 40 && (await clock()).mode !== 'crisis'; i++) await sleep(250);
   });
-  await sleep(1500);
-  const r = await ev(() => window.__front.motionProbe({ seconds: 10, minMeanPx: 0.02 }));
-  const worst = r.units.reduce((m, u) => Math.max(m, u.ratio), 0);
-  const worstV = r.units.reduce((m, u) => Math.max(m, u.speedRatio), 0);
-  row('T40', `crisis: max/mean per-frame displacement (${r.units.length} units, clock ${r.clock.mode}, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, r.jitter ? '<= 2 (frame times vary > 2x: judged per real second)' : '<= 2', r.clock.mode === 'crisis' && r.pass);
+  for (const id of staged) await ev((id) => window.__front.ctx.sim.debug({ type: 'removeUnit', unitId: id }), id);
+  staged = [];
+  await ev((q) => window.__front.ctx.settings.set({ quality: q }), q0);
+  await page.setViewportSize({ width: Number(args.w || 1280), height: Number(args.h || 720) });
 }
 
 // --- acceptance 15 / 16: declaration path, queued offensive, occupation after a resync ---------------------
