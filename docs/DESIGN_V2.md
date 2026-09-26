@@ -767,6 +767,14 @@ and its alliances were. Breaking the alliance, or a rival growing, resets the co
   at 62,000, seed 13 time limit; every other row of the seed 11 game passes (T16 avg 4.10 / max 11, T17 1.23 per 600,
   T19 worst 5.5 %). Invariants, survival (Easy/Normal/Hard), conquest, depth, attrition, empire and save unchanged.
   Corta ends by hegemony at 44,110 and Hard at 65,970, a little after their informative windows.
+* **W1 fix pass 2 (after W3's diplomacy switch-over).** The real §5.1 opinions sit higher than the W1 proxy did (a
+  trade agreement +15, a pact +10; ordinary neighbours between −20 and +10), and a settled AI-to-AI ultimatum used to
+  vanish before its author read the answer, so that nation never declared again: the world fell to one or two wars and
+  ended by the time limit. Fixes: settled proposals stay readable for 2,400 ticks; the war pipeline reads the §5.1 bands
+  (§5.7); a power that could crush the human (4× its strength) always presents an ultimatum first (§4.16).
+  Measured (`pace-audit game`, Normal): seed 11 hegemony at 53,050 (every row passes: T15 24/24, T16 avg 3.00 / max 7,
+  T17 87 = 0.99 per 600, T33 11,517, T37 45 / 16, T19 worst 9.1 %), seed 12 hegemony at 49,520, seed 13 hegemony at
+  85,880 (after its window). Survival Easy/Normal/Hard, invariants, conquest, empire, save and endgame pass.
 * **W1c measurement (stub build, superseded by the fix pass above).** With every other §3 target met (`game --seed 11`, Normal), the world
   consolidates but does not converge: 12 of 24 AIs capitulate, the survivors form three or four continental powers
   that end the 400 days at 15–20 % of the land each (seed 11: Myanmar 20.2 %, Libya 20.2 %, Argentina 15.1 %), and the
@@ -965,6 +973,14 @@ what the pipeline does about it:
   nothing, offers a white peace. Winners press on: a war we are clearly winning (score ≥ 40, enemy capital held) is
   fought to capitulation by every personality but turtles and traders; a `conquest` goal refuses every peace but
   capitulation until exhaustion 70.
+* **Opinion bands (W1 fix pass 2, on W3's real opinions).** A grievance war needs a hostile opinion (< −30). Ambition
+  reads the §5.1 bands: an opportunist strikes a *cold* (≤ −10) neighbour already bleeding elsewhere, a predator a cold
+  neighbour it could beat with a third of its army, a great power any unprotected neighbour below *cordial* (+20) that
+  is much weaker or bleeding, and rival great powers need only a negative opinion. Commerce does not stop an empire; a
+  signed NAP or alliance does (breaking one is the betrayal of §5.6).
+* **Ultimatum to a crushed human.** When the human is the target and the aggressor is 4× its strength, the ultimatum of
+  step 4 is always issued (not rolled): the player gets the choice of yielding the band or fighting, and the deadline
+  to find allies (T7b).
 * **Pacing limits** (within step 7's maxima): 1 declaration per AI per 1,200 ticks; worldwide 1 new AI war per 480
   ticks before tick 18,000 and per 360 after (T17 counts calls to arms too, ~40 % of all declarations).
 

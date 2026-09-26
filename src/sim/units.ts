@@ -1140,6 +1140,25 @@ export class UnitSystem {
     return true;
   }
 
+  /** The nearest playable tile within `radius` tiles of `tile` (itself when playable; `tile` when none). */
+  private nearestLand(tile: number, radius: number): number {
+    const g = this.g;
+    if (g.playable[tile]) return tile;
+    const x0 = tile % MAP_W, y0 = (tile / MAP_W) | 0;
+    for (let r = 1; r <= radius; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const y = y0 + dy;
+          if (y < 0 || y >= TILE_COUNT / MAP_W) continue;
+          const t = y * MAP_W + ((x0 + dx + MAP_W) % MAP_W);
+          if (g.playable[t]) return t;
+        }
+      }
+    }
+    return tile;
+  }
+
   /** Staging: create any unit type at a tile heading to targetTile. */
   debugSpawn(type: UnitType, owner: number, tile: number, targetTile: number): void {
     const g = this.g;
@@ -1194,7 +1213,8 @@ export class UnitSystem {
       case UnitType.ArmoredDivision:
         u.mode = Mode.None;
         u.state = UnitState.Idle;
-        if (hasTarget && p) this.legacyDeploy(p, u.id, targetTile);
+        // A staged target on a coastal water tile (a city's centre point often is) snaps to the nearest land tile.
+        if (hasTarget && p) this.legacyDeploy(p, u.id, this.nearestLand(targetTile, 3));
         return;
       case UnitType.FighterSquadron:
       case UnitType.Bomber:

@@ -7,7 +7,7 @@ import { icon, STRUCTURE_ICON, UNIT_ICON } from '../icons';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
 import { BUILDABLE_UNITS, NUKE_DEFS, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS } from '../../shared/constants';
-import { formatCompact, formatNumber, t } from '../../shared/i18n';
+import { formatCompact, formatNumber, hasKey, inSentence, t } from '../../shared/i18n';
 import { STRUCTURE_TYPES, StructureType, UnitType, type BuildableUnit, type WeaponType } from '../../shared/types';
 
 export const WEAPON_KEYS: Record<WeaponType, string> = {
@@ -201,7 +201,10 @@ export function createBuildBar(hs: HudShared): BuildBar {
     let whyText = '';
     if (why === 'hud.needs' && slot.kind === 'unit') {
       const d = UNIT_DEFS[slot.type as BuildableUnit];
-      whyText = t('msg.noProducer', { structureName: t(`structure.${STRUCTURE_DEFS[d.producedBy as StructureType].id}`) });
+      const sd = STRUCTURE_DEFS[d.producedBy as StructureType];
+      whyText = hasKey(`msg.noProducer.${sd.id}`)
+        ? t(`msg.noProducer.${sd.id}`)
+        : t('msg.noProducer', { structureName: inSentence(t(`structure.${sd.id}`)), g: t(`structure.${sd.id}.g`) === 'f' ? 'f' : 'm' });
     } else if (why) whyText = t(why);
     tip.replaceChildren(
       h('div', { class: 'fu-bb-tip-head' }, h('b', null, name), h('span', { class: `fu-mono ${why === 'msg.notEnoughGold' ? 'fu-neg' : 'fu-warn'}` }, icon('gold'), ` ${formatNumber(cost)}`)),

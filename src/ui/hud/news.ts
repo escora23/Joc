@@ -6,7 +6,7 @@ import type { NukeAlarm, Ticker, Toasts } from './feed';
 import type { HudShared } from './shared';
 import { BALANCE, HUMAN_ID, MAP_W, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon, tileXYToLatLon } from '../../shared/geo';
-import { countryName, formatCompact, t } from '../../shared/i18n';
+import { countryName, formatCompact, inSentence, t } from '../../shared/i18n';
 import { UnitType } from '../../shared/types';
 
 export function wireNews(hs: HudShared, ticker: Ticker, toasts: Toasts, alarm: NukeAlarm): void {
@@ -151,7 +151,10 @@ export function wireNews(hs: HudShared, ticker: Ticker, toasts: Toasts, alarm: N
     if (e.defender === HUMAN_ID && e.owner !== HUMAN_ID) toasts.push(t('toast.landing', { name: name(e.owner) }), 'danger', 4500, 'boat');
   });
   bus.on('structureCaptured', (e) => {
-    if (e.to === HUMAN_ID) toasts.push(t('toast.captured', { s: t(`structure.${STRUCTURE_DEFS[e.structure].id}`) }), 'success', 3500, 'flag');
+    if (e.to === HUMAN_ID) {
+      const id = STRUCTURE_DEFS[e.structure].id;
+      toasts.push(t('toast.captured', { s: inSentence(t(`structure.${id}`)), g: t(`structure.${id}.g`) === 'f' ? 'f' : 'm' }), 'success', 3500, 'flag');
+    }
   });
   // ---- v2 (W1): war, peace, sieges, offensives, invasions (§4, §8.2). v2-stub(W1→W3): W3 routes these through
   // the alert API; until then they are ticker news and toasts.

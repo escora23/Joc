@@ -8,7 +8,7 @@ import { tx } from '../tx';
 import type { HudShared } from './shared';
 import type { GameSpeed } from '../../shared/types';
 import { HUMAN_ID } from '../../shared/constants';
-import { formatCompact, formatNumber, t } from '../../shared/i18n';
+import { formatCompact, formatNumber, t, tn } from '../../shared/i18n';
 
 export interface TopBar {
   el: HTMLElement;
@@ -150,7 +150,7 @@ export function createTopBar(hs: HudShared, actions: { pause(): void; settings()
     if (hourOfDay !== lastHour || day !== lastDay) {
       lastHour = hourOfDay;
       for (let i = 0; i < 24; i++) toggleClass(hourSegs[i], 'is-on', i < hourOfDay);
-      clock.title = t('clock.day.tip', { day, hours });
+      clock.title = tn('clock.day.tip', hours, { day, hours: formatNumber(hours) });
     }
     // Scale chip: what one real second means right now.
     const c = view.clock;

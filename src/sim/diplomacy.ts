@@ -39,6 +39,8 @@ import { DONATE_COOLDOWN } from './balance';
 import type { Game } from './game';
 import type { Player } from './state';
 
+/** How long a settled proposal stays readable by id (a few AI decision cycles; 10 game days). */
+const SETTLED_KEEP_TICKS = 2_400;
 const pairKey = (a: number, b: number): number => (a < b ? a * 4096 + b : b * 4096 + a);
 /** Directed key: `of`'s view of `toward`. */
 const dirKey = (of: number, toward: number): number => of * 4096 + toward;
@@ -136,6 +138,12 @@ export class DiplomacySystem {
   private readonly proposals = new Map<number, ProposalRec>();
   /** Answered proposals involving the human, newest last (the inbox history, saved). */
   private history: ProposalRec[] = [];
+  /**
+   * Proposals between AIs settled in the last SETTLED_KEEP_TICKS, so the proposer can still read the answer when its
+   * next decision cycle comes (an ultimatum's outcome, §5.4). Without it a settled AI-to-AI proposal vanished and the
+   * proposer waited for it forever.
+   */
+  private readonly settled = new Map<number, ProposalRec>();
   /** Tension stated by `of` toward `toward` (dirKey) -> [tick, reason key]. */
   private readonly tension = new Map<number, [number, string]>();
   /** Accepted ultimatum: no war from `of` on `toward` before this tick (dirKey). */
@@ -530,7 +538,7 @@ export class DiplomacySystem {
   // Proposals (§5.3)
   // =================================================================================================
   proposal(id: number): SimProposal | undefined {
-    return this.proposals.get(id) ?? this.history.find((r) => r.id === id);
+    return this.proposals.get(id) ?? this.settled.get(id) ?? this.history.find((r) => r.id === id);
   }
 
   /** Open proposals (considering or pending), optionally involving `p`. */
@@ -802,6 +810,7 @@ export class DiplomacySystem {
     const g = this.g;
     if (!OPEN(r) && this.proposals.get(r.id) === r) {
       this.proposals.delete(r.id);
+      this.settled.set(r.id, r);
       if (r.from === HUMAN_ID || r.to === HUMAN_ID) {
         this.history.push(r);
         if (this.history.length > 40) this.history.splice(0, this.history.length - 40);
@@ -1053,6 +1062,7 @@ export class DiplomacySystem {
       for (const [k, v] of this.tension) if (tick - v[0] > 4_800) this.tension.delete(k);
       for (const [k, v] of this.noWar) if (v <= tick) this.noWar.delete(k);
       for (const [k, v] of this.cooldown) if (v <= tick) this.cooldown.delete(k);
+      for (const [k, r] of this.settled) if (tick - Math.max(r.createdTick, r.decideTick) > SETTLED_KEEP_TICKS) this.settled.delete(k);
     }
   }
 

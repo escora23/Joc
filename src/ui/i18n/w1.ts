@@ -7,6 +7,7 @@ export const esW1: Dictionary = {
   // ---- clock (DESIGN_V2 §2.7)
   'clock.day': 'DÍA {day}',
   'clock.day.tip': 'Día {day} de la partida, {hours} horas transcurridas. A 1x cada segundo real es una hora de juego. El día y la noche del globo son solo visuales: dan una vuelta cada 20 minutos reales y no afectan a la partida.',
+  'clock.day.tip.one': 'Día {day} de la partida, {hours} hora transcurrida. A 1x cada segundo real es una hora de juego. El día y la noche del globo son solo visuales: dan una vuelta cada 20 minutos reales y no afectan a la partida.',
   'clock.chip.strategic': '{speed}× · 1 s = {per}',
   'clock.chip.paused': 'EN PAUSA',
   'clock.chip.crisis': 'CRISIS · 1 s = 1 min',
@@ -179,6 +180,7 @@ export const esW1: Dictionary = {
 export const enW1: Dictionary = {
   'clock.day': 'DAY {day}',
   'clock.day.tip': 'Day {day} of the game, {hours} hours elapsed. At 1x every real second is one game hour. Day and night on the globe are only visual: they cycle every 20 real minutes and do not affect the game.',
+  'clock.day.tip.one': 'Day {day} of the game, {hours} hour elapsed. At 1x every real second is one game hour. Day and night on the globe are only visual: they cycle every 20 real minutes and do not affect the game.',
   'clock.chip.strategic': '{speed}× · 1 s = {per}',
   'clock.chip.paused': 'PAUSED',
   'clock.chip.crisis': 'CRISIS · 1 s = 1 min',

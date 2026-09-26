@@ -4,7 +4,7 @@
 // human, and records the stats history (every 5 s of game time) and the timelapse (400x200 RLE frames every 10 s).
 
 import { GAME_SECONDS_PER_TICK, HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, structureCost } from '../shared/constants';
-import { playerName, t } from '../shared/i18n';
+import { hasKey, inSentence, playerName, t } from '../shared/i18n';
 import type { GameBus } from '../shared/events';
 import type { GameView, ProgressFn, SimClientApi } from '../shared/api';
 import {
@@ -544,8 +544,10 @@ export function createSimClient(bus: GameBus): SimClientApi {
     if (typeof p.structure === 'number') {
       const d = STRUCTURE_DEFS[p.structure as StructureType];
       if (d) {
-        p.structureName = t(`structure.${d.id}`).toLowerCase();
+        p.structureName = inSentence(t(`structure.${d.id}`));
         p.g = t(`structure.${d.id}.g`) === 'f' ? 'f' : 'm';
+        // A sentence written for this structure (gender, article and adjective agree) wins over the generic one.
+        if (hasKey(`${e.key}.${d.id}`)) e.key = `${e.key}.${d.id}`;
       }
     }
     if (typeof p.weapon === 'number') {

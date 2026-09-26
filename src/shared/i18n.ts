@@ -145,3 +145,9 @@ export function playerName(p: { name: string; countryIndex: number; kind?: strin
   }
   return p.name;
 }
+
+/** A name used inside a sentence: first letter lowered unless it starts an acronym ("Base aérea" → "base aérea", "SAM Site" stays). */
+export function inSentence(name: string): string {
+  if (name.length > 1 && name[1] !== name[1].toLowerCase()) return name;
+  return name.charAt(0).toLowerCase() + name.slice(1);
+}

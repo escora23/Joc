@@ -162,6 +162,16 @@ function neededShare(p: SimPlayer, G: number, ratio: number, armor = 1): number 
   return (ratio * Math.max(1, G)) / Math.max(1, p.troops * armor);
 }
 
+/**
+ * Opinion bands of §5.1 as the war pipeline reads them. On the diplomacy system's scale a long shared border alone is
+ * −10 (the top of the *Fría* band), a trade agreement +15 and a non-aggression pact +10, so ordinary neighbours sit
+ * between −20 and +10. Grievance wars still need a hostile opinion (< −30); ambition reads the bands: an opportunist
+ * or a predator strikes a COLD neighbour (≤ −10), and a great power (§4.18) any neighbour below CORDIAL (+20) that no
+ * treaty protects: commerce does not stop an empire, a signed pact does (partners are handled as betrayals).
+ */
+const COLD = -10;
+const CORDIAL = 20;
+
 /** `p`'s opinion of `q` (§5.1, the diplomacy system's reasons). */
 function opinionOf(ctx: AiContext, p: SimPlayer, q: SimPlayer): number {
   return ctx.g.diplomacy.opinion(p.id, q.id);
@@ -342,21 +352,21 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     }
     const opinion = opinionOf(ctx, p, q);
     // Step 1 filter: hostile opinion (< −30), unless a conqueror faces a much weaker neighbour, an opportunist a cold
-    // one (< −10) already bleeding in another war, or a conqueror, nuker or opportunist a cold neighbour it could beat
+    // one (≤ −10) already bleeding in another war, or a conqueror, nuker or opportunist a cold neighbour it could beat
     // with a third of its army (prey: the temptation of overwhelming local superiority, §5.8; turtles and traders go
     // to war only when hostile).
-    const bleeding = b.personality === 'opportunist' && opinion < -10 && g.war.enemiesOf(q.id).length > 0;
+    const bleeding = b.personality === 'opportunist' && opinion <= COLD && g.war.enemiesOf(q.id).length > 0;
     // After tick 18,000 the AI's humanFocus (§4.16, §5.9; Normal and above) also turns its attention to a human it
     // could crush: a weak, passive human is prey unless the AI is friendly to it.
     const humanPrey = q.id === HUMAN_ID && g.tick >= 18_000 && b.diff.humanFocus >= 0.8 && opinion < 0;
     const prey = (b.personality === 'conqueror' || b.personality === 'nuker' || b.personality === 'opportunist' || humanPrey)
-      && (opinion < -10 || humanPrey) && isPrey(ctx, p, q, c);
-    // A great power (§4.18) eyes a cold neighbour that is much weaker or already bleeding on another front (never the
-    // human before tick 18,000: §4.16).
+      && (opinion <= COLD || humanPrey) && isPrey(ctx, p, q, c);
+    // A great power (§4.18) eyes any neighbour below cordial that is much weaker or already bleeding on another front
+    // (never the human before tick 18,000: §4.16). Rival great powers need no more than a negative opinion.
     // It expands toward smaller nations: a larger empire is a rival (see rivals), not a prey.
-    const great = greatPower(ctx, b, p) && q.tiles < p.tiles && opinion < -10 && (q.id !== HUMAN_ID || g.tick >= 18_000)
+    const great = greatPower(ctx, b, p) && q.tiles < p.tiles && opinion < CORDIAL && (q.id !== HUMAN_ID || g.tick >= 18_000)
       && (weak || (g.war.enemiesOf(q.id).length > 0 && strength(q) <= strength(p) * 0.8));
-    const rival = opinion < -10 && rivals(ctx, b, p, q);
+    const rival = opinion < 0 && rivals(ctx, b, p, q);
     if (opinion >= -30 && !(b.personality === 'conqueror' && weak) && !bleeding && !prey && !great && !rival) continue;
     // Deterrence: the troops the target's allies would bring, weighted by the §5.5 odds that they answer its call to
     // arms (0.5 + 0.5·loyalty when they border us or have a navy, 0.3 + 0.5·loyalty otherwise).
@@ -424,7 +434,10 @@ function ultimatumStage(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): b
   if (t.ultimatum === 0) {
     const odds = ULTIMATUM_ODDS[b.personality] ?? 0.7;
     const demand = b.kind === 'autopilot' ? null : ultimatumDemand(ctx, b, p, q, t.goal);
-    if (!demand || ctx.rng.next() >= odds) {
+    // Protecting the human (§4.16): a power that could crush the human (4× its strength) always presents its demand
+    // first, so the player gets a choice (yield the band, or fight) and time to find allies before the blow falls.
+    const crushing = q.id === HUMAN_ID && strength(q) * 4 < strength(p);
+    if (!demand || (ctx.rng.next() >= odds && !crushing)) {
       t.ultimatum = -1;
       return true;
     }
@@ -434,7 +447,13 @@ function ultimatumStage(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): b
   }
   if (t.ultimatum < 0) return true;
   const u = g.diplomacy.proposal(t.ultimatum);
-  if (!u || u.status === 'considering' || u.status === 'pending') return false;
+  // Settled too long ago to be read (or never recorded): treat it as expired, the plan goes on (an accepted demand
+  // still bars the war: declareError answers msg.ultimatumPeace).
+  if (!u) {
+    t.ultimatum = -1;
+    return true;
+  }
+  if (u.status === 'considering' || u.status === 'pending') return false;
   t.answeredTick ??= g.tick;
   if (u.status === 'accepted') {
     // Satisfied: peace for a while (the diplomacy system enforces it).
