@@ -19,8 +19,9 @@ import { dist2, friendlyShare, ownerShare, tileAt } from './mapindex';
 import type { Brain } from './state';
 import { atWar } from './diplomacy';
 
-const AIR_RANGE: Record<number, number> = { [UnitType.FighterSquadron]: 160, [UnitType.Bomber]: 210, [UnitType.DroneSwarm]: 130 };
-const CRUISE_RANGE = 300;
+/** Reach in tiles from the airbase (§6.3: 1,000 / 2,000 / 1,000 km) and the cruise missile's 2,500 km. */
+const AIR_RANGE: Record<number, number> = { [UnitType.FighterSquadron]: 40, [UnitType.Bomber]: 80, [UnitType.DroneSwarm]: 40 };
+const CRUISE_RANGE = 100;
 const SAM_COVER = 70;
 
 const unitTile = (x: number, y: number) => tileAt(Math.floor(x), Math.floor(y));

@@ -13,10 +13,10 @@ import {
 } from '../shared/protocol';
 import { clamp01, lerpAngle } from '../shared/math';
 import {
-  UnitType, emptyStats, type AllianceRequestView, type AllianceView, type AttackView, type ClockView, type FrontView,
+  UnitType, emptyStats, type OpinionView, type ProposalView, type TreatyKind, type TreatyView, type AllianceRequestView, type AllianceView, type AttackView, type ClockView, type FrontView,
   type GameConfig, type GamePhase, type GameSpeed, type PairState, type PlayerView, type ScarView, type SiegeView,
   type StatsSample, type StructureType, type StructureView, type Timelapse, type UnitState, type UnitView, type WarView,
-  type WorldData, type WorldEventView,
+  type WorldData, type WorldEventView, type ProductionView, type UnitMode,
 } from '../shared/types';
 import { worldInit } from '../data';
 import { unitPrice } from './balance';
@@ -118,6 +118,31 @@ class ClientView implements GameView {
   /** Occupied tiles (mirror of the sim's occupation set). */
   readonly occupied = new Uint8Array(TILE_COUNT);
   readonly occupiedTiles = new Set<number>();
+  // --- v2 (W4) ---
+  /** Planned paths by unit (tile waypoints), from TickUpdate.routes; dropped when the unit leaves the view. */
+  routes = new Map<number, Int32Array>();
+  /** The sim's rail graph as station-id pairs. */
+  rail: Int32Array = new Int32Array(0);
+  /** Bumped whenever `rail` changes (renderers rebuild the lines). */
+  railRev = 0;
+  /** The human's production queue. */
+  production: ProductionView[] = [];
+
+  // --- v2 (W3) ---
+  treaties: TreatyView[] = [];
+  /** The AIs' opinions of the human, by AI id. */
+  opinions = new Map<number, OpinionView>();
+  /** The human's proposals (open ones and the latest answered), by id. */
+  proposals = new Map<number, ProposalView>();
+  /** Wall time (performance.now()) of the last proposals update, to count the real-time floor down between updates. */
+  proposalsAtMs = 0;
+  hasTreaty(a: number, b: number, kind: TreatyKind): boolean {
+    for (const t of this.treaties) if (t.kind === kind && ((t.a === a && t.b === b) || (t.a === b && t.b === a))) return true;
+    return false;
+  }
+  treatiesBetween(a: number, b: number): TreatyView[] {
+    return this.treaties.filter((t) => (t.a === a && t.b === b) || (t.a === b && t.b === a));
+  }
 
   isOccupied(tile: number): boolean {
     return this.occupied[tile] === 1;
@@ -149,8 +174,10 @@ class ClientView implements GameView {
   }
   unitCost(type: UnitType): number {
     if (type === UnitType.Mirv) return unitPrice(type, this.humanMirvs);
+    // The sim prices by units owned plus units in production (v2 W4): the Arsenal shows what the next one costs.
     let n = 0;
     for (const u of this.units.values()) if (u.owner === HUMAN_ID && u.type === type && u.state !== 6) n++;
+    for (const q of this.production) if (q.unit === type) n++;
     return unitPrice(type, n);
   }
   reset(): void {
@@ -185,9 +212,17 @@ class ClientView implements GameView {
     this.wars = [];
     this.sieges = [];
     this.truces = [];
+    this.treaties = [];
+    this.opinions.clear();
+    this.proposals.clear();
+    this.proposalsAtMs = 0;
     this.frontByKey.clear();
     this.occupied.fill(0);
     this.occupiedTiles.clear();
+    this.routes.clear();
+    this.rail = new Int32Array(0);
+    this.railRev++;
+    this.production = [];
   }
 }
 
@@ -366,6 +401,8 @@ export function createSimClient(bus: GameBus): SimClientApi {
           prevHeading: h, alt, prevAlt: alt, state: U[o + UF.state] as UnitState, hp: U[o + UF.hp],
           troops: U[o + UF.troops], targetX: U[o + UF.targetX], targetY: U[o + UF.targetY],
           originX: U[o + UF.originX], originY: U[o + UF.originY], bornTick: u.tick,
+          mode: U[o + UF.mode] as UnitMode, order: U[o + UF.order], etaTicks: U[o + UF.eta], frontKey: U[o + UF.frontKey],
+          home: U[o + UF.home], serial: U[o + UF.serial],
         };
         view.units.set(id, un);
       } else {
@@ -402,14 +439,29 @@ export function createSimClient(bus: GameBus): SimClientApi {
         un.troops = U[o + UF.troops];
         un.targetX = U[o + UF.targetX];
         un.targetY = U[o + UF.targetY];
+        un.originX = U[o + UF.originX];
+        un.originY = U[o + UF.originY];
+        un.mode = U[o + UF.mode] as UnitMode;
+        un.order = U[o + UF.order];
+        un.etaTicks = U[o + UF.eta];
+        un.frontKey = U[o + UF.frontKey];
+        un.home = U[o + UF.home];
+        un.serial = U[o + UF.serial];
       }
     }
     for (const id of view.units.keys()) {
       if (unitSeen.get(id) !== gen) {
         view.units.delete(id);
         unitSeen.delete(id);
+        view.routes.delete(id);
       }
     }
+    if (u.routes) for (const r of u.routes) view.routes.set(r.unitId, r.tiles);
+    if (u.rail) {
+      view.rail = u.rail;
+      view.railRev++;
+    }
+    if (u.production) view.production = u.production;
 
     if (u.structures) {
       view.structures.clear();
@@ -424,6 +476,16 @@ export function createSimClient(bus: GameBus): SimClientApi {
     if (u.wars) view.wars = u.wars;
     if (u.sieges) view.sieges = u.sieges;
     if (u.truces) view.truces = u.truces;
+    if (u.treaties) view.treaties = u.treaties;
+    if (u.opinions) {
+      view.opinions.clear();
+      for (const o of u.opinions) view.opinions.set(o.of, o);
+    }
+    if (u.proposals) {
+      view.proposals.clear();
+      for (const p of u.proposals) view.proposals.set(p.id, p);
+      view.proposalsAtMs = performance.now();
+    }
     if (u.occupiedFull) {
       view.occupied.fill(0);
       view.occupiedTiles.clear();
@@ -481,7 +543,10 @@ export function createSimClient(bus: GameBus): SimClientApi {
     }
     if (typeof p.structure === 'number') {
       const d = STRUCTURE_DEFS[p.structure as StructureType];
-      if (d) p.structureName = t(`structure.${d.id}`);
+      if (d) {
+        p.structureName = t(`structure.${d.id}`).toLowerCase();
+        p.g = t(`structure.${d.id}.g`) === 'f' ? 'f' : 'm';
+      }
     }
     if (typeof p.weapon === 'number') {
       const d = UNIT_DEFS[p.weapon as UnitType];

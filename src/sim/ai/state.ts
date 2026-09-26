@@ -48,7 +48,7 @@ export interface FrontInfo {
 
 export interface PendingAction {
   at: number;
-  kind: 'reply' | 'emote' | 'renew' | 'helpAlly' | 'sam';
+  kind: 'helpAlly' | 'sam';
   other: number;
   flag: boolean;
   data: string;
@@ -102,7 +102,13 @@ export interface Brain {
   scratch: number[];
   // --- v2 (W1): the war pipeline (warplan.ts) ---
   /** Tension stated toward a target; the declaration follows after the tension lead (§5.7 step 3). */
-  tension: { target: number; goal: WarGoal; reasonKey: string; tick: number } | null;
+  tension: {
+    target: number; goal: WarGoal; reasonKey: string; tick: number;
+    /** v2 (W3, §5.7 step 4): 0 = not decided yet, -1 = no ultimatum, > 0 = the ultimatum's proposal id. */
+    ultimatum?: number;
+    /** Tick the ultimatum was answered (the tension goes stale from then). */
+    answeredTick?: number;
+  } | null;
   lastDeclareTick: number;
   /** War id -> next war-plan tick. */
   plans: Map<number, number>;
@@ -121,6 +127,8 @@ export interface Brain {
   lastOffensiveTick: number;
   /** War id -> last tick we had an offensive running in it (a war with none for long is a failed war). */
   warActive: Map<number, number>;
+  /** v2 (W3): `${kind}:${player}` -> last tick this nation proposed that (no repeated offers). */
+  proposed: Map<string, number>;
 }
 
 export function emptyFront(): FrontInfo {

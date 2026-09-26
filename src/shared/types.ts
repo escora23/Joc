@@ -173,6 +173,8 @@ export interface PeaceTerms {
   gold?: number;
   incomeShare?: number;
   ticks?: number;
+  /** v2 (W3): the side that cedes or pays (cede / tribute); 0 or absent for a white peace. */
+  loser?: number;
 }
 /** A besieged pocket (§4.12). */
 export interface SiegeView {
@@ -402,6 +404,19 @@ export interface UnitView {
   originY: number;
   /** Tick the unit was first seen by the client. */
   bornTick: number;
+  // --- v2 (W4): orders and purpose (DESIGN_V2 §7, §14.2) ---
+  /** What the unit is doing (UnitMode). */
+  mode: UnitMode;
+  /** The order it is carrying out (index into UNIT_ORDER_KINDS), -1 = none (its default behaviour). */
+  order: number;
+  /** Ticks until it arrives / is ready (rearm), -1 = n/a. */
+  etaTicks: number;
+  /** Stable key of the front it is attached to or supports (0 = none). */
+  frontKey: number;
+  /** Home structure id (airbase, army base, naval yard, port), 0 = none. */
+  home: number;
+  /** Ordinal of its type for its owner («1.ª División Acorazada»), 0 = unnamed (missiles, trade ships). */
+  serial: number;
 }
 
 export interface StructureView {
@@ -416,6 +431,10 @@ export interface StructureView {
   built: number;
   /** 0..1 cooldown remaining (silos, SAMs, airbases), 0 = ready. */
   cooldown: number;
+  /** v2 (W4): upgrade progress 0..1 toward level + 1 (0 = not upgrading); the structure keeps working meanwhile. */
+  upgrade?: number;
+  /** v2 (W4): units queued for production here (hourglass badge). */
+  producing?: number;
 }
 
 export interface AttackView {
@@ -561,4 +580,134 @@ export interface Timelapse {
   frameTick(i: number): number;
   /** Fills `out` (width*height) with owner ids for frame i. */
   decode(i: number, out: Uint16Array): void;
+}
+
+// --- v2 (W3): diplomacy (DESIGN_V2 §5.1–§5.6, §14.2) -----------------------------------------------
+/** One treaty between two players (§5.2). untilTick 0 = open-ended; leavingTick > 0 = notice given (alliance). */
+export interface TreatyView {
+  a: number;
+  b: number;
+  kind: TreatyKind;
+  sinceTick: number;
+  untilTick: number;
+  leavingTick: number;
+  /** Who gave notice (0 = nobody). */
+  leaver: number;
+}
+/** A reason line: i18n key (diplo.reason.* or answer.*), its opinion value when it has one, and parameters. */
+export interface ReasonView {
+  key: string;
+  value?: number;
+  params?: Record<string, string | number>;
+}
+/** An AI's opinion of another player with its reasons (§5.1). The sim publishes the AIs' opinions of the human. */
+export interface OpinionView {
+  of: number;
+  toward: number;
+  score: number;
+  reasons: ReasonView[];
+  /** Latest tension this AI stated toward `toward` (tick, reason key), when any. */
+  tensionTick?: number;
+  tensionKey?: string;
+  /** Accepted ultimatum: no war from this AI before this tick (§5.4). */
+  noWarUntil?: number;
+  /** Calls to arms refused by `toward` (three end the alliance, §5.5). */
+  refusals?: number;
+}
+export type ProposalKind = TreatyKind | 'peace' | 'callToArms' | 'demand';
+export type DemandKind = 'cede' | 'tribute' | 'breakAlliance' | 'endEmbargo' | 'withdraw';
+export interface Demand {
+  kind: DemandKind;
+  /** Cession: tiles of the band. */
+  tiles?: number;
+  /** Tribute: gold. */
+  gold?: number;
+  /** Break an alliance with / lift the embargo on this player. */
+  target?: number;
+}
+export type ProposalStatus = 'considering' | 'pending' | 'accepted' | 'rejected' | 'countered' | 'expired' | 'cancelled';
+export interface ProposalView {
+  id: number;
+  from: number;
+  to: number;
+  kind: ProposalKind;
+  terms?: PeaceTerms;
+  demand?: Demand;
+  /** War the peace or the call to arms is about (0 = none). */
+  war: number;
+  /** Call to arms: the enemy to fight. */
+  target: number;
+  /** Gold offered with the proposal (held until the answer; paid on acceptance). */
+  gold: number;
+  createdTick: number;
+  /** An AI receiver answers at this tick (deliberation). */
+  decideTick: number;
+  /** A human receiver may answer until this tick (and at least INBOX_MIN_REAL_MS of unpaused real time). */
+  expiresTick: number;
+  /** Unpaused real milliseconds this item has been pending (human receiver). */
+  realMs: number;
+  status: ProposalStatus;
+  /** Tick of the answer / expiry (0 while open). */
+  resolvedTick: number;
+  /** The one or two strongest reasons of the answer. */
+  reasons?: ReasonView[];
+  /** Counter-offer created by this answer (id), or the proposal this one counters. */
+  counterId?: number;
+  counterOf?: number;
+  /** A demand with a deadline and a threat of war (§5.4). */
+  ultimatum?: boolean;
+}
+/** Auto-pause triggers (§8.5). */
+export type AutoPauseKind = 'warOnYou' | 'ultimatum' | 'nukeAtYou' | 'capitalThreat' | 'invasion' | 'proposal' | 'peaceOffer' | 'callToArms';
+export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'ultimatum', 'nukeAtYou', 'capitalThreat', 'invasion', 'proposal', 'peaceOffer', 'callToArms'];
+
+// --- v2 (W4): unit orders, modes and production (DESIGN_V2 §6.4, §7, §14.2) ------------------------------------------
+/** Orders a player gives to units (§6.4). The right-click context picks one (§7.3). */
+export type UnitOrderKind = 'move' | 'attach' | 'hold' | 'return' | 'cap' | 'intercept' | 'escort' | 'strike' | 'support'
+  | 'patrol' | 'blockade' | 'bombard' | 'rebase' | 'attack';
+/** Index = the order code published in UnitView.order. Append only. */
+export const UNIT_ORDER_KINDS: readonly UnitOrderKind[] = [
+  'move', 'attach', 'hold', 'return', 'cap', 'intercept', 'escort', 'strike', 'support', 'patrol', 'blockade', 'bombard',
+  'rebase', 'attack',
+];
+/** What a unit is doing right now (published in UnitView.mode). */
+export const UnitMode = {
+  Idle: 0,
+  /** Road march (divisions) or transit (ships, aircraft). */
+  Moving: 1,
+  /** A division travelling by rail. */
+  Rail: 2,
+  /** A division attached to a front, holding it (defense). */
+  Front: 3,
+  /** A division attached to a front, supporting our offensive. */
+  Offensive: 4,
+  Returning: 5,
+  /** Aircraft parked at its airbase, ready. */
+  Docked: 6,
+  /** Aircraft on the ground rearming after a sortie (etaTicks = ready). */
+  Rearming: 7,
+  /** Fighter combat air patrol, warship patrol zone. */
+  Patrol: 8,
+  Intercept: 9,
+  Escort: 10,
+  /** Bomber / drone sortie toward its target. */
+  Strike: 11,
+  /** Drone swarm supporting a front. */
+  Support: 12,
+  Blockade: 13,
+  Bombard: 14,
+  /** Transport convoy embarking in port. */
+  Embarking: 15,
+  /** Unit in combat (warship engaging, fighter dogfight). */
+  Engaged: 16,
+} as const;
+export type UnitMode = (typeof UnitMode)[keyof typeof UnitMode];
+/** One unit being produced for the human (TickUpdate.production). */
+export interface ProductionView {
+  structureId: number;
+  unit: BuildableUnit;
+  startTick: number;
+  readyTick: number;
+  /** The ordinal the unit will carry. */
+  serial: number;
 }

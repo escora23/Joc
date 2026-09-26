@@ -87,6 +87,21 @@ const P: Record<string, string> = {
   hurricane: '<path d="M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0"/><path d="M14.5 12c0-5-3-8-8-8 2 1.5 3 3 3.2 5M9.5 12c0 5 3 8 8 8-2-1.5-3-3-3.2-5"/>',
   rebellion: '<path d="M8 21V11"/><path d="M5 11h6l-1-3 3-5 1.5 3.5L18 8l-2 3h3"/><path d="M4 21h16"/>',
   goldRush: '<path d="M6 19h12l-2-6H8z"/><path d="M9 13l-1-4h8l-1 4"/><path d="M12 3v3M8 5l1 2M16 5l-1 2"/>',
+  // ---- v2 (W3): diplomacy, alerts
+  bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/><path d="M12 3v2"/>',
+  inbox: '<path d="M3 13.5l2.5-8h13l2.5 8v6H3z"/><path d="M3 13.5h5l1.5 2.5h5l1.5-2.5h5"/>',
+  scroll: '<path d="M7 3.5h11a2 2 0 0 1 2 2V7h-4"/><path d="M16 7v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V17h10"/><path d="M7 3.5a2 2 0 0 0-2 2V17"/><path d="M8.5 8.5h4.5M8.5 11.5h4.5M8.5 14.5h3"/>',
+  nap: '<path d="M12 2.5l7.5 3v6c0 4.6-3.2 8.4-7.5 10-4.3-1.6-7.5-5.4-7.5-10v-6z"/><path d="M8.5 9l7 7M15.5 9l-7 7"/>',
+  trade: '<path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/>',
+  openBorders: '<path d="M4 21V5M20 21V5"/><path d="M8 13h8M13 10l3 3-3 3"/><path d="M4 5h4M16 5h4"/>',
+  peace: '<circle cx="12" cy="12" r="9"/><path d="M12 3v18M12 12l-6.4 6.4M12 12l6.4 6.4"/>',
+  megaphone: '<path d="M3 10.5v3h3l7 4.5v-12L6 10.5z"/><path d="M6 13.5l1.5 5h2.5L9 14.5"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>',
+  demand: '<path d="M7 11V5.5a1.5 1.5 0 0 1 3 0V11"/><path d="M10 10V4a1.5 1.5 0 0 1 3 0v6"/><path d="M13 10V5a1.5 1.5 0 0 1 3 0v6.5"/><path d="M16 9.5a1.5 1.5 0 0 1 3 0v4.5a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-2.7L3.5 14a1.5 1.5 0 0 1 2.3-1.9L7 13.5"/>',
+  helpCall: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M5.6 5.6l3.6 3.6M18.4 5.6l-3.6 3.6M5.6 18.4l3.6-3.6M18.4 18.4l-3.6-3.6"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  save: '<path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h7V4"/><rect x="7.5" y="13" width="9" height="7"/>',
+  folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h9A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/>',
+  book: '<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H20v15H5.5A1.5 1.5 0 0 0 4 19.5z"/><path d="M4 19.5A1.5 1.5 0 0 0 5.5 21H20v-3"/><path d="M8 7h8M8 10.5h6"/>',
   pandemic: '<circle cx="12" cy="12" r="5"/><path d="M12 7V3.5M12 17v3.5M7 12H3.5M17 12h3.5M8.5 8.5L6 6M15.5 15.5L18 18M8.5 15.5L6 18M15.5 8.5L18 6"/><circle cx="10.5" cy="11" r=".6"/><circle cx="13.5" cy="13" r=".6"/>',
 };
 

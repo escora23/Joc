@@ -204,7 +204,8 @@ export const SAM_INTERCEPTOR_SPEED = UNIT_DEFS[UnitType.SamInterceptor].speed;
 export const RADAR_RANGE = BALANCE.radarRangeTiles;
 
 export const SILO_COOLDOWN_TICKS = 110;
-export const CRUISE_RANGE = 320;
+/** Cruise missile reach in tiles (§6.3: 2,500 km). */
+export const CRUISE_RANGE = 100;
 
 /** Aircraft. */
 export const AIRBASE_INTERCEPT_RANGE = 45;

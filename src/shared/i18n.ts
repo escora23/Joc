@@ -45,8 +45,25 @@ export function hasKey(key: string): boolean {
   return key in dicts[current] || key in dicts.es || key in dicts.en;
 }
 
-/** Translate. Falls back to Spanish, then English, then the key itself (logged once). */
+const missingParams = new Set<string>();
+let devMode = false;
+try {
+  devMode = !!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
+} catch {
+  /* not under Vite */
+}
+
+/**
+ * Translate. Falls back to Spanish, then English, then the key itself (logged once).
+ * v2 (§12.7): a `g` parameter ('m' / 'f', the grammatical gender of the noun in it) picks the `<key>.m` / `<key>.f`
+ * variant when the current language has one («Hemos perdido un puerto» / «una fábrica»); a placeholder without a value
+ * never reaches the screen (empty, with a warning in development).
+ */
 export function t(key: string, params?: Record<string, string | number>): string {
+  if (params && (params.g === 'm' || params.g === 'f')) {
+    const v = `${key}.${params.g}`;
+    if (v in dicts[current]) key = v;
+  }
   let s = dicts[current][key] ?? dicts.es[key] ?? dicts.en[key];
   if (s === undefined) {
     if (!missing.has(key)) {
@@ -55,7 +72,16 @@ export function t(key: string, params?: Record<string, string | number>): string
     }
     s = key;
   }
-  if (params) s = s.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));
+  if (s.includes('{')) {
+    s = s.replace(/\{(\w+)\}/g, (_m, k: string) => {
+      if (params && k in params) return String(params[k]);
+      if (devMode && !missingParams.has(`${key}:${k}`)) {
+        missingParams.add(`${key}:${k}`);
+        console.warn(`[i18n] "${key}" has no value for {${k}}`);
+      }
+      return '';
+    });
+  }
   return s;
 }
 

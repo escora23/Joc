@@ -11,10 +11,10 @@
 //     The client keeps the last received value when a field is absent.
 
 import type {
-  AllianceRequestView, AllianceView, AttackView, BuildableUnit, ClockMode, ClockView, CommandKind, EmoteId, FrontView,
+  AllianceRequestView, AllianceView, AttackView, Demand, OpinionView, ProposalKind, ProposalView, TreatyKind, TreatyView, BuildableUnit, ClockMode, ClockView, CommandKind, EmoteId, FrontView,
   GameConfig, GameOverReason, GamePhase, GameSpeed, PeaceTerms, PlayerKind, Personality, PlayerStatsCounters,
   ScarView, SiegeView, StructureType, StructureView, UnitType, WarGoal, WarView, WeaponType, WorldEventKind,
-  WorldEventView, WorldInit,
+  WorldEventView, WorldInit, UnitOrderKind, ProductionView,
 } from './types';
 
 // =================================================================================================
@@ -58,6 +58,26 @@ export type PlayerCommand =
   | { type: 'emote'; target: number; emote: EmoteId }
   /** Mark a player as the preferred target (allies & AI allies react). */
   | { type: 'targetPlayer'; target: number }
+  // --- v2 (W3): diplomacy (§5.3, §14.3) ---
+  /**
+   * A proposal to another player: a treaty, peace terms (war = the war id), a call to arms against `against`, or a
+   * demand. `gold` is a sweetener, held until the answer and paid on acceptance.
+   */
+  | { type: 'propose'; target: number; kind: ProposalKind; terms?: PeaceTerms; demand?: Demand; war?: number; against?: number; gold?: number }
+  /** Answer a proposal addressed to the sender. */
+  | { type: 'answer'; proposalId: number; accept: boolean }
+  /** Leave a treaty: an alliance with 48 h notice, the others at once. */
+  | { type: 'leaveTreaty'; target: number; treaty: TreatyKind }
+  // --- v2 (W4): unit orders (§6.4, §7.3, §14.3) ---
+  /**
+   * One order for a set of units (each is validated with orders.ts orderError, the same rule the preview uses).
+   * tile = the clicked tile; targetId = the unit or structure under the cursor (0 = none). ratio: «Atacar hacia aquí»
+   * without an offensive on that front launches one with this share of home troops. confirm: the player accepted a
+   * strategic (L2) strike in the confirmation dialog.
+   */
+  | { type: 'unitOrder'; unitIds: number[]; order: UnitOrderKind; tile: number; targetId: number; ratio?: number; confirm?: boolean }
+  /** Cancel the last unit queued for production at a structure (refund). */
+  | { type: 'cancelProduction'; structureId: number }
   /** Command mode: freeze/unfreeze a unit while the player drives it. */
   | { type: 'unitControl'; unitId: number; controlled: boolean }
   /** Command mode results, applied to the strategic simulation. */
@@ -131,7 +151,26 @@ export type SimEvent =
   | { type: 'clockChanged'; tick: number; mode: ClockMode; rate: number }
   | { type: 'unrest'; tick: number; owner: number; region: number[]; cause: 'occupation' | 'exhaustion' | 'nuclear'; stage: 'start' | 'cancelled' | 'rebellion'; untilTick: number; x: number; y: number }
   | { type: 'hegemony'; tick: number; leader: number; stage: 'start' | 'broken' | 'won'; untilTick: number }
-  | { type: 'capitulation'; tick: number; loser: number; winner: number; tiles: number; war: number };
+  | { type: 'capitulation'; tick: number; loser: number; winner: number; tiles: number; war: number }
+  // --- v2 (W4): units ---
+  /** A unit left production at its structure (§7.5). */
+  | { type: 'unitReady'; tick: number; unitId: number; unit: UnitType; owner: number; structureId: number; x: number; y: number; serial: number }
+  /**
+   * A bomber or drone sortie toward `target`'s land, announced to it (§8.2): at take-off when the airbase lies inside
+   * its radar coverage, else when the sortie enters the coverage, else 250 km from the target.
+   */
+  | { type: 'airRaid'; tick: number; owner: number; target: number; unitId: number; unit: UnitType; fromTile: number; toTile: number; etaTicks: number; by: 'takeoff' | 'radar' | 'observers' }
+  /** The sim's answer to a unitOrder of `owner`: how many units took it, the i18n reason when none did. */
+  | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null }
+  /** A strike landed (bomber, drone): damage done, for the alert and the result line. */
+  | { type: 'strikeResult'; tick: number; unitId: number; unit: UnitType; owner: number; victim: number; kind: 'structure' | 'division' | 'front' | 'ship' | 'none'; targetId: number; structure: number; damage: number; destroyed: boolean; x: number; y: number }
+  /** A blockading warship captured a trade ship: the payout goes to the captor. */
+  | { type: 'shipCaptured'; tick: number; unitId: number; from: number; by: number; warshipId: number; gold: number; x: number; y: number }
+  // --- v2 (W3): diplomacy ---
+  /** A proposal was created or changed status (answers carry their reasons). */
+  | { type: 'proposal'; tick: number; proposal: ProposalView }
+  /** A treaty was signed, given notice, ended or broken (reasonKey: treaty.reason.*). */
+  | { type: 'treatyChanged'; tick: number; a: number; b: number; treaty: TreatyKind; active: boolean; reasonKey: string; leavingTick?: number };
 
 export type SimEventType = SimEvent['type'];
 /** Map from event name to event payload, for the typed EventBus. */
@@ -192,8 +231,18 @@ export const UF = {
   alt: 11,
   originX: 12,
   originY: 13,
+  // --- v2 (W4) ---
+  /** UnitMode. */
+  mode: 14,
+  /** Index into UNIT_ORDER_KINDS, -1 = none. */
+  order: 15,
+  /** Ticks to arrival / readiness, -1 = n/a. */
+  eta: 16,
+  frontKey: 17,
+  home: 18,
+  serial: 19,
 } as const;
-export const UNIT_STRIDE = 14;
+export const UNIT_STRIDE = 20;
 
 /** Slow-changing player info; sent for a player on its first update and whenever any field changes. */
 export interface PlayerMeta {
@@ -255,6 +304,20 @@ export interface TickUpdate {
   occupiedFull?: Int32Array;
   /** Truces in force (when changed): pairs at truce until untilTick (§4.15). */
   truces?: { a: number; b: number; untilTick: number }[];
+  // --- v2 (W4): units ---
+  /** Planned paths (water, land or rail waypoints as tile indices), sent once per new path. Transferable. */
+  routes?: { unitId: number; tiles: Int32Array }[];
+  /** The sim's rail graph as station-id pairs (when changed). Transferable. */
+  rail?: Int32Array;
+  /** The human's production queue (when changed). */
+  production?: ProductionView[];
+  // --- v2 (W3): diplomacy ---
+  /** Every treaty in force (when changed). */
+  treaties?: TreatyView[];
+  /** The AIs' opinions of the human with their reasons (every game day and when changed). */
+  opinions?: OpinionView[];
+  /** Proposals involving the human: open ones and the latest answered (when changed). */
+  proposals?: ProposalView[];
 }
 
 // =================================================================================================
@@ -326,5 +389,7 @@ export function tickUpdateTransferables(u: TickUpdate): Transferable[] {
   }
   if (u.occupied) list.push(u.occupied.buffer as ArrayBuffer);
   if (u.occupiedFull) list.push(u.occupiedFull.buffer as ArrayBuffer);
+  if (u.routes) for (const r of u.routes) list.push(r.tiles.buffer as ArrayBuffer);
+  if (u.rail) list.push(u.rail.buffer as ArrayBuffer);
   return list;
 }

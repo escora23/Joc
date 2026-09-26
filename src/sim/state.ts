@@ -5,7 +5,7 @@
 import { MAP_W } from '../shared/constants';
 import type { ModifierKey, SimAttack, SimPlayer, SimStructure, SimUnit } from '../shared/simapi';
 import {
-  STRUCTURE_TYPES, UNIT_TYPES, UnitState, emptyStats, type AttackState, type Personality, type PlayerKind,
+  STRUCTURE_TYPES, UNIT_TYPES, UnitState, emptyStats, type AttackState, type BuildableUnit, type Personality, type PlayerKind,
   type PlayerStatsCounters, type StructureType, type UnitType,
 } from '../shared/types';
 
@@ -78,6 +78,13 @@ export class Player implements SimPlayer {
   tributeTo = 0;
   tributeShare = 0;
   tributeUntil = 0;
+  // --- v2 (W4) ---
+  /** Units of each type queued for production (they count for the price, §6.3). */
+  queued = new Int32Array(UNIT_TYPES.length);
+  /** Last ordinal given per unit type («3.ª División Acorazada»). */
+  serials = new Int32Array(UNIT_TYPES.length);
+  /** Gold earned from maritime trade, rail freight and captured ships since the start (pace-audit economy, tooltips). */
+  tradeGold = 0;
 
   constructor(
     readonly id: number,
@@ -95,6 +102,15 @@ export class Player implements SimPlayer {
 
 }
 
+/** One unit in a production queue (paid when ordered). */
+export interface ProductionItem {
+  unit: BuildableUnit;
+  startTick: number;
+  readyTick: number;
+  serial: number;
+  cost: number;
+}
+
 export class Structure implements SimStructure {
   hp = 1;
   built = 0;
@@ -108,6 +124,14 @@ export class Structure implements SimStructure {
   timer = 0;
   /** Operational ticks counter used for staggering. */
   age = 0;
+  // --- v2 (W4) ---
+  /** Units being produced here, in order (the first one is being built). */
+  queue: ProductionItem[] = [];
+  /** Upgrade in progress: the tick it started and the tick it completes (0 = none); the level rises then. */
+  upgradeStart = 0;
+  upgradeUntil = 0;
+  /** Port: tick the next trade ship may leave (2-tick turnaround). Factory: trains are timed by `timer`. */
+  nextTradeTick = 0;
   readonly x: number;
   readonly y: number;
 
@@ -146,6 +170,10 @@ export const Mode = {
   Retreat: 15,
   /** v2: a transport convoy embarking troops in port before sailing (§4.11). */
   Embark: 16,
+  /** v2 (W4): warship holding a blockade station, bombarding a coast, escorting a convoy. */
+  Blockade: 17,
+  Bombard: 18,
+  Escort: 19,
 } as const;
 export type Mode = (typeof Mode)[keyof typeof Mode];
 
@@ -209,6 +237,33 @@ export class Unit implements SimUnit {
   /** v2 (W1): transport convoy embarking until this tick (§4.11); the target already detected it. */
   embarkUntil = 0;
   detected = false;
+  // --- v2 (W4): orders and purpose ---
+  /** Ordinal of its type for its owner (0 = unnamed). */
+  serial = 0;
+  /** The order being carried out (index into UNIT_ORDER_KINDS), -1 = default behaviour. */
+  order = -1;
+  /** Division: the enemy of the front it is attached to (0 = none) and that front's key. */
+  enemy = 0;
+  frontKey = 0;
+  /** Division: an own offensive runs on its sector (display: «apoyando la ofensiva»). */
+  onOffensive = false;
+  /** Division path legs travelled by rail (parallel to `path`: 1 = the leg ending at that waypoint is rail). */
+  pathRail: Uint8Array | null = null;
+  /** The planned path changed and the clients have not received it yet. */
+  routeDirty = false;
+  /** Ticks to arrival / readiness (published), -1 = n/a. */
+  eta = -1;
+  /** Aircraft: on the ground rearming until this tick. */
+  readyTick = 0;
+  /** Station of a patrol, CAP, blockade, bombardment or drone support (continuous tile coords). */
+  stationX = 0;
+  stationY = 0;
+  /** Bomber / drone sortie: announced to its target (airRaid) already. */
+  raidAnnounced = false;
+  /** Sortie target: 1 structure, 2 division, 3 ship, 4 front sector (0 = none). */
+  strikeKind = 0;
+  /** Fighters that already tried to intercept this aircraft on its current pass: fighter id -> tick. */
+  capTries: Map<number, number> | null = null;
   readonly maxHp: number;
 
   constructor(

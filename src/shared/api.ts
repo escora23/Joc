@@ -12,7 +12,7 @@ import type { SettingsStore } from './settings';
 import type {
   AllianceRequestView, AllianceView, AttackView, ClockView, CommandKind, Difficulty, FrontView, GameConfig, GamePhase,
   GameSpeed, LatLon, PairState, PlayerView, ScarView, SiegeView, StatsSample, StructureType, StructureView, Timelapse,
-  UnitType, UnitView, WarView, WorldData, WorldEventView,
+  UnitType, UnitView, WarView, WorldData, WorldEventView, ProductionView, OpinionView, ProposalView, TreatyKind, TreatyView,
 } from './types';
 
 // =================================================================================================
@@ -133,6 +133,25 @@ export interface GameView {
   pairState(a: number, b: number): PairState;
   /** The war between a and b (either side), or null. */
   warBetween(a: number, b: number): WarView | null;
+  // --- v2 (W3): diplomacy ---
+  /** Every treaty in force. */
+  readonly treaties: readonly TreatyView[];
+  /** The AIs' opinions of the human with their reasons, by AI id. */
+  readonly opinions: ReadonlyMap<number, OpinionView>;
+  /** The human's proposals (open and recently answered), by id. */
+  readonly proposals: ReadonlyMap<number, ProposalView>;
+  /** performance.now() when `proposals` was last updated (the real-time floor counts on between updates). */
+  readonly proposalsAtMs: number;
+  hasTreaty(a: number, b: number, kind: TreatyKind): boolean;
+  treatiesBetween(a: number, b: number): TreatyView[];
+  // --- v2 (W4) ---
+  /** Planned paths of units (tile waypoints: water paths, division land/rail routes, train lines). */
+  readonly routes: ReadonlyMap<number, Int32Array>;
+  /** The sim's rail graph: station-id pairs [a0, b0, a1, b1, ...]; railRev bumps on every change. */
+  readonly rail: Int32Array;
+  readonly railRev: number;
+  /** The human's units in production. */
+  readonly production: readonly ProductionView[];
 }
 
 export interface SimClientApi {

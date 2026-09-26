@@ -7,9 +7,11 @@
 //     naval, nukes, diplomacy) whose periods come from the difficulty profile, so the work is spread over ticks and
 //     the cost per tick stays small. Tribes and rebels run lighter brains. The human's nation is played too when
 //     GameConfig.humanAutopilot is set (shots, playtests).
-//   * onEvent(): the AI's senses — alliance requests (answered after a human-like delay), betrayals (remembered by
-//     everyone), nukes (retaliation, emergency air defense), emotes and donations (trust), ally target marks,
-//     world events (gold rushes attract armies, pandemics trigger quarantines, rebels fight their old masters).
+//   * onEvent(): the AI's senses — betrayals (remembered by everyone), nukes (retaliation, emergency air defense),
+//     donations (trust), world events (gold rushes attract armies, pandemics trigger quarantines, rebels fight their
+//     old masters).
+//   * answerProposal(): v2 (W3) — proposals to its nations are answered at the end of their deliberation with the
+//     reasons of the decision (diplomacy.ts); the human's autopilot answers the human's inbox the same way.
 //
 // Modules: profiles.ts (personality x difficulty tables), setup.ts, perception.ts (front scans), war.ts,
 // economy.ts, military.ts (units + nukes), naval.ts, diplomacy.ts, state.ts / context.ts / mapindex.ts.
@@ -17,9 +19,9 @@
 import { HUMAN_ID } from '../../shared/constants';
 import type { SimEvent } from '../../shared/protocol';
 import type { AiDirector, SimGame, SimPlayer } from '../../shared/simapi';
-import { StructureType, UnitType, type EmoteId, type Personality } from '../../shared/types';
+import { StructureType, UnitType, type Personality } from '../../shared/types';
 import { alive, home, isMajor, relation, type AiContext } from './context';
-import { allianceStillUseful, helpAlly, onAllianceRequest, onEmote, recordBetrayal, resolveReply, thinkDiplomacy } from './diplomacy';
+import { answerProposal, recordBetrayal, thinkDiplomacy } from './diplomacy';
 import { placeFor, thinkBuild } from './economy';
 import { MapIndex, dist2 } from './mapindex';
 import { emergencyAirDefense, thinkMilitary, thinkNukes } from './military';
@@ -62,7 +64,7 @@ export function createAiDirector(game: SimGame): AiDirector {
       relations: new Map(), front: emptyFront(), pending: [], lastTiles: 0, idleTicks: 0, rushTile: -1, rushUntil: 0,
       allyTarget: 0, allyTargetUntil: 0, buildFails: 0, lastBoatTick: -1_000_000, lastNukeTick: -1_000_000,
       nukesLaunched: 0, coalitionAnnounced: false, homeTile: p.capitalTile, homeCheckTick: -1_000_000, scratch: [],
-      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(), offCooldown: new Map(), settleFail: new Map(), settling: new Map(), intel: new Map(), lastOffensiveTick: -1_000_000, warActive: new Map(),
+      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(), offCooldown: new Map(), settleFail: new Map(), settling: new Map(), intel: new Map(), lastOffensiveTick: -1_000_000, warActive: new Map(), proposed: new Map(),
     };
     if (kind === 'rebel' && b.parent > 0) {
       b.enemy = b.parent;
@@ -119,21 +121,7 @@ export function createAiDirector(game: SimGame): AiDirector {
       if (a.at > now) continue;
       b.pending.splice(i--, 1);
       switch (a.kind) {
-        case 'reply':
-          resolveReply(c, b, p, a.other);
-          break;
-        case 'emote':
-          game.issue(p.id, { type: 'emote', target: a.other, emote: a.data as EmoteId });
-          break;
-        case 'renew': {
-          const q = game.player(a.other);
-          if (!alive(q) || game.isAllied(p.id, q.id) || relation(b, q.id).trust <= -0.3) break;
-          // Peace offers are always sent; renewals only when the alliance still serves us.
-          if (a.data === 'peace' || allianceStillUseful(c, b, p, q)) game.issue(p.id, { type: 'allianceRequest', target: q.id });
-          break;
-        }
         case 'helpAlly':
-          helpAlly(c, b, p, a.other);
           break;
         case 'sam': {
           if (emergencyAirDefense(c, b, p)) {
@@ -226,11 +214,6 @@ export function createAiDirector(game: SimGame): AiDirector {
         }
         return;
       }
-      case 'allianceRequested': {
-        const b = brains.get(e.to);
-        if (b && b.kind !== 'tribe' && b.kind !== 'rebel') onAllianceRequest(c, b, e.from);
-        return;
-      }
       case 'allianceFormed': {
         for (const [x, y] of [[e.a, e.b], [e.b, e.a]]) {
           const b = brains.get(x);
@@ -247,17 +230,6 @@ export function createAiDirector(game: SimGame): AiDirector {
       case 'allianceBroken':
         recordBetrayal(c, e.breaker, e.victim);
         return;
-      case 'allianceExpired': {
-        // The friendlier side asks to renew if the alliance still serves it.
-        const ba = brains.get(e.a), bb = brains.get(e.b);
-        const asker = ba && bb ? (ba.prof.diplomacy >= bb.prof.diplomacy ? ba : bb) : ba ?? bb;
-        if (!asker) return;
-        const other = asker.id === e.a ? e.b : e.a;
-        if (relation(asker, other).trust > 0 || rng.next() < asker.prof.diplomacy * 0.5) {
-          asker.pending.push({ at: e.tick + 20 + rng.int(80), kind: 'renew', other, flag: false, data: '' });
-        }
-        return;
-      }
       case 'warDeclared': {
         // §5.1 `unprovokedWar`: a war of choice on a nation that was not hostile (retaliation, defence, liberation and
         // wars on the runaway leader are provoked).
@@ -300,35 +272,12 @@ export function createAiDirector(game: SimGame): AiDirector {
       case 'nukeDetonated':
         if (e.weapon !== UnitType.CruiseMissile) world.detonations++;
         return;
-      case 'emote': {
-        if (e.to <= 0 || e.from === e.to) return;
-        const b = brains.get(e.to);
-        if (b && b.kind !== 'tribe' && b.kind !== 'autopilot') onEmote(c, b, e.from, e.emote);
-        return;
-      }
       case 'donation': {
         const b = brains.get(e.to);
         if (!b) return;
         const r = relation(b, e.from);
         r.trust = Math.min(1, r.trust + Math.min(0.5, (e.gold / 1_000_000 + e.troops / 100_000) * 0.25 + 0.05));
         r.helpedTick = e.tick;
-        if (e.from === HUMAN_ID && b.kind !== 'autopilot' && rng.next() < 0.95) {
-          b.pending.push({ at: e.tick + 10 + rng.int(40), kind: 'emote', other: e.from, flag: false, data: 'heart' });
-        }
-        return;
-      }
-      case 'message': {
-        // An ally marked a target: "help me against X".
-        if (e.key !== 'msg.allyTarget') return;
-        const b = brains.get(e.playerId);
-        const from = Number(e.params.from), target = Number(e.params.target);
-        if (!b || !(target > 0) || game.isAllied(b.id, target)) return;
-        const willing = from === HUMAN_ID ? 0.8 + b.prof.diplomacy * 0.2 : 0.45 + b.prof.diplomacy * 0.45;
-        if (relation(b, from).trust > -0.2 && rng.next() < willing) {
-          b.allyTarget = target;
-          b.allyTargetUntil = e.tick + 2400;
-          if (from === HUMAN_ID) b.pending.push({ at: e.tick + 15 + rng.int(40), kind: 'emote', other: from, flag: false, data: 'thumbsUp' });
-        }
         return;
       }
       case 'worldEvent': {
@@ -410,8 +359,27 @@ export function createAiDirector(game: SimGame): AiDirector {
         if (!p || !p.alive || !p.spawned) continue;
         think(c, b, p);
       }
+      // The autopilot answers the human's inbox like a nation would (scripted sessions, headless games).
+      const ap = brains.get(HUMAN_ID);
+      if (ap && ap.kind === 'autopilot' && game.tick % 20 === 0) {
+        const h = game.player(HUMAN_ID);
+        if (h && h.alive) {
+          for (const pr of game.diplomacy.openProposals(HUMAN_ID)) {
+            if (pr.to !== HUMAN_ID || pr.status !== 'pending' || game.tick - pr.createdTick < 40) continue;
+            const ans = answerProposal(c, ap, h, pr);
+            game.issue(HUMAN_ID, { type: 'answer', proposalId: pr.id, accept: ans.accept });
+          }
+        }
+      }
     },
     onEvent,
+    answerProposal(pr) {
+      const c = context();
+      const b = brains.get(pr.to);
+      const p = game.player(pr.to);
+      if (!b || !p || b.kind === 'tribe' || b.kind === 'rebel') return null;
+      return answerProposal(c, b, p, pr);
+    },
     // v2 (§12.8): everything the AI remembers, for saves (the map index is rebuilt on load).
     snapshotState() {
       return { brains, world, rng, knownPlayers, rebelParents };
@@ -426,6 +394,8 @@ export function createAiDirector(game: SimGame): AiDirector {
         b.intel ??= new Map();
         b.lastOffensiveTick ??= -1_000_000;
         b.warActive ??= new Map();
+        b.proposed ??= new Map();
+        b.pending = b.pending.filter((x) => x.kind === 'sam');
       }
       world = s.world;
       world.firstUses ??= 0;

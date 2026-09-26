@@ -5,9 +5,9 @@
 // band or a tribute) or a capitulation. The system keeps the per-war accounting the AI and the UI read: war score,
 // exhaustion, the per-war logistics bucket of each defender (§4.5), escalation levels and the capital of each side.
 //
-// v2-stub(W1→W3): betrayal is detected against v1 alliances (and our own truces) only; defensive allies of the
-// target answer the call to arms by the rule of §5.5 inside this system; the human's allies are told but cannot answer
-// until W3's inbox lands.
+// Treaties, betrayal and calls to arms belong to the diplomacy system (W3): a declaration asks it what the war breaks
+// (alliance, non-aggression pact or truce, §5.6), tells it to end the pair's treaties, and has it send the calls to
+// arms (§5.5), which allies (the human from its inbox) answer as proposals.
 
 import {
   AI_MOBILIZE_TICKS, CAPITULATION_EXHAUSTION, CAPITULATION_EXHAUSTION_MIN, CAPITULATION_LAND_LOST, CAPITULATION_LAND_LOST_MIN, CAPITULATION_ODDS_SLOPE, CAPITULATION_ARMY_BROKEN, DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID,
@@ -15,7 +15,6 @@ import {
   TENSION_LEAD_TICKS, TICKS_PER_GAME_DAY, TRAITOR_TICKS, TRUCE_TICKS,
 } from '../shared/constants';
 import type { PeaceTerms, WarGoal, WarView } from '../shared/types';
-import { PERSONALITY } from './ai/profiles';
 import type { Game } from './game';
 import { neighbors4 } from './game';
 import type { SaveReader, SaveWriter } from './save';
@@ -59,17 +58,6 @@ interface Queued {
   naval: boolean;
 }
 
-interface CallToArms {
-  ally: number;
-  war: number;
-  decideTick: number;
-  /**
-   * An aggressor's request for help against its target (§5.5 «Pedir ayuda contra X»; v2-stub(W1→W3): AI allies of an
-   * AI aggressor only, decided here). Absent = a defensive call to arms.
-   */
-  offense?: boolean;
-}
-
 /** A treaty transfer of land (cession, capitulation), animated as a wave from the winner's border. */
 interface Transfer {
   from: number;
@@ -100,7 +88,6 @@ export class WarSystem {
   /** Truces: pairKey -> tick the truce ends. */
   private readonly truces = new Map<number, number>();
   private readonly queued: Queued[] = [];
-  private readonly calls: CallToArms[] = [];
   private readonly transfers: Transfer[] = [];
   /** Exhaustion carried after a war ends, decaying 2 per game day at peace: player -> [value, tick]. */
   private readonly residual = new Map<number, [number, number]>();
@@ -244,6 +231,8 @@ export class WarSystem {
       const t = this.tension.get(aggressor);
       if (t === undefined || g.tick - t < TENSION_LEAD_TICKS[d]) return 'msg.tensionFirst';
     }
+    // An accepted ultimatum buys peace from that nation for a while (§5.4).
+    if (A.kind === 'nation' && !opts.join && g.diplomacy.noWarUntil(aggressor, target) > g.tick) return 'msg.ultimatumPeace';
     if (target === HUMAN_ID && A.kind !== 'human' && g.tick < 18_000) {
       const d = DIFFICULTY_INDEX[g.difficulty];
       const cap = d >= 2 ? 2 : 1;
@@ -277,15 +266,14 @@ export class WarSystem {
     }
     const A = g.playerById[aggressor]!, B = g.playerById[target]!;
     const k = pairKey(aggressor, target);
-    // Betrayal (v2-stub(W1→W3): alliances and truces only; W3 adds non-aggression pacts).
-    let betrayal = false;
-    if (!opts.join && (A.allies.has(target) || (this.truces.get(k) ?? 0) > g.tick)) {
-      betrayal = true;
-      if (A.allies.has(target)) g.diplomacy.breakAllianceForWar(aggressor, target);
+    // Betrayal (§5.6): declaring war while an alliance, a non-aggression pact or a truce binds the pair.
+    const broken = opts.join ? null : g.diplomacy.betrayalOf(aggressor, target);
+    const betrayal = broken !== null;
+    if (betrayal) {
       A.traitorUntilTick = g.tick + TRAITOR_TICKS;
       A.metaDirty = true;
     }
-    this.truces.delete(k);
+    if (this.truces.delete(k)) this.trucesDirty = true;
     const d = DIFFICULTY_INDEX[g.difficulty];
     const mob = opts.mobilizeTicks ?? (opts.join ? JOIN_MOBILIZE_TICKS : A.kind === 'human' ? HUMAN_MOBILIZE_TICKS[d] : A.kind === 'rebel' ? REBEL_MOBILIZE_TICKS : AI_MOBILIZE_TICKS[d]);
     const budgetA = Math.max(LOGISTICS_SHARE * A.tiles, LOGISTICS_FLOOR);
@@ -300,6 +288,8 @@ export class WarSystem {
     this.wars.set(w.id, w);
     this.byPair.set(k, w);
     this.dirty = true;
+    // The pair's treaties end (a betrayal when they bound it); reputation and the allies' resentment (§4.2, §5.6).
+    g.diplomacy.onWarDeclared(aggressor, target, goal, !!opts.join, broken);
     // Trade stops (hasEmbargo reads the war); the embargo lists shown to the client change.
     A.metaDirty = B.metaDirty = true;
     // Fronts that exist at the declaration start at their target garrison share (§4.4).
@@ -312,31 +302,10 @@ export class WarSystem {
       betrayal, parentWar: w.parentWar,
     });
     g.invariants?.onWarDeclared(w);
-    // Defensive allies of the target are called to arms (§5.5). Joiners do not cascade further.
-    if (!opts.join) {
-      for (const ally of B.allies) {
-        if (ally === aggressor || !this.canWage(ally) || this.atWar(ally, aggressor)) continue;
-        const ap = g.playerById[ally]!;
-        if (ap.allies.has(aggressor)) continue;
-        if (ap.kind === 'human') {
-          // v2-stub(W1→W3): the human answers calls to arms from W3's inbox.
-          g.message(HUMAN_ID, 'msg.allyAttacked', 'warning', { player: target, attacker: aggressor });
-          continue;
-        }
-        this.calls.push({ ally, war: w.id, decideTick: g.tick + 20 + g.rngWar.int(41) });
-      }
-      // An AI conqueror asks its own allies for help against the target (§4.18 convergence: a coalition splits the
-      // target's garrisons; §5.5 «Pedir ayuda contra X»). Never against the human (§4.16: W3 routes those through the
-      // human's own diplomacy), never an ally that is also the target's ally.
-      if (A.kind === 'nation' && B.kind === 'nation' && (goal === 'conquest' || goal === 'coalition')) {
-        for (const ally of A.allies) {
-          if (ally === target || !this.canWage(ally) || this.atWar(ally, target)) continue;
-          const ap = g.playerById[ally]!;
-          if (ap.kind !== 'nation' || ap.allies.has(target)) continue;
-          this.calls.push({ ally, war: w.id, decideTick: g.tick + 20 + g.rngWar.int(41), offense: true });
-        }
-      }
-    }
+    // Defensive allies of the target are called to arms (§5.5), and an AI conqueror asks its own allies for help
+    // (§4.18 convergence): proposals the allies answer after deliberating (the human from its inbox). Joiners do not
+    // cascade further.
+    if (!opts.join) g.diplomacy.callAllies(w);
     return w;
   }
 
@@ -456,6 +425,7 @@ export class WarSystem {
     }
     g.attacks.endBetween(w.a, w.b);
     g.fronts.onWarEnded(w);
+    g.diplomacy.onWarEnded(w.a, w.b);
     g.emit({ type: 'warEnded', tick: g.tick, war: w.id, a: w.a, b: w.b, winner, terms, reasonKey });
   }
 
@@ -472,6 +442,17 @@ export class WarSystem {
     for (const other of this.warsOf(loser)) this.endWar(other, other.a === loser ? other.b : other.a, { kind: 'white' }, 'peace.reason.capitulation');
     this.transfers.push({ from: loser, to: winner, tiles, next: 0, perTick: Math.max(1, Math.ceil(tiles.length / 20)), reason: 'capitulation' });
     return true;
+  }
+
+  /**
+   * A cession outside a peace treaty (§5.3–§5.4: a demand accepted): `tiles` of `from`'s land next to `to`, at most 5 %
+   * of it and 4 tiles deep, handed over as a wave (a treaty transfer, invariant 1).
+   */
+  cede(from: number, to: number, tiles: number): void {
+    const F = this.g.playerById[from];
+    if (!F || tiles <= 0) return;
+    const band = this.waveOrder(from, to, 4).slice(0, Math.min(tiles, Math.max(1, Math.floor(F.tiles * 0.05))));
+    if (band.length) this.transfers.push({ from, to, tiles: band, next: 0, perTick: Math.max(1, Math.ceil(band.length / 20)), reason: 'cession' });
   }
 
   /** Cede a band of the loser's tiles within 4 tiles of the current fronts, contiguous to the winner (≤ 15 %). */
@@ -558,13 +539,6 @@ export class WarSystem {
       if (!q.naval && g.sharesBorder(q.attacker, q.target)) g.attacks.command(p, q.target, q.ratio, q.tile);
       else g.unitSys.boatAttack(p, q.tile, q.ratio);
     }
-    // Calls to arms (v2-stub(W1→W3): AI allies decide here with the rule of §5.5).
-    for (let i = 0; i < this.calls.length; i++) {
-      const c = this.calls[i];
-      if (tick < c.decideTick) continue;
-      this.calls.splice(i--, 1);
-      this.answerCall(c);
-    }
     // Treaty transfers (cessions and capitulations), one wave step per tick.
     for (let i = 0; i < this.transfers.length; i++) {
       const tr = this.transfers[i];
@@ -589,42 +563,6 @@ export class WarSystem {
     // Capitulation (AI only, §4.13): see checkCapitulations.
     if (tick % 60 === 0) this.checkCapitulations();
     if (tick % 10 === 0) this.dirty = true;
-  }
-
-  private answerCall(c: CallToArms): void {
-    const g = this.g;
-    if (c.offense) return this.answerHelp(c);
-    const w = this.wars.get(c.war);
-    const ally = g.playerById[c.ally];
-    if (!w || !ally || !ally.alive || this.atWar(c.ally, w.a) || !ally.allies.has(w.b)) return;
-    const loyalty = PERSONALITY[ally.personality ?? 'opportunist']?.loyalty ?? 0.5;
-    const borders = g.sharesBorder(c.ally, w.a);
-    const navy = ally.unitCount[2] > 0;
-    const p = (borders || navy ? 0.5 : 0.3) + 0.5 * loyalty;
-    if (g.rngWar.next() >= p) return;
-    this.declare(c.ally, w.a, 'defense', 'war.reason.callToArms', { join: true, parentWar: w.id });
-  }
-
-  /**
-   * An ally asked to join an offensive war (§5.5 odds, lower than for a defensive call: nobody owes an aggressor):
-   * 0.35 + 0.3·loyalty when it borders the target (0.15 + 0.3·loyalty with a navy only, never otherwise), and only
-   * when it can hold its own front (≥ 40 % of the target's troops) and is not already fighting elsewhere.
-   */
-  private answerHelp(c: CallToArms): void {
-    const g = this.g;
-    const w = this.wars.get(c.war);
-    const ally = g.playerById[c.ally];
-    const T = w ? g.playerById[w.b] : undefined;
-    if (!w || !ally || !T || !ally.alive || !T.alive || this.pairState(c.ally, w.b) !== 'peace' || !ally.allies.has(w.a) || ally.allies.has(w.b)) return;
-    if (this.enemiesOf(c.ally).length > 0 || this.exhaustion(c.ally) > 40) return;
-    if (ally.troops < T.troops * 0.4) return;
-    const loyalty = PERSONALITY[ally.personality ?? 'opportunist']?.loyalty ?? 0.5;
-    const borders = g.sharesBorder(c.ally, w.b);
-    const navy = ally.unitCount[2] > 0;
-    if (!borders && !navy) return;
-    const p = (borders ? 0.35 : 0.15) + 0.3 * loyalty;
-    if (g.rngWar.next() >= p) return;
-    this.declare(c.ally, w.b, 'coalition', 'war.reason.allyRequest', { join: true, parentWar: w.id });
   }
 
   /**
@@ -707,7 +645,7 @@ export class WarSystem {
   serialize(w: SaveWriter): void {
     w.section('war');
     w.json({
-      wars: [...this.wars.values()], truces: [...this.truces], queued: this.queued, calls: this.calls, transfers: this.transfers,
+      wars: [...this.wars.values()], truces: [...this.truces], queued: this.queued, transfers: this.transfers,
       residual: [...this.residual], tension: [...this.tension], nextWarId: this.nextWarId,
     });
   }
@@ -715,7 +653,7 @@ export class WarSystem {
   restore(r: SaveReader): void {
     r.section('war');
     const d = r.json<{
-      wars: War[]; truces: [number, number][]; queued: Queued[]; calls: CallToArms[]; transfers: Transfer[];
+      wars: War[]; truces: [number, number][]; queued: Queued[]; transfers: Transfer[];
       residual: [number, [number, number]][]; tension: [number, number][]; nextWarId: number;
     }>();
     this.wars.clear();
@@ -727,7 +665,6 @@ export class WarSystem {
     this.truces.clear();
     for (const [k, v] of d.truces) this.truces.set(k, v);
     this.queued.splice(0, this.queued.length, ...d.queued);
-    this.calls.splice(0, this.calls.length, ...d.calls);
     this.transfers.splice(0, this.transfers.length, ...d.transfers);
     this.residual.clear();
     for (const [k, v] of d.residual) this.residual.set(k, v);

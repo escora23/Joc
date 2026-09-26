@@ -177,6 +177,8 @@ function loop(): void {
       n = 1;
     }
   } else if (g.phase === 'playing' && !held && clock.rate > 0) {
+    // v2 (W3): the human's inbox items count unpaused real time (§5.3: nothing expires before 60 real seconds).
+    g.diplomacy.addRealTime(dtSec * 1000);
     accTicks += (clock.rate * dtSec) / GAME_SECONDS_PER_TICK;
     // Command mode: the controlled unit and its surroundings advance between ticks (W5 registers the systems).
     if (clock.mode === 'tactical' || clock.mode === 'travel') g.subStep(clock.rate * dtSec);
@@ -230,6 +232,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
       case 'init': {
         game = new Game(msg.config, msg.world);
         game.onError = postError;
+        game.diplomacy.realTimeFloor = true;
         held = msg.config.instantStart && msg.config.autoSpawnTile >= 0;
         clock = { mode: 'strategic', rate: STRATEGIC_RATE * game.speed, tickPeriodMs: game.speed > 0 ? 100 / game.speed : 0, speed: game.speed };
         post({ kind: 'ready' });
@@ -242,6 +245,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
           const g = Game.restore(new SaveReader(msg.blob), msg.world);
           game = g;
           g.onError = postError;
+          g.diplomacy.realTimeFloor = true;
           held = false;
           clock = { mode: 'strategic', rate: 0, tickPeriodMs: 0, speed: g.speed };
           post({ kind: 'ready' });

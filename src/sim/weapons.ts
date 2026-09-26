@@ -4,14 +4,15 @@
 
 import {
   AI_CRUISE_PER_PLAYER_TICKS, AI_CRUISE_WORLD_MAX, AI_CRUISE_WORLD_WINDOW, AI_FIRST_NUKE_TICK, AI_NUKES_IN_FLIGHT,
-  AI_NUKE_GAP_TICKS, AI_NUKE_PER_PLAYER_TICKS, BALANCE, HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, POP_PER_CITY_LEVEL, POP_PER_TILE,
-  TILE_COUNT, TILE_KM, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick,
+  AI_NUKE_GAP_TICKS, AI_NUKE_PER_PLAYER_TICKS, HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, POP_PER_CITY_LEVEL, POP_PER_TILE,
+  TILE_COUNT, TILE_KM, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick, RADAR_SAM_RANGE_MUL, structureLevel,
 } from '../shared/constants';
+import { tileKm } from '../shared/orders';
 import type { NukeWeapon } from '../shared/protocol';
 import { StructureType, UnitState, UnitType, type WeaponType } from '../shared/types';
 import {
-  CRUISE_RANGE, INTERCEPT_WEAPON_MUL, MIRV_SPLIT_T, MIRV_SPREAD, MIRV_WARHEADS,
-  NUKE_ALLY_BREAK_TILES, SAM_COOLDOWN_TICKS, SILO_COOLDOWN_TICKS, TERMINAL_PHASE_T, WARSHIP_SHELL_DAMAGE, samRange,
+  CRUISE_RANGE, MIRV_SPLIT_T, MIRV_SPREAD, MIRV_WARHEADS,
+  NUKE_ALLY_BREAK_TILES, TERMINAL_PHASE_T, WARSHIP_SHELL_DAMAGE,
 } from './balance';
 import type { Game } from './game';
 import { Mode, Player, Structure, Unit } from './state';
@@ -85,17 +86,26 @@ export class WeaponSystem {
     const tx = (targetTile % MAP_W) + 0.5, ty = ((targetTile / MAP_W) | 0) + 0.5;
     let silo: Structure | undefined;
     let anySilo = false;
+    // v2 (§6.2): the silo's level unlocks the weapon (L1 cruise + atom, L2 + H-bomb, L3 + MIRV).
+    const allows = (s: Structure) => (structureLevel(s.type, s.level).weapons ?? []).includes(weapon);
+    let levelTooLow = false;
     if (siloId >= 0) {
       const s = g.structureMap.get(siloId);
       if (s && s.owner === p.id && s.type === StructureType.MissileSilo) {
         anySilo = true;
-        if (s.operational && s.cooldownTicks <= 0) silo = s;
+        if (!allows(s)) levelTooLow = true;
+        else if (s.operational && s.cooldownTicks <= 0) silo = s;
       }
     } else {
       let bestD = Infinity;
       for (const s of g.structByOwner.get(p.id) ?? []) {
         if (s.type !== StructureType.MissileSilo) continue;
         anySilo = true;
+        if (!allows(s)) {
+          levelTooLow = true;
+          continue;
+        }
+        levelTooLow = false;
         if (!s.operational || s.cooldownTicks > 0) continue;
         const d = dist2(s.x, s.y, tx, ty);
         if (weapon === UnitType.CruiseMissile && d > CRUISE_RANGE * CRUISE_RANGE) continue;
@@ -106,7 +116,8 @@ export class WeaponSystem {
       }
     }
     if (!silo) {
-      g.message(p.id, anySilo ? 'msg.siloCooldown' : 'msg.noSilo');
+      const lowOnly = levelTooLow && !(g.structByOwner.get(p.id) ?? []).some((s) => s.type === StructureType.MissileSilo && allows(s));
+      g.message(p.id, !anySilo ? 'msg.noSilo' : lowOnly ? 'msg.siloLevel' : 'msg.siloCooldown', 'warning', { weapon });
       return false;
     }
     if (weapon === UnitType.CruiseMissile && dist2(silo.x, silo.y, tx, ty) > CRUISE_RANGE * CRUISE_RANGE) {
@@ -120,8 +131,8 @@ export class WeaponSystem {
     }
     p.gold -= cost;
     p.stats.goldSpent += cost;
-    const cd = SILO_COOLDOWN_TICKS / silo.level;
-    silo.cooldownTicks = Math.round(weapon === UnitType.HydrogenBomb ? cd * 1.5 : weapon === UnitType.Mirv ? cd * 2.5 : weapon === UnitType.CruiseMissile ? cd * 0.5 : cd);
+    // Reload 24 / 12 / 8 h by level (§2.4).
+    silo.cooldownTicks = structureLevel(silo.type, silo.level).reloadTicks ?? 240;
     g.structuresDirty = true;
     if (weapon === UnitType.Mirv) p.mirvsLaunched++;
     const u = this.launch(p.id, weapon, silo.tile, targetTile, silo.id);
@@ -407,7 +418,7 @@ export class WeaponSystem {
         case UnitType.Bomber:
         case UnitType.DroneSwarm:
         case UnitType.FighterSquadron:
-          if (u.mode === Mode.Strike || u.mode === Mode.Intercept || u.mode === Mode.Cap) threats.push(u);
+          if (u.mode === Mode.Strike || u.mode === Mode.Intercept || u.mode === Mode.Cap || u.mode === Mode.Patrol || u.mode === Mode.Chase) threats.push(u);
           break;
       }
     }
@@ -426,28 +437,33 @@ export class WeaponSystem {
     }
   }
 
+  /**
+   * v2 (§6.2): SAM levels. Against aircraft and cruise missiles: 8 / 10 / 12 tiles (×1.25 inside own radar coverage),
+   * 70 / 75 / 80 % per interceptor; against ballistic warheads in their final phase: 5 / 6 / 8 tiles, 45 / 55 / 65 %.
+   * A salvo of 1 / 2 / 3 interceptors, then a 2 h reload.
+   */
   private samEngage(s: Structure, threats: Unit[]): void {
     const g = this.g;
+    const lv = structureLevel(s.type, s.level);
     const radar = g.economy.radarCovers(s.owner, s.x, s.y);
-    const range = samRange(s.level, radar);
-    const r2 = range * range;
+    const airKm = (lv.rangeTiles ?? 8) * (radar ? RADAR_SAM_RANGE_MUL : 1) * TILE_KM;
+    const abmKm = (lv.abmTiles ?? 5) * (radar ? RADAR_SAM_RANGE_MUL : 1) * TILE_KM;
     let best: Unit | null = null, bestScore = Infinity;
     for (const u of threats) {
       if (u.dead || u.owner === s.owner || g.isAllied(s.owner, u.owner)) continue;
       const maxEngaged = u.type === UnitType.HydrogenBomb || u.type === UnitType.Mirv ? 3 : 2;
       if ((this.engagedThisTick.get(u.id) ?? 0) >= maxEngaged) continue;
-      const aimD2 = dist2(s.x, s.y, u.toX, u.toY);
-      const posD2 = dist2(s.x, s.y, u.x, u.y);
       let score: number;
       if (BALLISTIC.has(u.type)) {
-        // Defend the area: warheads falling inside our umbrella.
-        if (aimD2 > r2) continue;
+        // Defend the area: warheads falling inside our anti-ballistic umbrella.
+        if (tileKm(s.x, s.y, u.toX, u.toY) > abmKm) continue;
         score = (1 - u.t) * 100 + (u.type === UnitType.HydrogenBomb ? -50 : 0);
       } else {
-        if (posD2 > r2) continue;
+        const d = tileKm(s.x, s.y, u.x, u.y);
+        if (d > airKm) continue;
         const tgt = g.owner[u.targetTile] ?? 0;
         if (!(g.isHostile(s.owner, u.owner) || tgt === s.owner || g.isAllied(s.owner, tgt))) continue;
-        score = 200 + posD2 * 0.01 + (u.type === UnitType.FighterSquadron ? 100 : 0);
+        score = 200 + d * 0.01 + (u.type === UnitType.FighterSquadron ? 100 : 0);
       }
       if (score < bestScore) {
         bestScore = score;
@@ -457,10 +473,18 @@ export class WeaponSystem {
     if (!best) return;
     this.fireInterceptor(s, best, radar);
     s.timer++;
-    if (s.timer >= s.level) {
-      s.cooldownTicks = SAM_COOLDOWN_TICKS;
+    if (s.timer >= (lv.salvo ?? 1)) {
+      s.cooldownTicks = lv.reloadTicks ?? 20;
       g.structuresDirty = true;
     }
+  }
+
+  /** SAM reach of a site now (tiles): air and anti-ballistic, ×1.25 inside its owner's radar coverage (cards, rings). */
+  samReach(s: Structure): { air: number; abm: number; radar: boolean } {
+    const lv = structureLevel(s.type, s.level);
+    const radar = this.g.economy.radarCovers(s.owner, s.x, s.y);
+    const k = radar ? RADAR_SAM_RANGE_MUL : 1;
+    return { air: (lv.rangeTiles ?? 8) * k, abm: (lv.abmTiles ?? 5) * k, radar };
   }
 
   /**
@@ -470,8 +494,13 @@ export class WeaponSystem {
    */
   private fireInterceptor(s: Structure, target: Unit, radar: boolean): void {
     const g = this.g;
-    const mul = INTERCEPT_WEAPON_MUL[target.type] ?? 0.7;
-    const chance = Math.min(0.95, BALANCE.samInterceptChance * mul + (radar ? 0.1 : 0) + 0.04 * (s.level - 1));
+    const lv = structureLevel(s.type, s.level);
+    const ballistic = BALLISTIC.has(target.type);
+    // §6.2 hit chance per level; heavy warheads and cruise missiles are harder (§6.3 multipliers).
+    const base = ballistic ? (lv.hitBallistic ?? 0.45) : (lv.hitAir ?? 0.7);
+    const mul = ballistic ? (target.type === UnitType.HydrogenBomb ? 0.85 : target.type === UnitType.MirvWarhead ? 0.7 : 1)
+      : target.type === UnitType.CruiseMissile ? 0.65 : 1;
+    const chance = Math.min(0.95, base * mul);
     const hit = g.rngCombat.next() < chance;
     this.engagedThisTick.set(target.id, (this.engagedThisTick.get(target.id) ?? 0) + 1);
     g.emit({ type: 'combat', tick: g.tick, kind: 'sam', owner: s.owner, fromX: s.x, fromY: s.y, toX: target.x, toY: target.y, hit });
@@ -738,7 +767,7 @@ export class WeaponSystem {
           if (!m) this.nukedBy.set(o, (m = new Map()));
           m.set(u.owner, tick);
         }
-        if (isNuke && g.isAllied(u.owner, o) && ni + no > NUKE_ALLY_BREAK_TILES / 4) g.diplomacy.breakAlliance(g.playerById[u.owner]!, o);
+        if (isNuke && g.isAllied(u.owner, o) && ni + no > NUKE_ALLY_BREAK_TILES / 4) g.diplomacy.breakAllianceByStrike(u.owner, o);
       }
     }
     if (isNuke) {

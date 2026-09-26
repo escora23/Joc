@@ -17,7 +17,7 @@
 import type { PlayerCommand, SimEvent } from './protocol';
 import type { Rng } from './rng';
 import type {
-  AttackState, Difficulty, GameConfig, GamePhase, PairState, PeaceTerms, Personality, PlayerKind, PlayerStatsCounters, StructureType,
+  AttackState, Demand, Difficulty, GameConfig, GamePhase, PairState, PeaceTerms, ProposalKind, ProposalStatus, ReasonView, TreatyKind, TreatyView, Personality, PlayerKind, PlayerStatsCounters, StructureType,
   UnitState, UnitType, WarGoal, WorldEventKind, WorldInit,
 } from './types';
 
@@ -167,8 +167,60 @@ export interface SimFrontApi {
   garrison(f: SimFront, p: number): number;
 }
 
+// --- v2 (W3): diplomacy (DESIGN_V2 §5, §14.7, §14.10) ---------------------------------------------
+/** A proposal as sim-ai sees it. */
+export interface SimProposal {
+  readonly id: number;
+  readonly from: number;
+  readonly to: number;
+  readonly kind: ProposalKind;
+  readonly terms?: PeaceTerms;
+  readonly demand?: Demand;
+  readonly war: number;
+  readonly target: number;
+  readonly gold: number;
+  readonly createdTick: number;
+  readonly status: ProposalStatus;
+  readonly resolvedTick: number;
+  readonly ultimatum?: boolean;
+  readonly counterOf?: number;
+}
+
+/** An AI's answer: accept or not, with the strongest reasons (i18n keys + params) and an optional counter-offer. */
+export interface ProposalAnswer {
+  accept: boolean;
+  reasons: ReasonView[];
+  counter?: { kind: ProposalKind; terms?: PeaceTerms };
+}
+
+/** The diplomacy system (src/sim/diplomacy.ts) seen from sim-ai. */
+export interface SimDiplomacyApi {
+  opinion(of: number, toward: number): number;
+  reasons(of: number, toward: number): ReasonView[];
+  /** Remember a reason (keys of REMEMBERED in diplomacy.ts; value overrides the default, e.g. a gift's size). */
+  addReason(of: number, toward: number, key: string, value?: number, params?: Record<string, string | number>): void;
+  giftValue(receiver: number, gold: number): number;
+  hasTreaty(a: number, b: number, kind: TreatyKind): boolean;
+  treatiesOf(p: number): TreatyView[];
+  canTransit(unitOwner: number, tileOwner: number): boolean;
+  hasPorts(p: number): boolean;
+  propose(from: number, to: number, kind: ProposalKind, opts?: { terms?: PeaceTerms; demand?: Demand; against?: number; gold?: number }): SimProposal | null;
+  proposeError(from: number, to: number, kind: ProposalKind, opts?: { terms?: PeaceTerms; demand?: Demand; against?: number; gold?: number }): [string, Record<string, string | number>?] | null;
+  proposal(id: number): SimProposal | undefined;
+  openProposals(p?: number): SimProposal[];
+  issueTension(from: number, to: number, reasonKey: string, params?: Record<string, string | number>): void;
+  lastTension(from: number, to: number): number;
+  issueUltimatum(from: number, to: number, demand: Demand): SimProposal | null;
+  noWarUntil(of: number, toward: number): number;
+  refusals(asker: number, refuser: number): number;
+  /** Tiles of `loser`'s band next to `winner`, in transfer order. */
+  band(loser: number, winner: number, tiles: number): number[];
+}
+
 export interface SimGame {
   readonly config: GameConfig;
+  /** v2 (W3): opinions, treaties, proposals (§5). */
+  readonly diplomacy: SimDiplomacyApi;
   /** v2 (W1): wars, truces, peace (§4). */
   readonly war: SimWarApi;
   readonly fronts: SimFrontApi;
@@ -257,6 +309,8 @@ export interface AiDirector {
   /** v2 (§12.8): the director's hidden state for a save (a graph of plain objects, Maps and registered classes). */
   snapshotState?(): unknown;
   restoreState?(state: unknown): void;
+  /** v2 (W3): answer a proposal addressed to one of its nations at the end of its deliberation (§5.3). */
+  answerProposal?(p: SimProposal): ProposalAnswer | null;
 }
 
 export interface WorldEventDirector {

@@ -26,7 +26,8 @@ import {
   ADVANCE_FULL_RATIO, ADVANCE_MAX_KMH, DEFENSE_REAR_SHARE, ENGAGEMENT_RATE, FRONTAGE_MAX, FRONTAGE_MIN, HUMAN_ID,
   LANDING_COAST_MUL, LANDING_STORM_TICKS, MAP_H, MAP_W, NEUTRAL_ADVANCE_KMH, NEUTRAL_TROOPS_PER_FRONT_TILE,
   OFFENSIVE_BREAK_TICKS, OFFENSIVE_CONTACT_TICKS, OFFENSIVE_RETURN_TICKS, OFFENSIVE_STALL_TICKS, RETREAT_LOSS,
-  SIEGE_DEFENSE_MUL, THRESHOLD_JITTER, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE,
+  SIEGE_DEFENSE_MUL, THRESHOLD_JITTER, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE, BOMBARD_ATTACK_MUL, DRONE_ADVANCE_MUL,
+  DRONE_ENEMY_ADVANCE_MUL, structureLevel,
 } from '../shared/constants';
 import { StructureType, TerrainClass, TerrainFlag, type AttackView } from '../shared/types';
 import { NEUTRAL_LOSS_DIV, terrainCombat, type TerrainCombat } from './balance';
@@ -38,9 +39,6 @@ import { Attack, Mode, type Player, type Unit } from './state';
 
 type EndReason = 'exhausted' | 'retreat' | 'defenderEliminated' | 'cancelled';
 
-/** Defense-post zones (§6.2): radius in tiles and the time / casualty multiplier by level. */
-const POST_RADIUS = [0, 3, 4.5, 6];
-const POST_MUL = [1, 1.5, 1.75, 2];
 /** Terrain time multipliers (§4.5) and terrain defense for casualties (§4.6). */
 const TERRAIN_TIME = { plains: 1, hills: 1.6, mountains: 2.6 };
 const TERRAIN_DEF = { plains: 1, hills: 1.2, mountains: 1.5, urban: 1.4 };
@@ -83,6 +81,10 @@ export class AttackSystem {
   private readonly posts: PostZone[] = [];
   private readonly atkArmor: Unit[] = [];
   private readonly defArmor: Unit[] = [];
+  /** Drone swarms supporting each side and warships bombarding for the attacker (this offensive, this tick). */
+  private dronesAtk = 0;
+  private dronesDef = 0;
+  private navalAtk = 0;
   private readonly ready: number[] = [];
   /** Terrain defense of tiles taken in the last 10 ticks (ring of per-tick sums). */
   private defSum = new Float64Array(10);
@@ -123,19 +125,9 @@ export class AttackSystem {
     return false;
   }
 
-  /** Attached divisions of `p` near a front (v2-stub(W1→W4): v1 frontArmor lists). */
+  /** Divisions of `p` attached to front `f` (FrontView.divisionsA/B), from the unit system (W4). */
   divisionsNear(p: number, f: Front): number {
-    let n = 0;
-    for (const u of this.g.unitSys.frontArmor(p)) {
-      for (let i = 0; i < f.samples.length; i += 2) {
-        const dx = wdx(u.x, f.samples[i]), dy = f.samples[i + 1] - u.y;
-        if (dx * dx + dy * dy <= 16) {
-          n++;
-          break;
-        }
-      }
-    }
-    return n;
+    return this.g.unitSys.divisionsNear(p, f.samples, p === f.a ? f.b : f.a);
   }
 
   // =================================================================================================
@@ -269,7 +261,7 @@ export class AttackSystem {
    * Set the corridor: origin = centroid of the attacker's contact tiles near the contact point closest to the click,
    * direction = toward the click (the local outward normal when the click is on the border itself or sideways).
    */
-  private setAxis(a: Attack, clickTile: number): boolean {
+  setAxis(a: Attack, clickTile: number): boolean {
     const g = this.g;
     const A = g.playerById[a.attacker];
     if (!A) return false;
@@ -625,7 +617,8 @@ export class AttackSystem {
     } else {
       const armorA = Math.min(2, 1 + 0.25 * this.atkArmor.length);
       const armorD = Math.min(2, 1 + 0.25 * this.defArmor.length);
-      Pa = a.troops * atkPower * armorA;
+      // §4.4: ×1.15 with drone support over the front, ×1.15 with naval bombardment of its coast.
+      Pa = a.troops * atkPower * armorA * (this.dronesAtk > 0 ? 1.15 : 1) * (this.navalAtk > 0 ? BOMBARD_ATTACK_MUL : 1);
       if (tribeDef) {
         let n = 0;
         for (const o of g.attackList) if (!o.ended && o.defender === D.id && o.boatId === 0) n++;
@@ -648,6 +641,9 @@ export class AttackSystem {
       const R = Pa / Math.max(1, Pd);
       a.ratio = R;
       v = ADVANCE_MAX_KMH * Math.min(1, Math.max(0, (R - 1) / (ADVANCE_FULL_RATIO - 1)));
+      // Drones over the front (§6.3): our advance ×1.15, the enemy's ×0.85 (never above the cap).
+      if (this.dronesAtk > 0) v *= DRONE_ADVANCE_MUL;
+      if (this.dronesDef > 0) v *= DRONE_ENEMY_ADVANCE_MUL;
     }
     a.pa = Pa;
     a.pd = Pd;
@@ -925,30 +921,30 @@ export class AttackSystem {
     return m;
   }
 
-  /** Attached divisions near this offensive (v2-stub(W1→W4): v1 frontArmor lists) and the defender's posts. */
+  /**
+   * The units supporting this offensive (W4 frontSupport, §4.4): attached divisions of each side near the corridor,
+   * drone swarms over the front and warships bombarding its coast; and the defender's defense posts (§6.2 levels).
+   */
   private collectArmor(a: Attack, A: Player, D: Player | undefined): void {
     const g = this.g;
     const atk = this.atkArmor, dfn = this.defArmor;
     atk.length = 0;
     dfn.length = 0;
     this.posts.length = 0;
+    this.dronesAtk = this.dronesDef = this.navalAtk = 0;
     if (!D) return;
-    const reach = a.frontage / 2 + ARMOR_REACH;
-    for (const u of g.unitSys.frontArmor(A.id)) {
-      if (u.targetPlayer !== a.defender && u.targetPlayer >= 0) continue;
-      if (this.nearAxis(a, u, reach)) atk.push(u);
-    }
-    for (const u of g.unitSys.frontArmor(D.id)) if (this.nearAxis(a, u, reach + 3)) dfn.push(u);
+    const sup = g.unitSys.frontSupport(a.id);
+    for (const u of sup.atk) atk.push(u);
+    for (const u of sup.def) dfn.push(u);
+    this.dronesAtk = sup.dronesAtk;
+    this.dronesDef = sup.dronesDef;
+    this.navalAtk = sup.navalAtk;
     for (const s of g.structByOwner.get(D.id) ?? []) {
       if (s.type !== StructureType.DefensePost || !s.operational) continue;
-      const lv = Math.max(1, Math.min(3, s.level));
-      this.posts.push({ x: s.x, y: s.y, r2: POST_RADIUS[lv] * POST_RADIUS[lv], mul: POST_MUL[lv] });
+      const lv = structureLevel(s.type, s.level);
+      const r = lv.radiusTiles ?? 3;
+      this.posts.push({ x: s.x, y: s.y, r2: r * r, mul: lv.timeMul ?? 1.5 });
     }
-  }
-
-  private nearAxis(a: Attack, u: Unit, reach: number): boolean {
-    const rx = wdx(a.originX, u.x), ry = u.y - a.originY;
-    return Math.abs(rx * a.dirY - ry * a.dirX) <= reach && rx * a.dirX + ry * a.dirY >= -reach;
   }
 
   private nearUnit(list: Unit[], t: number): boolean {

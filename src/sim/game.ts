@@ -19,7 +19,7 @@ import {
 } from '../shared/protocol';
 import { Rng } from '../shared/rng';
 import type {
-  AiDirector, ModifierKey, NewPlayerDef, SimAttack, SimGame, SimPlayer, SimStructure, SimUnit, WorldEventDirector,
+  AiDirector, ModifierKey, NewPlayerDef, ProposalAnswer, SimAttack, SimGame, SimPlayer, SimProposal, SimStructure, SimUnit, WorldEventDirector,
 } from '../shared/simapi';
 import { isPlayableTerrain, isShoreTerrain, isWaterTerrain } from '../shared/terrain';
 import {
@@ -34,7 +34,7 @@ import {
   AI_START_MUL, CAPITAL_LOOT, CIVILIANS_PER_TILE, ELIMINATION_LOOT, HOSTILITY_TICKS, SPAWN_COUNTDOWN_TICKS,
   START_GOLD_TRIBE, START_TROOPS_HUMAN, START_TROOPS_TRIBE, STRUCTURE_MIN_DIST2, unitPrice,
 } from './balance';
-import { Diplomacy } from './diplomacy';
+import { DiplomacySystem } from './diplomacy';
 import { EconomySystem } from './economy';
 import { EnclaveSystem } from './enclaves';
 import { createFallbackAi } from './fallbackAi';
@@ -44,6 +44,7 @@ import { LabelPlacer } from './labels';
 import { DynamicGrid, StaticGrid, dist2 } from './spatial';
 import { Attack, Player, Structure, Unit } from './state';
 import { UnitSystem } from './units';
+import { createSimRules, type SimRules } from './rules';
 import { WaterNav } from './water';
 import { WarSystem } from './war';
 import { WeaponSystem, type Scar } from './weapons';
@@ -58,7 +59,7 @@ import { EVENT_CLASSES } from './events';
 export const FF_EVENT_TYPES = new Set<SimEvent['type']>([
   'phaseChanged', 'playerSpawned', 'nationEliminated', 'capitalCaptured', 'allianceFormed', 'allianceBroken',
   'allianceExpired', 'embargoChanged', 'gameOver', 'warDeclared', 'warEnded', 'capitulation', 'escalation', 'siege',
-  'hegemony', 'unrest',
+  'hegemony', 'unrest', 'proposal', 'treatyChanged', 'tension',
 ]);
 
 /**
@@ -117,7 +118,8 @@ export class Game implements SimGame {
   readonly unitSys: UnitSystem;
   readonly weapons: WeaponSystem;
   readonly economy: EconomySystem;
-  readonly diplomacy: Diplomacy;
+  /** v2 (W3): opinions, treaties, proposals (§5). */
+  readonly diplomacy: DiplomacySystem;
   readonly fronts: FrontTracker;
   readonly labels: LabelPlacer;
   readonly enclaves: EnclaveSystem;
@@ -162,10 +164,14 @@ export class Game implements SimGame {
   /** v2 (W1): offensive thresholds (§4.5) and war decisions (calls to arms), forked after the v1 streams. */
   readonly rngFront: Rng;
   readonly rngWar: Rng;
+  /** v2 (W3): deliberation times (forked after the W1 streams). */
+  readonly rngDiplo: Rng;
   /** v2 (W1): pair states, wars, peace (§4.1–§4.2, §4.13–§4.16). */
   readonly war: WarSystem;
   /** v2 (W1): the §4.17 checker (harness only, see Game.checkInvariants). */
   invariants: InvariantChecker | null = null;
+  /** v2 (W4): the order rules' view of this game (shared/orders.ts RulesView). */
+  readonly rules: SimRules;
   /** Why the tile being transferred right now changes owner. */
   transferContext: TransferContext = 'none';
   /** v2 (W1): tick a tile was last captured from another player (-1 = never), §4.13. */
@@ -191,6 +197,7 @@ export class Game implements SimGame {
     this.rngEconomy = this.rng.fork('sim-economy');
     this.rngFront = this.rng.fork('sim-front');
     this.rngWar = this.rng.fork('sim-war');
+    this.rngDiplo = this.rng.fork('sim-diplomacy');
     this.difficulty = config.difficulty;
     this.speed = config.speed;
     this.owner = new Uint16Array(TILE_COUNT);
@@ -215,13 +222,14 @@ export class Game implements SimGame {
     this.contact = new Int32Array(this.contactCap * this.contactCap);
     this.spawnDeadline = config.spawnTimeoutTicks;
 
+    this.rules = createSimRules(this);
     this.war = new WarSystem(this);
     if (Game.checkInvariants) this.invariants = new InvariantChecker(this);
     this.attacks = new AttackSystem(this);
     this.unitSys = new UnitSystem(this);
     this.weapons = new WeaponSystem(this);
     this.economy = new EconomySystem(this);
-    this.diplomacy = new Diplomacy(this);
+    this.diplomacy = new DiplomacySystem(this);
     this.fronts = new FrontTracker(this);
     this.labels = new LabelPlacer(this);
     this.enclaves = new EnclaveSystem(this);
@@ -312,9 +320,15 @@ export class Game implements SimGame {
     g.forceFull = true;
     g.structuresDirty = g.attacksDirty = g.alliancesDirty = g.worldEventsDirty = g.scarsDirty = true;
     g.war.dirty = g.war.trucesDirty = true;
+    g.diplomacy.treatiesDirty = g.diplomacy.opinionsDirty = g.diplomacy.proposalsDirty = true;
     g.fronts.dirty = true;
     g.enclaves.siegesDirty = true;
     return g;
+  }
+
+  /** v2 (W3): the AI director answers a proposal to one of its nations (null: the diplomacy system's default rule). */
+  answerProposal(p: SimProposal): ProposalAnswer | null {
+    return this.ai.answerProposal?.(p) ?? null;
   }
 
   private reportError(msg: string, err: unknown): void {
@@ -422,7 +436,8 @@ export class Game implements SimGame {
   unitCost(playerId: number, type: UnitType): number {
     const p = this.playerById[playerId];
     if (!p) return UNIT_DEFS[type].cost;
-    return unitPrice(type, type === UnitType.Mirv ? p.mirvsLaunched : p.unitCount[type]);
+    // v2 (W4): units in production count for the price (the Arsenal shows the price of the next one).
+    return unitPrice(type, type === UnitType.Mirv ? p.mirvsLaunched : p.unitCount[type] + p.queued[type]);
   }
 
   canBuild(playerId: number, type: StructureType, tile: number): boolean {
@@ -559,12 +574,17 @@ export class Game implements SimGame {
         return this.unitSys.buildUnit(p, cmd.unit, cmd.structureId);
       case 'launch':
         return this.weapons.launchCommand(p, cmd.weapon, cmd.targetTile, cmd.siloId);
+      // v1 unit commands (the AI's) are mapped onto v2 orders (§14.3).
       case 'moveUnit':
-        return this.unitSys.moveUnit(p, cmd.unitId, cmd.tile);
+        return this.unitSys.legacyMove(p, cmd.unitId, cmd.tile);
       case 'deployArmor':
-        return this.unitSys.deployArmor(p, cmd.unitId, cmd.targetTile);
+        return this.unitSys.legacyDeploy(p, cmd.unitId, cmd.targetTile);
       case 'airStrike':
-        return this.unitSys.airStrike(p, cmd.unitId, cmd.targetTile);
+        return this.unitSys.legacyStrike(p, cmd.unitId, cmd.targetTile);
+      case 'unitOrder':
+        return this.unitSys.order(p, cmd.unitIds, cmd.order, cmd.tile, cmd.targetId, cmd.ratio, cmd.confirm);
+      case 'cancelProduction':
+        return this.unitSys.cancelProduction(p, cmd.structureId);
       case 'allianceRequest':
         return this.diplomacy.request(p, cmd.target);
       case 'allianceReply':
@@ -576,9 +596,15 @@ export class Game implements SimGame {
       case 'donate':
         return this.diplomacy.donate(p, cmd.target, cmd.gold, cmd.troops);
       case 'emote':
-        return this.diplomacy.emote(p, cmd.target, cmd.emote);
+        return this.diplomacy.emote();
       case 'targetPlayer':
-        return this.diplomacy.targetPlayer(p, cmd.target);
+        return this.diplomacy.askHelp(p, cmd.target);
+      case 'propose':
+        return !!this.diplomacy.propose(p.id, cmd.target, cmd.kind, { terms: cmd.terms, demand: cmd.demand, war: cmd.war, against: cmd.against, gold: cmd.gold });
+      case 'answer':
+        return this.diplomacy.answer(p, cmd.proposalId, cmd.accept);
+      case 'leaveTreaty':
+        return this.diplomacy.leaveTreaty(p, cmd.target, cmd.treaty);
       case 'unitControl':
         return this.unitSys.control(p, cmd.unitId, cmd.controlled);
       case 'commandResult':
@@ -682,6 +708,7 @@ export class Game implements SimGame {
 
   emit(e: SimEvent): void {
     this.events.push(e);
+    this.diplomacy.onEvent(e);
     try {
       this.ai.onEvent(e);
     } catch (err) {
@@ -1499,9 +1526,34 @@ export class Game implements SimGame {
       u.alliances = this.diplomacy.allianceViews();
       u.allianceRequests = this.diplomacy.requestViews();
     }
+    // v2 (W3): treaties, the AIs' opinions of the human, the human's proposals.
+    const dip = this.diplomacy;
+    if (dip.treatiesDirty || full) {
+      dip.treatiesDirty = false;
+      u.treaties = dip.treatyViews();
+    }
+    if (dip.opinionsDirty || full) {
+      dip.opinionsDirty = false;
+      u.opinions = dip.opinionViews();
+    }
+    if (dip.proposalsDirty || full || (ticks > 0 && this.tick % 10 === 0 && dip.openProposals(HUMAN_ID).length > 0)) {
+      dip.proposalsDirty = false;
+      u.proposals = dip.proposalViews();
+    }
     if (this.doomsdayDirty || full) {
       this.doomsdayDirty = false;
       u.doomsday = this.doomsday;
+    }
+    // v2 (W4): planned paths, the rail graph, the human's production queue.
+    const routes = this.unitSys.takeRoutes(full);
+    if (routes) u.routes = routes;
+    if (this.economy.railChanged || full) {
+      this.economy.railChanged = false;
+      u.rail = this.economy.railPairs().slice();
+    }
+    if (this.unitSys.productionDirty || full) {
+      this.unitSys.productionDirty = false;
+      u.production = this.unitSys.productionViews();
     }
     if (this.phase === 'spawn' || full) u.spawnDeadlineTick = this.spawnDeadline;
     if (this.winner) u.winner = this.winner;
@@ -1520,6 +1572,8 @@ export class Game implements SimGame {
       out.push({
         id: s.id, type: s.type, owner: s.owner, tile: s.tile, level: s.level, hp: Math.max(0, Math.min(1, s.hp)),
         built: Math.min(1, s.built), cooldown: this.economy.cooldownFraction(s),
+        upgrade: s.upgradeUntil > 0 ? Math.min(0.999, Math.max(0.001, (this.tick - s.upgradeStart) / Math.max(1, s.upgradeUntil - s.upgradeStart))) : 0,
+        producing: s.queue.length,
       });
     }
     return out;
@@ -1544,6 +1598,12 @@ export class Game implements SimGame {
       a[o + UF.alt] = u.alt;
       a[o + UF.originX] = u.originX;
       a[o + UF.originY] = u.originY;
+      a[o + UF.mode] = this.unitSys.publicMode(u);
+      a[o + UF.order] = u.order;
+      a[o + UF.eta] = u.eta;
+      a[o + UF.frontKey] = u.frontKey;
+      a[o + UF.home] = u.home;
+      a[o + UF.serial] = u.serial;
       o += UNIT_STRIDE;
     };
     for (const u of this.unitMap.values()) put(u, u.state);
@@ -1574,21 +1634,22 @@ export function neighbors4(tile: number, out: Int32Array): number {
 // -------------------------------------------------------------------------------------------------
 type SaveCtor = abstract new (...args: never[]) => unknown;
 const SAVE_MERGE = new Set<SaveCtor>([
-  Game, AttackSystem, UnitSystem, WeaponSystem, EconomySystem, Diplomacy, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav,
+  Game, AttackSystem, UnitSystem, WeaponSystem, EconomySystem, DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav,
 ]);
 const SAVE_SPEC: GraphSpec = {
   classes: [
     Game, Player, Structure, Unit, Attack, RngClass, SGrid, DGrid, TileHeap, AttackSystem, UnitSystem, WeaponSystem, EconomySystem,
-    Diplomacy, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES,
+    DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES,
   ],
   skip: new Map<SaveCtor, ReadonlySet<string>>([
-    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug'])],
+    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug', 'rules'])],
     [AttackSystem, new Set(['terrainTime', 'terrainDef', 'nb', 'nb2', 'tc', 'ready', 'atkArmor', 'defArmor', 'posts'])],
     [WeaponSystem, new Set(['falloutStamp', 'threats'])],
     [EnclaveSystem, new Set(['stamp', 'stack', 'nb', 'nb2'])],
-    [UnitSystem, new Set(['comps', 'scratch'])],
+    [UnitSystem, new Set(['comps', 'scratch', 'stations', 'routesOut', 'supportTick', 'support', 'heap', 'aStamp', 'aG', 'aParent', 'aGen', 'rnd'])],
     [EconomySystem, new Set(['comps', 'comps2', 'atWarSet'])],
     [FrontTracker, new Set(['nb'])],
+    [DiplomacySystem, new Set(['cache', 'cacheTick', 'realTimeFloor'])],
     [WaterNav, new Set([
       'terrain', 'comp', 'compSize', 'coastal', 'node', 'nodeCount', 'nodeRep', 'adjStart', 'adjList', 'adjCost', 'ngen', 'nstamp',
       'nclosed', 'ng', 'nparent', 'nheap', 'bgen', 'bstamp', 'bparent', 'bqueue', 'nb',

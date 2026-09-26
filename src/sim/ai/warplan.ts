@@ -1,11 +1,13 @@
 // FRONT ULTRA — the AI war pipeline (DESIGN_V2 §5.7, steps 1–2 and 5–8; owner: sim-ai, built by W1). Worker-only.
 //
-//   1. Candidates every war clock: bordering players scored by scoreTarget, filtered by an OPINION PROXY (v1 trust and
-//      grievance mapped to −100…+100, plus border friction, betrayal and the runaway leader): < −30 required, unless a
-//      conqueror faces a neighbour at ≤ 0.5× its strength.
+//   1. Candidates every war clock: bordering players scored by scoreTarget, filtered by the nation's real OPINION of
+//      them (the §5.1 reasons of the diplomacy system): < −30 required, unless a conqueror faces a neighbour at ≤ 0.5×
+//      its strength (and the other exceptions below).
 //   2. A goal and a reason key (retaliation, coalition, conquest, tribute, border).
-//   3. A `tension` event, then the declaration after the tension lead of §2.4 (Easy 480, Normal 240, Hard/Insane 120).
-//      v2-stub(W1→W3): W3 replaces the proxy with real opinions, adds ultimatums and routes tension through its system.
+//   3–4. prepareWar (W3): a public `tension` through the diplomacy system, then, after the tension lead of §2.4 (Easy
+//      480, Normal 240, Hard/Insane 120), an ULTIMATUM with probability by personality (§5.4) or the declaration. An
+//      accepted ultimatum ends the matter; a refusal leads to war with probability by personality; an ultimatum left
+//      to expire is not a refusal, and the declaration follows as planned.
 //   5. The declaration carries the first offensive, which starts by itself when the mobilization ends.
 //   6. War plans every 120 ticks: front priorities (alta where the enemy attacks), offensives topped up to the commit
 //      ratio and re-aimed at the enemy capital or its largest region; naval landings when there is no land front.
@@ -21,6 +23,7 @@ import {
 import type { SimPlayer, SimWar } from '../../shared/simapi';
 import { UnitType, type PeaceTerms, type WarGoal } from '../../shared/types';
 import { alive, relation, strength, type AiContext } from './context';
+import { REFUSAL_WAR_ODDS, ULTIMATUM_ODDS, ultimatumDemand } from './diplomacy';
 import type { Brain } from './state';
 import { scoreTarget } from './war';
 import { reachOf } from './naval';
@@ -159,52 +162,9 @@ function neededShare(p: SimPlayer, G: number, ratio: number, armor = 1): number 
   return (ratio * Math.max(1, G)) / Math.max(1, p.troops * armor);
 }
 
-/**
- * The opinion proxy of `b` about `q` (−100…+100), built from the reasons of §5.1 that the sim already knows, on top of
- * v1's trust and grievance. v2-stub(W1→W3): W3's opinion model replaces it.
- */
-export function opinionProxy(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): number {
-  const g = ctx.g;
-  const r = b.relations.get(q.id);
-  let o = 0;
-  if (r) {
-    o += 100 * r.trust - 10 * r.grievance;
-    if (r.betrayedUs) o -= 60;
-    if (g.tick - r.attackedTick < 2400) o -= 25; // pastWar / they attacked us recently
-    if (g.tick - r.nukedTick < 7200) o -= 60;
-  }
-  // borderLong / borderShort: a shared border is a standing dispute.
-  const c = b.front.contact.get(q.id) ?? 0;
-  if (c > 60) o -= 10;
-  else if (c > 0) o -= 3;
-  // sizeThreat: a neighbour with twice our land or more (−5 at 2×, −20 at 4× and above).
-  if (c > 0 && q.tiles >= p.tiles * 2) o -= Math.min(20, 5 + 7.5 * (q.tiles / Math.max(1, p.tiles) - 2));
-  // runawayLeader: −(0…30) × coalition above the difficulty's coalition share.
-  if (ctx.world.leader === q.id && ctx.world.leaderShare > b.diff.coalitionShare) {
-    o -= Math.min(30, 30 * (ctx.world.leaderShare - b.diff.coalitionShare) / 0.2) * (0.5 + b.prof.coalition);
-  }
-  // unprovokedWar (half-life 20 days = 4,800 ticks) and reputationTraitor.
-  const agg = ctx.world.unprovoked.get(q.id);
-  if (agg !== undefined) o -= 10 * Math.pow(0.5, (g.tick - agg) / 4800);
-  if (q.traitorUntilTick > g.tick) o -= 15;
-  // personality affinity: traders like traders, conquerors distrust conquerors.
-  const qb = ctx.brains.get(q.id);
-  if (qb && qb.personality === b.personality) o += b.personality === 'trader' ? 10 : b.personality === 'conqueror' ? -10 : 0;
-  // alliance / commonEnemy.
-  if (p.allies.has(q.id)) o += 25;
-  for (const a of q.allies) {
-    if (p.allies.has(a)) {
-      o += 10;
-      break;
-    }
-  }
-  for (const e of g.war.enemiesOf(p.id)) {
-    if (g.war.atWar(q.id, e)) {
-      o += 20;
-      break;
-    }
-  }
-  return clamp(o, -100, 100);
+/** `p`'s opinion of `q` (§5.1, the diplomacy system's reasons). */
+function opinionOf(ctx: AiContext, p: SimPlayer, q: SimPlayer): number {
+  return ctx.g.diplomacy.opinion(p.id, q.id);
 }
 
 /** Offensive wars `p` wages (it declared them; wars joined by a call to arms and defensive wars do not count). */
@@ -308,16 +268,24 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
   if (b.tension) {
     const t = b.tension;
     const q = g.player(t.target);
-    const stale = !alive(q) || (g.isAllied(p.id, t.target) && t.reasonKey !== 'war.reason.ambition') || g.war.atWar(p.id, t.target) || g.tick - t.tick > lead * 4 + 600;
+    const waiting = (t.ultimatum ?? 0) > 0;
+    const since = t.answeredTick ?? t.tick;
+    const stale = !alive(q) || (g.isAllied(p.id, t.target) && t.reasonKey !== 'war.reason.ambition') || g.war.atWar(p.id, t.target)
+      || (!waiting && g.tick - since > lead * 4 + 600);
     if (stale) {
       b.tension = null;
-    } else if (g.tick - t.tick >= lead && mayDeclare(ctx, b, p) && !gate.swamped) {
+    } else if (g.tick - t.tick >= lead && (waiting || (mayDeclare(ctx, b, p) && !gate.swamped))) {
+      // An ultimatum out: wait for its answer (or its expiry), then declare or stand down.
+      if (waiting && (!ultimatumStage(ctx, b, p, q!) || !b.tension)) return;
+      if (!mayDeclare(ctx, b, p) || gate.swamped) return;
       const naval = !g.sharesBorder(p.id, t.target);
       // The odds are re-read when the lead has run: a target that grew or made peace elsewhere is dropped.
       const need = naval ? 0 : neededShare(p, enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1), aggressorRatio(ctx, b, p, q!), armorPlan(ctx, p));
       if (need > MAX_COMMIT) {
         if (g.tick - t.tick > lead * 3) b.tension = null;
       } else if (g.war.declareError(p.id, t.target) === null) {
+        // The war would go ahead now: first, perhaps, an ultimatum (§5.4).
+        if (!waiting && !ultimatumStage(ctx, b, p, q!)) return;
         const G0 = naval ? 0 : enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1);
         const want = Math.min(commitRatio(b) * p.troops, Math.max(restrained(ctx, b, q!) ? 0 : usefulWidthTroops(q!), G0 * Math.max(LAUNCH_RATIO, targetRatio(ctx, b, q)) * 1.05));
         const ratio = clamp(Math.max(need * 1.05, want / Math.max(1, p.troops)), 0.05, MAX_COMMIT);
@@ -354,8 +322,11 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     // Protecting the human (§4.16): tension may start one lead before the grace ends, never earlier.
     if (id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < graceEnd - lead) continue;
     if (id === HUMAN_ID && g.war.declareError(p.id, id) === 'msg.warCap') continue;
+    // An accepted ultimatum bought peace for a while (§5.4).
+    if (g.diplomacy.noWarUntil(p.id, id) > g.tick) continue;
     const weak = strength(q) <= strength(p) * 0.5;
-    if (g.isAllied(p.id, id)) {
+    // A partner (alliance or non-aggression pact) is spared unless the rare betrayal of §5.6.
+    if (g.isAllied(p.id, id) || g.diplomacy.hasTreaty(p.id, id, 'nap')) {
       // Betrayal (§5.6): an ally is spared unless the gain is large (it is much weaker, and not allied to our other
       // friends) and the personality's word gives way: 1 − loyalty, rolled once per decision cycle, scaled down.
       if (!weak || betrayalBlocked(ctx, p, q)) continue;
@@ -369,7 +340,7 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
       }
       continue;
     }
-    const opinion = opinionProxy(ctx, b, p, q);
+    const opinion = opinionOf(ctx, p, q);
     // Step 1 filter: hostile opinion (< −30), unless a conqueror faces a much weaker neighbour, an opportunist a cold
     // one (< −10) already bleeding in another war, or a conqueror, nuker or opportunist a cold neighbour it could beat
     // with a third of its army (prey: the temptation of overwhelming local superiority, §5.8; turtles and traders go
@@ -406,13 +377,14 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     const base = b.homeTile;
     for (const q of g.players()) {
       if (q.id === p.id || !alive(q) || (q.kind !== 'nation' && q.kind !== 'human') || b.front.contact.has(q.id)) continue;
-      if (g.isAllied(p.id, q.id) || g.war.pairState(p.id, q.id) !== 'peace' || q.capitalTile < 0 || base < 0) continue;
+      if (g.isAllied(p.id, q.id) || g.diplomacy.hasTreaty(p.id, q.id, 'nap') || g.war.pairState(p.id, q.id) !== 'peace' || q.capitalTile < 0 || base < 0) continue;
+      if (g.diplomacy.noWarUntil(p.id, q.id) > g.tick) continue;
       if (q.id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < graceEnd - lead) continue;
       if (q.id === HUMAN_ID && g.war.declareError(p.id, q.id) === 'msg.warCap') continue;
       if (g.distance(base, q.capitalTile) > reach) continue;
       const weak = strength(q) <= strength(p) * 0.5;
       const prey = b.personality === 'conqueror' ? weak : weak && g.war.enemiesOf(q.id).length > 0;
-      if (!prey || opinionProxy(ctx, b, p, q) >= 10) continue;
+      if (!prey || opinionOf(ctx, p, q) >= 10) continue;
       const sc = scoreTarget(ctx, b, p, q, 6, gate.neutral) * 0.6;
       if (sc > bestScore) {
         bestScore = sc;
@@ -427,9 +399,59 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
   const goal = betray
     ? { goal: 'conquest' as WarGoal, reasonKey: 'war.reason.ambition', tensionKey: 'tension.ambition' }
     : chooseGoal(ctx, b, p, best);
-  b.tension = { target: best.id, goal: goal.goal, reasonKey: goal.reasonKey, tick: g.tick };
-  if (best.id === HUMAN_ID) g.war.recordTension(p.id, best.id);
-  g.emit({ type: 'tension', tick: g.tick, from: p.id, to: best.id, reasonKey: goal.tensionKey, params: { goal: goal.goal } });
+  prepareWar(ctx, b, p, best, goal, betray);
+}
+
+/**
+ * §5.7 steps 3–4 (W3): the grievance is stated publicly (a `tension` event through the diplomacy system, the warning
+ * T9 measures) and the plan is kept on the brain; after the tension lead the staff either issues an ultimatum or
+ * declares (thinkDeclarations). A betrayal is a surprise: no ultimatum.
+ */
+export function prepareWar(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer, goal: { goal: WarGoal; reasonKey: string; tensionKey: string }, betray = false): void {
+  const g = ctx.g;
+  b.tension = { target: q.id, goal: goal.goal, reasonKey: goal.reasonKey, tick: g.tick, ultimatum: betray ? -1 : 0 };
+  g.diplomacy.issueTension(p.id, q.id, goal.tensionKey, { goal: goal.goal });
+}
+
+/**
+ * The ultimatum stage (§5.4) when the tension lead has run. Returns true when the declaration may go ahead now, false
+ * while an ultimatum is issued or pending (or when the matter ended).
+ */
+function ultimatumStage(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): boolean {
+  const g = ctx.g;
+  const t = b.tension!;
+  if (t.ultimatum === undefined) t.ultimatum = 0;
+  if (t.ultimatum === 0) {
+    const odds = ULTIMATUM_ODDS[b.personality] ?? 0.7;
+    const demand = b.kind === 'autopilot' ? null : ultimatumDemand(ctx, b, p, q, t.goal);
+    if (!demand || ctx.rng.next() >= odds) {
+      t.ultimatum = -1;
+      return true;
+    }
+    const u = g.diplomacy.issueUltimatum(p.id, q.id, demand);
+    t.ultimatum = u ? u.id : -1;
+    return !u;
+  }
+  if (t.ultimatum < 0) return true;
+  const u = g.diplomacy.proposal(t.ultimatum);
+  if (!u || u.status === 'considering' || u.status === 'pending') return false;
+  t.answeredTick ??= g.tick;
+  if (u.status === 'accepted') {
+    // Satisfied: peace for a while (the diplomacy system enforces it).
+    b.tension = null;
+    return false;
+  }
+  if (u.status === 'rejected' || u.status === 'countered') {
+    t.ultimatum = -1;
+    if (ctx.rng.next() >= (REFUSAL_WAR_ODDS[b.personality] ?? 0.7)) {
+      b.tension = null;
+      return false;
+    }
+    return true;
+  }
+  // Expired or cancelled: not a refusal; the plan goes on as it was.
+  t.ultimatum = -1;
+  return true;
 }
 
 // =================================================================================================
@@ -608,7 +630,7 @@ function goalMet(ctx: AiContext, w: SimWar, p: number): boolean {
  * or any war it is clearly winning (score ≥ 40 with the enemy capital in hand) when its personality has the appetite:
  * turtles and traders take their terms instead.
  */
-function pressing(ctx: AiContext, w: SimWar, p: number): boolean {
+export function pressing(ctx: AiContext, w: SimWar, p: number): boolean {
   const side = w.a === p ? 0 : 1;
   if (side === 0 && w.goal === 'conquest') return true;
   const b = ctx.brains.get(p);
@@ -619,7 +641,7 @@ function pressing(ctx: AiContext, w: SimWar, p: number): boolean {
 }
 
 /** Would `q` accept a white peace from its enemy? (the side that holds out demands terms instead). */
-function answerWhite(ctx: AiContext, w: SimWar, q: number, enemy: number): 'yes' | 'no' | 'cede' | 'tribute' {
+export function answerWhite(ctx: AiContext, w: SimWar, q: number, enemy: number): 'yes' | 'no' | 'cede' | 'tribute' {
   const g = ctx.g;
   const ex = g.war.exhaustion(q);
   const s = g.war.warScore(q, enemy);
@@ -640,9 +662,13 @@ export function thinkPeace(ctx: AiContext, b: Brain, p: SimPlayer): void {
     const enemy = w.a === p.id ? w.b : w.a;
     const q = g.player(enemy);
     if (!alive(q)) continue;
-    // v2-stub(W1→W3): the human negotiates from W3's inbox; only its autopilot takes part here.
-    if (enemy === HUMAN_ID && !g.config.humanAutopilot) continue;
-    if (!ctx.brains.has(enemy)) continue;
+    // The human negotiates from its inbox (W3): the AI proposes, the human answers (its autopilot answers like an AI).
+    const human = enemy === HUMAN_ID && !g.config.humanAutopilot;
+    if (!human && !ctx.brains.has(enemy)) continue;
+    if (human) {
+      proposePeaceToHuman(ctx, b, p, w);
+      continue;
+    }
     const ex = g.war.exhaustion(p.id);
     const s = g.war.warScore(p.id, enemy);
     const mineConquest = pressing(ctx, w, p.id);
@@ -677,6 +703,31 @@ export function thinkPeace(ctx: AiContext, b: Brain, p: SimPlayer): void {
     // only at exhaustion 50: §4.15, winners hold out).
     if (ex >= (mineConquest ? 50 : 35) && Math.abs(s) < 25 && answerWhite(ctx, w, enemy, p.id) === 'yes') makePeace(ctx, p.id, enemy, { kind: 'white' }, 0);
   }
+}
+
+/**
+ * An AI at war with the human offers terms through the human's inbox (§5.3, §5.7 step 8): a losing, exhausted AI a
+ * white peace; a winner whose goal is met a cession or a tribute from the human; a stalemate both are tired of, a white
+ * peace. At most one open offer; the cooldown after a refusal applies.
+ */
+function proposePeaceToHuman(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar): void {
+  const g = ctx.g;
+  if (g.diplomacy.openProposals(p.id).some((x) => x.kind === 'peace' && x.to === HUMAN_ID)) return;
+  const ex = g.war.exhaustion(p.id);
+  const s = g.war.warScore(p.id, HUMAN_ID);
+  const conquest = pressing(ctx, w, p.id);
+  let terms: PeaceTerms | null = null;
+  if (w.a === p.id && !w.joined) {
+    const active = Math.max(b.warActive.get(w.id) ?? 0, w.mobilizeUntilTick);
+    if (g.tick - active >= FAILED_WAR_TICKS && w.net <= 0) terms = { kind: 'white' };
+  }
+  if (!terms && ex >= 45 && s <= 0 && !(conquest && ex < 70)) terms = { kind: 'white' };
+  const human = g.player(HUMAN_ID);
+  if (!terms && !conquest && goalMet(ctx, w, p.id) && s >= 25 && human) {
+    terms = s >= 40 ? { kind: 'cede', loser: HUMAN_ID, tiles: Math.max(1, Math.round(human.tiles * 0.1)) } : { kind: 'tribute', loser: HUMAN_ID };
+  }
+  if (!terms && ex >= (conquest ? 50 : 35) && Math.abs(s) < 25) terms = { kind: 'white' };
+  if (terms && !g.diplomacy.proposeError(p.id, HUMAN_ID, 'peace', { terms })) g.diplomacy.propose(p.id, HUMAN_ID, 'peace', { terms });
 }
 
 function makePeace(ctx: AiContext, a: number, b: number, terms: PeaceTerms, loser: number): void {

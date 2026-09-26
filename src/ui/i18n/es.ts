@@ -377,7 +377,9 @@ export const es: Dictionary = {
   'toast.underAttack': '¡{name} nos ataca con {n} tropas!',
   'toast.navalInvasion': '¡Invasión naval de {name} ({n} tropas)!',
   'toast.landing': '¡Desembarco enemigo de {name}!',
-  'toast.captured': 'Hemos capturado un(a) {s}',
+  'toast.captured': 'Hemos capturado un {s}',
+  'toast.captured.m': 'Hemos capturado un {s}',
+  'toast.captured.f': 'Hemos capturado una {s}',
 
   // ---- alarm
   'alarm.title': 'Alerta nuclear',
@@ -469,6 +471,17 @@ export const es: Dictionary = {
   'structure.armyBase': 'Base del ejército',
   'structure.navalYard': 'Astillero naval',
   'structure.radar': 'Radar',
+  // Grammatical gender of each structure noun (§12.7: «un puerto», «una fábrica»).
+  'structure.city.g': 'f',
+  'structure.port.g': 'm',
+  'structure.factory.g': 'f',
+  'structure.defensePost.g': 'm',
+  'structure.samSite.g': 'f',
+  'structure.missileSilo.g': 'm',
+  'structure.airbase.g': 'f',
+  'structure.armyBase.g': 'f',
+  'structure.navalYard.g': 'm',
+  'structure.radar.g': 'm',
   'structure.city.desc': 'Aumenta la población máxima y los ingresos. Mejorable hasta nivel 10.',
   'structure.port.desc': 'Envía buques mercantes que traen oro. Solo en la costa.',
   'structure.factory.desc': 'Conecta tus ciudades por ferrocarril: los trenes transportan oro.',
