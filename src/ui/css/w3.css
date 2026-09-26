@@ -5,7 +5,10 @@
    Alert feed (top-left, replaces the v1 toasts)
    --------------------------------------------------------------------------------------------- */
 .fu-alerts { display: flex; flex-direction: column; gap: 0.45rem; pointer-events: none; }
-.fu-alerts-list { display: flex; flex-direction: column; gap: 0.45rem; }
+.fu-alerts-list { display: flex; flex-direction: column; gap: 0.45rem; overflow: hidden; }
+.fu-alerts-list > .fu-alert { flex-shrink: 0; }
+/* Clipped by the room above the advisor / minimap: the oldest entries fade out (all of them stay in the Registro). */
+.fu-alerts-list.is-clipped { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); }
 .fu-alert {
   --ac: var(--fu-accent);
   position: relative; display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.55rem 0.6rem 0.6rem 0.7rem;

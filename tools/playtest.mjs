@@ -329,18 +329,23 @@ try {
     // A click on an AI nation's land: refused with a toast that says whose land it is.
     const ai = await page.evaluate(() => {
       const v = window.__front.ctx.sim.view;
-      // The biggest nation; the owned tile nearest its label, in the middle of its land (8 neighbours its own).
-      const p = v.playerList.filter((q) => q.kind === 'nation' && q.id !== 1 && q.tiles > 20).sort((a, b) => b.tiles - a.tiles)[0];
-      if (!p) return null;
-      let best = -1, bd = Infinity;
+      // The biggest nations first: an owned tile inside their land (4 neighbours their own), not under the label and
+      // capital icon (a click there picks the icon), so 3+ tiles away from it.
+      const list = v.playerList.filter((q) => q.kind === 'nation' && q.id !== 1 && q.tiles > 20).sort((a, b) => b.tiles - a.tiles);
+      const byOwner = new Map(list.map((p) => [p.id, { p, best: -1, bd: Infinity }]));
       for (let t = 1600; t < v.owner.length - 1600; t++) {
-        if (v.owner[t] !== p.id) continue;
-        if (v.owner[t - 1] !== p.id || v.owner[t + 1] !== p.id || v.owner[t - 1600] !== p.id || v.owner[t + 1600] !== p.id) continue;
-        // Not under the nation's label and capital icon (a click there picks the icon): 5+ tiles away from it.
-        const d = Math.hypot((t % 1600) - p.labelX, Math.floor(t / 1600) - p.labelY);
-        if (d >= 5 && d < bd) { bd = d; best = t; }
+        const r = byOwner.get(v.owner[t]);
+        if (!r) continue;
+        const id = r.p.id;
+        if (v.owner[t - 1] !== id || v.owner[t + 1] !== id || v.owner[t - 1600] !== id || v.owner[t + 1600] !== id) continue;
+        const d = Math.hypot((t % 1600) - r.p.labelX, Math.floor(t / 1600) - r.p.labelY);
+        if (d >= 3 && d < r.bd) { r.bd = d; r.best = t; }
       }
-      return best >= 0 ? { id: p.id, tile: best } : null;
+      for (const p of list) {
+        const r = byOwner.get(p.id);
+        if (r.best >= 0) return { id: p.id, tile: r.best };
+      }
+      return null;
     });
     check(ai, 'no AI land to click');
     const ll = await tileLL(ai.tile);
@@ -682,7 +687,7 @@ try {
     }
     await page.waitForSelector('.fu-pause .fu-pause-btn', { timeout: 15000 });
     await sleep(500);
-    await page.locator('.fu-pause .fu-pause-btn').nth(1).click();
+    await page.locator('.fu-pause .fu-pause-btn').nth(1).click({ force: true });
     await page.waitForSelector('.fu-save-row', { timeout: 15000 });
     await sleep(600);
     await shot('17a-save-dialog');
@@ -691,10 +696,10 @@ try {
       const v = window.__front.ctx.sim.view;
       return { tick: v.tick, tiles: v.human.tiles, treaties: v.treaties?.length ?? 0, proposals: v.proposals.size, opinions: v.opinions.size, wars: v.wars.length };
     });
-    await page.locator('.fu-save-row').first().click();
+    await page.locator('.fu-save-row').first().click({ force: true });
     // An occupied slot asks before overwriting.
     await sleep(800);
-    if (await page.locator('.fu-modal .fu-btn--primary', { hasText: /Sobrescribir|Overwrite/ }).count()) await page.locator('.fu-modal .fu-btn--primary').last().click();
+    if (await page.locator('.fu-modal .fu-btn--primary', { hasText: /Sobrescribir|Overwrite/ }).count()) await page.locator('.fu-modal .fu-btn--primary').last().click({ force: true });
     // The «Guardado · día N» entry in the alert feed (the save's toast).
     const toast = await until((n0) => {
       const ev = window.__pt.events.filter((e) => e.type === 'saved' && e.key !== 'autosave').slice(n0)[0];
@@ -708,14 +713,16 @@ try {
       await page.keyboard.press('Escape');
       await page.waitForSelector('.fu-pause .fu-pause-btn', { timeout: 15000 });
     }
-    await page.locator('.fu-pause .fu-btn--danger').last().click();
-    await sleep(600);
-    await page.locator('.fu-modal .fu-btn--danger').last().click();
+    // Modals slide in: on the software renderer the animation can outlast Playwright's stability check.
+    await page.locator('.fu-pause .fu-btn--danger').last().click({ force: true });
+    await page.waitForFunction(() => document.querySelectorAll('.fu-modal').length >= 2, null, { timeout: 15000 }).catch(() => {});
+    await sleep(1200);
+    await page.locator('.fu-modal .fu-btn--danger').last().click({ force: true });
     await waitState('menu', 60000);
     await page.waitForSelector('.fu-menu-continue:not(.fu-hidden)', { timeout: 20000 });
     await sleep(1500);
     await shot('17b-menu-continue');
-    await page.locator('.fu-menu-continue').click();
+    await page.locator('.fu-menu-continue').click({ force: true });
     await waitState('playing', 180000);
     await sleep(3000);
     const after = await page.evaluate(() => {

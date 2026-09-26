@@ -294,6 +294,22 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     toggleClass(logBtn, 'fu-hidden', n === 0);
   }
 
+  // ---- feed height ----------------------------------------------------------------------------------
+  // The feed grows down from the top-left corner; it must never cover the advisor or the minimap below it (nor push
+  // the Registro button under them): the list is capped to the room left and fades out at the bottom when clipped.
+  function fitFeed(): void {
+    const top = list.getBoundingClientRect().top;
+    if (!top && !list.childElementCount) return;
+    let limit = window.innerHeight;
+    for (const e of document.querySelectorAll('.fu-hud-left > *, .fu-hud-bl')) {
+      const r = e.getBoundingClientRect();
+      if (r.height > 0 && r.top > top) limit = Math.min(limit, r.top);
+    }
+    const room = Math.max(90, Math.floor(limit - top - logBtn.offsetHeight - 18));
+    list.style.maxHeight = `${room}px`;
+    toggleClass(list, 'is-clipped', list.scrollHeight > room + 2);
+  }
+
   // ---- globe markers ------------------------------------------------------------------------------
   const v = new THREE.Vector3();
   const vc = new THREE.Vector3();
@@ -376,6 +392,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     acc += dt;
     if (acc >= 0.1) {
       acc = 0;
+      fitFeed();
       projectMarkers();
       for (const a of all) if (a.el) setText(a.el.querySelector('.fu-alert-age') as HTMLElement, ageText(a));
     }

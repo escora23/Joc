@@ -234,7 +234,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
         kind: e.betrayal ? 'betrayal' : 'warDeclared', severity: 'critical', icon: 'attack', actors: [e.aggressor],
         lat: ll?.lat, lon: ll?.lon, autoPause: 'warOnYou', groupKey: `war:${e.aggressor}`,
         title: t(e.betrayal ? 'alert.betrayal.title' : e.parentWar ? 'alert.warJoinedOnUs.title' : 'alert.warOnUs.title', { name: name(e.aggressor) }),
-        body: t('alert.warOnUs.body', { reason: t(e.reasonKey), hours }),
+        body: t(hours > 0 ? 'alert.warOnUs.body' : 'alert.warOnUs.bodyNow', { reason: t(e.reasonKey), hours }),
       });
       return;
     }

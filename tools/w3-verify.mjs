@@ -253,7 +253,8 @@ for (const lang of langs) {
         const q = window.__V.onScreen(lat, lon);
         window.__V.lastFly = { q, cam: window.__front.ctx.cameraRig.getState() };
         return q && q.dx < 0.25 && q.dy < 0.3 ? q : null;
-      }, { lat: o.lat, lon: o.lon }, 20000, 250);
+        // The 1.2 s flight advances by capped frame steps: on the software renderer it can take much longer.
+      }, { lat: o.lat, lon: o.lon }, 90000, 250);
       const lastFly = flown ? null : await page.evaluate(() => window.__V.lastFly);
       row('V5c', 'clicking the offensive alert flies there', flown ? `place ${(flown.dx * 100).toFixed(0)} % / ${(flown.dy * 100).toFixed(0)} % from the screen centre` : `no: alert at ${o.lat.toFixed(1)}, ${o.lon.toFixed(1)}; ${JSON.stringify(lastFly)}`, 'near the centre', flown);
       await shot(`${lang}-V5-offensive`);
@@ -335,7 +336,7 @@ for (const lang of langs) {
     await page.evaluate(({ x, y }) => {
       const { ctx } = window.__front;
       const v = ctx.sim.view;
-      ctx.sim.debug({ type: 'war', a: x, b: y, mobilizeTicks: 0 });
+      ctx.sim.debug({ type: 'war', a: x, b: y, mobilizeTicks: 0, reasonKey: 'war.reason.rivalry' });
       ctx.sim.debug({ type: 'launchNuke', weapon: 8 /* UnitType.AtomBomb */, owner: x, fromTile: v.players[x].capitalTile, targetTile: v.players[y].capitalTile });
     }, { x, y }).catch(() => {});
     const amber = await until(() => { const c = window.__fuCrisis(); return c.active && !c.red ? c : null; }, null, 15000, 200);
@@ -343,7 +344,7 @@ for (const lang of langs) {
     await shot(`${lang}-V16-amber`);
     await page.evaluate(({ x, cap }) => {
       const { ctx } = window.__front;
-      ctx.sim.debug({ type: 'war', a: x, b: 1, mobilizeTicks: 0 });
+      ctx.sim.debug({ type: 'war', a: x, b: 1, mobilizeTicks: 0, reasonKey: 'war.reason.rivalry' });
       ctx.sim.debug({ type: 'launchNuke', weapon: 9 /* UnitType.HydrogenBomb */, owner: x, fromTile: ctx.sim.view.players[x].capitalTile, targetTile: cap });
       // A second weapon on our land from another silo: the alarm must list every weapon in flight.
       ctx.sim.debug({ type: 'launchNuke', weapon: 8 /* UnitType.AtomBomb */, owner: x, fromTile: ctx.sim.view.players[x].capitalTile, targetTile: cap + 6 });
@@ -370,7 +371,7 @@ for (const lang of langs) {
       ['callToArms', ({ o }) => {
         const d = window.__front.ctx.sim.debug;
         d({ type: 'treaty', a: 1, b: o[4], kind: 'alliance' });
-        d({ type: 'war', a: o[5], b: o[4], mobilizeTicks: 0 });
+        d({ type: 'war', a: o[5], b: o[4], mobilizeTicks: 0, reasonKey: 'war.reason.border' });
         d({ type: 'propose', from: o[4], to: 1, kind: 'callToArms', against: o[5] });
       }],
       ['warOnYou', ({ o }) => window.__front.ctx.sim.debug({ type: 'war', a: o[6], b: 1, mobilizeTicks: 240, reasonKey: 'war.reason.rivalry' })],
@@ -519,7 +520,7 @@ for (const lang of langs) {
     await sleep(300);
   }
   const topbar = await page.$$eval('.fu-topbar [data-has-tip], .fu-tb-stat[data-has-tip]', (l) => l.length).catch(() => 0);
-  row('V14', 'sampled tooltips on W3 controls show text', tipTexts.join(' ## '), 'non-empty', tipTexts.every((x) => !/missing/.test(x) && x.split(': ').slice(1).join(': ').trim().length > 20));
+  row('V14', 'sampled tooltips on W3 controls show text', tipTexts.join(' ## '), 'non-empty', tipTexts.every((x) => !/missing|\(no tooltip/.test(x) && x.split(': ').slice(1).join(': ').trim().length > 20));
   log(`top bar controls with tooltips: ${topbar}; radial wedges with tooltips: ${tipsRad}`);
 }
 
