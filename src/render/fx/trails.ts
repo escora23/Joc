@@ -438,6 +438,14 @@ export class TrailSystem {
     }
   }
 
+  /** Remove a trail now (no hold, no fade): it is recycled on the next update. */
+  kill(tr: Trail | null | undefined): void {
+    if (!tr) return;
+    tr.released = true;
+    tr.releasedAt = this.now;
+    tr.count = 0;
+  }
+
   clear(): void {
     for (const t of this.live) {
       t.inUse = false;

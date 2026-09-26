@@ -25,6 +25,9 @@ export const ROUTE_BUDGET = 64;
 
 type RouteKind = 'convoy' | 'trade' | 'warship' | 'air';
 
+/** Real seconds a finished route stays at full opacity, then fades (§10.8). */
+const ENDING: Record<RouteKind, readonly [number, number]> = { convoy: [15, 5], trade: [6, 3], warship: [8, 5], air: [10, 5] };
+
 interface Route {
   unitId: number;
   owner: number;
@@ -53,6 +56,8 @@ interface Cross {
 export interface RouteEnv {
   fx: FxInternal;
   now: number;
+  /** Real (wall-clock) seconds: the after-arrival hold and fade are real time (§10.8), whatever the frame rate. */
+  realNow: number;
   altitudeKm: number;
   relationTo(owner: number): Relation;
   radiusAt(lat: number, lon: number): number;
@@ -72,6 +77,8 @@ export interface TrailStats {
   suppressed: number;
   evicted: { total: number; trade: number; other: number; ally: number; human: number; war: number };
   crosses: number;
+  /** Lines of arrived or sunk units still held or fading. */
+  ending: number;
 }
 
 const tmpLL: LatLon = { lat: 0, lon: 0 };
@@ -106,6 +113,8 @@ export function tileDistKm(ax: number, ay: number, bx: number, by: number): numb
 export class RouteManager {
   private readonly routes = new Map<number, Route>();
   private readonly crosses: Cross[] = [];
+  /** Lines of units that arrived or sank: held at full opacity, then faded (real seconds), then removed. */
+  private readonly ending: { trail: Trail; unitId: number; owner: number; at: number; hold: number; fade: number }[] = [];
   private gen = 0;
   readonly evicted = { total: 0, trade: 0, other: 0, ally: 0, human: 0, war: 0 };
   /** Units whose planned path is shown because they are selected or hovered. */
@@ -211,6 +220,8 @@ export class RouteManager {
     r.seen = this.gen;
     r.lastState = u.state;
     r.owner = u.owner;
+    // A ship that changed hands (capitulation, cession) or whose owner went to war with the human is protected now.
+    if (r.suppressed && this.protectedRoute(env, r)) r.suppressed = false;
     if (moving) r.lastMovingAt = env.now;
     const ship = kind !== 'air';
     this.point(env, u.x, u.y, ship, r.last);
@@ -309,8 +320,23 @@ export class RouteManager {
     for (const [id, r] of this.routes) {
       if (r.seen === this.gen) continue;
       if (r.lastState === UnitState.Destroyed && r.kind !== 'air') this.crosses.push({ pos: r.last.clone(), until: env.now + 15 });
+      // The travelled line stays (convoys 15 s + 5 s fade, trade 6 + 3, warships 8 + 5, sorties 10 + 5); the planned
+      // path and the alert outline go at once.
+      if (r.trail && !r.suppressed) {
+        const [hold, fade] = ENDING[r.kind];
+        this.ending.push({ trail: r.trail, unitId: r.unitId, owner: r.owner, at: env.realNow, hold, fade });
+        r.trail = null;
+      }
       this.releaseRoute(env, r);
       this.routes.delete(id);
+    }
+    for (let i = this.ending.length - 1; i >= 0; i--) {
+      const e = this.ending[i];
+      const age = env.realNow - e.at;
+      if (age >= e.hold + e.fade) {
+        env.fx.trails.kill(e.trail);
+        this.ending.splice(i, 1);
+      } else e.trail.opacity = age <= e.hold ? 1 : 1 - (age - e.hold) / e.fade;
     }
     for (let i = this.crosses.length - 1; i >= 0; i--) if (this.crosses[i].until < env.now) this.crosses.splice(i, 1);
     // Budget: evict by priority, never the human's routes or routes at war with the human.
@@ -361,10 +387,21 @@ export class RouteManager {
       if (r.owner === HUMAN_ID) human++;
       else if (env.relationTo(r.owner) === 'war') war++;
     }
+    let endingHuman = 0;
+    for (const e of this.ending) if (e.owner === HUMAN_ID) endingHuman++;
     return {
-      budget: ROUTE_BUDGET, routes, byKind, human, atWarWithHuman: war, plans: plans + this.divPlans.size, alerts, suppressed,
+      budget: ROUTE_BUDGET, routes, byKind, human: human + endingHuman, ending: this.ending.length, atWarWithHuman: war, plans: plans + this.divPlans.size, alerts, suppressed,
       evicted: { ...this.evicted }, crosses: this.crosses.length,
     };
+  }
+
+  /** One unit's route line (verification): 'live' while it sails, 'ending' with its real age after arrival. */
+  info(unitId: number, realNow: number): { state: 'live' | 'ending' | 'none'; drawn: boolean; age?: number; opacity?: number; suppressed?: boolean } {
+    const r = this.routes.get(unitId);
+    if (r) return { state: 'live', drawn: !!r.trail && !r.suppressed, suppressed: r.suppressed };
+    const e = this.ending.find((x) => x.unitId === unitId);
+    if (e) return { state: 'ending', drawn: e.trail.opacity > 0, age: +(realNow - e.at).toFixed(2), opacity: +e.trail.opacity.toFixed(3) };
+    return { state: 'none', drawn: false };
   }
 
   /** Human units that are protected yet suppressed (must stay 0). */
@@ -379,6 +416,8 @@ export class RouteManager {
       for (const t of [r.trail, r.alert, r.plan]) if (t) fx.trails.release(t);
     }
     if (fx) for (const d of this.divPlans.values()) fx.trails.release(d.plan);
+    if (fx) for (const e of this.ending) fx.trails.kill(e.trail);
+    this.ending.length = 0;
     this.divPlans.clear();
     this.routes.clear();
     this.crosses.length = 0;

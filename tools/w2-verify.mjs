@@ -116,12 +116,13 @@ async function checkIcons() {
     for (const h of r.icons) for (const m of (h.kind === 'cluster' ? h.members : [h.id])) (h.structure ? repS : repU).add(m);
     const missU = r.proj.units.filter((u) => !repU.has(u.id));
     const missS = r.proj.structures.filter((s) => !repS.has(s.id));
-    // Same-owner, same-kind single icons closer than 26 px would have to be clustered.
+    // Same-owner, same-category single icons closer than 26 px would have to be clustered (DESIGN_V2 §10.7: owner and
+    // category; a warship next to a trade ship stays a separate icon).
     const singles = r.icons.filter((h) => h.kind === 'single');
     let unclustered = 0;
     for (let i = 0; i < singles.length; i++) for (let j = i + 1; j < singles.length; j++) {
       const a = singles[i], b = singles[j];
-      if (a.owner === b.owner && a.structure === b.structure && a.half > 7 && b.half > 7 && Math.hypot(a.x - b.x, a.y - b.y) < 26 - 0.5) unclustered++;
+      if (a.owner === b.owner && a.structure === b.structure && a.cat === b.cat && !a.selected && !b.selected && a.half > 7 && b.half > 7 && Math.hypot(a.x - b.x, a.y - b.y) < 26 - 0.5) unclustered++;
     }
     const clusters = r.icons.filter((h) => h.kind === 'cluster');
     res[alt] = { stats: r.st, projectedUnits: r.proj.units.length, projectedStructures: r.proj.structures.length, missingUnits: missU.slice(0, 20), missingStructures: missS.slice(0, 20), unclusteredPairs: unclustered, clusters: clusters.length };
@@ -213,34 +214,36 @@ async function checkIslands() {
 // 8. Routes
 // -------------------------------------------------------------------------------------------------
 async function checkRoutes() {
-  // Sail from Lisbon at 4x, sampling the human convoy's line; after arrival keep sampling for 25 s.
+  // Sail from Lisbon at 4x and follow the convoy's own line (__trails.route(id)) every second, then 25 s past arrival.
   const page = await open('routes-atlantic', '&ff=0&speed=4');
+  const id = await page.evaluate(() => {
+    const ships = [...window.__front.ctx.sim.view.units.values()].filter((u) => u.owner === 1 && u.type === 0);
+    // The staged convoy is bound for New York (tile x ~473, y ~220 on the 1600 x 800 grid).
+    ships.sort((a, b) => Math.hypot(a.targetX - 473, a.targetY - 220) - Math.hypot(b.targetX - 473, b.targetY - 220));
+    return ships.length ? ships[0].id : -1;
+  });
   const samples = [];
   const t0 = Date.now();
-  let arrivedAt = null;
-  for (let i = 0; i < 400; i++) {
-    const s = await page.evaluate(() => {
-      const st = window.__trails.stats();
-      const ships = [...window.__front.ctx.sim.view.units.values()].filter((u) => u.owner === 1 && u.type === 0);
-      return { st, alive: ships.length, tick: window.__front.ctx.sim.view.tick };
-    });
+  let endedAt = null;
+  for (let i = 0; i < 600 && id >= 0; i++) {
+    const s = await page.evaluate((uid) => ({ r: window.__trails.route(uid), st: window.__trails.stats() }), id);
     const t = (Date.now() - t0) / 1000;
     samples.push({ t, ...s });
-    if (arrivedAt === null && s.alive === 0 && i > 2) arrivedAt = t;
-    if (arrivedAt !== null && t - arrivedAt > 26) break;
+    if (s.r.state !== 'live' && endedAt === null) endedAt = t;
+    if (endedAt !== null && t - endedAt > 26) break;
     if (i === 10) await page.screenshot({ path: path.join(out, 'routes-atlantic-sailing.png') });
     await page.waitForTimeout(1000);
   }
-  save('routes', { arrivedAt, samples });
-  const human = (s) => s.st.human;
-  const sailing = samples.filter((s) => arrivedAt === null || s.t < arrivedAt);
-  const after = arrivedAt === null ? [] : samples.filter((s) => s.t >= arrivedAt);
-  const keptUntil = after.filter((s) => human(s) > 0).map((s) => s.t - arrivedAt);
-  verdict('8 routes: the human convoy line is drawn for the whole trip', sailing.length > 3 && sailing.every((s) => human(s) > 0),
-    { samples: sailing.length, missing: sailing.filter((s) => !(human(s) > 0)).length });
-  verdict('8 routes: kept >= 15 s after arrival and gone within 5 s after that', arrivedAt !== null && Math.max(0, ...keptUntil) >= 15 && Math.max(0, ...keptUntil) <= 21,
-    { arrivedAt, lastSeenAfterArrival: Math.max(0, ...keptUntil) });
-  verdict('8 routes: the human route never evicted (budget)', samples.every((s) => s.st.humanSuppressed === 0),
+  save('routes', { id, endedAt, samples });
+  const live = samples.filter((s) => s.r.state === 'live');
+  const ending = samples.filter((s) => s.r.state === 'ending');
+  const lastDrawnAge = Math.max(0, ...ending.filter((s) => s.r.drawn).map((s) => s.r.age));
+  const goneBy = samples.find((s, i) => i > 0 && s.r.state === 'none' && samples[i - 1].r.state !== 'live');
+  verdict('8 routes: the convoy line is drawn from departure for the whole trip', id >= 0 && live.length > 3 && live.every((s) => s.r.drawn),
+    { id, samples: live.length, missing: live.filter((s) => !s.r.drawn).length });
+  verdict('8 routes: kept >= 15 real s after arrival, gone within 5 s after that', endedAt !== null && lastDrawnAge >= 15 && lastDrawnAge <= 20.5 && !!goneBy,
+    { endedAt, lastDrawnAge, fullOpacityUntil: Math.max(0, ...ending.filter((s) => s.r.opacity >= 0.999).map((s) => s.r.age)) });
+  verdict('8 routes: the human routes never evicted with 100 trade ships and 10 warships in view', samples.every((s) => s.st.humanSuppressed === 0 && s.st.evicted.human === 0),
     samples[Math.min(5, samples.length - 1)]?.st);
   await page.close();
 }
@@ -254,15 +257,19 @@ async function checkHistorical() {
     const ctx = window.__front.ctx;
     const def = ctx.settings.get().historicalBorders;
     const u = () => window.__globeDebug?.historical?.() ?? null;
-    const a = u();
+    const frames = async (n) => { const f0 = ctx.frame.frame; while (ctx.frame.frame < f0 + n) await new Promise((res) => setTimeout(res, 200)); };
+    await frames(4);
+    const a0 = u();
     ctx.settings.set({ historicalBorders: true });
-    await new Promise((res) => setTimeout(res, 2500));
+    await frames(8);
     const b = u();
-    ctx.cameraRig.setState({ ...ctx.cameraRig.getState(), altitudeKm: 1400 });
-    await new Promise((res) => setTimeout(res, 2500));
+    const st = ctx.cameraRig.getState();
+    ctx.cameraRig.setState({ lat: st.lat, lon: st.lon, tilt: st.tilt, heading: st.heading, altitudeKm: 1400 });
+    await frames(8);
     const c = u();
+    const altAfter = ctx.cameraRig.getState().altitudeKm;
     ctx.settings.set({ historicalBorders: false });
-    return { defaultOn: def, offAt600: a, onAt600: b, onAt1400: c };
+    return { defaultOn: def, offAt600: a0, onAt600: b, onAt1400: c, altAfter };
   });
   save('historical', r);
   verdict('13 historical borders off by default, drawn only below 1000 km when on', r.defaultOn === false && r.offAt600 === 0 && r.onAt600 > 0.9 && r.onAt1400 === 0, r);

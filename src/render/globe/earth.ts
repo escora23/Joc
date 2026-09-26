@@ -540,7 +540,7 @@ void main() {
       fillA *= mix(1.0, 0.7, occ);
       // Every nation reads against its ground (§16.3: ΔE >= 15 from orbit); up close (uCloseK) the ground detail must
       // read through the fill, so the floor drops.
-      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.14, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
+      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.18, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
       fillA *= terr * landK;
       vec3 ground = albedo;
       albedo = territoryFill(albedo, natO, fillA);
@@ -772,12 +772,12 @@ void main() {
   }
 
   // Night side (DESIGN_V2 §10.4): a bluish floor light so land, coasts and islands stay readable, and the territory
-  // fill re-emitted at 50 % of its day brightness so nations keep their colours in the dark (70 % made the fills so
+  // fill re-emitted at 42 % of its day brightness so nations keep their colours in the dark (70 % made the fills so
   // bright that the emissive borders fell below 3:1 contrast against them).
   float nightK = 1.0 - smoothstep(-0.12, 0.06, muS);
   if (nightK > 0.0) {
     col += albedo * vec3(0.55, 0.72, 1.0) * uNightFloor * nightK * (0.45 + 0.55 * landK);
-    emissive += nightFill * uSunE * 0.75 * 0.5 * nightK;
+    emissive += nightFill * uSunE * 0.75 * 0.42 * nightK;
   }
   col += emissive;
 

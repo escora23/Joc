@@ -201,12 +201,13 @@ vec3 territoryFill(vec3 ground, vec3 owner, float fill) {
   return mix(ground, territoryTarget(ground, owner), fill);
 }
 // The smallest fill that still changes the ground by a perceptual step \`t\` (measured in sqrt-linear RGB, close to a
-// gamma-encoded difference; t = 0.14 is about 18 CIELAB ΔE after tone mapping). Where the owner colour is close to the
+// gamma-encoded difference; t = 0.18 is about 18-20 CIELAB ΔE after tone mapping). Where the owner colour is close to the
 // ground it covers (a sand-coloured nation over desert, a green one over forest, a muted independent territory) the
-// base fill would barely show, so the fill rises until the nation reads (capped at 0.75: relief stays visible).
+// base fill would barely show, so the fill rises until the nation reads (capped at 0.85: some relief stays visible).
 float territoryMinFill(vec3 ground, vec3 owner, float t) {
   vec3 d = sqrt(max(territoryTarget(ground, owner), 0.0)) - sqrt(max(ground, 0.0));
-  return min(0.75, t / max(length(d), 1e-3));
+  // Bright ground (desert, snow) sits in the shoulder of the tone curve, where the same linear step reads smaller.
+  return min(0.85, t * (1.0 + 2.0 * luma(ground)) / max(length(d), 1e-3));
 }
 `;
 

@@ -688,7 +688,7 @@ export class IconLayer {
   private readonly uRes: { value: THREE.Vector2 };
   private fan: { structure: boolean; head: number; owner: number; cat: number; until: number; members: number[] } | null = null;
   /** Hit rectangles of what was drawn this frame: x, y, half, kind (0 unit, 1 structure, 2 cluster), index into drawn. */
-  private readonly hits: { x: number; y: number; half: number; kind: 0 | 1 | 2; id: number; owner: number; members: number[]; structure: boolean }[] = [];
+  private readonly hits: { x: number; y: number; half: number; kind: 0 | 1 | 2; id: number; owner: number; members: number[]; structure: boolean; cat: number; selected: boolean }[] = [];
   private hitN = 0;
   stats: IconStats = { unitIcons: 0, structureIcons: 0, pips: 0, clusters: 0, clusteredMembers: 0, unitsInView: 0, structuresInView: 0, unitsRepresented: 0, structuresRepresented: 0, drawCalls: 0, fanned: 0 };
   hoverKey = -1;
@@ -943,7 +943,7 @@ export class IconLayer {
 
   private hit(x: number, y: number, half: number, kind: 0 | 1 | 2, s: Src, members: number[]): void {
     let h = this.hits[this.hitN];
-    if (!h) this.hits.push((h = { x, y, half, kind, id: s.id, owner: s.owner, members, structure: s.structure }));
+    if (!h) this.hits.push((h = { x, y, half, kind, id: s.id, owner: s.owner, members, structure: s.structure, cat: s.cat, selected: s.selected }));
     this.hitN++;
     h.x = x;
     h.y = y;
@@ -953,6 +953,8 @@ export class IconLayer {
     h.owner = s.owner;
     h.members = members;
     h.structure = s.structure;
+    h.cat = s.cat;
+    h.selected = s.selected;
   }
 
   /**
@@ -981,11 +983,11 @@ export class IconLayer {
   }
 
   /** Debug (verification scripts): every pickable icon drawn this frame, CSS px relative to the canvas. */
-  debugHits(): { x: number; y: number; half: number; kind: 'single' | 'cluster'; id: number; owner: number; members: number[]; structure: boolean }[] {
+  debugHits(): { x: number; y: number; half: number; kind: 'single' | 'cluster'; id: number; owner: number; members: number[]; structure: boolean; cat: number; selected: boolean }[] {
     const out = [];
     for (let i = 0; i < this.hitN; i++) {
       const h = this.hits[i];
-      out.push({ x: h.x, y: h.y, half: h.half, kind: h.kind === 2 ? 'cluster' as const : 'single' as const, id: h.id, owner: h.owner, members: [...h.members], structure: h.structure });
+      out.push({ x: h.x, y: h.y, half: h.half, kind: h.kind === 2 ? 'cluster' as const : 'single' as const, id: h.id, owner: h.owner, members: [...h.members], structure: h.structure, cat: h.cat, selected: h.selected });
     }
     return out;
   }

@@ -681,7 +681,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   function makeRouteEnv(fx: FxInternal): RouteEnv {
     if (!routeEnv) {
       routeEnv = {
-        fx, now: 0, altitudeKm: 0,
+        fx, now: 0, realNow: 0, altitudeKm: 0,
         relationTo: (o) => relations.relationTo(o),
         radiusAt,
         ownerColor: (o) => ownerColor(o),
@@ -690,6 +690,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     }
     routeEnv.fx = fx;
     routeEnv.now = env.fxTime;
+    routeEnv.realNow = performance.now() / 1000;
     routeEnv.altitudeKm = env.altitudeKm;
     return routeEnv;
   }
@@ -1191,6 +1192,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   (window as unknown as { __units?: unknown }).__units = debugHook;
   (window as unknown as { __trails?: unknown }).__trails = {
     stats: () => ({ ...routes.stats({ relationTo: (o: number) => relations.relationTo(o) }), humanSuppressed: routes.humanSuppressed() }),
+    route: (unitId: number) => routes.info(unitId, performance.now() / 1000),
   };
   const api: UnitsApi = {
     async init(progress) {

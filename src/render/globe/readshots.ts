@@ -119,16 +119,16 @@ registerShot('routes-atlantic', 'units', 'Route lines: a Lisbon -> New York conv
  * the human with a nation first, then with any other player, then between two other players. `peaceful` skips pairs
  * at war and tiles near a front (the zoom shots are "outside battles").
  */
-function humanBorderTile(s: ShotContext, peaceful: boolean): number {
+function humanBorderTile(s: ShotContext, peaceful: boolean): [number, number] {
   const view = s.ctx.sim.view;
   const w = s.ctx.world;
   const cap = view.human?.capitalTile ?? latLonToTile(40.4, -3.7);
-  if (!w) return cap;
+  if (!w) return [cap, cap];
   const rel = relationsFor(s.ctx);
   rel.refresh(Number.POSITIVE_INFINITY);
   const fronts = view.fronts.map((f) => tileIndex(Math.floor(f.x), Math.floor(f.y)));
   const nb = new Int32Array(4);
-  const best = [cap, cap, cap], bestD = [Infinity, Infinity, Infinity];
+  const best = [cap, cap, cap], bestN = [cap, cap, cap], bestD = [Infinity, Infinity, Infinity];
   for (let t = 0; t < view.owner.length; t++) {
     const a = view.owner[t];
     if (a === 0 || !isPlayableTerrain(w.terrain[t])) continue;
@@ -143,10 +143,11 @@ function humanBorderTile(s: ShotContext, peaceful: boolean): number {
       if (cls > 2 || d >= bestD[cls]) continue;
       bestD[cls] = d;
       best[cls] = t;
+      bestN[cls] = nb[i];
     }
   }
-  for (let c = 0; c < 3; c++) if (Number.isFinite(bestD[c])) return best[c];
-  return cap;
+  for (let c = 0; c < 3; c++) if (Number.isFinite(bestD[c])) return [best[c], bestN[c]];
+  return [cap, cap];
 }
 
 async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt: number, heading: number): Promise<number> {
@@ -155,8 +156,11 @@ async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt:
   await s.ctx.app.startScriptedGame({ ticks: num(p, 'tick', 9000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(p, 'sun', 0)) });
   // Let the view settle on the final tick (capitulations and transfers of the last ticks) before choosing the spot.
   await s.waitFrames(10);
-  const tile = humanBorderTile(s, peaceful);
-  const ll = tileToLatLon(tile);
+  const [tile, other] = humanBorderTile(s, peaceful);
+  // The camera looks at the edge between the two tiles (the border line), not at a tile centre ~12 km away from it.
+  const la = tileToLatLon(tile), lb = tileToLatLon(other);
+  const dLon = ((lb.lon - la.lon + 540) % 360) - 180;
+  const ll = { lat: (la.lat + lb.lat) / 2, lon: la.lon + dLon / 2 };
   // Mid-afternoon light at the border (subsolar point 45 degrees west of it) so the relief reads; &sun= overrides.
   const cfg = s.ctx.sim.view.config as { startWorldTimeSec: number } | null;
   if (cfg) cfg.startWorldTimeSec = worldTimeForSubsolarLon(num(p, 'sun', ll.lon - 45)) - s.ctx.sim.view.simTime;
@@ -180,11 +184,11 @@ registerShot('borders-close', 'globe', 'Borders up close (&alt=1500 default, &al
 }, 20);
 
 registerShot('zoom-40', 'globe', 'Close zoom outside battles at 40 km over the human\'s border: fill, ground borders, near patch without seam (DESIGN_V2 §10.11)', async (s) => {
-  await stageBorder(s, true, 40, 0.75, 0.4);
+  await stageBorder(s, true, 40, 0.55, 0.4);
   await s.waitFrames(10);
 }, 30);
 
 registerShot('zoom-8', 'globe', 'Close zoom outside battles at 8 km over the human\'s border: fill, ground borders, procedural detail, no flat plane (DESIGN_V2 §10.11)', async (s) => {
-  await stageBorder(s, true, 8, 0.8, 0.4);
+  await stageBorder(s, true, 8, 0.5, 0.4);
   await s.waitFrames(10);
 }, 30);
