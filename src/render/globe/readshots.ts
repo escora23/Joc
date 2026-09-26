@@ -189,13 +189,13 @@ registerShot('borders-close', 'globe', 'Borders up close (&alt=1500 default, &al
       for (let t = 0; t < before.length; t++) if (view.owner[t] !== before[t] && view.owner[t] === HUMAN_ID) out.push(t);
       return out;
     };
-    for (let i = 0; i < 100 && changed().length === 0; i++) await s.wait(100);
+    // Generous wait: under load (SwiftShader, close-zoom detail at 300 km) the transfer can take many seconds to arrive.
+    for (let i = 0; i < 600 && changed().length === 0; i++) await s.wait(100);
     await s.waitFrames(2);
-    const hook = (window as unknown as { __territory?: { stampCapture(t: number[]): void; pinFlash(a: number | null): void } }).__territory;
-    // The staged transfer reaches the client as a resync (no flash): stamp the captured tiles as the wave would.
-    hook?.stampCapture(changed());
-    await s.waitFrames(1);
-    hook?.pinFlash(num(s.params, 'flashAge', 0.5));
+    const hook = (window as unknown as { __territory?: { stampCapture(t: number[], pinAge?: number): void } }).__territory;
+    // The staged transfer reaches the client as a resync (no flash): stamp the captured tiles as the wave would and pin
+    // the flash clock in the same call (a slow frame in between would otherwise let the stamps expire).
+    hook?.stampCapture(changed(), num(s.params, 'flashAge', 0.5));
   }
   await s.waitFrames(6);
 }, 20);

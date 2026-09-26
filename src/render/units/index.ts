@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
-import { presentationTime } from '../../shared/shots';
+import { FROZEN_TIME_SEC, presentationTime, shotView } from '../../shared/shots';
 import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, TILE_KM } from '../../shared/constants';
 import { labelRects } from '../globe/labels';
 import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, wrapDX } from '../../shared/geo';
@@ -175,6 +175,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const relations = relationsFor(ctx);
   let structModelsOn = false;
   const routes = new RouteManager();
+  // The after-arrival hold and fade of route lines run on real seconds (frozen with &freeze=1), evaluated every frame
+  // and also on this timer, so a slow or stalled frame never leaves a line drawn past its hold + fade (§10.8).
+  routes.clock = () => presentationTime(performance.now() / 1000);
+  setInterval(() => routes.tickEnding(), 200);
   let routeEnv: RouteEnv | null = null;
   let hoverUnit = -1;
   let viewW = 1, viewH = 1;
@@ -352,6 +356,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     anchor?: THREE.Vector3, anchorSize = 0): void {
     if (im.n >= im.cap) return;
     const i = im.n++;
+    if (pbox.on) projectInstance(boxOf(im), pos, right, up, back, sx, sy, sz);
     const te = m4.elements;
     te[0] = right.x * sx; te[1] = right.y * sx; te[2] = right.z * sx; te[3] = 0;
     te[4] = up.x * sy; te[5] = up.y * sy; te[6] = up.z * sy; te[7] = 0;
@@ -366,6 +371,34 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       aa[i * 4] = anchor.x; aa[i * 4 + 1] = anchor.y; aa[i * 4 + 2] = anchor.z; aa[i * 4 + 3] = anchorSize;
     }
   }
+
+  // Projected screen box (px) of the unit model instances put while pbox.on: what the player really sees of a model
+  // (the minimum-size clamp and __units.stats().unitModelsInView measure this, not the intended size).
+  const pbox = { on: false, x0: 0, y0: 0, x1: 0, y1: 0 };
+  const corner = new THREE.Vector3();
+  function boxOf(im: InstMesh): THREE.Box3 {
+    const g = im.mesh.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    return g.boundingBox!;
+  }
+  function resetPBox(): void {
+    pbox.x0 = pbox.y0 = Infinity;
+    pbox.x1 = pbox.y1 = -Infinity;
+  }
+  function projectInstance(box: THREE.Box3, pos: THREE.Vector3, right: THREE.Vector3, up: THREE.Vector3, back: THREE.Vector3,
+    sx: number, sy: number, sz: number): void {
+    for (let c = 0; c < 8; c++) {
+      const bx = c & 1 ? box.max.x : box.min.x, by = c & 2 ? box.max.y : box.min.y, bz = c & 4 ? box.max.z : box.min.z;
+      corner.copy(pos).addScaledVector(right, bx * sx).addScaledVector(up, by * sy).addScaledVector(back, bz * sz).project(ctx.camera);
+      if (corner.z > 1) continue;
+      const x = (corner.x * 0.5 + 0.5) * viewW, y = (0.5 - corner.y * 0.5) * viewH;
+      if (x < pbox.x0) pbox.x0 = x;
+      if (x > pbox.x1) pbox.x1 = x;
+      if (y < pbox.y0) pbox.y0 = y;
+      if (y > pbox.y1) pbox.y1 = y;
+    }
+  }
+  const pboxPx = (): number => (pbox.x1 >= pbox.x0 ? Math.max(pbox.x1 - pbox.x0, pbox.y1 - pbox.y0) : 0);
 
   function commit(im: InstMesh): void {
     im.mesh.count = im.n;
@@ -492,7 +525,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   /** World position of unit u at sim coordinates (x, y, alt) with a given drawn size. */
   function worldAt(u: UnitView, t: Track, x: number, y: number, alt: number, sizeKm: number, out: THREE.Vector3): THREE.Vector3 {
     tileXYToLatLon(x, y, ll2);
-    const gr = t.ship ? 1 : ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon);
+    const gr = t.ship ? seaRadius(ll2.lat, ll2.lon) : ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon);
     const h = airHeightKm(u.type, alt, sizeKm, t.range, t.apex);
     return latLonToVec3(ll2.lat, ll2.lon, gr + h / EARTH_RADIUS_KM, out);
   }
@@ -506,7 +539,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     tileXYToLatLon(x, y, ll);
     tangentFrame(ll.lat, ll.lon, E, N, U);
     t.ship = isShip(u.type);
-    const gr = t.ship ? 1 : ctx.globe.surfaceRadiusAt(ll.lat, ll.lon);
+    const gr = t.ship ? seaRadius(ll.lat, ll.lon) : ctx.globe.surfaceRadiusAt(ll.lat, ll.lon);
     G.copy(U).multiplyScalar(gr);
     const sizeKm = unitSizeKm(u.type, env.camPos.distanceTo(G)) * (u.type === UnitType.Shell ? 1 : unitK);
     t.size = sizeKm;
@@ -702,10 +735,26 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     icons.add(false, u.id, u.type, u.owner, relations.relationTo(u.owner), scrXY.x + dxPx, scrXY.y + dyPx - lift, u.hp, 0, sel, size, unitCategory(u.type));
   }
 
+  /**
+   * Waterline radius of a ship: the drawn sea surface (the globe mesh's relief, which near islands and coasts lifts the
+   * water by up to a few hundred metres through texture filtering), plus 10 % of that lift for the mesh's own
+   * interpolation. A ship at radius 1 there sank under the drawn sea at close zoom.
+   */
+  function seaRadius(lat: number, lon: number): number {
+    const r = ctx.globe.meshRadiusAt(lat, lon);
+    return r + Math.max(0, r - 1) * 0.1;
+  }
+
+  /** Projectiles and sub-munitions are small by design (no minimum rendered size). */
+  function isProjectile(t: UnitType): boolean {
+    return t === UnitType.Shell || t === UnitType.SamInterceptor || t === UnitType.MirvWarhead;
+  }
+
   function makeRouteEnv(fx: FxInternal): RouteEnv {
     if (!routeEnv) {
       routeEnv = {
-        fx, now: 0, realNow: 0, altitudeKm: 0,
+        fx, now: 0, realNow: 0, altitudeKm: 0, frozen: false,
+        pathOf: (id) => ctx.sim.view.routes.get(id),
         relationTo: (o) => relations.relationTo(o),
         radiusAt,
         ownerColor: (o) => ownerColor(o),
@@ -713,8 +762,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       };
     }
     routeEnv.fx = fx;
-    routeEnv.now = env.fxTime;
-    routeEnv.realNow = performance.now() / 1000;
+    // &freeze=1: route clocks stand still (plans rebuild when a unit moves, lines of vanished units go at once).
+    routeEnv.frozen = shotView.freeze;
+    routeEnv.now = shotView.freeze ? FROZEN_TIME_SEC : env.fxTime;
+    routeEnv.realNow = routes.clock();
     routeEnv.altitudeKm = env.altitudeKm;
     return routeEnv;
   }
@@ -752,7 +803,17 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const x = lerp(u.prevX, u.x, a), y = lerp(u.prevY, u.y, a);
       const alt = lerp(u.prevAlt, u.alt, a);
       const heading = lerpAngle(u.prevHeading, u.heading, a);
-      const s = pose(u, t, x, y, alt, heading, unitK, true);
+      let s = pose(u, t, x, y, alt, heading, unitK, true);
+      // Minimum rendered size (owner clarification to FEEDBACK-1: close models clearly visible): the model's projected
+      // bounding box must reach lod.unitMinPx (32 px below 600 km) whatever the view angle; a ship seen bow-on or a
+      // flat hull seen from above is scaled up until its drawn box does (at most 4x).
+      const measured = !!key && lod.unitModelFade > 0 && !isProjectile(u.type);
+      if (measured && key) {
+        resetPBox();
+        projectInstance(boxOf(unitMeshes[key]), P, R, UP, B, s, s, s);
+        const ext = pboxPx();
+        if (ext > 0.5 && ext < lod.unitMinPx) s = pose(u, t, x, y, alt, heading, unitK * Math.min(4, lod.unitMinPx / ext), false);
+      }
       t.lat = ll.lat;
       t.lon = ll.lon;
       t.ground.copy(G);
@@ -764,17 +825,13 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const isMoving = Math.abs(u.x - u.prevX) + Math.abs(u.y - u.prevY) > 1e-4;
       t.idle = isMoving ? 0 : t.idle + frame.dt;
       if (fx) emitTrails(fx, u, t, s, alt, active, isMoving, true);
-      offerUnitIcon(u, P, sel === 1);
       // Above 1,200 km units are icons only: no model instances at all.
-      if (!key || lod.unitModelFade <= 0) continue;
-      // Measurement (__units.stats()): models actually in the frustum and above the horizon, with their drawn size.
-      if (toScreen(P, 0)) {
-        const px = s / Math.max(1e-12, env.pixelK * env.camPos.distanceTo(P));
-        modelView.n++;
-        // Minimum over vehicles (projectiles and sub-munitions are small by design).
-        if (u.type !== UnitType.Shell && u.type !== UnitType.SamInterceptor && u.type !== UnitType.MirvWarhead) modelView.minPx = Math.min(modelView.minPx, px);
-        if (modelView.list.length < 200) modelView.list.push({ id: u.id, type: u.type, px: +px.toFixed(1), x: Math.round(scrXY.x), y: Math.round(scrXY.y) });
+      if (!key || lod.unitModelFade <= 0) {
+        offerUnitIcon(u, P, sel === 1);
+        continue;
       }
+      resetPBox();
+      pbox.on = true;
       const im = unitMeshes[key];
       const seed = (u.id * 0.618) % 1;
       switch (u.type) {
@@ -818,6 +875,24 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         default:
           put(im, P, R, UP, B, s, s, s, col, 1, sel, hp, seed);
       }
+      pbox.on = false;
+      // Measurement (__units.stats()): models in the frustum and above the horizon, with the projected size of what
+      // was drawn (the union of the instances' bounding boxes, px).
+      const inView = toScreen(P, 0);
+      const px = pboxPx();
+      if (inView) {
+        modelView.n++;
+        // Minimum over vehicles (projectiles and sub-munitions are small by design).
+        if (measured) modelView.minPx = Math.min(modelView.minPx, px);
+        if (modelView.list.length < 200) {
+          modelView.list.push({ id: u.id, type: u.type, px: +px.toFixed(1), x: Math.round((pbox.x0 + pbox.x1) / 2), y: Math.round((pbox.y0 + pbox.y1) / 2),
+            w: Math.round(pbox.x1 - pbox.x0), h: Math.round(pbox.y1 - pbox.y0) });
+        }
+      }
+      // The owner pip: below 300 km it sits above the drawn model instead of on it (the model is the unit now).
+      if (measured && px > 0 && lod.unitIconMode === 2 && env.altitudeKm < 300 && toScreen(P)) {
+        offerUnitIcon(u, P, sel === 1, 0, Math.min(0, pbox.y0 - 8 - scrXY.y + 11));
+      } else offerUnitIcon(u, P, sel === 1);
     }
     // Vanished units: release their trails, play small terminal effects.
     for (const t of tracks.values()) {
@@ -1188,7 +1263,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   }
 
   /** Unit models drawn this frame inside the frustum and above the horizon (measurement, not the instance count). */
-  const modelView = { n: 0, minPx: Infinity, list: [] as { id: number; type: UnitType; px: number; x: number; y: number }[] };
+  const modelView = { n: 0, minPx: Infinity, list: [] as { id: number; type: UnitType; px: number; x: number; y: number; w: number; h: number }[] };
 
   /** Debug / measurement hook (DESIGN_V2 §16.3): what is drawn right now. */
   function stats(): Record<string, unknown> {
@@ -1233,7 +1308,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   (window as unknown as { __units?: unknown }).__units = debugHook;
   (window as unknown as { __trails?: unknown }).__trails = {
     stats: () => ({ ...routes.stats({ relationTo: (o: number) => relations.relationTo(o) }), humanSuppressed: routes.humanSuppressed() }),
-    route: (unitId: number) => routes.info(unitId, performance.now() / 1000),
+    route: (unitId: number) => routes.info(unitId),
     points: (unitId: number) => routes.points(unitId),
   };
   const api: UnitsApi = {

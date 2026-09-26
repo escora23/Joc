@@ -2,8 +2,16 @@
 //   * a ship's line in its owner's colour from the port it left (UnitView.originX/Y) to where it is, for the whole
 //     trip, kept 15 real seconds after arrival or sinking and faded out over 5 s (F2, F01); a sinking leaves a small
 //     red cross for 15 s;
-//   * the remaining planned path drawn dashed at 40 % ahead of convoys, sorties and the selected or hovered unit
-//     (v2-stub(W2→W4): a great-circle preview until W4 publishes the sim's water paths in `routes`);
+//   * ship lines follow the sim's own water path (view.routes): the travelled part is rebuilt from the path's
+//     waypoints up to the ship when the line starts and follows the path again after any jump, so a ship line never
+//     crosses land; a ship with no published path draws only what it actually sails from where it was first seen;
+//   * the remaining planned path drawn dashed at 40 % ahead of convoys, sorties and the selected or hovered unit,
+//     along the same water path (aircraft: the great circle they fly; divisions: their land/rail waypoints);
+//   * at strategic zoom (above ~2,500 km) only the human's routes, routes of players at war with the human and the
+//     hovered or selected unit's route are drawn: other nations' trade and naval lines fade out from 1,800 km;
+//   * after arrival the hold and fade run on a real clock evaluated every rendered frame and on a 200 ms timer (a
+//     stalled frame never leaves a line stuck); with &freeze=1 the clock is frozen and lines of units that are gone
+//     are dropped at once, so a frozen shot shows exactly the units in it;
 //   * transport convoys 3 px with arrowheads, trade ships 1 px at 30 % below 5,000 km, warships 1.5 px while moving,
 //     aircraft sorties drawn progressively from take-off and kept 10 s after landing, CAP circles while a fighter
 //     patrols, divisions' dashed route with the ETA at its end on hover and selection;
@@ -15,6 +23,7 @@
 
 import * as THREE from 'three';
 import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, UNIT_DEFS } from '../../shared/constants';
+import { smoothstep } from '../../shared/math';
 import { latLonToVec3, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { UnitState, UnitType, type LatLon, type UnitView } from '../../shared/types';
 import type { FxInternal } from '../fx';
@@ -43,6 +52,15 @@ interface Route {
   suppressed: boolean;
   segKm: number;
   planAt: number;
+  /** Tile position the planned path was last built from (rebuilt when the unit moved, even on a frozen clock). */
+  planX: number;
+  planY: number;
+  /** The sim path the line follows (identity: a new plan replaces it) and the segment the unit was last on. */
+  path: Int32Array | null;
+  pathK: number;
+  /** Tile position of the last point pushed (jump detection). */
+  lastX: number;
+  lastY: number;
   lastState: number;
   /** Last drawn position (for the sinking cross). */
   last: THREE.Vector3;
@@ -55,9 +73,14 @@ interface Cross {
 
 export interface RouteEnv {
   fx: FxInternal;
+  /** fx time (paused-aware; constant while &freeze=1). */
   now: number;
   /** Real (wall-clock) seconds: the after-arrival hold and fade are real time (§10.8), whatever the frame rate. */
   realNow: number;
+  /** &freeze=1: the frame is a still of the present (no lines of units already gone, no crosses). */
+  frozen: boolean;
+  /** The sim's planned path of a unit (tile waypoints), if published. */
+  pathOf(unitId: number): Int32Array | undefined;
   altitudeKm: number;
   relationTo(owner: number): Relation;
   radiusAt(lat: number, lon: number): number;
@@ -87,6 +110,9 @@ const V = new THREE.Vector3();
 const VA = new THREE.Vector3();
 const VB = new THREE.Vector3();
 const pathBuf = new Float32Array(260 * 3);
+const KNOTS = 1024;
+const knotX = new Float64Array(KNOTS);
+const knotY = new Float64Array(KNOTS);
 
 function kindOf(t: UnitType): RouteKind | null {
   switch (t) {
@@ -110,15 +136,59 @@ export function tileDistKm(ax: number, ay: number, bx: number, by: number): numb
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/** Tile centre of a path waypoint. */
+const tcx = (t: number): number => (t % MAP_W) + 0.5;
+const tcy = (t: number): number => Math.floor(t / MAP_W) + 0.5;
+
+/**
+ * Index i of the path segment (path[i] -> path[i + 1]) nearest to the point (x, y), searching from `from` (units only
+ * move forward along their path). Tile units, wrap-aware.
+ */
+export function nearestSegment(path: ArrayLike<number>, x: number, y: number, from = 0): number {
+  const n = path.length;
+  if (n < 2) return 0;
+  let best = Math.min(Math.max(0, from), n - 2), bestD = Infinity;
+  for (let i = best; i < n - 1; i++) {
+    const ax = tcx(path[i]), ay = tcy(path[i]);
+    const dx = wrapDX(ax, tcx(path[i + 1])), dy = tcy(path[i + 1]) - ay;
+    const px = wrapDX(ax, x), py = y - ay;
+    const L = dx * dx + dy * dy;
+    const t = L > 1e-9 ? Math.min(1, Math.max(0, (px * dx + py * dy) / L)) : 0;
+    const qx = dx * t - px, qy = dy * t - py;
+    const d = qx * qx + qy * qy;
+    if (d < bestD - 1e-9) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Ending line: held, then faded on the route clock, then killed. */
+interface Ending {
+  trail: Trail;
+  unitId: number;
+  owner: number;
+  at: number;
+  hold: number;
+  fade: number;
+  /** Strategic-zoom visibility of this line (1 for the human's and at-war routes, and the focused unit). */
+  vis: number;
+  protect: boolean;
+}
+
 export class RouteManager {
   private readonly routes = new Map<number, Route>();
   private readonly crosses: Cross[] = [];
   /** Lines of units that arrived or sank: held at full opacity, then faded (real seconds), then removed. */
-  private readonly ending: { trail: Trail; unitId: number; owner: number; at: number; hold: number; fade: number }[] = [];
+  private readonly ending: Ending[] = [];
   private gen = 0;
   readonly evicted = { total: 0, trade: 0, other: 0, ally: 0, human: 0, war: 0 };
   /** Units whose planned path is shown because they are selected or hovered. */
   focus = new Set<number>();
+  /** Clock of the after-arrival hold and fade (real seconds; constant while frozen). Set by the units layer. */
+  clock: () => number = () => performance.now() / 1000;
+  private fx: FxInternal | null = null;
 
   /** Surface point (lifted) for tile coordinates; ships sit at sea level. */
   private point(env: RouteEnv, x: number, y: number, ship: boolean, out: THREE.Vector3): THREE.Vector3 {
@@ -155,24 +225,93 @@ export class RouteManager {
     return n;
   }
 
-  private styleFor(kind: RouteKind) {
-    return kind === 'convoy' ? TRAIL_STYLES.routeConvoy : kind === 'trade' ? TRAIL_STYLES.routeTrade : kind === 'warship' ? TRAIL_STYLES.routeWarship : TRAIL_STYLES.routeAir;
+  /**
+   * The polyline (x0, y0) -> path[i0..i1] -> (x1, y1) as surface points into pathBuf, straight in tile space between
+   * knots exactly as the sim sails it (spatial.advanceKm), every `segKm` or coarser so that it fits `max` points; every
+   * waypoint is kept (a corner is never cut across land). (x0, y0) / (x1, y1) are skipped when NaN. Returns the count.
+   */
+  private alongPath(env: RouteEnv, path: ArrayLike<number>, x0: number, y0: number, i0: number, i1: number, x1: number, y1: number,
+    segKm: number, ship: boolean, max = 256): number {
+    const kx = knotX, ky = knotY;
+    let k = 0;
+    const add = (x: number, y: number): void => {
+      if (k >= KNOTS) return;
+      if (k > 0) x = kx[k - 1] + wrapDX(kx[k - 1], x);
+      if (k > 0 && Math.abs(x - kx[k - 1]) < 1e-4 && Math.abs(y - ky[k - 1]) < 1e-4) return;
+      kx[k] = x;
+      ky[k] = y;
+      k++;
+    };
+    if (!Number.isNaN(x0)) add(x0, y0);
+    for (let i = Math.max(0, i0); i <= Math.min(i1, path.length - 1); i++) add(tcx(path[i]), tcy(path[i]));
+    if (!Number.isNaN(x1)) add(x1, y1);
+    if (k === 0) return 0;
+    const knots = Math.min(k, max);
+    let total = 0;
+    for (let i = 1; i < knots; i++) total += tileDistKm(kx[i - 1], ky[i - 1], kx[i], ky[i]);
+    const step = Math.max(segKm, total / Math.max(1, max - knots));
+    let n = 0;
+    const emit = (x: number, y: number): void => {
+      const p = this.point(env, x, y, ship, V);
+      pathBuf[n * 3] = p.x;
+      pathBuf[n * 3 + 1] = p.y;
+      pathBuf[n * 3 + 2] = p.z;
+      n++;
+    };
+    emit(kx[0], ky[0]);
+    for (let i = 1; i < knots; i++) {
+      const km = tileDistKm(kx[i - 1], ky[i - 1], kx[i], ky[i]);
+      const m = Math.max(1, Math.ceil(km / step));
+      for (let j = 1; j <= m && n < max; j++) {
+        const t = j / m;
+        emit(kx[i - 1] + (kx[i] - kx[i - 1]) * t, ky[i - 1] + (ky[i] - ky[i - 1]) * t);
+      }
+    }
+    return n;
   }
 
-  private startTrail(env: RouteEnv, r: Route, u: UnitView, fromX: number, fromY: number): void {
+  private styleKey(kind: RouteKind): 'routeConvoy' | 'routeTrade' | 'routeWarship' | 'routeAir' {
+    return kind === 'convoy' ? 'routeConvoy' : kind === 'trade' ? 'routeTrade' : kind === 'warship' ? 'routeWarship' : 'routeAir';
+  }
+
+  /**
+   * Start a route's line. Ships: from the first waypoint of their sim path (the port they left, or where this
+   * warship leg began) along the path up to the ship; with no path yet, from where the ship is. Aircraft: the great
+   * circle from take-off.
+   */
+  private startTrail(env: RouteEnv, r: Route, u: UnitView, airFromOrigin: boolean): void {
     const ship = r.kind !== 'air';
-    const n = this.arc(env, fromX, fromY, u.x, u.y, r.segKm, ship, 200);
-    const key = r.kind === 'convoy' ? 'routeConvoy' : r.kind === 'trade' ? 'routeTrade' : r.kind === 'warship' ? 'routeWarship' : 'routeAir';
-    const tr = env.fx.trails.start(key, pathBuf[0], pathBuf[1], pathBuf[2], env.ownerColor(r.owner));
+    let n: number;
+    const path = ship ? env.pathOf(u.id) ?? null : null;
+    if (ship && path && path.length >= 2) {
+      let km = 0;
+      for (let i = 1; i < path.length; i++) km += tileDistKm(tcx(path[i - 1]), tcy(path[i - 1]), tcx(path[i]), tcy(path[i]));
+      r.segKm = Math.max(20, km / 220);
+      const k = nearestSegment(path, u.x, u.y);
+      n = this.alongPath(env, path, NaN, NaN, 0, k, u.x, u.y, r.segKm, true, 240);
+      r.path = path;
+      r.pathK = k;
+    } else if (!ship && airFromOrigin) {
+      n = this.arc(env, u.originX, u.originY, u.x, u.y, r.segKm, false, 200);
+    } else {
+      this.point(env, u.x, u.y, ship, V);
+      pathBuf[0] = V.x;
+      pathBuf[1] = V.y;
+      pathBuf[2] = V.z;
+      n = 1;
+      r.path = null;
+    }
+    const tr = env.fx.trails.start(this.styleKey(r.kind), pathBuf[0], pathBuf[1], pathBuf[2], env.ownerColor(r.owner));
+    if (n > 1) env.fx.trails.setPath(tr, pathBuf, n);
     tr.minSegKm = r.segKm;
-    if (r.kind === 'trade') tr.opacity = env.altitudeKm < 5000 ? 1 : 0;
-    for (let i = 1; i < n; i++) env.fx.trails.push(tr, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
     r.trail = tr;
     r.startedAt = env.now;
+    r.lastX = u.x;
+    r.lastY = u.y;
     if (this.isAlert(env, r, u)) {
       const al = env.fx.trails.start('routeAlert', pathBuf[0], pathBuf[1], pathBuf[2]);
+      if (n > 1) env.fx.trails.setPath(al, pathBuf, n);
       al.minSegKm = r.segKm;
-      for (let i = 1; i < n; i++) env.fx.trails.push(al, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
       r.alert = al;
     }
   }
@@ -195,10 +334,17 @@ export class RouteManager {
   }
 
   /**
-   * Per frame for every live unit. `pos` is the unit's drawn position (ignored), `airborne` false for docked aircraft.
-   * Returns nothing; trails follow the unit.
+   * Strategic-zoom clutter cut (§10.8, FEEDBACK #10): above ~2,500 km only the human's routes, routes at war with the
+   * human and the hovered or selected unit's route are drawn; other lines fade out between 1,800 and 2,500 km.
    */
+  private visibility(env: RouteEnv, protect: boolean, unitId: number): number {
+    if (protect || this.focus.has(unitId)) return 1;
+    return 1 - smoothstep(1800, 2500, env.altitudeKm);
+  }
+
+  /** Per frame for every live unit: the line follows the unit (along its sim path), the planned path ahead. */
   unit(env: RouteEnv, u: UnitView, moving: boolean): void {
+    this.fx = env.fx;
     if (u.type === UnitType.ArmoredDivision) {
       this.division(env, u);
       return;
@@ -210,9 +356,10 @@ export class RouteManager {
     if (!r) {
       r = {
         unitId: u.id, owner: u.owner, type: u.type, kind, trail: null, plan: null, alert: null, startedAt: env.now,
-        lastMovingAt: env.now, seen: 0, suppressed: false, segKm: 20, planAt: -1, lastState: u.state, last: new THREE.Vector3(),
+        lastMovingAt: env.now, seen: 0, suppressed: false, segKm: 20, planAt: -1, planX: NaN, planY: NaN, path: null, pathK: 0,
+        lastX: u.x, lastY: u.y, lastState: u.state, last: new THREE.Vector3(),
       };
-      // A point every max(20 km, route length / 200).
+      // Aircraft: a point every max(10 km, sortie length / 200). Ships: from their path length when the line starts.
       const len = tileDistKm(u.originX, u.originY, u.targetX, u.targetY) * 1.3;
       r.segKm = Math.max(kind === 'air' ? 10 : 20, len / 200);
       this.routes.set(u.id, r);
@@ -220,76 +367,124 @@ export class RouteManager {
     r.seen = this.gen;
     r.lastState = u.state;
     r.owner = u.owner;
+    const protect = this.protectedRoute(env, r);
     // A ship that changed hands (capitulation, cession) or whose owner went to war with the human is protected now.
-    if (r.suppressed && this.protectedRoute(env, r)) r.suppressed = false;
+    if (r.suppressed && protect) r.suppressed = false;
     if (moving) r.lastMovingAt = env.now;
     const ship = kind !== 'air';
     this.point(env, u.x, u.y, ship, r.last);
 
-    // When a line exists and should: follow the unit. When it should end: release it (hold, then fade).
+    // When a line exists and should: follow the unit. When it should end: hold, then fade.
     let want: boolean;
     if (kind === 'warship') want = moving || (!!r.trail && env.now - r.lastMovingAt < 3);
     else if (kind === 'air') want = !docked;
     else want = true;
     if (!want) {
-      this.releaseRoute(env, r);
+      this.endRoute(env, r);
       return;
     }
-    if (!r.trail && !r.suppressed) {
-      // Transports and trade ships: from the port they left. Warships: from where this leg started. Aircraft: from
-      // take-off (their base when the sortie began after we saw them docked, else their origin).
-      if (kind === 'convoy' || kind === 'trade') this.startTrail(env, r, u, u.originX, u.originY);
-      else if (kind === 'air' && tileDistKm(u.originX, u.originY, u.x, u.y) < 2500) this.startTrail(env, r, u, u.originX, u.originY);
-      else this.startTrail(env, r, u, u.x, u.y);
+    const path = ship ? env.pathOf(u.id) ?? null : null;
+    // A transport or trade ship whose line started before its path arrived: redraw it along the path from its port.
+    if (r.trail && ship && !r.path && path && path.length >= 2 && kind !== 'warship') {
+      env.fx.trails.kill(r.trail);
+      env.fx.trails.kill(r.alert);
+      r.trail = r.alert = null;
     }
+    if (!r.trail && !r.suppressed) {
+      this.startTrail(env, r, u, kind === 'air' && tileDistKm(u.originX, u.originY, u.x, u.y) < 2500);
+    }
+    const vis = this.visibility(env, protect, u.id);
     if (r.trail) {
+      if (ship && path && path.length >= 2) {
+        if (path !== r.path) {
+          // A new plan (the next warship leg, a retarget): the line keeps what was sailed and follows the new path.
+          r.path = path;
+          r.pathK = 0;
+        }
+        // A jump longer than two line segments (a fast-forward, a stalled tab, a burst of updates): follow the
+        // waypoints sailed meanwhile instead of a chord that could cross land.
+        if (tileDistKm(r.lastX, r.lastY, u.x, u.y) > 2 * r.segKm) {
+          const k0 = r.pathK;
+          const k = nearestSegment(path, u.x, u.y, k0);
+          if (k > k0) {
+            const n = this.alongPath(env, path, NaN, NaN, k0 + 1, k, NaN, NaN, r.segKm, true, 240);
+            for (let i = 0; i < n; i++) {
+              env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
+              if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
+            }
+          }
+          r.pathK = k;
+        }
+      }
       env.fx.trails.push(r.trail, r.last.x, r.last.y, r.last.z);
       if (r.alert) env.fx.trails.push(r.alert, r.last.x, r.last.y, r.last.z);
-      // Trade routes only below 5,000 km.
-      if (kind === 'trade') r.trail.opacity = env.altitudeKm < 5000 ? 1 : 0;
+      r.lastX = u.x;
+      r.lastY = u.y;
+      r.trail.opacity = vis;
+      if (r.alert) r.alert.opacity = vis;
     }
-    // Planned path ahead (dashed): convoys and sorties always; anything selected or hovered.
-    const planned = (kind === 'convoy' || kind === 'air' || this.focus.has(u.id)) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > 30;
-    if (planned) {
-      if (!r.plan) r.plan = env.fx.trails.start('plan', r.last.x, r.last.y, r.last.z, env.ownerColor(r.owner));
-      if (env.now - r.planAt > 0.4) {
-        r.planAt = env.now;
-        // v2-stub(W2→W4): great circle to the target until W4 publishes the sim's path (TickUpdate.routes).
-        const n = this.arc(env, u.x, u.y, u.targetX, u.targetY, Math.max(15, r.segKm), ship, 200);
-        pathBuf[0] = r.last.x;
-        pathBuf[1] = r.last.y;
-        pathBuf[2] = r.last.z;
-        env.fx.trails.setPath(r.plan, pathBuf, n);
+    // Planned path ahead (dashed): convoys and sorties always; anything selected or hovered. Ships follow their sim
+    // path (no path: no preview, never a guess across land); aircraft the great circle they fly.
+    const planned = (kind === 'convoy' || kind === 'air' || this.focus.has(u.id)) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > 30
+      && (!ship || (!!path && path.length >= 2));
+    if (planned && !r.suppressed) {
+      if (!r.plan) {
+        r.plan = env.fx.trails.start('plan', r.last.x, r.last.y, r.last.z, env.ownerColor(r.owner));
+        r.planAt = -1;
       }
+      const movedTiles = Math.abs(wrapDX(r.planX, u.x)) + Math.abs(r.planY - u.y);
+      if (r.planAt < 0 || env.now - r.planAt > 0.4 || !(movedTiles < 0.25) || (ship && path !== r.path)) {
+        r.planAt = env.now;
+        r.planX = u.x;
+        r.planY = u.y;
+        let n: number;
+        if (ship && path) {
+          const k = nearestSegment(path, u.x, u.y, r.path === path ? r.pathK : 0);
+          n = this.alongPath(env, path, u.x, u.y, k + 1, path.length - 1, NaN, NaN, Math.max(15, r.segKm), true, 240);
+        } else n = this.arc(env, u.x, u.y, u.targetX, u.targetY, Math.max(15, r.segKm), false, 200);
+        if (n >= 2) env.fx.trails.setPath(r.plan, pathBuf, n);
+      }
+      r.plan.opacity = vis;
     } else if (r.plan) {
-      env.fx.trails.release(r.plan);
+      env.fx.trails.kill(r.plan);
       r.plan = null;
     }
   }
 
-  /** Divisions: a dashed route to their destination with the ETA at its end, on hover and selection only. */
-  private readonly divPlans = new Map<number, { plan: Trail; at: number; seen: number; end: THREE.Vector3; eta: string; owner: number }>();
+  /** Divisions: a dashed route along their land / rail waypoints with the ETA at its end, on hover and selection only. */
+  private readonly divPlans = new Map<number, { plan: Trail; at: number; x: number; y: number; path: Int32Array | null; seen: number; end: THREE.Vector3; eta: string; owner: number }>();
   private division(env: RouteEnv, u: UnitView): void {
     let d = this.divPlans.get(u.id);
     const show = this.focus.has(u.id) && hasDestination(u) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > 15;
     if (!show) {
       if (d) {
-        env.fx.trails.release(d.plan);
+        env.fx.trails.kill(d.plan);
         this.divPlans.delete(u.id);
       }
       return;
     }
     const here = this.point(env, u.x, u.y, false, V);
     if (!d) {
-      d = { plan: env.fx.trails.start('plan', here.x, here.y, here.z, env.ownerColor(u.owner)), at: -1, seen: 0, end: new THREE.Vector3(), eta: '', owner: u.owner };
+      d = { plan: env.fx.trails.start('plan', here.x, here.y, here.z, env.ownerColor(u.owner)), at: -1, x: NaN, y: NaN, path: null, seen: 0, end: new THREE.Vector3(), eta: '', owner: u.owner };
       this.divPlans.set(u.id, d);
     }
     d.seen = this.gen;
-    if (env.now - d.at > 0.4) {
+    const path = env.pathOf(u.id) ?? null;
+    const moved = Math.abs(wrapDX(d.x, u.x)) + Math.abs(d.y - u.y);
+    if (d.at < 0 || env.now - d.at > 0.4 || !(moved < 0.25) || path !== d.path) {
       d.at = env.now;
-      const n = this.arc(env, u.x, u.y, u.targetX, u.targetY, 10, false, 200);
-      env.fx.trails.setPath(d.plan, pathBuf, n);
-      d.end.set(pathBuf[(n - 1) * 3], pathBuf[(n - 1) * 3 + 1], pathBuf[(n - 1) * 3 + 2]);
+      d.x = u.x;
+      d.y = u.y;
+      d.path = path;
+      let n: number;
+      if (path && path.length >= 1) {
+        const k = path.length >= 2 ? nearestSegment(path, u.x, u.y) : -1;
+        n = this.alongPath(env, path, u.x, u.y, k + 1, path.length - 1, NaN, NaN, 10, false, 200);
+      } else n = this.arc(env, u.x, u.y, u.targetX, u.targetY, 10, false, 200);
+      if (n >= 2) {
+        env.fx.trails.setPath(d.plan, pathBuf, n);
+        d.end.set(pathBuf[(n - 1) * 3], pathBuf[(n - 1) * 3 + 1], pathBuf[(n - 1) * 3 + 2]);
+      }
       d.eta = etaLabel(u);
     }
   }
@@ -299,45 +494,61 @@ export class RouteManager {
     for (const d of this.divPlans.values()) fn(d.end, d.eta, d.owner);
   }
 
-  private releaseRoute(env: RouteEnv, r: Route): void {
-    if (r.trail) env.fx.trails.release(r.trail);
-    if (r.alert) env.fx.trails.release(r.alert);
-    if (r.plan) env.fx.trails.release(r.plan);
+  /**
+   * The unit is gone, arrived, docked or stopped: its travelled line is held and then faded on the route clock (convoys
+   * 15 s + 5 s, trade 6 + 3, warships 8 + 5, sorties 10 + 5); the planned path and the alert outline go at once. While
+   * frozen (&freeze=1) the line goes at once too: a frozen frame shows the present.
+   */
+  private endRoute(env: RouteEnv, r: Route): void {
+    if (r.trail && !r.suppressed && !env.frozen) {
+      const [hold, fade] = ENDING[r.kind];
+      const protect = this.protectedRoute(env, r);
+      this.ending.push({ trail: r.trail, unitId: r.unitId, owner: r.owner, at: this.clock(), hold, fade, protect, vis: this.visibility(env, protect, r.unitId) });
+    } else if (r.trail) env.fx.trails.kill(r.trail);
+    env.fx.trails.kill(r.alert);
+    env.fx.trails.kill(r.plan);
     r.trail = r.alert = r.plan = null;
+    r.path = null;
   }
 
   begin(): void {
     this.gen++;
   }
 
-  /** After all units: release vanished units (red cross if sunk), enforce the budget. */
+  /**
+   * Hold and fade of ending lines from the route clock: full opacity for `hold` s, then linear to 0 over `fade` s, then
+   * killed. Runs every rendered frame (end()) and on a 200 ms timer (tickEnding from the units layer) so the state is
+   * right whatever the frame cadence: a line is never drawn past hold + fade, even after a stalled frame.
+   */
+  tickEnding(): void {
+    const now = this.clock();
+    for (let i = this.ending.length - 1; i >= 0; i--) {
+      const e = this.ending[i];
+      const age = now - e.at;
+      if (age >= e.hold + e.fade) {
+        this.fx?.trails.kill(e.trail);
+        e.trail.opacity = 0;
+        this.ending.splice(i, 1);
+      } else e.trail.opacity = e.vis * (age <= e.hold ? 1 : 1 - (age - e.hold) / e.fade);
+    }
+  }
+
+  /** After all units: end vanished units' lines (red cross if sunk), fade ending lines, enforce the budget. */
   end(env: RouteEnv): void {
+    this.fx = env.fx;
     for (const [id, d] of this.divPlans) {
       if (d.seen === this.gen) continue;
-      env.fx.trails.release(d.plan);
+      env.fx.trails.kill(d.plan);
       this.divPlans.delete(id);
     }
     for (const [id, r] of this.routes) {
       if (r.seen === this.gen) continue;
-      if (r.lastState === UnitState.Destroyed && r.kind !== 'air') this.crosses.push({ pos: r.last.clone(), until: env.now + 15 });
-      // The travelled line stays (convoys 15 s + 5 s fade, trade 6 + 3, warships 8 + 5, sorties 10 + 5); the planned
-      // path and the alert outline go at once.
-      if (r.trail && !r.suppressed) {
-        const [hold, fade] = ENDING[r.kind];
-        this.ending.push({ trail: r.trail, unitId: r.unitId, owner: r.owner, at: env.realNow, hold, fade });
-        r.trail = null;
-      }
-      this.releaseRoute(env, r);
+      if (r.lastState === UnitState.Destroyed && r.kind !== 'air' && !env.frozen) this.crosses.push({ pos: r.last.clone(), until: env.now + 15 });
+      this.endRoute(env, r);
       this.routes.delete(id);
     }
-    for (let i = this.ending.length - 1; i >= 0; i--) {
-      const e = this.ending[i];
-      const age = env.realNow - e.at;
-      if (age >= e.hold + e.fade) {
-        env.fx.trails.kill(e.trail);
-        this.ending.splice(i, 1);
-      } else e.trail.opacity = age <= e.hold ? 1 : 1 - (age - e.hold) / e.fade;
-    }
+    for (const e of this.ending) e.vis = this.visibility(env, e.protect, e.unitId);
+    this.tickEnding();
     for (let i = this.crosses.length - 1; i >= 0; i--) if (this.crosses[i].until < env.now) this.crosses.splice(i, 1);
     // Budget: evict by priority, never the human's routes or routes at war with the human.
     let live = 0;
@@ -349,8 +560,9 @@ export class RouteManager {
         if (live <= ROUTE_BUDGET) break;
         const rank = this.evictRank(env, r);
         // Evicted lines vanish at once (no hold): the budget is about what is on screen.
-        for (const t of [r.trail, r.alert, r.plan]) if (t) t.opacity = 0;
-        this.releaseRoute(env, r);
+        for (const t of [r.trail, r.alert, r.plan]) env.fx.trails.kill(t);
+        r.trail = r.alert = r.plan = null;
+        r.path = null;
         r.suppressed = true;
         live--;
         this.evicted.total++;
@@ -396,11 +608,11 @@ export class RouteManager {
   }
 
   /** One unit's route line (verification): 'live' while it sails, 'ending' with its real age after arrival. */
-  info(unitId: number, realNow: number): { state: 'live' | 'ending' | 'none'; drawn: boolean; age?: number; opacity?: number; suppressed?: boolean } {
+  info(unitId: number): { state: 'live' | 'ending' | 'none'; drawn: boolean; age?: number; opacity?: number; suppressed?: boolean } {
     const r = this.routes.get(unitId);
     if (r) return { state: 'live', drawn: !!r.trail && !r.suppressed, suppressed: r.suppressed };
     const e = this.ending.find((x) => x.unitId === unitId);
-    if (e) return { state: 'ending', drawn: e.trail.opacity > 0, age: +(realNow - e.at).toFixed(2), opacity: +e.trail.opacity.toFixed(3) };
+    if (e) return { state: 'ending', drawn: e.trail.opacity > 0 && e.trail.count > 0, age: +(this.clock() - e.at).toFixed(2), opacity: +e.trail.opacity.toFixed(3) };
     return { state: 'none', drawn: false };
   }
 

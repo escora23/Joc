@@ -331,8 +331,14 @@ async function checkRoutes() {
   const goneBy = samples.find((s, i) => i > 0 && s.r.state === 'none' && samples[i - 1].r.state !== 'live');
   verdict('8 routes: the convoy line is drawn from departure for the whole trip', id >= 0 && live.length > 3 && live.every((s) => s.r.drawn),
     { id, samples: live.length, missing: live.filter((s) => !s.r.drawn).length });
-  verdict('8 routes: kept >= 15 real s after arrival, gone within 5 s after that', endedAt !== null && lastDrawnAge >= 15 && lastDrawnAge <= 20.5 && !!goneBy,
-    { endedAt, lastDrawnAge, fullOpacityUntil: Math.max(0, ...ending.filter((s) => s.r.opacity >= 0.999).map((s) => s.r.age)) });
+  // Opacity at the samples nearest 16, 18 and 20 s after arrival: a visible hold then a fade (1, ~0.6, ~0.2 or gone).
+  const near = (a) => { let b = null; for (const s of samples) if (s.r.state !== 'live' && s.r.age !== undefined && (!b || Math.abs(s.r.age - a) < Math.abs(b.r.age - a))) b = s; return b ? { age: b.r.age, opacity: b.r.opacity, drawn: b.r.drawn } : null; };
+  const fadeSamples = { at16: near(16), at18: near(18), at20: near(20) };
+  const fullOpacityUntil = Math.max(0, ...ending.filter((s) => s.r.opacity >= 0.999).map((s) => s.r.age));
+  const fading = ending.filter((s) => s.r.drawn && s.r.opacity < 0.999 && s.r.opacity > 0).length;
+  verdict('8 routes: kept >= 15 real s after arrival, faded over the next 5 s and gone by 20 s', endedAt !== null && lastDrawnAge >= 15 && lastDrawnAge <= 20.5 && !!goneBy
+    && fullOpacityUntil >= 14 && fullOpacityUntil <= 15.6 && fading >= 2,
+    { endedAt, lastDrawnAge, fullOpacityUntil, fadingSamples: fading, ...fadeSamples });
   verdict('8 routes: the human routes never evicted with 100 trade ships and 10 warships in view', samples.every((s) => s.st.humanSuppressed === 0 && s.st.evicted.human === 0),
     samples[Math.min(5, samples.length - 1)]?.st);
   await page.close();
@@ -470,7 +476,8 @@ function linLab(R, G, B) {
 async function checkFlash() {
   const results = [];
   for (const alt of [1500, 300]) {
-    const page = await open('borders-close', `&flash=1&freeze=1&alt=${alt}`);
+    // No HUD: the live news ticker and counters would add their own differences to the flash signal.
+    const page = await open('borders-close', `&flash=1&freeze=1&hud=0&alt=${alt}`);
     await frames(page, 4);
     const fl = await page.evaluate(() => window.__territory.flashing());
     const a = PNG.sync.read(await page.screenshot({ path: path.join(out, `flash-${alt}-mid.png`) }));
@@ -654,19 +661,35 @@ async function checkModels() {
     const page = await open('unit-closeup', `&unit=${unit}&alt=300`);
     const id = await page.evaluate(() => window.__closeupUnit ?? -1);
     for (const alt of [300, 100, 30]) {
-      await page.evaluate(({ id, alt }) => {
-        const ctx = window.__front.ctx;
-        const u = ctx.sim.view.units.get(id);
-        const w = ctx.world, mw = w.width, mh = w.height;
-        const st = ctx.cameraRig.getState();
-        if (u) ctx.cameraRig.setState({ ...st, lat: 90 - (u.y / mh) * 180, lon: ((((u.x % mw) + mw) % mw) / mw) * 360 - 180, altitudeKm: alt });
-      }, { id, alt });
-      await frames(page, 8);
-      await page.waitForTimeout(1200);
-      const st = await page.evaluate((id) => {
-        const s = window.__units.stats();
-        return { m: s.unitModelsInView.find((x) => x.id === id) ?? null, inView: s.unitModels, instances: s.unitModelInstances, minPx: s.unitModelMinPx };
-      }, id);
+      // Track the unit: the camera looks at where the model is drawn (aircraft fly above the ground point and move),
+      // re-centred until the drawn model sits near the middle of the screen.
+      let st = null;
+      for (let pass = 0; pass < 3; pass++) {
+        await page.evaluate(({ id, alt }) => {
+          const ctx = window.__front.ctx;
+          const u = ctx.sim.view.units.get(id);
+          const w = ctx.world, mw = w.width, mh = w.height;
+          const cs = ctx.cameraRig.getState();
+          const p = ctx.camera.position.clone();
+          let lat, lon;
+          if (ctx.units.getUnitWorldPosition(id, p)) {
+            p.normalize();
+            lat = Math.asin(Math.max(-1, Math.min(1, p.y))) * 180 / Math.PI;
+            lon = Math.atan2(-p.z, p.x) * 180 / Math.PI;
+          } else if (u) {
+            lat = 90 - (u.y / mh) * 180;
+            lon = ((((u.x % mw) + mw) % mw) / mw) * 360 - 180;
+          }
+          if (lat !== undefined) ctx.cameraRig.setState({ ...cs, lat, lon, altitudeKm: alt });
+        }, { id, alt });
+        await frames(page, 6);
+        await page.waitForTimeout(800);
+        st = await page.evaluate((id) => {
+          const s = window.__units.stats();
+          return { m: s.unitModelsInView.find((x) => x.id === id) ?? null, inView: s.unitModels, instances: s.unitModelInstances, minPx: s.unitModelMinPx };
+        }, id);
+        if (st.m && Math.abs(st.m.x - 800) < 300 && Math.abs(st.m.y - 450) < 250) break;
+      }
       const shotPath = path.join(out, `closeup-${unit}-${alt}.png`);
       if (st.m) await page.screenshot({ path: shotPath, clip: { x: Math.max(0, st.m.x - 110), y: Math.max(0, st.m.y - 110), width: 220, height: 220 } });
       else await page.screenshot({ path: shotPath });
@@ -676,6 +699,7 @@ async function checkModels() {
     await page.close();
   }
   save('models', results);
+  // px = the projected bounding box of the drawn instances (__units.stats(), not the intended size); crops saved.
   verdict('5 close-up: every unit type drawn as a 3D model in view, >= 24 px at 300/100/30 km',
     results.every((r) => r.id >= 0 && r.px >= 24), results.map((r) => `${r.unit}@${r.alt}:${r.px}`).join(' '));
 }

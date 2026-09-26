@@ -40,13 +40,17 @@ export const CLOUD_MASK_LAYER = 29;
 const FROZEN_CLOUD_U = 0.52;
 
 /**
- * Cloud thinning factors for a mode and camera altitude (DESIGN_V2 §10.5): x = the human's land, y = other land,
- * z = ocean, w = fronts. Strategic: > 2,500 km 0 / 0.2 / 0.85 / 0; < 800 km 0.6 / 0.6 / 1 / 0.3; lerp between.
+ * Cloud thinning factors for a mode and camera altitude (DESIGN_V2 §10.5, FEEDBACK #5): x = the human's land,
+ * y = other land, z = ocean, w = fronts. Strategic mode keeps the human's land and the fronts clear of cloud at every
+ * zoom the game is played at, down to the close-zoom threshold (300 km); other land stays thin (0.2 from orbit, 0.3
+ * at mid zoom) and the ocean keeps its weather. Below 300 km the clouds come back toward the realistic look
+ * (0.6 / 0.6 / 1 / 0.3 at 150 km), where the camera is among them and the ground detail carries the map.
  */
 export function cloudFactors(mode: CloudMode, altKm: number, out: THREE.Vector4): THREE.Vector4 {
   if (mode !== 'strategic') return out.set(1, 1, 1, 1);
-  const t = smoothstep(800, 2500, altKm);
-  return out.set(lerp(0.6, 0, t), lerp(0.6, 0.2, t), lerp(1, 0.85, t), lerp(0.3, 0, t));
+  const far = smoothstep(800, 2500, altKm);
+  const close = 1 - smoothstep(150, 300, altKm);
+  return out.set(lerp(0, 0.6, close), lerp(lerp(0.3, 0.2, far), 0.6, close), lerp(1, 0.85, far), lerp(0, 0.3, close));
 }
 
 export function createGlobe(ctx: GameContext): GlobeApi {
@@ -84,6 +88,11 @@ export function createGlobe(ctx: GameContext): GlobeApi {
   function reliefRadius(lat: number, lon: number): number {
     const w = ctx.world;
     if (w) return surfaceRadius(sampleElevation(w, lat, lon));
+    return meshRadius(lat, lon);
+  }
+
+  /** The earth vertex shader's displacement (textureLod(uRelief).a, bilinear, texel centres at +0.5). */
+  function meshRadius(lat: number, lon: number): number {
     if (!tex) return 1;
     // Same bilinear lookup as data.sampleElevation, on our copy of the topology.
     const W = tex.reliefW, H = tex.reliefH, d = tex.reliefGray;
@@ -273,6 +282,9 @@ export function createGlobe(ctx: GameContext): GlobeApi {
     },
     surfaceRadiusAt(lat, lon) {
       return reliefRadius(lat, lon);
+    },
+    meshRadiusAt(lat, lon) {
+      return meshRadius(lat, lon);
     },
     getSunDirection(out) {
       return sunDirection(worldTimeOverride ?? ctx.frame.worldTime, out);

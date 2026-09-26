@@ -83,6 +83,11 @@ float cloudThin(vec4 m, vec4 k) {
 }
 `;
 
+// Inverse ACES matrices for the display-space conquest flash (the same fit as render/post/shaders.ts).
+const glslMat3 = (m: THREE.Matrix3): string => `mat3(${m.elements.map((v) => v.toFixed(6)).join(', ')})`;
+const FL_INV_IN = glslMat3(new THREE.Matrix3().set(0.59719, 0.35458, 0.04823, 0.076, 0.90834, 0.01566, 0.0284, 0.13383, 0.83777).invert());
+const FL_INV_OUT = glslMat3(new THREE.Matrix3().set(1.60475, -0.53108, -0.07367, -0.10208, 1.10813, -0.00605, -0.00327, -0.07276, 1.07602).invert());
+
 const vert = /* glsl */ `
 ${GLSL_CONSTANTS}
 ${GLSL_GEO}
@@ -191,6 +196,26 @@ uniform float uShoreK;
 uniform float uCloseK;
 uniform vec4 uCloudK;
 uniform float uMaskMode;
+// The post pipeline's ACES fit (render/post/shaders.ts aces()) and its inverse, for the display-space conquest flash.
+const mat3 FL_IN = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+const mat3 FL_OUT = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+const mat3 FL_INV_IN = ${FL_INV_IN};
+const mat3 FL_INV_OUT = ${FL_INV_OUT};
+vec3 flashTone(vec3 c) {
+  c = FL_IN * (max(c, 0.0) / 0.6);
+  vec3 a = c * (c + 0.0245786) - 0.000090537;
+  vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
+  return clamp(FL_OUT * (a / b), 0.0, 1.0);
+}
+float flashInvRrt(float y) {
+  y = clamp(y, 0.0, 0.995);
+  float a = 0.983729 * y - 1.0, b = 0.432951 * y - 0.0245786, c = 0.238081 * y + 0.000090537;
+  return (-b - sqrt(max(b * b - 4.0 * a * c, 0.0))) / (2.0 * a);
+}
+vec3 flashUntone(vec3 d) {
+  vec3 u = FL_INV_OUT * d;
+  return max(FL_INV_IN * vec3(flashInvRrt(u.r), flashInvRrt(u.g), flashInvRrt(u.b)) * 0.6, 0.0);
+}
 uniform float uSpawn;
 uniform vec4 uScars[MAX_SCARS];
 uniform int uScarCount;
@@ -433,6 +458,8 @@ void main() {
   int O = 0, Q = -1;
   float distPx = 1e4, distT = 1e4;
   float occ = 0.0, flash = 0.0, isl = 0.0, landCov = 1.0, shorePx = 1e4;
+  float flashAmt = 0.0;
+  vec3 flashCol = vec3(0.0);
   bool playableHere = water < 0.5;
   vec2 tp0 = vec2(uv.x * ${MAP_W}.0, uvT.y * ${MAP_H}.0);
   vec2 tp = tp0;
@@ -645,10 +672,14 @@ void main() {
         float vis = smoothstep(3.0, 6.0, 0.4 / pxT);
         albedo = mix(albedo, natO * 1.15, mix(0.3, dotm, vis) * occ * 0.9 * terr * landK);
       }
-      // Conquest flash in the attacker's (new owner's) exact colour, 2 s. Soft everywhere: the coverage weights feather
-      // it inside the attacker's land, and it ramps up over 6 px from the border line, so it never has a hard edge.
-      float flashEdge = Q >= 0 ? smoothstep(0.5, 6.5, distPx) : 1.0;
-      emissive += natO * 1.25 * flash * flashEdge * terr * landK;
+      // Conquest flash in the attacker's (new owner's) colour, 2 s: light of exactly the attacker's colour added on
+      // screen (applied after the aerial perspective, in display space, see flashTone). Soft everywhere: the coverage
+      // weights feather it inside the attacker's land, and it ramps up over 8 px starting just past the border line
+      // (never a step against the line).
+      float flashEdge = Q >= 0 ? smoothstep(2.5, 10.5, distPx) : 1.0;
+      flashAmt = flash * flashEdge * terr * landK;
+      vec3 ps = pal.rgb;
+      flashCol = mix(ps / 12.92, pow((ps + 0.055) / 1.055, vec3(2.4)), step(0.04045, ps));
     } else if (landK > 0.0 && playableHere) {
       // Neutral land: desaturated 50 % and darkened 24 % from orbit, so owned land stands out (the design's 35 % / 10 %
       // measured ΔE 2.9 against the plain globe at 3,000 km; the readability target is ≥ 5).
@@ -880,6 +911,16 @@ void main() {
     else m = vec3(0.0, 0.0, ${OWNER_MASK.ice}.0 + nightB);
     gl_FragColor = vec4(m / 255.0, 1.0);
     return;
+  }
+  if (flashAmt > 0.001) {
+    // Conquest flash in display space: the post pipeline's ACES curve is applied here, the attacker's colour is added
+    // to the displayed pixel (kept below white so no channel clips and the hue stays the attacker's), and the result is
+    // mapped back to HDR. Adding the light in HDR instead pushes a bright fill into the curve's shoulder, where the
+    // saturated channel compresses first and the flash reads cream instead of the attacker's colour (§10.3).
+    vec3 d = flashTone(col);
+    vec3 room = (vec3(0.93) - d) / max(flashCol, vec3(1e-3));
+    float k = clamp(0.55 * flashAmt, 0.0, max(0.0, min(room.r, min(room.g, room.b))));
+    col = flashUntone(d + flashCol * k);
   }
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>

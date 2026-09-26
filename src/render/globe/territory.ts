@@ -276,6 +276,14 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
     }
   }
 
+  function pinFlash(ageSec: number | null): void {
+    flashPin = ageSec;
+    if (ageSec === null || recent.length === 0) return;
+    let newest = recent[recent.length - 1].stamp;
+    for (const r of recent) if (((r.stamp - newest) & 0xffff) < 0x8000) newest = r.stamp;
+    uniforms.uFlashNow.value = (newest + ageSec * FLASH_UNITS) % 65536;
+  }
+
   // Debug / verification hook (DESIGN_V2 §10.3 conquest flash): the tiles flashing now with their colour and age, and
   // a pin that holds the flash clock at a given age after the newest capture (deterministic shots).
   (window as unknown as { __territory?: unknown }).__territory = {
@@ -290,17 +298,12 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
       }
       return out;
     },
-    pinFlash(ageSec: number | null): void {
-      flashPin = ageSec;
-      if (ageSec === null || recent.length === 0) return;
-      let newest = recent[recent.length - 1].stamp;
-      for (const r of recent) if (((r.stamp - newest) & 0xffff) < 0x8000) newest = r.stamp;
-      uniforms.uFlashNow.value = (newest + ageSec * FLASH_UNITS) % 65536;
-    },
+    pinFlash,
     queued: () => qLen,
     /** Shots: show these tiles as captured now (a staged conquest arrives as a resync, which never flashes). */
-    stampCapture(tiles: readonly number[]): void {
+    stampCapture(tiles: readonly number[], pinAge?: number): void {
       for (const t of tiles) applyTile(t, mirror[t]);
+      if (pinAge !== undefined && tiles.length) pinFlash(pinAge);
     },
   };
 

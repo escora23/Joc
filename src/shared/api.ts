@@ -227,6 +227,12 @@ export interface GlobeApi extends Subsystem {
   pickLatLon(clientX: number, clientY: number, out?: LatLon): LatLon | null;
   /** Ground radius (world units) at lat/lon as rendered (== geo.surfaceRadius(sampleElevation)). */
   surfaceRadiusAt(lat: number, lon: number): number;
+  /**
+   * Radius of the drawn globe mesh at lat/lon: the vertex relief as the GPU samples it (bilinear over the relief
+   * texture). Over the sea this is 1 except near islands and coasts, where the filtered relief lifts the water
+   * surface a little; ships sit on this surface so the drawn sea never covers their hulls.
+   */
+  meshRadiusAt(lat: number, lon: number): number;
   /** Direction toward the sun this frame (world space, unit). */
   getSunDirection(out: THREE.Vector3): THREE.Vector3;
   /** Hover highlight (tile outline / owner glow), -1 = none. */
