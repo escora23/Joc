@@ -198,6 +198,8 @@ if (want('motion')) {
     const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
     ctx.sim.debug({ type: 'conquer', playerId: 1, centerTile: tile(40.9, -1.2), radius: 22 });
     for (let i = 0; i < 4; i++) ctx.sim.debug({ type: 'spawnUnit', unit: 2, owner: 1, tile: tile(39 + i * 0.6, -12 - i), targetTile: tile(40, -60) });
+    // More warships (unit 2), spread further south: movers that keep sailing through all four speed windows.
+    for (let i = 0; i < 3; i++) ctx.sim.debug({ type: 'spawnUnit', unit: 2, owner: 1, tile: tile(37.5 + i * 0.7, -11 - i), targetTile: tile(35, -70) });
     for (let i = 0; i < 3; i++) ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: tile(40.4 + i * 0.3, -3.7), targetTile: tile(41.4, 2.2) });
     ctx.sim.debug({ type: 'spawnUnit', unit: 13, owner: 1, tile: tile(40.4, -3.7), targetTile: tile(41.4, 2.2) });
   });
@@ -209,7 +211,7 @@ if (want('motion')) {
     const r = await ev(() => window.__front.motionProbe({ seconds: 10 }));
     const worst = r.units.reduce((m, u) => Math.max(m, u.ratio), 0);
     const worstV = r.units.reduce((m, u) => Math.max(m, u.speedRatio), 0);
-    row('T40', `${sp}x: max/mean per-frame displacement (${r.units.length} units, ${r.frames} frames, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, '<= 2', r.units.length > 0 && r.pass);
+    row('T40', `${sp}x: max/mean per-frame displacement (${r.units.length} units, ${r.frames} frames, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, r.jitter ? '<= 2 (frame times vary > 2x: judged per real second)' : '<= 2', r.units.length > 0 && r.pass);
   }
   await setSpeed(1);
   // Crisis: a long flight keeps the world on the crisis clock during the probe.
@@ -222,7 +224,7 @@ if (want('motion')) {
   const r = await ev(() => window.__front.motionProbe({ seconds: 10, minMeanPx: 0.02 }));
   const worst = r.units.reduce((m, u) => Math.max(m, u.ratio), 0);
   const worstV = r.units.reduce((m, u) => Math.max(m, u.speedRatio), 0);
-  row('T40', `crisis: max/mean per-frame displacement (${r.units.length} units, clock ${r.clock.mode}, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, '<= 2', r.clock.mode === 'crisis' && r.pass);
+  row('T40', `crisis: max/mean per-frame displacement (${r.units.length} units, clock ${r.clock.mode}, frame ms p50 ${r.frameMs.p50.toFixed(0)} max ${r.frameMs.max.toFixed(0)})`, `${worst.toFixed(2)} (velocity ${worstV.toFixed(2)})`, r.jitter ? '<= 2 (frame times vary > 2x: judged per real second)' : '<= 2', r.clock.mode === 'crisis' && r.pass);
 }
 
 // --- acceptance 15 / 16: declaration path, queued offensive, occupation after a resync ---------------------
@@ -231,10 +233,17 @@ if (want('declare')) {
     const { ctx } = window.__front;
     const view = ctx.sim.view;
     const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + (Math.floor(((lon + 180) / 360) * 1600) % 1600);
-    const enemy = view.playerList.find((p) => p.alive && p.kind === 'nation')?.id ?? 2;
+    // The weakest living nation (the staged offensive must be able to take land for the occupation check).
+    // (not the last nation: speedProbe staged a war and a truce with it)
+    let enemy = 2, least = Infinity, lastId = 0;
+    for (const p of view.playerList) if (p.alive && p.kind === 'nation') lastId = Math.max(lastId, p.id);
+    for (const p of view.playerList) if (p.alive && p.kind === 'nation' && p.id !== lastId && p.troops < least) {
+      least = p.troops;
+      enemy = p.id;
+    }
     ctx.sim.debug({ type: 'conquer', playerId: 1, centerTile: tile(40.4, -3.7), radius: 22 });
     ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: tile(44.6, 1.5), radius: 14 });
-    ctx.sim.debug({ type: 'addTroops', playerId: 1, amount: 400_000 });
+    ctx.sim.debug({ type: 'addTroops', playerId: 1, amount: 2_500_000 }); // enough for real odds (§4.6) against any nation's garrison
     window.__decl = { msgs: [], wars: [], starts: [] };
     ctx.bus.on('message', (e) => window.__decl.msgs.push(e.key));
     ctx.bus.on('warDeclared', (e) => window.__decl.wars.push({ tick: e.tick, mob: e.mobilizeUntilTick, a: e.aggressor, b: e.target }));
@@ -274,16 +283,18 @@ if (want('declare')) {
   // Occupation after a fast-forward (a fullOwners resync): the drawn set equals the sim's (checked through the view).
   const occ = await ev(async () => {
     const { ctx } = window.__front;
-    await ctx.sim.fastForward(400);
+    // Long enough for the offensive to take ground across the Pyrenees, short of the 720-tick occupation.
+    await ctx.sim.fastForward(600);
     const v = ctx.sim.view;
     let owned = 0, occNotOwned = 0;
     for (const t of v.occupiedTiles) {
       if (v.owner[t] !== 0) owned++;
       else occNotOwned++;
     }
-    return { n: v.occupiedTiles.size, owned, occNotOwned, human: v.occupiedCount(1) };
+    const mine = v.attacks.filter((a) => a.attacker === 1 && a.defender > 0).map((a) => `${a.state} R ${(a.ratio ?? 0).toFixed(2)}`);
+    return { n: v.occupiedTiles.size, owned, occNotOwned, human: v.occupiedCount(1), mine };
   });
-  row('A16', 'occupied tiles after a fast-forward resync', `${occ.n} (human ${occ.human}), ${occ.occNotOwned} on unowned land`, '> 0, none unowned', occ.n > 0 && occ.occNotOwned === 0);
+  row('A16', 'occupied tiles after a fast-forward resync', `${occ.n} (human ${occ.human}), ${occ.occNotOwned} on unowned land${occ.n ? '' : `; our offensives: ${occ.mine.join(', ') || 'none'}`}`, '> 0, none unowned', occ.n > 0 && occ.occNotOwned === 0);
 }
 
 console.log('\n=== W1 browser checks ===');

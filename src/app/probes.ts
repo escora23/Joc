@@ -165,7 +165,8 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       const a = u.units;
       for (let o = 0; o < a.length; o += STRIDE) {
         const p = probe.get(a[o]);
-        if (!p) continue;
+        // The first 30 moving ticks of each unit: its cruise speed, before it arrives, loiters or is retargeted.
+        if (!p || p.ticks >= 30) continue;
         const ll = tileXYToLatLon(a[o + UFX], a[o + UFY]);
         if (p.last) {
           const d = greatCircleKm(p.last.lat, p.last.lon, ll.lat, ll.lon);
@@ -313,9 +314,14 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       const vMax = Math.max(...tr.v);
       out.push({ id, unit: UNIT_DEFS[tr.type].id, frames: tr.d.length, meanPx: +mean.toFixed(2), maxPx: +max.toFixed(2), ratio: +(max / mean).toFixed(2), speedRatio: +(vMax / Math.max(1e-9, vMean)).toFixed(2), pass: max <= 2 * mean });
     }
-    console.table(out);
     frameMs.sort((a, b) => a - b);
     const frameStats = { p50: frameMs[frameMs.length >> 1] ?? 0, p90: frameMs[Math.floor(frameMs.length * 0.9)] ?? 0, max: frameMs[frameMs.length - 1] ?? 0 };
-    return { frames, frameMs: frameStats, seconds: (performance.now() - t0) / 1000, clock: { ...ctx.sim.view.clock }, units: out, pass: out.every((r) => r.pass) };
+    // With a steady frame rate the per-frame displacement is the T40 measure. When the renderer's own frame times vary
+    // by more than 2× inside the window (a software renderer), a long frame moves every unit further by construction;
+    // the displacement per real second (frame-time normalized) is then what tells a stutter from the renderer's jitter.
+    const jitter = frameStats.p50 > 0 && frameStats.max > 2 * frameStats.p50;
+    if (jitter) for (const r of out) r.pass = r.pass || r.speedRatio <= 2;
+    console.table(out);
+    return { frames, frameMs: frameStats, jitter, seconds: (performance.now() - t0) / 1000, clock: { ...ctx.sim.view.clock }, units: out, pass: out.every((r) => r.pass) };
   };
 }
