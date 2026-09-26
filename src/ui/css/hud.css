@@ -73,10 +73,13 @@
 .fu-time-main { display: flex; align-items: center; gap: 0.4rem; }
 .fu-time-main > .fu-ico { color: var(--fu-text-dim); width: 1rem; height: 1rem; margin-left: 0.2rem; }
 .fu-time-clock { font-size: 1.02rem; min-width: 3.8rem; color: var(--fu-text); }
-.fu-time-seg { flex: 1; }
-.fu-time-seg > button { flex: 1; padding: 0.45rem 0.4rem; font-family: var(--fu-font-mono); font-size: 0.78rem; letter-spacing: 0; display: grid; place-items: center; }
+.fu-time-main { justify-content: space-between; }
+.fu-time-seg { flex: 0 0 auto; margin-left: auto; }
+.fu-time-seg > button { flex: 0 0 auto; min-width: 2.35rem; padding: 0.45rem 0.4rem; font-family: var(--fu-font-mono); font-size: 0.78rem; letter-spacing: 0; display: grid; place-items: center; }
 .fu-time-seg > button .fu-ico { width: 0.8rem; height: 0.8rem; }
 .fu-time.is-paused .fu-time-seg > button.is-on { background: var(--fu-accent-2); animation: fu-pulse 1.2s ease-in-out infinite; }
+.fu-time-tools { display: flex; align-items: center; justify-content: space-between; gap: 0.3rem; }
+.fu-time-tools > .fu-time-btn { flex: 1 1 0; display: grid; place-items: center; position: relative; }
 .fu-time-btn { padding: 0.38rem; }
 .fu-time-btn .fu-ico { width: 1rem; height: 1rem; }
 .fu-doom { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.55rem; border: 1px solid rgba(255, 74, 74, 0.35); background: rgba(255, 74, 74, 0.08); color: #ff8b8b; border-radius: 2px; }

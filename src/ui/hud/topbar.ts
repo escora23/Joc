@@ -131,10 +131,14 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
   });
   ctx.bus.on('gameTornDown', () => (heg = { leader: 0, until: 0 }));
   const time = h('div', { class: 'fu-time fu-glass fu-interactive' },
-    h('div', { class: 'fu-time-main' }, icon('clock'), clock, speeds,
+    // Row 1: clock and the speed control at its natural width (every speed button must stay clickable).
+    h('div', { class: 'fu-time-main' }, icon('clock'), clock, speeds),
+    // Row 2: what one real second means right now.
+    chip,
+    // Row 3: the panel tools (nations, alerts, help, settings, menu), on their own row.
+    h('div', { class: 'fu-time-tools' },
       nationsBtn, iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
       iconBtn('help', 'hud.help', actions.help, 'tb.help.tip', 'F1'), iconBtn('settings', 'menu.settings', actions.settings, 'tb.settings.tip'), iconBtn('menu', 'hud.menu', actions.pause, 'tb.menu.tip', 'Esc')),
-    chip,
     hegChip,
     doom,
   );

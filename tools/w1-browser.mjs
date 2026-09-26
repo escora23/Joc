@@ -74,17 +74,66 @@ if (want('topbar')) {
     day: document.querySelector('.fu-day-label')?.textContent ?? '',
     segs: document.querySelectorAll('.fu-hourbar i').length,
     on: document.querySelectorAll('.fu-hourbar i.is-on').length,
-    tip: document.querySelector('.fu-daybox')?.getAttribute('title') ?? '',
     chip: document.querySelector('.fu-clockchip')?.textContent ?? '',
     speeds: [...document.querySelectorAll('.fu-time-seg > button')].map((b) => b.textContent),
     hours: window.__front.ctx.sim.view.gameHours,
   }));
   row('§2.7', 'top bar day label', tb.day, 'DÍA n', /^DÍA \d+$/.test(tb.day));
   row('§2.7', 'hour bar segments', `${tb.segs} (${tb.on} lit at ${tb.hours.toFixed(1)} h)`, '24, one per hour', tb.segs === 24 && tb.on === Math.floor(tb.hours) % 24);
-  row('§2.7', 'day tooltip', tb.tip.slice(0, 60) + '…', 'Día n de la partida…', tb.tip.startsWith('Día'));
+  // The day tooltip is the HUD tip() component: hover the day box like a player and read the tip that appears.
+  const dayBox = await ev(() => {
+    const r = document.querySelector('.fu-daybox')?.getBoundingClientRect();
+    return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+  });
+  let tipText = '';
+  if (dayBox) {
+    await page.mouse.move(dayBox.x, dayBox.y);
+    for (let i = 0; i < 40 && !tipText; i++) {
+      await sleep(250);
+      tipText = await ev(() => document.querySelector('.fu-tip.is-on .fu-tip-text')?.textContent ?? '');
+    }
+    await page.mouse.move(640, 400);
+  }
+  row('§2.7', 'day tooltip (hovered .fu-daybox, read .fu-tip-text)', tipText.slice(0, 60) + '…', 'Día n de la partida…', /^(Día|Day) \d+/.test(tipText));
   row('§2.7', 'scale chip at 1x', tb.chip, '1× · 1 s = 1 h', tb.chip === '1× · 1 s = 1 h');
   row('§2.7', 'speed buttons', tb.speeds.join(' | '), 'pause, 0.5x, 1x, 2x, 4x', tb.speeds.length === 5);
-  await page.screenshot({ path: path.join(out, 'topbar-1x.png'), clip: { x: 1100, y: 0, width: 500, height: 140 } });
+  // Every speed button must be clickable with the mouse: hit-test the centre of each one (elementFromPoint) at the
+  // three reference resolutions, then click 0.5x/1x/2x/4x for real and read the game speed back.
+  const vp = page.viewportSize();
+  for (const [w, hgt] of [[1280, 720], [1600, 900], [1920, 1080]]) {
+    await page.setViewportSize({ width: w, height: hgt });
+    await sleep(1500);
+    const hits = await ev(() => [...document.querySelectorAll('.fu-time-seg > button')].map((b) => {
+      const r = b.getBoundingClientRect();
+      const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { label: (b.textContent || 'II').trim() || 'II', w: Math.round(r.width), hit: !!el && (el === b || b.contains(el)) };
+    }));
+    const seg = await ev(() => {
+      const r = document.querySelector('.fu-time-seg')?.getBoundingClientRect();
+      const want = [...document.querySelectorAll('.fu-time-seg > button')].reduce((a, b) => a + b.scrollWidth, 0);
+      return { w: Math.round(r?.width ?? 0), want };
+    });
+    row('§2.7', `speed buttons hit-testable at ${w}x${hgt}`, hits.map((x) => `${x.label}:${x.hit ? 'hit' : 'COVERED'}(${x.w}px)`).join(' ') + ` seg ${seg.w}px`, '5 of 5 hit, segment at natural width', hits.length === 5 && hits.every((x) => x.hit && x.w >= 20) && seg.w + 1 >= seg.want);
+    if (w === 1600) {
+      const r = await ev(() => { const b = document.querySelector('.fu-time')?.getBoundingClientRect(); return b ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; });
+      if (r) await page.screenshot({ path: path.join(out, 'topbar-1x.png'), clip: { x: Math.max(0, r.x - 8), y: Math.max(0, r.y - 8), width: Math.min(r.width + 16, w - Math.max(0, r.x - 8)), height: r.height + 16 } });
+    }
+  }
+  if (vp) await page.setViewportSize(vp);
+  await sleep(1500);
+  const clicked = [];
+  for (const [idx, sp] of [[1, 0.5], [3, 2], [4, 4], [2, 1]]) {
+    const c = await ev((i) => { const r = document.querySelectorAll('.fu-time-seg > button')[i].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, idx);
+    await page.mouse.click(c.x, c.y);
+    let got = -1;
+    for (let i = 0; i < 20 && got !== sp; i++) {
+      await sleep(200);
+      got = await ev(() => window.__front.ctx.sim.view.speed);
+    }
+    clicked.push(`${sp}->${got}`);
+  }
+  await page.mouse.move(640, 400);
+  row('§2.7', 'mouse clicks on 0.5x/2x/4x/1x set the game speed', clicked.join(' '), 'each click sets its speed', clicked.every((c) => { const [a, b] = c.split('->'); return Number(a) === Number(b); }));
   for (const [sp, want] of [[0.5, '0,5× · 1 s = 30 min'], [2, '2× · 1 s = 2 h'], [4, '4× · 1 s = 4 h']]) {
     await setSpeed(sp);
     // The HUD text refreshes with the frames (a software renderer draws a frame every 1-2 s here).
