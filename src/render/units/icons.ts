@@ -673,7 +673,6 @@ export interface IconStats {
   fanned: number;
 }
 
-const CLUSTER_PX = 26;
 const PICK_PX = 14;
 
 export class IconLayer {
@@ -776,7 +775,11 @@ export class IconLayer {
     return this.fan !== null;
   }
 
-  end(now: number, sizes: { unitPx: number; smallPx: number; structPx: number; pipPx: number; unitsOn: boolean; structsOn: boolean }): void {
+  end(now: number, sizes: { unitPx: number; smallPx: number; structPx: number; pipPx: number; unitsOn: boolean; structsOn: boolean; clusterPx?: number; structOneCat?: boolean }): void {
+    // From high orbit (above 8,000 km) the merge radius grows and a nation's icons merge whatever their category, so the globe does
+    // not turn into confetti (DESIGN_V2 §10.7: 26 px is the minimum radius).
+    const CLUSTER_PX = Math.max(26, sizes.clusterPx ?? 26);
+    const oneCat = !!sizes.structOneCat;
     if (this.fan && now > this.fan.until) this.fan = null;
     const srcs = this.srcs, n = this.n;
     // Cluster: stable order (priority, previous heads first), 26 px grid hash on heads.
@@ -799,7 +802,7 @@ export class IconLayer {
             const l = this.grid.get((cx + dx + 4096) * 8192 + (cy + dy + 4096));
             if (!l) continue;
             for (const h of l) {
-              if (h.structure !== s.structure || h.owner !== s.owner || h.cat !== s.cat || h.selected) continue;
+              if (h.structure !== s.structure || h.owner !== s.owner || (h.cat !== s.cat && !oneCat) || h.selected) continue;
               if ((h.x - s.x) ** 2 + (h.y - s.y) ** 2 <= CLUSTER_PX * CLUSTER_PX) {
                 joined = h;
                 break;

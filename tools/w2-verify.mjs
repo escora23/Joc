@@ -193,12 +193,14 @@ async function checkIslands() {
     const m = r.details.markers.find((x) => x.x > 40 && x.y > 120 && x.x < 1200 && x.y < 700);
     if (m) {
       await page.evaluate(() => window.__front.ctx.app.goto?.('playing'));
-      await page.mouse.move(m.x, m.y);
-      await page.waitForTimeout(1500);
-      tip = await page.evaluate(() => {
-        const el = document.querySelector('.fu-tt');
-        return el && !el.classList.contains('fu-hidden') ? el.textContent : null;
-      });
+      for (let k = 0; k < 3 && !tip; k++) {
+        await page.mouse.move(m.x + k, m.y);
+        await page.waitForTimeout(2500);
+        tip = await page.evaluate(() => {
+          const el = document.querySelector('.fu-tt');
+          return el && !el.classList.contains('fu-hidden') ? el.textContent : null;
+        });
+      }
     }
     save(shot, { ...r, hoverTip: tip });
     const v = r.visible;

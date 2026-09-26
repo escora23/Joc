@@ -54,7 +54,8 @@ registerShot('clouds-strategic', 'globe', 'Strategic clouds at 3,000 km: no clou
 }, 20);
 
 registerShot('labels-world', 'globe', 'Nation labels from 20,000 km with the HUD: no overlaps, none on the limb or under a panel (DESIGN_V2 §10.10)', async (s) => {
-  await stageReadability(s, { lat: 22, lon: 18, alt: 20_000, sun: 18 });
+  // 9,000 ticks: the land rush is over and nations have their real size (v2 pacing).
+  await stageReadability(s, { lat: 22, lon: 18, alt: 20_000, sun: 18, ticks: 9000 });
   await s.wait(1200);
 }, 20);
 

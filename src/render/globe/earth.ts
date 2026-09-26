@@ -540,7 +540,12 @@ void main() {
       fillA *= mix(1.0, 0.7, occ);
       // Every nation reads against its ground (§16.3: ΔE >= 15 from orbit); up close (uCloseK) the ground detail must
       // read through the fill, so the floor drops.
-      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.18, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
+      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.21, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
+#if ATM_Q >= 1
+      // Toward the limb the air washes colours out (col * vTrans + inscatter): compensate so a nation near the horizon
+      // reads as clearly as one under the camera.
+      fillA = min(0.9, fillA / clamp(luma(vTrans), 0.55, 1.0));
+#endif
       fillA *= terr * landK;
       vec3 ground = albedo;
       albedo = territoryFill(albedo, natO, fillA);
@@ -628,9 +633,10 @@ void main() {
       float s = distPx;
       float cO = bandCov(s, 0.0, hO), cQ = bandCov(s, -hQ, 0.0);
       float nightL = 1.0 - smoothstep(-0.12, 0.06, muS);
-      float E = mix(1.5, 3.4, nightL);
-      // At night the line leans further to white so it keeps >= 3:1 against the re-emitted fills (§10.4).
-      float wl = mix(0.35, 0.55, nightL);
+      // Up close (uCloseK) the ground line keeps its owner's colour instead of blooming to white; at night the line
+      // leans further to white so it keeps >= 3:1 against the re-emitted fills (§10.4).
+      float E = mix(mix(1.5, 1.15, uCloseK), 3.4, nightL);
+      float wl = mix(mix(0.35, 0.18, uCloseK), 0.55, nightL);
       vec3 colO = mix(natO, vec3(1.0), wl) * E * (1.0 + 0.25 * float(O == HUMAN_ID) + 0.5 * hoverO);
       vec3 colQ = mix(natQ, vec3(1.0), wl) * E * (1.0 + 0.25 * float(Q == HUMAN_ID) + 0.5 * hoverQ);
       if ((flagsO & PAL_TRAITOR) != 0) colO = mix(colO, vec3(3.0, 0.2, 0.15), 0.5 + 0.5 * sin(uTime * 6.0));

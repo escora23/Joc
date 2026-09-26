@@ -1288,7 +1288,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       updateRadarDishes();
       updateStructureIcons();
       updateUnits(frame, fx);
-      icons?.end(frame.now / 1000, { unitPx: 22, smallPx: 14, structPx: 18 - 4 * lod.structModelFade, pipPx: 6, unitsOn: true, structsOn: lod.structIcons });
+      icons?.end(frame.now / 1000, {
+        unitPx: 22, smallPx: 14, structPx: 18 - 4 * lod.structModelFade, pipPx: 6, unitsOn: true, structsOn: lod.structIcons,
+        clusterPx: 26 + 18 * clamp((alt - 6000) / 14000, 0, 1), structOneCat: alt > 8000,
+      });
       updateRails(frame.time);
       updateOverlays();
       if (fx) updateAmbient(fx, env.fxDt);
