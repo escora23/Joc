@@ -625,8 +625,13 @@ If D launches an offensive against A on a front where A already attacks D, the t
   capture stamp in the owner texture (CM§15) is kept only for the 2 s conquest flash, because `rebuildAll()` resets it on
   every resync (T43).
 * **Capitulation (AI only)** is the main way large territories change hands (§4.18): an AI that has lost its capital
-  **and** ≥ 40 % of its pre-war land **and** has exhaustion ≥ 50 (W1c retune within the §4.18 tuning rule; was 50 % and
-  60) capitulates to the enemy that took most of its land:
+  in one of its current wars **or** whose army is broken (home plus committed troops < 10 % of its cap), **and** has
+  lost ≥ 40 % of its pre-war land (the land it held before the first of its current wars, so a nation beaten on
+  several fronts at once collapses like one beaten on one) **and** has exhaustion ≥ 50, capitulates to the nation (never
+  a rebel movement) that took most of its land. Hopeless resistance ends sooner: with `r` = its enemies' combined land ÷
+  its pre-war land, the land threshold is `max(15 %, 40 % − 15 % × (r − 1))` and the exhaustion threshold
+  `max(30, 50 − 5 × (r − 1))` (W1 fix pass 1, within the §4.18 tuning rule; W1c had 40 % / 50, v2 draft 50 % / 60).
+  The capitulation:
   its remaining land transfers to that enemy through a treaty, animated as a wave from the winner's border over 20
   ticks, announced in the news, with its population (§6.7) and structures. The human never capitulates automatically (it
   may propose surrender terms, §5.3).
@@ -707,11 +712,20 @@ therefore **capitulations and cessions**:
 **Victory conditions** depend on the setup option **«Duración: corta / normal / larga»** (default normal;
 `GameConfig.duration`, W1c):
 
-| Duración | Dominación | Hegemonía | Time limit | T14 target |
+**Hegemony is a bloc's** (W1 fix pass 1): the leader (the largest nation) and its *junior allies* (allies with less land
+than it) form its bloc. Hegemony holds when the leader itself has at least the leader share, the bloc has at least the
+bloc share of the land, and the bloc has at least the ratio × the land of the largest nation outside it. A power that
+holds a fifth of the world and leads an alliance holding almost a third, with no challenger half its size, is the
+hegemon of the world as the British Empire (about a quarter of the land at its height) or the post-1945 United States
+and its alliances were. Breaking the alliance, or a rival growing, resets the countdown.
+
+| Duración | Dominación | Hegemonía (leader / bloc / ratio over the largest outsider, held) | Time limit | T14 target |
 |---|---|---|---|---|
-| Corta | 60 % of the land | ≥ 35 % of the land and ≥ 2.5× the second nation's land, held 5 days (1,200 ticks) | 200 days (48,000 ticks) | 18,000–42,000 ticks |
-| Normal | 80 % | ≥ 50 % and ≥ 3× the second, held 10 days (2,400 ticks) | 400 days (96,000 ticks) | 36,000–72,000 |
-| Larga | 90 % | ≥ 60 % and ≥ 4× the second, held 20 days (4,800 ticks) | none | 60,000–120,000 |
+| Corta | 60 % of the land | ≥ 15 % / ≥ 22 % / ≥ 1.75×, held 5 days (1,200 ticks) | 200 days (48,000 ticks) | 18,000–42,000 ticks |
+| Normal | 80 % | ≥ 20 % / ≥ 30 % / ≥ 2×, held 10 days (2,400 ticks) | 400 days (96,000 ticks) | 36,000–72,000 |
+| Larga | 90 % | ≥ 30 % / ≥ 40 % / ≥ 2.5×, held 20 days (4,800 ticks) | none | 60,000–120,000 |
+
+(The v2 draft asked ≥ 50 % and ≥ 3× the second for Normal; no measured game ever came close: see the measurement below.)
 
 * **Last standing** wins in every option.
 * **Hegemony** has a public countdown: a news item and a top-bar chip («Alemania alcanzará la hegemonía en 6 días»),
@@ -725,7 +739,26 @@ therefore **capitulations and cessions**:
   (members that capitulate hand their land to it).
 * **Tuning rule**: T14 is tuned through the capitulation thresholds, the AI war goals and the hegemony numbers, never
   by loosening T1–T5, T16, T17 or T19.
-* **W1c measurement (stub build, open for W3/W7).** With every other §3 target met (`game --seed 11`, Normal), the world
+* **W1 fix pass 1 (stub build): convergence.** The W1c world stalled into three or four peers (below). Four changes,
+  all inside the tuning rule, make it converge without touching T1–T5, T16, T17 or T19:
+  1. *Capitulation* (§4.13): counted over all current wars, triggered by a broken army as well as a lost capital, and
+     sooner when resistance is hopeless (the odds scaling above). Drained empires no longer bleed for 20,000 ticks to a
+     ring of small neighbours: they surrender, and their land goes whole to the nation that took the most.
+  2. *AI war goals* (§5.7, `warplan.ts`): a **great power** (≥ 5 % of the land, any temperament but the turtle) wages
+     up to two offensive wars with the goal `conquest` (reason `war.reason.expansion`) against smaller neighbours that
+     are much weaker or already bleeding elsewhere, and presses them to capitulation (traders too). Two great powers are
+     **rivals** (`war.reason.rivalry`): the stronger accepts a grinding war (GRIND_RATIO) against the other. A conquest
+     war is given up in a stalemate only at exhaustion 50.
+  3. *Help against the target* (§5.5, v2-stub(W1→W3)): an AI declaring a `conquest` or `coalition` war asks its AI
+     allies for help; one that borders the target (or has a navy), is at peace and not exhausted, and can hold its own
+     front joins with odds 0.35 + 0.3·loyalty (0.15 + 0.3·loyalty by sea), reason `war.reason.allyRequest`. Never
+     against the human.
+  4. *Hegemony numbers*: the bloc rule and the table above.
+  Measured (`pace-audit game`, Normal): seed 11 hegemony at 56,410 (Argentina and its ally Angola), seed 12 hegemony
+  at 62,000, seed 13 time limit; every other row of the seed 11 game passes (T16 avg 4.10 / max 11, T17 1.23 per 600,
+  T19 worst 5.5 %). Invariants, survival (Easy/Normal/Hard), conquest, depth, attrition, empire and save unchanged.
+  Corta ends by hegemony at 44,110 and Hard at 65,970, a little after their informative windows.
+* **W1c measurement (stub build, superseded by the fix pass above).** With every other §3 target met (`game --seed 11`, Normal), the world
   consolidates but does not converge: 12 of 24 AIs capitulate, the survivors form three or four continental powers
   that end the 400 days at 15–20 % of the land each (seed 11: Myanmar 20.2 %, Libya 20.2 %, Argentina 15.1 %), and the
   game ends by the time limit. What holds it: a power can only open a war at the §4.6 odds, which against a peer with
@@ -1639,8 +1672,10 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
 
 * At game start the client computes land components once (4-connected playable tiles). Components of ≤ 20 tiles
   (~480 of the 557) get a **marker**.
-  (W2: only components in the sea get one: touching ocean water and not diagonally attached to a larger land mass,
-  so salt pans and dry lakes of the water mask do not scatter rings over the Sahara and Arabia.)
+  (W2: only components in the sea get one: touching ocean water through a side (the Navigable flag), so salt pans and
+  dry lakes of the water mask do not scatter rings over the Sahara and Arabia. Specks touching a larger coast only
+  diagonally are marked too: the sim is 4-connected, so they can only be taken by sea. The acceptance check counts
+  these components itself from the terrain grid and compares that count with `__islands.visible()`.)
 * Marker: a screen-space ring of diameter `max(8 px, projected island size + 4 px)`, 1.5 px stroke; filled with the
   owner colour when owned, white outline when neutral; above clouds; hidden once the island itself is larger than 16 px.
   Markers within 10 px of each other merge into one archipelago marker with a count.
@@ -1658,11 +1693,12 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
 
 | Camera altitude | Units | Structures |
 |---|---|---|
+| > 8,000 km (world view) | icons of the human's and hostile-to-human military units only (clustered); no trade ships or trains; no icon over a nation label | none (the nation labels carry the view) |
 | > 1,500 km | icons only | icons only |
 | 900–1,500 km | icons; models fade in from 1,200 km (min 12 px) | icons only |
 | 600–900 km | icons shrink to 14 px and float above the models | icons; models fade in from 900 km |
-| 250–600 km | models; a 6 px owner pip above each | icons + models |
-| < 250 km | models at real size below 60 km (min 12 px above) | models only; level pips on hover and selection |
+| 250–600 km | models (≥ 32 px, growing from 12 px at 900 km); a 6 px owner pip above each | icons + models |
+| < 250 km | models, never smaller than 32 px on screen for ships, divisions and aircraft (owner clarification to FEEDBACK-1: close-zoom models must be clearly visible) | models only; level pips on hover and selection |
 
 * **Icon**: 22 px frame for units, 18 px for structures. Frame shape by relation to the viewer (NATO convention):
   **own = rectangle**, ally = rectangle with a dashed outline, **at war = diamond**, others = rounded square. Fill =
@@ -1698,7 +1734,8 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
 * Divisions: dashed route with the ETA at the end on hover and selection.
 * Enemy convoys heading to you: the route line pulses with a red outline.
 * The white wake stays, only below 300 km.
-* Budget: at most 64 route trails, drawn in the existing trail batch, **evicted by priority**, never by age alone: trade
+* Budget: at most 64 route trails, drawn in one route batch of the trail system without depth test (above relief, the near
+  patch and the clouds, renderOrder 43) with an analytic horizon test, **evicted by priority**, never by age alone: trade
   routes first (oldest first), then other players' military routes not at war with you, then your allies'; the
   human's own routes and routes of players at war with the human are never evicted (F2).
 

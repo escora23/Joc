@@ -9,7 +9,7 @@
 //   5. The declaration carries the first offensive, which starts by itself when the mobilization ends.
 //   6. War plans every 120 ticks: front priorities (alta where the enemy attacks), offensives topped up to the commit
 //      ratio and re-aimed at the enemy capital or its largest region; naval landings when there is no land front.
-//   7. Limits: 2 offensive wars for conquerors and opportunists, 1 for the rest; 1 declaration per AI per 720 ticks; no
+//   7. Limits: 2 offensive wars for conquerors, opportunists and great powers (§4.18), 1 for the rest; 1 declaration per AI per 720 ticks; no
 //      declaration above exhaustion 50; worldwide 1 new AI war per 120 ticks before tick 18,000, per 60 after.
 //   8. Peace every 240 ticks: sue for peace at exhaustion ≥ 45 and war score ≤ 0; the other side accepts a white peace at
 //      exhaustion ≥ 35 or when its goal is met, but a winner (score ≥ 40, exhaustion < 70) demands a cession (or a
@@ -46,9 +46,12 @@ export const LAUNCH_RATIO = 1.7;
 export const GRIND_RATIO = 1.3;
 
 /** The ratio `p` needs to open an offensive against `q` as the aggressor. */
-export function aggressorRatio(ctx: AiContext, b: Brain, _p: SimPlayer, q: SimPlayer): number {
+export function aggressorRatio(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): number {
   const w = ctx.world;
-  return w.leader === q.id && w.leaderShare > b.diff.coalitionShare ? GRIND_RATIO : LAUNCH_RATIO;
+  if (w.leader === q.id && w.leaderShare > b.diff.coalitionShare) return GRIND_RATIO;
+  // Great-power rivalry (§4.18): between two great powers the stronger accepts a grinding war; nothing else decides
+  // a world of a few continental empires.
+  return rivals(ctx, b, p, q) ? GRIND_RATIO : LAUNCH_RATIO;
 }
 
 /** Attack power the staff can count on from its own armored divisions (+25 % each at the front, at most ×2, §4.4). */
@@ -211,8 +214,28 @@ function offensiveWars(ctx: AiContext, p: SimPlayer): number {
   return n;
 }
 
-function maxOffensiveWars(b: Brain): number {
-  return b.personality === 'conqueror' || b.personality === 'opportunist' ? 2 : 1;
+/**
+ * A great power (§4.18 convergence): a nation holding ≥ GREAT_POWER_SHARE of the world's land. Whatever its temperament
+ * (turtles excepted) it now thinks like an empire: it may wage two offensive wars, it presses its won wars toward the
+ * enemy's capitulation instead of settling for a tribute, and it bandwagons on a rival already bleeding on another front.
+ */
+export const GREAT_POWER_SHARE = 0.05;
+export function greatPower(ctx: AiContext, b: Brain, p: SimPlayer): boolean {
+  return b.personality !== 'turtle' && p.kind === 'nation' && p.tiles >= ctx.g.world.landTiles * GREAT_POWER_SHARE;
+}
+
+/**
+ * Two great powers where `p` is at least as strong as `q` (§4.18 rivalry): the world's last powers do not share it in
+ * peace. Never the human before tick 18,000 (§4.16).
+ */
+export function rivals(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): boolean {
+  if (q.id === HUMAN_ID && ctx.g.tick < 18_000) return false;
+  if (q.kind !== 'nation' && q.kind !== 'human') return false;
+  return greatPower(ctx, b, p) && q.tiles >= ctx.g.world.landTiles * GREAT_POWER_SHARE && strength(q) <= strength(p);
+}
+
+function maxOffensiveWars(ctx: AiContext, b: Brain, p: SimPlayer): number {
+  return b.personality === 'conqueror' || b.personality === 'opportunist' || greatPower(ctx, b, p) ? 2 : 1;
 }
 
 /** May `p` declare a new war now (limits of §5.7 step 7)? */
@@ -222,7 +245,7 @@ function mayDeclare(ctx: AiContext, b: Brain, p: SimPlayer): boolean {
   // The declaration's queued offensive is the staff's next operation: it must fit the tempo.
   if (g.tick + AI_MOBILIZE_TICKS[DIFFICULTY_INDEX[g.difficulty]] - b.lastOffensiveTick < OFFENSIVE_TEMPO) return false;
   if (g.war.exhaustion(p.id) > 50) return false;
-  if (offensiveWars(ctx, p) >= maxOffensiveWars(b)) return false;
+  if (offensiveWars(ctx, p) >= maxOffensiveWars(ctx, b, p)) return false;
   const gap = g.tick < 18_000 ? 480 : 360;
   if (g.tick - ctx.world.lastAiWarTick < gap) return false;
   return true;
@@ -243,6 +266,11 @@ function chooseGoal(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): { goa
   // another war, nukers against a crushed one (a third of their strength or less).
   const crushed = strength(q) <= strength(p) * 0.35 || isPrey(ctx, p, q, b.front.contact.get(q.id) ?? 1);
   const bleeding = g.war.enemiesOf(q.id).length > 0;
+  // A great power means to subdue a weaker neighbour, or one already fighting on another front (§4.18).
+  if (greatPower(ctx, b, p) && q.tiles < p.tiles && (weak || crushed || (bleeding && strength(q) <= strength(p) * 0.8))) {
+    return { goal: 'conquest', reasonKey: 'war.reason.expansion', tensionKey: 'tension.expansion' };
+  }
+  if (rivals(ctx, b, p, q)) return { goal: 'conquest', reasonKey: 'war.reason.rivalry', tensionKey: 'tension.rivalry' };
   if ((weak || crushed) && (b.personality === 'conqueror' || (b.personality === 'opportunist' && (bleeding || crushed)) || (b.personality === 'nuker' && crushed))) {
     return { goal: 'conquest', reasonKey: 'war.reason.weakNeighbour', tensionKey: 'tension.weak' };
   }
@@ -257,12 +285,15 @@ export function commitRatio(b: Brain): number {
   return clamp(0.25 + 0.3 * (b.prof.aggression - 0.6) / 0.75 + 0.1 * b.diff.efficiency, 0.25, 0.6);
 }
 
-/** Aim point on `q`: its capital when within reach of our front, else the front's aim tile. */
-function aimAt(ctx: AiContext, b: Brain, q: SimPlayer): number {
+/**
+ * Aim point on `q`: its capital when within `reach` tiles of our front (60; 150 in a war pressed toward capitulation,
+ * where the capital is the objective, §4.13), else the front's aim tile.
+ */
+function aimAt(ctx: AiContext, b: Brain, q: SimPlayer, reach = 60): number {
   const g = ctx.g;
   const front = b.front.aim.get(q.id) ?? -1;
   const cap = q.capitalTile >= 0 && g.ownerOf(q.capitalTile) === q.id ? q.capitalTile : -1;
-  if (cap >= 0 && (front < 0 || g.distance(front, cap) < 60)) return cap;
+  if (cap >= 0 && (front < 0 || g.distance(front, cap) < reach)) return cap;
   return front >= 0 ? front : cap;
 }
 
@@ -290,7 +321,7 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
         const G0 = naval ? 0 : enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1);
         const want = Math.min(commitRatio(b) * p.troops, Math.max(restrained(ctx, b, q!) ? 0 : usefulWidthTroops(q!), G0 * Math.max(LAUNCH_RATIO, targetRatio(ctx, b, q)) * 1.05));
         const ratio = clamp(Math.max(need * 1.05, want / Math.max(1, p.troops)), 0.05, MAX_COMMIT);
-        const aim = aimAt(ctx, b, q!);
+        const aim = aimAt(ctx, b, q!, t.goal === 'conquest' ? 150 : 60);
         const ok = g.issue(p.id, {
           type: 'declareWar', target: t.target, goal: t.goal, reasonKey: t.reasonKey,
           queuedAttack: aim >= 0 && !naval ? { tile: aim, ratio } : undefined,
@@ -349,7 +380,13 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     const humanPrey = q.id === HUMAN_ID && g.tick >= 18_000 && b.diff.humanFocus >= 0.8 && opinion < 0;
     const prey = (b.personality === 'conqueror' || b.personality === 'nuker' || b.personality === 'opportunist' || humanPrey)
       && (opinion < -10 || humanPrey) && isPrey(ctx, p, q, c);
-    if (opinion >= -30 && !(b.personality === 'conqueror' && weak) && !bleeding && !prey) continue;
+    // A great power (§4.18) eyes a cold neighbour that is much weaker or already bleeding on another front (never the
+    // human before tick 18,000: §4.16).
+    // It expands toward smaller nations: a larger empire is a rival (see rivals), not a prey.
+    const great = greatPower(ctx, b, p) && q.tiles < p.tiles && opinion < -10 && (q.id !== HUMAN_ID || g.tick >= 18_000)
+      && (weak || (g.war.enemiesOf(q.id).length > 0 && strength(q) <= strength(p) * 0.8));
+    const rival = opinion < -10 && rivals(ctx, b, p, q);
+    if (opinion >= -30 && !(b.personality === 'conqueror' && weak) && !bleeding && !prey && !great && !rival) continue;
     // Deterrence: the troops the target's allies would bring, weighted by the §5.5 odds that they answer its call to
     // arms (0.5 + 0.5·loyalty when they border us or have a navy, 0.3 + 0.5·loyalty otherwise).
     if (expectedAllies(ctx, p, q) > p.troops * 0.5) continue;
@@ -445,7 +482,7 @@ function runPlan(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar, reserve: num
   const commit = commitRatio(b);
   const home = p.troops;
   const spare = home - reserve * p.maxTroops * 0.6;
-  const aim = aimAt(ctx, b, q);
+  const aim = aimAt(ctx, b, q, pressing(ctx, w, p.id) ? 150 : 60);
   if (g.sharesBorder(p.id, enemyId)) {
     const G = enemyGarrison(ctx, p, q, b.front.contact.get(enemyId) ?? 1);
     // Their offensive on the same front joins the defence of a counter-offensive at half weight (§4.8).
@@ -575,7 +612,8 @@ function pressing(ctx: AiContext, w: SimWar, p: number): boolean {
   const side = w.a === p ? 0 : 1;
   if (side === 0 && w.goal === 'conquest') return true;
   const b = ctx.brains.get(p);
-  if (!b || b.personality === 'turtle' || b.personality === 'trader') return false;
+  const P = ctx.g.player(p);
+  if (!b || !P || b.personality === 'turtle' || (b.personality === 'trader' && !greatPower(ctx, b, P))) return false;
   const enemy = side === 0 ? w.b : w.a;
   return w.capitalLost[side === 0 ? 1 : 0] && ctx.g.war.warScore(p, enemy) >= 40;
 }
@@ -635,8 +673,9 @@ export function thinkPeace(ctx: AiContext, b: Brain, p: SimPlayer): void {
       }
       continue;
     }
-    // A stalemate both sides are tired of ends on the current lines.
-    if (ex >= 35 && Math.abs(s) < 25 && answerWhite(ctx, w, enemy, p.id) === 'yes') makePeace(ctx, p.id, enemy, { kind: 'white' }, 0);
+    // A stalemate both sides are tired of ends on the current lines (a war pressed toward capitulation is given up
+    // only at exhaustion 50: §4.15, winners hold out).
+    if (ex >= (mineConquest ? 50 : 35) && Math.abs(s) < 25 && answerWhite(ctx, w, enemy, p.id) === 'yes') makePeace(ctx, p.id, enemy, { kind: 'white' }, 0);
   }
 }
 

@@ -1297,9 +1297,10 @@ export class Game implements SimGame {
       }
       if (!top || p.tiles > top.tiles) top = p;
     }
-    // Hegemony: ≥ share of the land and ≥ ratio × the second power, held for holdTicks, with a public countdown.
+    // Hegemony (§4.18): the leader's bloc (it and its junior allies) holds ≥ the share of the land and ≥ ratio × the
+    // largest nation outside it, the leader itself ≥ hegemonyLeader; held for holdTicks, with a public countdown.
     if (this.tick % 10 === 0) {
-      const leads = !!first && first.tiles >= this.landTiles * rules.hegemony && first.tiles >= (second?.tiles ?? 0) * rules.hegemonyRatio;
+      const leads = !!first && this.hegemonyHolds(first, rules);
       const h = this.hegemony;
       if (leads && h.leader !== first!.id) {
         if (h.leader) this.emit({ type: 'hegemony', tick: this.tick, leader: h.leader, stage: 'broken', untilTick: 0 });
@@ -1323,6 +1324,18 @@ export class Game implements SimGame {
       return this.end(best?.id ?? top?.id ?? 0, 'eliminated');
     }
     if (aliveMajor === 1 && lastMajor && this.playerArr.some((p) => p.kind === 'nation')) this.end(lastMajor.id, 'lastStanding');
+  }
+
+  /** The hegemony condition of §4.18 for `leader` (the largest major power). */
+  private hegemonyHolds(leader: Player, rules: { hegemonyLeader: number; hegemony: number; hegemonyRatio: number }): boolean {
+    if (leader.tiles < this.landTiles * rules.hegemonyLeader) return false;
+    let bloc = leader.tiles, outside = 0;
+    for (const p of this.playerArr) {
+      if (p === leader || !p.alive || !p.spawned || (p.kind !== 'human' && p.kind !== 'nation')) continue;
+      if (leader.allies.has(p.id) && p.allies.has(leader.id) && p.tiles < leader.tiles) bloc += p.tiles;
+      else outside = Math.max(outside, p.tiles);
+    }
+    return bloc >= this.landTiles * rules.hegemony && bloc >= outside * rules.hegemonyRatio;
   }
 
   end(winner: number, reason: GameOverReason): void {

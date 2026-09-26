@@ -23,7 +23,7 @@ import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
 import { SaveReader, SaveWriter } from '../save.ts';
 import {
-  HUMAN_ID, OFFENSIVE_CONTACT_TICKS, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick,
+  DURATION_RULES, HUMAN_ID, OFFENSIVE_CONTACT_TICKS, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick,
 } from '../../shared/constants.ts';
 import { greatCircleKm, latLonToTile, latLonToTileXY, tileXYToLatLon } from '../../shared/geo.ts';
 import { StructureType, UnitType } from '../../shared/types.ts';
@@ -1123,7 +1123,8 @@ async function game(opts = {}) {
 async function endgame() {
   const duration = String(arg('duration', 'short'));
   const { g, events, step } = controlledGame(Number(arg('seed', 5)), { duration });
-  const rules = { short: [0.35, 2.5, 1200], normal: [0.5, 3, 2400], long: [0.6, 4, 4800] }[duration];
+  const R0 = DURATION_RULES[duration];
+  const rules = [Math.max(R0.hegemony, R0.hegemonyLeader), R0.hegemonyRatio, R0.holdTicks];
   const rival = addNation(g, 'Rival');
   g.issue(rival, { type: 'spawn', tile: tileOf(-25, 135) });
   const land = [];

@@ -134,6 +134,16 @@ export const TRAITOR_TICKS = 720;
 /** Capitulation thresholds (§4.13): capital lost, share of the pre-war land lost, exhaustion. */
 export const CAPITULATION_LAND_LOST = 0.4;
 export const CAPITULATION_EXHAUSTION = 50;
+/**
+ * Hopeless resistance (§4.13, §4.18 convergence): against enemies whose combined land is `r` times its own pre-war land,
+ * a nation gives up sooner. The land threshold falls by CAPITULATION_ODDS_SLOPE per unit of r above 1 down to
+ * CAPITULATION_LAND_LOST_MIN, the exhaustion threshold by 5 per unit down to CAPITULATION_EXHAUSTION_MIN.
+ */
+export const CAPITULATION_LAND_LOST_MIN = 0.15;
+export const CAPITULATION_EXHAUSTION_MIN = 30;
+export const CAPITULATION_ODDS_SLOPE = 0.15;
+/** An army broken (home plus committed troops below this share of the cap) counts like a lost capital (§4.13). */
+export const CAPITULATION_ARMY_BROKEN = 0.1;
 /** Naval invasions (§4.11). */
 export const EMBARK_PORT_TICKS = 60;
 export const EMBARK_SHORE_TICKS = 120;
@@ -157,13 +167,15 @@ export const MAX_PLAYER_ID = 2047;
 // --- Win condition ---------------------------------------------------------------------------
 export const WIN_LAND_SHARE = 0.8;
 /**
- * v2 (§4.18): victory by «Duración». domination = land share that wins at once; hegemony = land share and ratio over
- * the second power held for holdTicks; timeLimit = the tick the largest nation wins (0 = none).
+ * v2 (§4.18): victory by «Duración». domination = land share that wins at once. Hegemony = a leader holding at least
+ * `hegemonyLeader` of the land whose bloc (the leader and its junior allies: allies with less land than it) holds at
+ * least `hegemony` of the land and `hegemonyRatio` times the largest nation outside the bloc, for holdTicks (the
+ * countdown). timeLimit = the tick the largest nation wins (0 = none).
  */
 export const DURATION_RULES = {
-  short: { domination: 0.6, hegemony: 0.35, hegemonyRatio: 2.5, holdTicks: 1_200, timeLimit: 48_000 },
-  normal: { domination: 0.8, hegemony: 0.5, hegemonyRatio: 3, holdTicks: 2_400, timeLimit: 96_000 },
-  long: { domination: 0.9, hegemony: 0.6, hegemonyRatio: 4, holdTicks: 4_800, timeLimit: 0 },
+  short: { domination: 0.6, hegemonyLeader: 0.15, hegemony: 0.22, hegemonyRatio: 1.75, holdTicks: 1_200, timeLimit: 48_000 },
+  normal: { domination: 0.8, hegemonyLeader: 0.2, hegemony: 0.3, hegemonyRatio: 2, holdTicks: 2_400, timeLimit: 96_000 },
+  long: { domination: 0.9, hegemonyLeader: 0.3, hegemony: 0.4, hegemonyRatio: 2.5, holdTicks: 4_800, timeLimit: 0 },
 } as const;
 
 // --- Balance (sim-core tunes values) -----------------------------------------------------------

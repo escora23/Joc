@@ -10,7 +10,7 @@
 // until W3's inbox lands.
 
 import {
-  AI_MOBILIZE_TICKS, CAPITULATION_EXHAUSTION, CAPITULATION_LAND_LOST, DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID,
+  AI_MOBILIZE_TICKS, CAPITULATION_EXHAUSTION, CAPITULATION_EXHAUSTION_MIN, CAPITULATION_LAND_LOST, CAPITULATION_LAND_LOST_MIN, CAPITULATION_ODDS_SLOPE, CAPITULATION_ARMY_BROKEN, DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID,
   HUMAN_MOBILIZE_TICKS, JOIN_MOBILIZE_TICKS, LOGISTICS_FLOOR, LOGISTICS_SHARE, LOGISTICS_WINDOW, REBEL_MOBILIZE_TICKS,
   TENSION_LEAD_TICKS, TICKS_PER_GAME_DAY, TRAITOR_TICKS, TRUCE_TICKS,
 } from '../shared/constants';
@@ -63,6 +63,11 @@ interface CallToArms {
   ally: number;
   war: number;
   decideTick: number;
+  /**
+   * An aggressor's request for help against its target (§5.5 «Pedir ayuda contra X»; v2-stub(W1→W3): AI allies of an
+   * AI aggressor only, decided here). Absent = a defensive call to arms.
+   */
+  offense?: boolean;
 }
 
 /** A treaty transfer of land (cession, capitulation), animated as a wave from the winner's border. */
@@ -320,6 +325,17 @@ export class WarSystem {
         }
         this.calls.push({ ally, war: w.id, decideTick: g.tick + 20 + g.rngWar.int(41) });
       }
+      // An AI conqueror asks its own allies for help against the target (§4.18 convergence: a coalition splits the
+      // target's garrisons; §5.5 «Pedir ayuda contra X»). Never against the human (§4.16: W3 routes those through the
+      // human's own diplomacy), never an ally that is also the target's ally.
+      if (A.kind === 'nation' && B.kind === 'nation' && (goal === 'conquest' || goal === 'coalition')) {
+        for (const ally of A.allies) {
+          if (ally === target || !this.canWage(ally) || this.atWar(ally, target)) continue;
+          const ap = g.playerById[ally]!;
+          if (ap.kind !== 'nation' || ap.allies.has(target)) continue;
+          this.calls.push({ ally, war: w.id, decideTick: g.tick + 20 + g.rngWar.int(41), offense: true });
+        }
+      }
     }
     return w;
   }
@@ -570,13 +586,14 @@ export class WarSystem {
         }
       }
     }
-    // Capitulation (AI only, §4.13): capital lost in the war, >= 50 % of the pre-war land gone, exhaustion >= 60.
+    // Capitulation (AI only, §4.13): see checkCapitulations.
     if (tick % 60 === 0) this.checkCapitulations();
     if (tick % 10 === 0) this.dirty = true;
   }
 
   private answerCall(c: CallToArms): void {
     const g = this.g;
+    if (c.offense) return this.answerHelp(c);
     const w = this.wars.get(c.war);
     const ally = g.playerById[c.ally];
     if (!w || !ally || !ally.alive || this.atWar(c.ally, w.a) || !ally.allies.has(w.b)) return;
@@ -588,21 +605,70 @@ export class WarSystem {
     this.declare(c.ally, w.a, 'defense', 'war.reason.callToArms', { join: true, parentWar: w.id });
   }
 
+  /**
+   * An ally asked to join an offensive war (§5.5 odds, lower than for a defensive call: nobody owes an aggressor):
+   * 0.35 + 0.3·loyalty when it borders the target (0.15 + 0.3·loyalty with a navy only, never otherwise), and only
+   * when it can hold its own front (≥ 40 % of the target's troops) and is not already fighting elsewhere.
+   */
+  private answerHelp(c: CallToArms): void {
+    const g = this.g;
+    const w = this.wars.get(c.war);
+    const ally = g.playerById[c.ally];
+    const T = w ? g.playerById[w.b] : undefined;
+    if (!w || !ally || !T || !ally.alive || !T.alive || this.pairState(c.ally, w.b) !== 'peace' || !ally.allies.has(w.a) || ally.allies.has(w.b)) return;
+    if (this.enemiesOf(c.ally).length > 0 || this.exhaustion(c.ally) > 40) return;
+    if (ally.troops < T.troops * 0.4) return;
+    const loyalty = PERSONALITY[ally.personality ?? 'opportunist']?.loyalty ?? 0.5;
+    const borders = g.sharesBorder(c.ally, w.b);
+    const navy = ally.unitCount[2] > 0;
+    if (!borders && !navy) return;
+    const p = (borders ? 0.35 : 0.15) + 0.3 * loyalty;
+    if (g.rngWar.next() >= p) return;
+    this.declare(c.ally, w.b, 'coalition', 'war.reason.allyRequest', { join: true, parentWar: w.id });
+  }
+
+  /**
+   * Capitulation (AI only, §4.13): the capital lost in one of its current wars (or its army broken), ≥ CAPITULATION_LAND_LOST of its pre-war
+   * land gone (the land it held before the first of its current wars: a nation beaten on several fronts at once
+   * collapses as surely as one beaten on one), and exhaustion ≥ CAPITULATION_EXHAUSTION. It capitulates to the enemy
+   * that took the most of its land (a nation or the human; a rebel movement never receives a capitulation, T20).
+   */
   private checkCapitulations(): void {
     const g = this.g;
     const seen = new Set<number>();
-    for (const w of [...this.wars.values()]) {
-      for (const s of [0, 1] as const) {
-        const loser = s === 0 ? w.a : w.b;
+    for (const w0 of [...this.wars.values()]) {
+      for (const loser of [w0.a, w0.b]) {
         if (seen.has(loser)) continue;
+        seen.add(loser);
         const L = g.playerById[loser];
         if (!L || !L.alive || L.kind !== 'nation') continue;
-        if (!w.capitalLost[s]) continue;
-        if (L.tiles > w.tilesAtStart[s] * (1 - CAPITULATION_LAND_LOST)) continue;
-        if (this.exhaustion(loser) < CAPITULATION_EXHAUSTION) continue;
+        let capital = false, base = 0;
+        const mine = this.warsOf(loser);
+        for (const o of mine) {
+          const s = this.side(o, loser);
+          if (o.capitalLost[s]) capital = true;
+          base = Math.max(base, o.tilesAtStart[s]);
+        }
+        // Its capital taken, or its army broken (home troops under CAPITULATION_ARMY_BROKEN of the cap: nothing left
+        // to defend the land with, the way armies rather than capitals ended most wars).
+        if (!capital) {
+          let army = L.troops;
+          for (const a of g.outgoingAttacks(loser)) army += a.troops;
+          if (army >= L.maxTroops * CAPITULATION_ARMY_BROKEN) continue;
+        }
+        // The odds it faces: its enemies' combined land against its own pre-war land (hopeless resistance ends sooner).
+        let enemyLand = 0;
+        for (const o of mine) enemyLand += g.playerById[o.a === loser ? o.b : o.a]?.tiles ?? 0;
+        const odds = Math.max(0, enemyLand / Math.max(1, base) - 1);
+        const landNeed = Math.max(CAPITULATION_LAND_LOST_MIN, CAPITULATION_LAND_LOST - CAPITULATION_ODDS_SLOPE * odds);
+        const exNeed = Math.max(CAPITULATION_EXHAUSTION_MIN, CAPITULATION_EXHAUSTION - 5 * odds);
+        if (L.tiles > base * (1 - landNeed)) continue;
+        if (this.exhaustion(loser) < exNeed) continue;
         // To the enemy that took the most of its land.
         let best: War | null = null, bestTaken = 0;
-        for (const o of this.warsOf(loser)) {
+        for (const o of mine) {
+          const e = g.playerById[o.a === loser ? o.b : o.a];
+          if (!e || (e.kind !== 'nation' && e.kind !== 'human')) continue;
           const taken = o.a === loser ? -o.net : o.net;
           if (taken > bestTaken) {
             bestTaken = taken;
@@ -610,7 +676,6 @@ export class WarSystem {
           }
         }
         if (!best) continue;
-        seen.add(loser);
         this.capitulate(loser, best.a === loser ? best.b : best.a);
       }
     }
