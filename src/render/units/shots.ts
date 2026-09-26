@@ -2,6 +2,7 @@
 //   units       naval battle + air battle over the western Mediterranean (Balearic sea, Algerian coast)
 //   units-orbit the same battle seen from high orbit (screen-space minimum sizes, LOD)
 //   structures  every structure type on a developed Spain at dusk (skylines lighting up), close orbit
+//   unit-closeup one unit type up close at 300 / 100 / 30 km (models clearly visible, >= 24 px)
 
 import type { CameraState, GameContext } from '../../shared/api';
 import { HUMAN_ID } from '../../shared/constants';
@@ -126,4 +127,44 @@ registerShot('structures', 'units', 'A developed nation up close (Valencian coas
 
 registerShot('structures-night', 'units', 'The same developed coast at night: skylines, streets and bases lit up', async ({ ctx, waitFrames, wait, params }) => {
   await stageStructures(ctx, waitFrames, wait, params, -112);
+}, 8);
+
+/**
+ * One unit up close (owner clarification to FEEDBACK-1: close-zoom models must be clearly visible). &unit= a UnitType
+ * name (TransportShip, TradeShip, Warship, ArmoredDivision, FighterSquadron, Bomber, DroneSwarm, Train), &alt= 300 /
+ * 100 / 30 km. The human's unit sails, drives or flies off the Valencian coast, paused, the camera centred on it with a
+ * 0.6 rad tilt. tools/w2-verify.mjs (check `models`) reads its projected size from __units.stats().unitModelsInView.
+ */
+registerShot('unit-closeup', 'units', 'One unit up close (&unit=Warship|TransportShip|TradeShip|ArmoredDivision|FighterSquadron|Bomber|DroneSwarm|Train, &alt=300|100|30): the 3D model is clearly visible (>= 24 px)', async ({ ctx, waitFrames, wait, params }) => {
+  await ctx.app.startScriptedGame({ ticks: 600, speed: 0, nukes: false, worldTimeSec: worldTimeForSubsolarLon(Number(params.get('sun') ?? -20)) });
+  const name = (params.get('unit') ?? 'Warship') as keyof typeof UnitType;
+  const type = UnitType[name] ?? UnitType.Warship;
+  const sim = ctx.sim;
+  sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.5, -0.9), radius: 9 });
+  sim.debug({ type: 'spawnStructure', structure: StructureType.City, owner: HUMAN_ID, tile: at(39.47, -0.45), level: 4 });
+  sim.debug({ type: 'spawnStructure', structure: StructureType.Airbase, owner: HUMAN_ID, tile: at(39.5, -0.95), level: 2 });
+  const naval = type === UnitType.TransportShip || type === UnitType.TradeShip || type === UnitType.Warship;
+  const air = type === UnitType.FighterSquadron || type === UnitType.Bomber || type === UnitType.DroneSwarm;
+  const from: [number, number] = naval ? [39.3, 0.9] : air ? [39.4, -0.2] : [39.55, -1.2];
+  const to: [number, number] = naval ? [38.2, 4.5] : air ? [38.6, 3.5] : [39.3, -0.6];
+  sim.debug({ type: 'spawnUnit', unit: type, owner: HUMAN_ID, tile: at(...from), targetTile: at(...to) });
+  // A moment of motion so the unit is under way (aircraft airborne, ships with a heading), then paused.
+  sim.setSpeed(1);
+  await wait(Number(params.get('run') ?? 600));
+  sim.setSpeed(0);
+  await waitFrames(4);
+  let lat = from[0], lon = from[1];
+  for (const u of sim.view.units.values()) {
+    if (u.owner === HUMAN_ID && u.type === type) {
+      const w = ctx.world;
+      const mw = w ? w.width : 1600, mh = w ? w.height : 800;
+      lon = ((((u.x % mw) + mw) % mw) / mw) * 360 - 180;
+      lat = 90 - (u.y / mh) * 180;
+      (window as unknown as { __closeupUnit?: number }).__closeupUnit = u.id;
+      break;
+    }
+  }
+  ctx.cameraRig.setMode('game');
+  ctx.cameraRig.setState({ lat, lon, altitudeKm: Number(params.get('alt') ?? 100), tilt: Number(params.get('tilt') ?? 0.6), heading: Number(params.get('heading') ?? 0) });
+  await waitFrames(10);
 }, 8);

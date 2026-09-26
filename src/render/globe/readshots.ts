@@ -151,7 +151,7 @@ function humanBorderTile(s: ShotContext, peaceful: boolean): [number, number] {
   return [cap, cap];
 }
 
-async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt: number, heading: number): Promise<number> {
+async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt: number, heading: number): Promise<[number, number]> {
   const p = s.params;
   // 9,000 ticks: the land rush is over, so the human borders other nations (v2 pacing, 1 tick = 6 game minutes).
   await s.ctx.app.startScriptedGame({ ticks: num(p, 'tick', 9000), speed: 0, worldTimeSec: worldTimeForSubsolarLon(num(p, 'sun', 0)) });
@@ -170,16 +170,21 @@ async function stageBorder(s: ShotContext, peaceful: boolean, alt: number, tilt:
     lat: num(p, 'lat', ll.lat), lon: num(p, 'lon', ll.lon), altitudeKm: num(p, 'alt', alt),
     tilt: num(p, 'tilt', tilt), heading: num(p, 'heading', heading),
   });
-  return tile;
+  return [tile, other];
 }
 
-registerShot('borders-close', 'globe', 'Borders up close (&alt=1500 default, &alt=300): smooth, constant-width lines, the human\'s 2.4 px with glow; &flash=1 plays a few ticks so conquest flashes show (DESIGN_V2 §10.3)', async (s) => {
-  await stageBorder(s, false, 1500, 0, 0);
+registerShot('borders-close', 'globe', 'Borders up close (&alt=1500 default, &alt=300): smooth, constant-width lines, the human\'s 2.4 px with glow; &flash=1 stages one conquest (the human takes a disc of &r=3 tiles from its neighbour) and holds the flash at &flashAge=0.5 s (DESIGN_V2 §10.3)', async (s) => {
+  const [tile, other] = await stageBorder(s, false, 1500, 0, 0);
   if (s.params.get('flash') === '1') {
-    // A few live ticks: the tiles taken now glow in the attacker's colour and fade over 2 s.
-    s.ctx.sim.setSpeed(1);
-    await s.wait(num(s.params, 'live', 2500));
-    s.ctx.sim.setSpeed(0);
+    // One known conquest: a disc two tiles into the neighbour's side of the border. The tiles taken glow in the
+    // attacker's colour; the flash clock is then pinned mid-flash so every capture shows the same frame.
+    const dx = ((other % MAP_W) - (tile % MAP_W) + MAP_W + MAP_W / 2) % MAP_W - MAP_W / 2;
+    const dy = Math.floor(other / MAP_W) - Math.floor(tile / MAP_W);
+    const cx = ((other % MAP_W) + dx * 2 + MAP_W) % MAP_W, cy = Math.min(MAP_H - 1, Math.max(0, Math.floor(other / MAP_W) + dy * 2));
+    s.ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: cy * MAP_W + cx, radius: num(s.params, 'r', 3) });
+    const hook = (window as unknown as { __territory?: { flashing(): unknown[]; queued(): number; pinFlash(a: number | null): void } }).__territory;
+    for (let i = 0; i < 100 && hook && (hook.flashing().length === 0 || hook.queued() > 0); i++) await s.wait(100);
+    hook?.pinFlash(num(s.params, 'flashAge', 0.5));
   }
   await s.waitFrames(6);
 }, 20);

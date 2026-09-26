@@ -404,6 +404,23 @@ export class RouteManager {
     return { state: 'none', drawn: false };
   }
 
+  /**
+   * World points of a unit's drawn route line, oldest (departure) first, plus its colour as sRGB hex (verification:
+   * tools/w2-verify.mjs projects them and samples the rendered frame along the polyline).
+   */
+  points(unitId: number): { pts: number[]; color: string; opacity: number } | null {
+    const r = this.routes.get(unitId);
+    const tr = r ? (r.suppressed ? null : r.trail) : this.ending.find((x) => x.unitId === unitId)?.trail ?? null;
+    if (!tr || tr.count < 2) return null;
+    const cap = tr.style.maxPts;
+    const pts: number[] = [];
+    for (let k = tr.count - 1; k >= 0; k--) {
+      const i = (tr.head - k + cap * 2) % cap;
+      pts.push(tr.pts[i * 3], tr.pts[i * 3 + 1], tr.pts[i * 3 + 2]);
+    }
+    return { pts, color: '#' + tr.color.getHexString(), opacity: tr.opacity };
+  }
+
   /** Human units that are protected yet suppressed (must stay 0). */
   humanSuppressed(): number {
     let n = 0;

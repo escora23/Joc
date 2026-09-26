@@ -136,6 +136,14 @@ export interface NationLabels {
   placed(): PlacedLabel[];
 }
 
+/** Rectangles (canvas CSS px) of the nation labels placed and visible now; empty when labels are hidden. */
+export interface LabelRect { x0: number; y0: number; x1: number; y1: number }
+let visibleRects: readonly LabelRect[] = [];
+/** The icon layer keeps its world-view icons off these rectangles (DESIGN_V2 §10.7, FEEDBACK-1 #4). */
+export function labelRects(): readonly LabelRect[] {
+  return visibleRects;
+}
+
 export function createNationLabels(ctx: GameContext, font: SdfFont | null): NationLabels {
   const labelData = new Float32Array(MAX_LABELS * 2 * 4);
   const labelTex = new THREE.DataTexture(labelData, MAX_LABELS, 2, THREE.RGBAFormat, THREE.FloatType);
@@ -177,6 +185,7 @@ export function createNationLabels(ctx: GameContext, font: SdfFont | null): Nati
   const states = new Map<number, LabelState>();
   const order: LabelState[] = [];
   const accepted: LabelState[] = [];
+  visibleRects = accepted;
   let textDirty = true;
   let textTimer = 0;
   let nextSlot = 0;

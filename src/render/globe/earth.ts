@@ -254,6 +254,25 @@ float reliefShadow(vec2 uv, vec3 up, vec3 east, vec3 north, vec3 L, float h0, fl
   return sh;
 }
 
+// Cubic B-spline sample of the water mask with 4 bilinear taps: rounded, smooth coastline isolines up close.
+float waterBicubic(vec2 uv) {
+  vec2 ts = vec2(${MAP_W}.0, ${MAP_H}.0);
+  vec2 p = uv * ts - 0.5;
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 f2 = f * f, f3 = f2 * f;
+  vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+  vec2 w3 = f3 / 6.0;
+  vec2 g0 = w0 + w1, g1 = w2 + w3;
+  vec2 h0 = (i - 1.0 + w1 / g0 + 0.5) / ts;
+  vec2 h1 = (i + 1.0 + w3 / g1 + 0.5) / ts;
+  float a = texture2D(uWater, vec2(h0.x, h0.y)).r, b = texture2D(uWater, vec2(h1.x, h0.y)).r;
+  float c = texture2D(uWater, vec2(h0.x, h1.y)).r, d = texture2D(uWater, vec2(h1.x, h1.y)).r;
+  return g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
+}
+
 void main() {
   vec3 up = normalize(vDir);
   vec3 east, north;
@@ -281,6 +300,18 @@ void main() {
   // --- base maps -------------------------------------------------------------------------------
   vec3 albedo = texture2D(uDay, uv).rgb;
   float water = smoothstep(0.3, 0.7, texture2D(uWater, uv).r);
+  // Close up (below ~450 km) the coast is a crisp, anti-aliased isoline of a cubic B-spline of the 25 km water mask,
+  // perturbed by fractal noise so it reads like a real shoreline. Everything that depends on water (the ocean shading,
+  // the territory fill, the ground detail) stops at this same line, so owned land never bleeds into the sea (§10.11).
+  float coastM = 1e6; // distance from the shoreline into the sea in metres (close up only)
+  float sharpK = smoothstep(0.07, 0.025, dist);
+  if (sharpK > 0.0) {
+    float cn = (fbm3(vWorld * 1500.0) * 0.16 + fbm3(vWorld * 6000.0) * 0.05) * sharpK;
+    float wv = waterBicubic(uv) - 0.5 + cn;
+    float gw = max(fwidth(wv), 1e-6);
+    water = mix(water, smoothstep(-gw, gw, wv), sharpK);
+    coastM = wv / gw * pxWorld * ${EARTH_RADIUS_KM.toFixed(1)} * 1000.0;
+  }
   vec4 rel = texture2D(uRelief, uvT);
   float elevM = rel.a * TOPO_MAX;
   float rugged = rel.b;
@@ -324,26 +355,52 @@ void main() {
     float fineK = clamp((1.0 / 21000.0) / max(pxWorld, 1e-9) / 3.0 - 1.0, 0.0, 1.0);
     float n3 = fineK > 0.0 ? fbm3(vWorld * 21000.0) * fineK : 0.0;
     albedo *= 1.0 + landK * (0.16 * n2 + 0.12 * n3 + 0.14 * (hd - 0.45));
-    // Land-use patchwork on gentle ground (DESIGN_V2 §10.11): fields, pasture, ploughed and wooded plots of ~1.2 km
-    // with darker hedgerows between them. The NASA albedo is ~1 km per texel, so without it the ground below 50 km
-    // reads as a flat wash of colour. Irregular polygons: 3D cells cut by the sphere, edges wobbled by noise.
-    float fieldK = landK * (1.0 - smoothstep(0.2, 0.55, rugged)) * (1.0 - smoothstep(0.3, 0.5, luma(albedo)))
+    // Land-use patchwork on gentle ground (DESIGN_V2 §10.11): fields, pasture, ploughed and wooded plots with darker
+    // hedgerows between them. The NASA albedo is ~1 km per texel, so without it the ground below 50 km reads as a flat
+    // wash of colour. The plots are a domain-warped 3D Voronoi cut by the sphere (never a lattice): neighbouring cells
+    // whose seeds fall in the same coarse block merge into one field, so fields range from ~0.8 to ~4 km and have
+    // irregular outlines; hedges are drawn only between different fields; plough strips inside a field follow the
+    // contour lines on slopes (perpendicular to the relief gradient) and a per-field direction on the flat.
+    float fieldK = landK * (1.0 - smoothstep(0.2, 0.55, rugged)) * (1.0 - smoothstep(0.45, 0.7, luma(albedo)))
                  * (1.0 - smoothstep(2400.0, 3400.0, elevM)) * clamp((1.0 / 5200.0) / max(pxWorld, 1e-9) / 6.0 - 1.0, 0.0, 1.0);
     if (fieldK > 0.001) {
-      vec3 q = vWorld * 5200.0 + vec3(fbm3(vWorld * 1700.0), fbm3(vWorld * 1700.0 + 7.3), 0.0) * 0.45;
-      vec3 cell = floor(q);
-      float hv = hash13(cell), hv2 = hash13(cell + 17.0);
-      vec3 f = fract(q);
-      vec3 e3 = min(f, 1.0 - f);
-      float edge = min(e3.x, min(e3.y, e3.z));
-      float hedge = 1.0 - smoothstep(0.0, 0.05 + 2.0 * pxWorld * 5200.0, edge);
-      vec3 fcol = hv < 0.3 ? albedo * vec3(1.2, 1.12, 0.82) : hv < 0.58 ? albedo * vec3(0.8, 1.0, 0.72)
-                : hv < 0.8 ? albedo * vec3(0.78, 0.7, 0.62) : albedo * vec3(0.55, 0.68, 0.5);
-      albedo = mix(albedo, fcol, fieldK * (0.6 + 0.3 * hv2));
-      // Plots inside a field (~400 m strips) and the hedgerows between fields.
-      vec3 q2 = q * 3.0;
-      float hv3 = hash13(floor(q2) + cell * 3.0);
-      albedo *= 1.0 + fieldK * 0.12 * (hv3 - 0.5);
+      vec3 q = vWorld * 5200.0;
+      q += vec3(fbm3(vWorld * 1300.0), fbm3(vWorld * 1300.0 + 7.3), fbm3(vWorld * 1300.0 - 3.1)) * 0.9
+         + vec3(fbm3(vWorld * 5200.0 + 1.7), fbm3(vWorld * 5200.0 - 5.9), 0.0) * 0.18;
+      vec3 qc = floor(q);
+      float d1 = 1e9, d2 = 1e9;
+      vec3 s1 = vec3(0.0), s2 = vec3(0.0);
+      for (int k = 0; k < 27; k++) {
+        vec3 o = vec3(float(k - (k / 3) * 3), float((k / 3) - (k / 9) * 3), float(k / 9)) - 1.0;
+        vec3 c = qc + o;
+        vec3 sp = c + vec3(hash13(c), hash13(c + 31.7), hash13(c - 47.3));
+        vec3 dv = sp - q;
+        float d = dot(dv, dv);
+        if (d < d1) { d2 = d1; s2 = s1; d1 = d; s1 = sp; }
+        else if (d < d2) { d2 = d; s2 = sp; }
+      }
+      // A field = the Voronoi cells whose seeds share a coarse block (sizes vary, outlines stay irregular).
+      vec3 f1 = floor(s1 * 0.5), f2 = floor(s2 * 0.5);
+      bool sameField = all(equal(f1, f2));
+      float hv = hash13(f1 + 3.3), hv2 = hash13(f1 + 17.0);
+      // Distance to the cell boundary (half the F2-F1 gap, in cell units) -> hedgerow line of ~2 px or 25 m.
+      float edge = (sqrt(d2) - sqrt(d1)) * 0.5;
+      float hw = 0.02 + 1.4 * pxWorld * 5200.0;
+      float hedge = sameField ? 0.0 : 1.0 - smoothstep(hw * 0.5, hw * 1.5, edge);
+      // Stubble / ripe crops, green crops and pasture, ploughed earth, woodlots: distinct enough to read under the fill.
+      vec3 fcol = hv < 0.3 ? albedo * vec3(1.3, 1.18, 0.78) : hv < 0.58 ? albedo * vec3(0.72, 1.02, 0.6)
+                : hv < 0.8 ? albedo * vec3(0.72, 0.6, 0.5) : albedo * vec3(0.45, 0.58, 0.4);
+      albedo = mix(albedo, fcol, fieldK * (0.65 + 0.3 * hv2));
+      // Plough strips (~120 m): along the contour on slopes, a per-field bearing on flat ground.
+      vec2 g2 = slope; // relief gradient in (east, north)
+      float ang = hv2 * PI;
+      vec2 dirF = vec2(cos(ang), sin(ang));
+      vec2 dirS = length(g2) > 1e-4 ? normalize(g2) : dirF;
+      vec2 dir = normalize(mix(dirF, dirS, smoothstep(0.05, 0.25, length(g2))));
+      vec2 tpos = vec2(dot(vWorld, east), dot(vWorld, north)) * 52000.0;
+      float stripW = clamp((1.0 / 52000.0) / max(pxWorld, 1e-9) / 3.0 - 1.0, 0.0, 1.0);
+      float strip = sin(dot(tpos, dir) * PI) * 0.5 + 0.5;
+      albedo *= 1.0 + fieldK * stripW * (hv < 0.8 ? 0.16 : 0.04) * (strip - 0.5);
       albedo = mix(albedo, albedo * vec3(0.55, 0.66, 0.5), hedge * fieldK * 0.7);
     }
     // Woods and scrub: dark irregular stands at ~400 m-2 km on vegetated ground, denser on hills (fields take the
@@ -588,8 +645,10 @@ void main() {
         float vis = smoothstep(3.0, 6.0, 0.4 / pxT);
         albedo = mix(albedo, natO * 1.15, mix(0.3, dotm, vis) * occ * 0.9 * terr * landK);
       }
-      // Conquest flash in the attacker's (new owner's) colour, 2 s.
-      emissive += mix(natO, vec3(1.0), 0.25) * 1.7 * flash * terr * landK;
+      // Conquest flash in the attacker's (new owner's) exact colour, 2 s. Soft everywhere: the coverage weights feather
+      // it inside the attacker's land, and it ramps up over 6 px from the border line, so it never has a hard edge.
+      float flashEdge = Q >= 0 ? smoothstep(0.5, 6.5, distPx) : 1.0;
+      emissive += natO * 1.25 * flash * flashEdge * terr * landK;
     } else if (landK > 0.0 && playableHere) {
       // Neutral land: desaturated 50 % and darkened 24 % from orbit, so owned land stands out (the design's 35 % / 10 %
       // measured ΔE 2.9 against the plain globe at 3,000 km; the readability target is ≥ 5).
@@ -747,12 +806,15 @@ void main() {
     vec3 skyRefl = vec3(0.16, 0.32, 0.62) * dayK * 0.55;
     ocean = deep * (sunLight * smoothstep(-0.03, 0.25, muS) * max(muS + 0.03, 0.0) * 0.9 + skyAmb) * (1.0 - Fv) + skyRefl * Fv + spec;
 #if OCEAN_Q >= 2
-    // Coastal foam / surf close up.
-    float coast = water * (1.0 - smoothstep(0.55, 0.95, texture2D(uWater, uv).r));
-    float foamN = vnoise(vWorld * 26000.0 + vec3(0.0, uTime * 0.6, 0.0));
-    // Only once the ~250 m foam cells span a few pixels (from ~300 km they alias into white speckle).
-    float foamVis = 1.0 - smoothstep(0.6e-5, 1.6e-5, pxWorld);
-    ocean += vec3(0.8) * coast * smoothstep(0.2, 0.8, foamN) * closeK * foamVis * sunLight * max(muS, 0.0) * 0.35;
+    // Coastal surf close up: a smooth foam band 20-200 m off the shoreline with slow breaking lines, faded out before
+    // it gets thinner than a few pixels (no speckle).
+    float pxM = pxWorld * ${EARTH_RADIUS_KM.toFixed(1)} * 1000.0;
+    float foamVis = clamp(180.0 / max(pxM, 1e-3) / 3.0 - 1.0, 0.0, 1.0) * sharpK;
+    if (foamVis > 0.0 && coastM < 400.0) {
+      float band = smoothstep(0.0, 25.0, coastM) * (1.0 - smoothstep(70.0, 220.0, coastM));
+      float surf = 0.55 + 0.45 * sin(coastM * 0.06 - uTime * 1.2 + fbm3(vWorld * 3000.0) * 6.0);
+      ocean += vec3(0.85, 0.9, 0.92) * band * surf * foamVis * (sunLight * max(muS, 0.0) + skyAmb) * 0.45;
+    }
 #endif
   }
   col = mix(land, ocean, water);

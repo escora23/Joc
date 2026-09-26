@@ -92,27 +92,19 @@ export function landComponents(world: WorldData): LandComponents {
     list.push(c);
     if (n <= SMALL_ISLAND_TILES) small.push(c);
   }
-  // A small component is an island (marker, shoreline) only when it lies in the sea: it touches ocean water and is not
-  // a fragment of a larger coast cut off only diagonally. Land specks enclosed by lake tiles (salt pans and dry lakes
-  // in the water mask across the Sahara, Arabia and the Sahel) and diagonal coastal crumbs would otherwise scatter
-  // hundreds of meaningless rings over the continents.
+  // A small component is an island (marker, shoreline) only when it lies in the sea: it touches ocean water through a
+  // side (4-neighbourhood, the Navigable flag). Land specks enclosed by lake tiles (salt pans and dry lakes in the water
+  // mask across the Sahara, Arabia and the Sahel) would otherwise scatter hundreds of meaningless rings over the
+  // continents. Specks that touch a larger coast only diagonally ARE islands: the sim is 4-connected, so they can only
+  // be taken by sea, and the player must see them (FEEDBACK-1 #6).
   const islands = small.filter((c) => {
-    let sea = false;
     for (const t of c.tiles!) {
       const x = t % MAP_W, y = (t / MAP_W) | 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        const yy = y + dy;
-        if (yy < 0 || yy >= MAP_H) continue;
-        for (let dx = -1; dx <= 1; dx++) {
-          if (!dx && !dy) continue;
-          const nt = yy * MAP_W + ((x + dx + MAP_W) % MAP_W);
-          const o = compOf[nt];
-          if (o >= 0 && o !== c.id && list[o].size > SMALL_ISLAND_TILES) return false;
-          if ((dx === 0 || dy === 0) && isNavigableTerrain(terrain[nt])) sea = true;
-        }
-      }
+      if (isNavigableTerrain(terrain[y * MAP_W + ((x + 1) % MAP_W)]) || isNavigableTerrain(terrain[y * MAP_W + ((x + MAP_W - 1) % MAP_W)])) return true;
+      if (y > 0 && isNavigableTerrain(terrain[t - MAP_W])) return true;
+      if (y < MAP_H - 1 && isNavigableTerrain(terrain[t + MAP_W])) return true;
     }
-    return sea;
+    return false;
   });
   small.length = 0;
   small.push(...islands);

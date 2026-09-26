@@ -22,8 +22,9 @@ export interface RenderEnv {
   fxTime: number;
   fxDt: number;
   /**
-   * Minimum on-screen size of unit models (px): 12 from 60 km up, real size below (DESIGN_V2 §10.7; above 1,200 km
-   * units are icons only). Caps UNIT_LOOK.minPx.
+   * Cap on the minimum on-screen size of unit models (px): 12 while they fade in under the icons (900-1,200 km),
+   * rising to 32 at 600 km and kept down to the lowest camera altitude (DESIGN_V2 §10.7 as revised by the owner's
+   * clarification: close-zoom models must be clearly visible). Caps UNIT_LOOK.minPx.
    */
   unitMinPx: number;
 }
@@ -106,14 +107,14 @@ export const UNIT_LOOK: Record<UnitType, UnitLook> = {
   [UnitType.ArmoredDivision]: { realKm: 0.35, minPx: 30, maxKm: 80 },
   [UnitType.FighterSquadron]: { realKm: 0.06, minPx: 30, maxKm: 70 },
   [UnitType.Bomber]: { realKm: 0.09, minPx: 44, maxKm: 110 },
-  [UnitType.DroneSwarm]: { realKm: 0.05, minPx: 16, maxKm: 36 },
+  [UnitType.DroneSwarm]: { realKm: 0.05, minPx: 24, maxKm: 40 },
   [UnitType.CruiseMissile]: { realKm: 0.03, minPx: 24, maxKm: 50 },
   [UnitType.AtomBomb]: { realKm: 0.04, minPx: 30, maxKm: 90 },
   [UnitType.HydrogenBomb]: { realKm: 0.05, minPx: 34, maxKm: 100 },
   [UnitType.Mirv]: { realKm: 0.05, minPx: 36, maxKm: 110 },
   [UnitType.MirvWarhead]: { realKm: 0.02, minPx: 16, maxKm: 44 },
   [UnitType.SamInterceptor]: { realKm: 0.02, minPx: 16, maxKm: 34 },
-  [UnitType.Train]: { realKm: 0.12, minPx: 16, maxKm: 34 },
+  [UnitType.Train]: { realKm: 0.12, minPx: 26, maxKm: 40 },
   [UnitType.Shell]: { realKm: 0.01, minPx: 6, maxKm: 10 },
 };
 

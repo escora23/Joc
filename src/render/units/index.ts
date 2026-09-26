@@ -11,12 +11,13 @@
 // Draw calls: one per model kind (~25) + rails + overlays + 2 icon batches. No per-frame allocations in the update loop.
 // LOD (DESIGN_V2 §10.7, W2): from orbit units and structures are NATO-style 2D icons (icons.ts); 3D models cross-fade
 // in below 1,200 km (units) and 900 km (structures) at a 12 px minimum size instead of the old 16-46 px inflation, and
-// are real-size below 60 km. W4 owns the models, rings and grounding; the hand-off thresholds live in iconLod().
+// never smaller than 32 px below 600 km. W4 owns the models, rings and grounding; the hand-off thresholds live in iconLod().
 
 import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
 import { presentationTime } from '../../shared/shots';
-import { EARTH_RADIUS_KM, MAP_W, TILE_KM } from '../../shared/constants';
+import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, TILE_KM } from '../../shared/constants';
+import { labelRects } from '../globe/labels';
 import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, wrapDX } from '../../shared/geo';
 import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
 import { hash3 } from '../../shared/rng';
@@ -95,14 +96,25 @@ export interface IconLod {
   structIcons: boolean;
   unitMinPx: number;
   structMinPxScale: number;
+  /**
+   * Strategic world view (above 8,000 km): only the human's and hostile-to-human military icons (clustered); trade
+   * ships, trains, structures and other nations' units are hidden, and no icon covers a nation label (FEEDBACK-1 #4).
+   */
+  worldView: boolean;
 }
+
+/** Above this camera altitude the icon layer switches to the strategic world view (IconLod.worldView). */
+export const WORLD_VIEW_KM = 8000;
 
 export function iconLod(altKm: number, out: IconLod): IconLod {
   out.unitModelFade = clamp((1200 - altKm) / 300, 0, 1);
   out.structModelFade = clamp((900 - altKm) / 250, 0, 1);
   out.unitIconMode = altKm > 900 ? 0 : altKm > 600 ? 1 : 2;
-  out.structIcons = altKm > 250;
-  out.unitMinPx = altKm > 60 ? 12 : 0;
+  out.worldView = altKm > WORLD_VIEW_KM;
+  out.structIcons = altKm > 250 && !out.worldView;
+  // Models fade in small under the icons (12 px), then grow to a clearly readable 32 px from 600 km down to the
+  // lowest camera altitude (owner clarification to FEEDBACK-1: close-zoom models must be clearly visible).
+  out.unitMinPx = altKm >= 900 ? 12 : altKm <= 600 ? 32 : 12 + 20 * (900 - altKm) / 300;
   out.structMinPxScale = altKm > 250 ? 0.5 : clamp((altKm - 120) / 130, 0, 1) * 0.5;
   return out;
 }
@@ -159,7 +171,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   let overlays: Overlays | null = null;
   let icons: IconLayer | null = null;
   let built = false;
-  const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPxScale: 0.5 };
+  const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPxScale: 0.5, worldView: false };
   const relations = relationsFor(ctx);
   let structModelsOn = false;
   const routes = new RouteManager();
@@ -670,8 +682,20 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return t === UnitType.TradeShip || t === UnitType.Train ? 3 : 0;
   }
 
+  /** In the world view: only the human's and its enemies' military units get an icon, never over a nation label. */
+  function worldViewHides(u: UnitView): boolean {
+    if (u.type === UnitType.TradeShip || u.type === UnitType.Train) return true;
+    if (u.owner !== HUMAN_ID && relations.relationTo(u.owner) !== 'war') return true;
+    const r = 13;
+    for (const q of labelRects()) {
+      if (scrXY.x + r > q.x0 && scrXY.x - r < q.x1 && scrXY.y + r > q.y0 && scrXY.y - r < q.y1) return true;
+    }
+    return false;
+  }
+
   function offerUnitIcon(u: UnitView, pos: THREE.Vector3, sel: boolean, dxPx = 0, dyPx = 0): void {
     if (!icons || !toScreen(pos)) return;
+    if (lod.worldView && !sel && worldViewHides(u)) return;
     const size = iconSize(u.type);
     // Small icons float above the model; pips sit just above it.
     const lift = size === 1 ? 16 : size === 2 && lod.unitIconMode === 2 && u.type !== UnitType.Shell && u.type !== UnitType.SamInterceptor ? 11 : 0;
@@ -697,6 +721,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
 
   function updateUnits(frame: FrameInfo, fx: FxInternal | undefined): void {
     const view = ctx.sim.view;
+    modelView.n = 0;
+    modelView.minPx = Infinity;
+    modelView.list.length = 0;
     for (const key of UNIT_MODELS) unitMeshes[key].n = 0;
     const renv = fx ? makeRouteEnv(fx) : null;
     routes.focus.clear();
@@ -740,6 +767,14 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       offerUnitIcon(u, P, sel === 1);
       // Above 1,200 km units are icons only: no model instances at all.
       if (!key || lod.unitModelFade <= 0) continue;
+      // Measurement (__units.stats()): models actually in the frustum and above the horizon, with their drawn size.
+      if (toScreen(P, 0)) {
+        const px = s / Math.max(1e-12, env.pixelK * env.camPos.distanceTo(P));
+        modelView.n++;
+        // Minimum over vehicles (projectiles and sub-munitions are small by design).
+        if (u.type !== UnitType.Shell && u.type !== UnitType.SamInterceptor && u.type !== UnitType.MirvWarhead) modelView.minPx = Math.min(modelView.minPx, px);
+        if (modelView.list.length < 200) modelView.list.push({ id: u.id, type: u.type, px: +px.toFixed(1), x: Math.round(scrXY.x), y: Math.round(scrXY.y) });
+      }
       const im = unitMeshes[key];
       const seed = (u.id * 0.618) % 1;
       switch (u.type) {
@@ -1152,6 +1187,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return icons.pick(clientX - rect.left, clientY - rect.top);
   }
 
+  /** Unit models drawn this frame inside the frustum and above the horizon (measurement, not the instance count). */
+  const modelView = { n: 0, minPx: Infinity, list: [] as { id: number; type: UnitType; px: number; x: number; y: number }[] };
+
   /** Debug / measurement hook (DESIGN_V2 §16.3): what is drawn right now. */
   function stats(): Record<string, unknown> {
     let unitModels = 0, structureModels = 0;
@@ -1160,7 +1198,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     structureModels += (buildings?.mesh.count ?? 0) + (spires?.mesh.count ?? 0);
     const view = ctx.sim.view;
     return {
-      altitudeKm: +env.altitudeKm.toFixed(1), lod: { ...lod }, unitModels, structureModels,
+      altitudeKm: +env.altitudeKm.toFixed(1), lod: { ...lod },
+      // unitModels: models in view (frustum + horizon); unitModelInstances: every instance written this frame.
+      unitModels: modelView.n, unitModelInstances: unitModels, unitModelMinPx: Number.isFinite(modelView.minPx) ? +modelView.minPx.toFixed(1) : 0,
+      unitModelsInView: modelView.list.map((m) => ({ ...m })), structureModels,
       liveUnits: view.units.size, liveStructures: view.structures.size, ...(icons ? icons.stats : {}),
     };
   }
@@ -1193,6 +1234,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   (window as unknown as { __trails?: unknown }).__trails = {
     stats: () => ({ ...routes.stats({ relationTo: (o: number) => relations.relationTo(o) }), humanSuppressed: routes.humanSuppressed() }),
     route: (unitId: number) => routes.info(unitId, performance.now() / 1000),
+    points: (unitId: number) => routes.points(unitId),
   };
   const api: UnitsApi = {
     async init(progress) {
@@ -1300,6 +1342,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       // Icons first (DESIGN_V2 §7.2): what the player sees is what the click picks.
       const hit = iconHitAt(clientX, clientY);
       if (hit) return hit.structure ? -1 : hit.id;
+      // The world view hides most units: only what is drawn can be picked.
+      if (lod.worldView) return -1;
       const rect = ctx.canvas.getBoundingClientRect();
       let best = -1, bestD = 18 * 18;
       for (const t of tracks.values()) {
@@ -1315,7 +1359,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     pickStructure(clientX, clientY) {
       const hit = iconHitAt(clientX, clientY);
       if (hit) return hit.structure ? hit.id : -1;
-      if (lod.structIcons && !structModelsOn) return -1;
+      if ((lod.structIcons || lod.worldView) && !structModelsOn) return -1;
       const rect = ctx.canvas.getBoundingClientRect();
       let best = -1, bestD = 20 * 20;
       for (const [id, a] of structAnchor) {

@@ -175,6 +175,10 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
   let pairsRev = -1;
   let flashNow = 0;
   let realNow = 0;
+  /** Tiles stamped in the last seconds (debug hook __territory.flashing()): tile, new owner, stamp (1/32 s units). */
+  const recent: { tile: number; owner: number; stamp: number }[] = [];
+  /** Shots: the flash clock pinned at this age (s) after the newest stamp, or null to follow real time. */
+  let flashPin: number | null = null;
   const box = new THREE.Box2();
   const pos = new THREE.Vector2();
 
@@ -238,6 +242,7 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
     const owner = view.owner;
     // An old stamp: no flash anywhere after a resync (fast-forward, shots).
     const old = (flashNow - 20_000) & 0xffff;
+    recent.length = 0;
     mirror.set(owner);
     qLen = 0;
     qHead = 0;
@@ -258,6 +263,8 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
 
   function applyTile(tile: number, owner: number): void {
     writeOwner(tile, owner, flashNow);
+    if (recent.length >= 4096) recent.splice(0, 1024);
+    recent.push({ tile, owner, stamp: flashNow });
     markDirty(tile);
   }
 
@@ -268,6 +275,30 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
       qLen--;
     }
   }
+
+  // Debug / verification hook (DESIGN_V2 §10.3 conquest flash): the tiles flashing now with their colour and age, and
+  // a pin that holds the flash clock at a given age after the newest capture (deterministic shots).
+  (window as unknown as { __territory?: unknown }).__territory = {
+    flashing(): { tile: number; owner: number; color: string; age: number }[] {
+      const now = uniforms.uFlashNow.value;
+      const out: { tile: number; owner: number; color: string; age: number }[] = [];
+      for (const r of recent) {
+        const age = (((now - r.stamp) % 65536) + 65536) % 65536 / FLASH_UNITS;
+        if (age >= 2 || mirror[r.tile] !== r.owner) continue;
+        const c = ctx.sim.view.players[r.owner]?.color ?? 0;
+        out.push({ tile: r.tile, owner: r.owner, color: '#' + c.toString(16).padStart(6, '0'), age: +age.toFixed(3) });
+      }
+      return out;
+    },
+    pinFlash(ageSec: number | null): void {
+      flashPin = ageSec;
+      if (ageSec === null || recent.length === 0) return;
+      let newest = recent[recent.length - 1].stamp;
+      for (const r of recent) if (((r.stamp - newest) & 0xffff) < 0x8000) newest = r.stamp;
+      uniforms.uFlashNow.value = (newest + ageSec * FLASH_UNITS) % 65536;
+    },
+    queued: () => qLen,
+  };
 
   ctx.bus.on('tilesChanged', (e) => {
     if (e.full) {
@@ -572,7 +603,9 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
     update(dt, realTime) {
       realNow = realTime;
       flashNow = Math.floor(realTime * FLASH_UNITS) & 0xffff;
-      uniforms.uFlashNow.value = (realTime * FLASH_UNITS) % 65536;
+      if (flashPin === null) uniforms.uFlashNow.value = (realTime * FLASH_UNITS) % 65536;
+      // Forget stamps older than the flash (2 s) plus a margin.
+      while (recent.length > 0 && ((flashNow - recent[0].stamp) & 0xffff) > 5 * FLASH_UNITS && flashPin === null) recent.shift();
       const view = ctx.sim.view;
       const inSession = view.phase !== 'none';
       uniforms.uHoverAmt.value += (hoverTarget - uniforms.uHoverAmt.value) * Math.min(1, dt * 10);

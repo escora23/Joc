@@ -2,7 +2,7 @@
 // Each trail keeps a small ring of world-space points (committed every `minSeg` km, the newest point follows the
 // emitter live). Every frame all live trails are written into two preallocated dynamic buffers (alpha-blended and
 // additive), expanded into camera-facing (or water-flat, for wakes) ribbons in the vertex shader with a
-// minimum on-screen width, and softly faded along age and across the ribbon. Two draw calls total.
+// minimum on-screen width, and softly faded along age and across the ribbon. Three draw calls: alpha-blended, additive, and the route lines (drawn without depth test above the clouds, horizon-tested).
 // Released trails ("orphans": the unit died or landed) keep fading until their last point expires.
 // Route styles (DESIGN_V2 §10.8, W2): crisp owner-coloured lines with a constant screen width, drawn solid, dashed
 // (planned paths), with arrowheads (convoys) or a pulsing outline (enemy convoys heading to you); they keep every
@@ -124,6 +124,7 @@ varying float vAlong;
 varying float vLook;
 varying float vAlongPx;
 varying float vWpx;
+varying vec3 vWorld;
 
 void main() {
   vec3 p = position;
@@ -146,7 +147,8 @@ void main() {
   float thin = clamp(aData.z / max(w, 1e-12), 0.0, 1.0);
   p += side * w * aData.x;
   vCol = aCol;
-  vCol.a *= mix(0.55, 1.0, thin);
+  // (Route lines are crisp constant-width lines in their owner's exact colour: no thinning.)
+  if (aLook < 0.5) vCol.a *= mix(0.55, 1.0, thin);
   vSide = aData.x;
   vAge = aData.y;
   // Breakup scale follows the ribbon width (in km), so puffs look the same at every zoom.
@@ -155,6 +157,7 @@ void main() {
   float ppx = uPixelK * dist;
   vAlongPx = aAlong / ${EARTH_RADIUS_KM.toFixed(1)} / max(ppx, 1e-12);
   vWpx = w / max(ppx, 1e-12);
+  vWorld = p;
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
 }
 `;
@@ -169,12 +172,20 @@ varying float vAlong;
 varying float vLook;
 varying float vAlongPx;
 varying float vWpx;
+varying vec3 vWorld;
 ${inverseToneGlsl()}
 
+vec3 linToSrgb(vec3 c) { c = max(c, 0.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 float h11(float x) { return fract(sin(x * 127.1) * 43758.5453); }
 float n11(float x) { float i = floor(x); float f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h11(i), h11(i + 1.0), f); }
 
 void main() {
+#ifdef ROUTE_LINES
+  // Route lines draw without the depth buffer (above relief, the near patch, ocean swell and clouds); an analytic
+  // horizon test hides the far side of the planet instead (as icons and order paths do).
+  vec3 toC = cameraPosition - vWorld;
+  if (dot(normalize(vWorld), toC) < 0.0) discard;
+#endif
   float across = 1.0 - vSide * vSide;
   if (vLook > 0.5) {
     // Route lines: crisp edges at a constant pixel width.
@@ -200,7 +211,7 @@ void main() {
   }
   if (a < 0.003) discard;
   // Route lines show their owner's exact colour (the same swatch as the HUD and the icons).
-  gl_FragColor = vec4(vLook > 0.5 && vLook < 3.5 ? untone(pow(max(vCol.rgb, 0.0), vec3(1.0 / 2.2))) : vCol.rgb, a);
+  gl_FragColor = vec4(vLook > 0.5 && vLook < 3.5 ? untone(linToSrgb(vCol.rgb)) : vCol.rgb, a);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -220,7 +231,8 @@ class RibbonBatch {
   ni = 0;
   readonly maxV: number;
 
-  constructor(maxV: number, additive: boolean) {
+  /** `routes`: crisp route lines drawn without depth test, above the clouds (renderOrder 43), horizon-tested. */
+  constructor(maxV: number, additive: boolean, routes = false) {
     this.maxV = maxV;
     this.pos = new Float32Array(maxV * 3);
     this.tan = new Float32Array(maxV * 3);
@@ -239,18 +251,21 @@ class RibbonBatch {
     this.geo.setIndex(new THREE.BufferAttribute(this.index, 1).setUsage(THREE.DynamicDrawUsage));
     this.geo.setDrawRange(0, 0);
     const mat = new THREE.ShaderMaterial({
-      name: additive ? 'fx-trails-add' : 'fx-trails-alpha',
+      name: routes ? 'fx-trails-route' : additive ? 'fx-trails-add' : 'fx-trails-alpha',
+      defines: routes ? { ROUTE_LINES: 1 } : {},
       vertexShader: VERT,
       fragmentShader: FRAG,
       uniforms: { uPixelK: sharedUniforms.uPixelK, uNoise: { value: additive ? 0 : 1 }, uTime: sharedUniforms.uTime },
       transparent: true,
       depthWrite: false,
+      depthTest: !routes,
       side: THREE.DoubleSide,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     });
     this.mesh = new THREE.Mesh(this.geo, mat);
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = additive ? 53 : 49;
+    // Routes: above clouds (30) and atmosphere (40), below island markers (44) and icons (45/46).
+    this.mesh.renderOrder = routes ? 43 : additive ? 53 : 49;
     this.mesh.name = mat.name;
   }
 
@@ -275,7 +290,7 @@ class RibbonBatch {
   }
 }
 
-const tA = new THREE.Vector3(), tB = new THREE.Vector3();
+const tA = new THREE.Vector3(), tB = new THREE.Vector3(), tS0 = new THREE.Vector3(), tS1 = new THREE.Vector3();
 
 export class TrailSystem {
   readonly group = new THREE.Group();
@@ -283,7 +298,10 @@ export class TrailSystem {
   private live: Trail[] = [];
   private alpha: RibbonBatch;
   private add: RibbonBatch;
+  private routes: RibbonBatch;
   private now = 0;
+  /** push() is inserting great-circle fill points (no nested fill). */
+  private filling = false;
   private dist = new Float32Array(512);
   private tmpPts = new Float32Array(512 * 3);
   private tmpTimes = new Float32Array(512);
@@ -292,7 +310,8 @@ export class TrailSystem {
   constructor(maxVerts: number) {
     this.alpha = new RibbonBatch(maxVerts, false);
     this.add = new RibbonBatch(Math.round(maxVerts * 0.5), true);
-    this.group.add(this.alpha.mesh, this.add.mesh);
+    this.routes = new RibbonBatch(Math.round(maxVerts * 0.75), false, true);
+    this.group.add(this.alpha.mesh, this.add.mesh, this.routes.mesh);
   }
 
   setTime(t: number): void {
@@ -349,10 +368,38 @@ export class TrailSystem {
       tr.count = 2;
       return;
     }
+    const seg = tr.minSegKm > 0 ? tr.minSegKm : st.minSeg;
+    if (st.keepAll && !this.filling) {
+      // Route lines follow the globe: a jump longer than two segments (a fast-forward, a stalled tab, a resync) is
+      // filled with great-circle points instead of one straight chord that would cut under the surface.
+      tA.set(tr.pts[h * 3], tr.pts[h * 3 + 1], tr.pts[h * 3 + 2]);
+      tB.set(x, y, z);
+      const jumpKm = tA.distanceTo(tB) * EARTH_RADIUS_KM;
+      if (jumpKm > seg * 2) {
+        const m = Math.min(512, Math.ceil(jumpKm / seg));
+        const ra = tA.length(), rb = tB.length();
+        const a0 = tS0.copy(tA).normalize(), b0 = tS1.copy(tB).normalize();
+        const om = Math.acos(Math.min(1, Math.max(-1, a0.dot(b0))));
+        const so = Math.sin(om);
+        this.filling = true;
+        for (let j = 1; j < m; j++) {
+          const t = j / m;
+          const ka = so > 1e-9 ? Math.sin((1 - t) * om) / so : 1 - t, kb = so > 1e-9 ? Math.sin(t * om) / so : t;
+          const r = ra + (rb - ra) * t;
+          this.push(tr, (a0.x * ka + b0.x * kb) * r, (a0.y * ka + b0.y * kb) * r, (a0.z * ka + b0.z * kb) * r);
+        }
+        this.filling = false;
+      }
+    }
+    const h2 = tr.head;
+    if (h2 !== h) {
+      this.push(tr, x, y, z);
+      return;
+    }
     const p = (h - 1 + cap) % cap;
     tA.set(tr.pts[p * 3], tr.pts[p * 3 + 1], tr.pts[p * 3 + 2]);
     const dKm = tA.distanceTo(tB.set(x, y, z)) * EARTH_RADIUS_KM;
-    if (dKm >= (tr.minSegKm > 0 ? tr.minSegKm : st.minSeg)) {
+    if (dKm >= seg) {
       if (tr.count >= cap && st.keepAll) {
         this.decimate(tr);
         this.push(tr, x, y, z);
@@ -456,6 +503,8 @@ export class TrailSystem {
     this.alpha.end();
     this.add.begin();
     this.add.end();
+    this.routes.begin();
+    this.routes.end();
   }
 
   get liveCount(): number {
@@ -466,6 +515,7 @@ export class TrailSystem {
     const now = this.now;
     this.alpha.begin();
     this.add.begin();
+    this.routes.begin();
     for (let li = this.live.length - 1; li >= 0; li--) {
       const tr = this.live[li];
       const st = tr.style;
@@ -486,7 +536,7 @@ export class TrailSystem {
         }
         continue;
       }
-      const b = st.additive ? this.add : this.alpha;
+      const b = st.look > 0 ? this.routes : st.additive ? this.add : this.alpha;
       // Length limit: walk back from the head, stop one point past maxLen.
       let n = tr.count;
       let cutF = 1;
@@ -559,5 +609,6 @@ export class TrailSystem {
     }
     this.alpha.end();
     this.add.end();
+    this.routes.end();
   }
 }
