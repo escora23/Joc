@@ -419,17 +419,25 @@ export class RouteManager {
         }
         // A jump longer than two line segments (a fast-forward, a stalled tab, a burst of updates): follow the
         // waypoints sailed meanwhile instead of a chord that could cross land.
-        if (tileDistKm(r.lastX, r.lastY, u.x, u.y) > 2 * r.segKm) {
+        // The sim's path is straight between waypoints on the tile grid, so the sailed stretch is rebuilt the same way
+        // (every segKm along the grid line): a single long chord would be a great circle, which leaves the grid line
+        // and can cut across a cape or an isthmus.
+        if (tileDistKm(r.lastX, r.lastY, u.x, u.y) > r.segKm) {
           const k0 = r.pathK;
           const k = nearestSegment(path, u.x, u.y, k0);
-          if (k > k0) {
-            const n = this.alongPath(env, path, NaN, NaN, k0 + 1, k, NaN, NaN, r.segKm, true, 240);
-            for (let i = 0; i < n; i++) {
-              env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
-              if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
-            }
+          const n = this.alongPath(env, path, r.lastX, r.lastY, k0 + 1, k, u.x, u.y, r.segKm, true, 240);
+          for (let i = 1; i < n - 1; i++) {
+            env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
+            if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
           }
-          r.pathK = k;
+          r.pathK = Math.max(k0, k);
+        }
+      } else if (ship && tileDistKm(r.lastX, r.lastY, u.x, u.y) > r.segKm) {
+        // No sim path (a warship between legs): the same grid-line subdivision from the last point.
+        const n = this.alongPath(env, [], r.lastX, r.lastY, 0, -1, u.x, u.y, r.segKm, true, 240);
+        for (let i = 1; i < n - 1; i++) {
+          env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
+          if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
         }
       }
       // The line ends at the stern of the drawn model (lines draw above models).

@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import { EARTH_RADIUS_KM } from '../../shared/constants';
-import { sharedUniforms } from '../units/common';
+import { MODEL_STENCIL, sharedUniforms } from '../units/common';
 import { inverseToneGlsl } from '../units/icons';
 
 const RIBBON_ATTRS = ['position', 'aTan', 'aData', 'aCol', 'aAlong', 'aLook'];
@@ -262,6 +262,15 @@ class RibbonBatch {
       side: THREE.DoubleSide,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     });
+    if (routes) {
+      // Route lines skip the pixels of drawn 3D models (the models mark the stencil, render/units/material.ts): a line
+      // drawn above everything must never cover the ship or aircraft it belongs to at close zoom.
+      mat.stencilWrite = true;
+      mat.stencilRef = MODEL_STENCIL;
+      mat.stencilFunc = THREE.NotEqualStencilFunc;
+      mat.stencilWriteMask = 0;
+      mat.stencilFail = mat.stencilZFail = mat.stencilZPass = THREE.KeepStencilOp;
+    }
     this.mesh = new THREE.Mesh(this.geo, mat);
     this.mesh.frustumCulled = false;
     // Routes: above clouds (30) and atmosphere (40), below island markers (44) and icons (45/46).

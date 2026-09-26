@@ -112,13 +112,26 @@ void main() {
   g = g * (uPatchWarp + (1.0 - uPatchWarp) * abs(g));
   float lat = clamp(uPatch.x + g.y * uPatch.z, -1.5, 1.5);
   float lon = uPatch.y + g.x * uPatch.w;
-  vec3 dir = latLonDir(lat, lon);
+  // Renormalised: GPU sin/cos are approximate (on SwiftShader |dir| was off by ~2e-5, a sea surface ~140 m too high
+  // that hid ship hulls up close).
+  vec3 dir = normalize(latLonDir(lat, lon));
   vec2 tuv = vec2(lon / TAU + 0.5, lat / PI + 0.5);
 #else
   vec3 dir = normalize(position);
   vec2 tuv = uv;
 #endif
-  float hg = textureLod(uRelief, vec2(tuv.x, 1.0 - tuv.y), 0.0).a;
+  // Manual bilinear on texel fetches (texel centres at +0.5, x wraps), exactly what globe.meshRadiusAt computes on the
+  // CPU for ships and markers. A filtered vertex fetch is not guaranteed to be exact (SwiftShader returned heights
+  // ~140 m off near Ibiza, which drew the sea over ship hulls at close zoom).
+  ivec2 rsz = textureSize(uRelief, 0);
+  vec2 rf = vec2(tuv.x, 1.0 - tuv.y) * vec2(rsz) - 0.5;
+  vec2 rt = fract(rf);
+  ivec2 r0 = ivec2(floor(rf));
+  int rx0 = r0.x - rsz.x * int(floor(float(r0.x) / float(rsz.x)));
+  int rx1 = rx0 + 1 >= rsz.x ? 0 : rx0 + 1;
+  int ry0 = clamp(r0.y, 0, rsz.y - 1), ry1 = clamp(r0.y + 1, 0, rsz.y - 1);
+  float hg = mix(mix(texelFetch(uRelief, ivec2(rx0, ry0), 0).a, texelFetch(uRelief, ivec2(rx1, ry0), 0).a, rt.x),
+                 mix(texelFetch(uRelief, ivec2(rx0, ry1), 0).a, texelFetch(uRelief, ivec2(rx1, ry1), 0).a, rt.x), rt.y);
   float lift = 0.0;
 #ifdef PATCH
   // Where the patch overlaps the sphere (its rim, outside the sphere's cut at 0.93 of its extent, hundreds of km from

@@ -114,7 +114,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
     type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
     magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter, generateMipmaps: false,
   } as const;
-  let sceneRT = new THREE.WebGLRenderTarget(1, 1, { ...hdrOpts, depthBuffer: true, samples: cfg.aa === 'msaa4' ? 4 : 0 });
+  let sceneRT = new THREE.WebGLRenderTarget(1, 1, { ...hdrOpts, depthBuffer: true, stencilBuffer: true, samples: cfg.aa === 'msaa4' ? 4 : 0 });
   const bloomRTs: THREE.WebGLRenderTarget[] = [];
   for (let i = 0; i < 6; i++) bloomRTs.push(new THREE.WebGLRenderTarget(1, 1, hdrOpts));
   const ldrRT = new THREE.WebGLRenderTarget(1, 1, {
@@ -207,7 +207,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
     const samples = next.aa === 'msaa4' ? 4 : 0;
     if (samples !== sceneRT.samples) {
       sceneRT.dispose();
-      sceneRT = new THREE.WebGLRenderTarget(1, 1, { ...hdrOpts, depthBuffer: true, samples });
+      sceneRT = new THREE.WebGLRenderTarget(1, 1, { ...hdrOpts, depthBuffer: true, stencilBuffer: true, samples });
       compUniforms.tScene.value = sceneRT.texture;
     }
     cfg = next;

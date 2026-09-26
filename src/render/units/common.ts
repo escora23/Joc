@@ -157,3 +157,6 @@ export function airHeightKm(type: UnitType, alt: number, sizeKm: number, rangeKm
       return 0;
   }
 }
+
+/** Stencil value written by drawn 3D models; route lines (render/fx/trails.ts) are not drawn over them. */
+export const MODEL_STENCIL = 1;

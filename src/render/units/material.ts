@@ -10,7 +10,7 @@
 // Outputs linear HDR (post does tone mapping), ends with the tonemapping/colorspace chunks (ARCHITECTURE §5.4).
 
 import * as THREE from 'three';
-import { sharedUniforms } from './common';
+import { MODEL_STENCIL, sharedUniforms } from './common';
 
 export interface ModelMaterialOpts {
   anchored?: boolean;
@@ -221,6 +221,13 @@ export function createModelMaterial(o: ModelMaterialOpts = {}): THREE.ShaderMate
     depthWrite: !o.ghost,
     blending: o.ghost ? THREE.AdditiveBlending : THREE.NormalBlending,
   });
+  if (!o.ghost) {
+    // Drawn model pixels mark the stencil; route lines (drawn later, without depth test) leave them alone.
+    m.stencilWrite = true;
+    m.stencilRef = MODEL_STENCIL;
+    m.stencilFunc = THREE.AlwaysStencilFunc;
+    m.stencilZPass = THREE.ReplaceStencilOp;
+  }
   return m;
 }
 
