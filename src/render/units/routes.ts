@@ -179,6 +179,21 @@ export function nearestSegment(path: ArrayLike<number>, x: number, y: number, fr
   return best;
 }
 
+/** A ship move longer than this that its path does not explain restarts its line instead of drawing a chord (km). */
+const JUMP_KM = 150;
+
+/** Distance in tiles from (x, y) to the path segment i (path[i] -> path[i + 1]), wrap-aware. */
+export function segmentDist(path: ArrayLike<number>, i: number, x: number, y: number): number {
+  if (path.length < 2) return Infinity;
+  i = Math.min(Math.max(0, i), path.length - 2);
+  const ax = tcx(path[i]), ay = tcy(path[i]);
+  const dx = wrapDX(ax, tcx(path[i + 1])), dy = tcy(path[i + 1]) - ay;
+  const px = wrapDX(ax, x), py = y - ay;
+  const L = dx * dx + dy * dy;
+  const t = L > 1e-9 ? Math.min(1, Math.max(0, (px * dx + py * dy) / L)) : 0;
+  return Math.hypot(dx * t - px, dy * t - py);
+}
+
 /** Ending line: held, then faded on the route clock, then killed. */
 interface Ending {
   trail: Trail;
@@ -297,7 +312,9 @@ export class RouteManager {
   private startTrail(env: RouteEnv, r: Route, u: UnitView, airFromOrigin: boolean): void {
     const ship = r.kind !== 'air';
     let n: number;
-    const path = ship ? env.pathOf(u.id) ?? null : null;
+    let path = ship ? env.pathOf(u.id) ?? null : null;
+    // A path that does not pass the ship is a stale plan (an earlier leg): not drawn from.
+    if (path && (path.length < 2 || segmentDist(path, nearestSegment(path, u.x, u.y), u.x, u.y) > 2)) path = null;
     if (ship && path && path.length >= 2) {
       let km = 0;
       for (let i = 1; i < path.length; i++) km += tileDistKm(tcx(path[i - 1]), tcy(path[i - 1]), tcx(path[i]), tcy(path[i]));
@@ -414,8 +431,10 @@ export class RouteManager {
       if (ship && path && path.length >= 2) {
         if (path !== r.path) {
           // A new plan (the next warship leg, a retarget): the line keeps what was sailed and follows the new path.
+          // The same plan can also arrive again as a new array (a full resync): the line resumes from where its last
+          // point lies on the new path, never from the path's start (that drew a chord back to the port).
           r.path = path;
-          r.pathK = 0;
+          r.pathK = nearestSegment(path, r.lastX, r.lastY);
         }
         // A jump longer than two line segments (a fast-forward, a stalled tab, a burst of updates): follow the
         // waypoints sailed meanwhile instead of a chord that could cross land.
@@ -425,20 +444,21 @@ export class RouteManager {
         if (tileDistKm(r.lastX, r.lastY, u.x, u.y) > r.segKm) {
           const k0 = r.pathK;
           const k = nearestSegment(path, u.x, u.y, k0);
-          const n = this.alongPath(env, path, r.lastX, r.lastY, k0 + 1, k, u.x, u.y, r.segKm, true, 240);
-          for (let i = 1; i < n - 1; i++) {
-            env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
-            if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
-          }
-          r.pathK = Math.max(k0, k);
+          // Both ends must lie on the sim's path (a stale plan from an earlier leg does not explain the move).
+          if (segmentDist(path, k, u.x, u.y) <= 2 && segmentDist(path, Math.min(k0, path.length - 2), r.lastX, r.lastY) <= 2) {
+            const n = k > k0 ? this.alongPath(env, path, r.lastX, r.lastY, k0 + 1, k, u.x, u.y, r.segKm, true, 240)
+              : this.alongPath(env, path, r.lastX, r.lastY, 0, -1, u.x, u.y, r.segKm, true, 240);
+            for (let i = 1; i < n - 1; i++) {
+              env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
+              if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
+            }
+            r.pathK = Math.max(k0, k);
+          } else if (tileDistKm(r.lastX, r.lastY, u.x, u.y) > JUMP_KM) this.restartTrail(env, r, u);
         }
-      } else if (ship && tileDistKm(r.lastX, r.lastY, u.x, u.y) > r.segKm) {
-        // No sim path (a warship between legs): the same grid-line subdivision from the last point.
-        const n = this.alongPath(env, [], r.lastX, r.lastY, 0, -1, u.x, u.y, r.segKm, true, 240);
-        for (let i = 1; i < n - 1; i++) {
-          env.fx.trails.push(r.trail, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
-          if (r.alert) env.fx.trails.push(r.alert, pathBuf[i * 3], pathBuf[i * 3 + 1], pathBuf[i * 3 + 2]);
-        }
+      } else if (ship && tileDistKm(r.lastX, r.lastY, u.x, u.y) > JUMP_KM) {
+        // No sim path (a warship between legs) and a jump nothing explains: a straight line could cross land, so the
+        // line starts again from here rather than guess.
+        this.restartTrail(env, r, u);
       }
       // The line ends at the stern of the drawn model (lines draw above models).
       if (clear > 0) {
@@ -544,6 +564,25 @@ export class RouteManager {
     env.fx.trails.kill(r.plan);
     r.trail = r.alert = r.plan = null;
     r.path = null;
+  }
+
+  /** Drop a ship's line and start it again (from its departure along the sim's path when it has one, else here). */
+  private restartTrail(env: RouteEnv, r: Route, u: UnitView): void {
+    env.fx.trails.kill(r.trail);
+    env.fx.trails.kill(r.alert);
+    r.trail = r.alert = null;
+    r.path = null;
+    const path = env.pathOf(u.id);
+    // A path that does not pass the ship is stale: start from the ship alone.
+    if (path && path.length >= 2 && segmentDist(path, nearestSegment(path, u.x, u.y), u.x, u.y) <= 2) this.startTrail(env, r, u, false);
+    else {
+      this.point(env, u.x, u.y, true, V);
+      r.trail = env.fx.trails.start(this.styleKey(r.kind), V.x, V.y, V.z, env.ownerColor(r.owner));
+      r.trail.minSegKm = r.segKm;
+      r.startedAt = env.now;
+      r.lastX = u.x;
+      r.lastY = u.y;
+    }
   }
 
   begin(): void {

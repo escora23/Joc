@@ -27,7 +27,7 @@ const COLS = ATLAS / CELL;
 export const G = {
   ARMOR: 0, WARSHIP: 1, FIGHTER: 2, BOMBER: 3, DRONE: 4, TRANSPORT: 5, TRADE: 6, CRUISE: 7, NUKE: 8, TRAIN: 9,
   CITY: 10, PORT: 11, FACTORY: 12, DEFENSE: 13, SAM: 14, SILO: 15, AIRBASE: 16, ARMYBASE: 17, YARD: 18, RADAR: 19,
-  DIGIT0: 20, PLUS: 30, SHELL: 31, H: 32, D: 33, LT: 34,
+  DIGIT0: 20, PLUS: 30, SHELL: 31, H: 32, D: 33, LT: 34, HOURGLASS: 35,
 } as const;
 
 /** Glyph cell of a text character ('' / unknown = -1): digits, 'h', 'd', '<', '+'. */
@@ -37,6 +37,7 @@ export function textGlyph(ch: string): number {
   if (ch === 'd') return G.D;
   if (ch === '<') return G.LT;
   if (ch === '+') return G.PLUS;
+  if (ch === '⧗') return G.HOURGLASS;
   return -1;
 }
 
@@ -367,6 +368,14 @@ function drawAtlas(): HTMLCanvasElement {
       g.fillText(ch, 32, 35);
     });
   }
+  // v2 (W4): the hourglass badge of a structure producing or building (DESIGN_V2 §10.7).
+  cell(G.HOURGLASS, (g) => {
+    g.beginPath();
+    g.moveTo(16, 10); g.lineTo(48, 10); g.lineTo(34, 32); g.lineTo(48, 54); g.lineTo(16, 54); g.lineTo(30, 32); g.closePath();
+    g.fill();
+    g.fillRect(12, 6, 40, 5);
+    g.fillRect(12, 53, 40, 5);
+  });
   return c;
 }
 
@@ -932,6 +941,11 @@ export class IconLayer {
       cells[n++] = c;
     }
     if (n) this.extras.push(n, x, y, 1, rgb, cells[0], cells[1], cells[2], cells[3]);
+  }
+
+  /** An hourglass badge (a structure building, upgrading or producing units), amber on a dark pill. */
+  addHourglass(x: number, y: number): void {
+    this.extras.push(1, x, y, 1, 0xffc24a, G.HOURGLASS, -1, -1, -1);
   }
 
   private drawExtras(): void {

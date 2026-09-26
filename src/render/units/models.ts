@@ -42,9 +42,14 @@ export const UNIT_MODELS = [
 ] as const;
 export type UnitModelKey = (typeof UNIT_MODELS)[number];
 
+/** Structure types whose model changes with the level (1 / 2 / 3, §6.5); the key of level L > 1 is `${key}${L}`. */
+export const LEVELLED = ['port', 'factory', 'defensePost', 'samSite', 'silo', 'airbase', 'armyBase', 'navalYard', 'radar'] as const;
+export type LevelledKey = (typeof LEVELLED)[number];
 export const STRUCT_MODELS = [
   'cityBase', 'port', 'factory', 'defensePost', 'samSite', 'silo', 'airbase', 'armyBase', 'navalYard', 'radar',
-  'radarDish', 'beacon',
+  'port2', 'factory2', 'defensePost2', 'samSite2', 'silo2', 'airbase2', 'armyBase2', 'navalYard2', 'radar2',
+  'port3', 'factory3', 'defensePost3', 'samSite3', 'silo3', 'airbase3', 'armyBase3', 'navalYard3', 'radar3',
+  'radarDish', 'beacon', 'pad',
 ] as const;
 export type StructModelKey = (typeof STRUCT_MODELS)[number];
 
@@ -342,24 +347,31 @@ function cityBase(): THREE.BufferGeometry {
   return m.build();
 }
 
-function port(): THREE.BufferGeometry {
+// Structures by level (DESIGN_V2 §6.5): every level adds visible capacity, so an upgrade shows on the model.
+
+function port(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  // Land apron (z > -0.1) and piers stretching over the water (z < -0.1).
+  // Land apron (z > -0.1) and piers stretching over the water (z < -0.1): 1 / 2 / 3 berths with their cranes.
   m.block(1.0, 0.1, 0.6, 0, -0.08, 0.2, C.concrete);
-  for (const x of [-0.32, 0.0, 0.32]) m.block(0.1, 0.06, 0.45, x, -0.042, -0.33, C.concreteDark);
-  // Container yard.
+  const piers = L === 1 ? [0.0] : L === 2 ? [-0.2, 0.2] : [-0.32, 0.0, 0.32];
+  for (const x of piers) m.block(0.1, 0.06, 0.45, x, -0.042, -0.33, C.concreteDark);
+  // Container yard grows with the trade it handles.
   const cols = [0xb8452f, 0x2f6fb8, 0xd0a13a, 0x3d8f4f, 0x8f8f8f, 0xa0522d];
   let k = 0;
-  for (let r = 0; r < 3; r++) for (let c = 0; c < 6; c++) {
-    const h = 1 + ((r * 5 + c * 3) % 3);
-    m.block(0.07, 0.028 * h, 0.05, -0.36 + c * 0.1, 0.02, 0.3 + r * 0.07, cols[k++ % cols.length]);
+  for (let r = 0; r < L + 1; r++) for (let c = 0; c < 2 + 2 * L; c++) {
+    const hgt = 1 + ((r * 5 + c * 3) % 3);
+    m.block(0.07, 0.028 * hgt, 0.05, -0.42 + c * 0.1, 0.02, 0.3 + r * 0.06, cols[k++ % cols.length]);
   }
   // Warehouses with nation roofs.
-  m.block(0.28, 0.07, 0.12, 0.3, 0.02, 0.05, C.offWhite);
-  m.prism(0.28, 0.03, 0.12, 0.3, 0.09, 0.05, C.steel, { team: 0.8 });
-  // Gantry cranes on the quay (nation colored).
-  for (const x of [-0.18, 0.16]) {
-    m.push().translate(x, 0.02, -0.08);
+  const sheds: [number, number][] = [[0.34, 0.05], [0.34, 0.2], [-0.34, 0.05]];
+  for (let i = 0; i < L; i++) {
+    const [x, z] = sheds[i];
+    m.block(0.2, 0.07, 0.12, x, 0.02, z, C.offWhite);
+    m.prism(0.2, 0.03, 0.12, x, 0.09, z, C.steel, { team: 0.8 });
+  }
+  // One gantry crane per berth (nation colored).
+  for (const x of piers) {
+    m.push().translate(x + 0.08, 0.02, -0.08);
     m.block(0.018, 0.2, 0.018, -0.05, 0, -0.04, C.steel, { team: 0.9 });
     m.block(0.018, 0.2, 0.018, 0.05, 0, -0.04, C.steel, { team: 0.9 });
     m.block(0.018, 0.2, 0.018, -0.05, 0, 0.04, C.steel, { team: 0.9 });
@@ -369,79 +381,115 @@ function port(): THREE.BufferGeometry {
     m.block(0.04, 0.03, 0.04, 0, 0.23, 0.02, C.offWhite);
     m.sphere(0.008, 0, 0.26, -0.3, 0xff3322, 4, 3, { heat: 0.4 });
     m.pop();
+    // A cargo ship moored at each berth.
+    m.push().translate(x - 0.09, 0, -0.38).scale(0.1, 0.1, 0.1);
+    m.block(0.8, 0.5, 3.2, 0, -0.3, 0, C.black);
+    m.block(0.6, 0.35, 0.5, 0, 0.2, 1.2, C.white);
+    m.pop();
   }
-  // Moored cargo ship alongside the middle pier.
-  m.push().translate(0.16, 0, -0.38).scale(0.1, 0.1, 0.1);
-  m.block(0.8, 0.5, 3.2, 0, -0.3, 0, C.black);
-  m.block(0.6, 0.35, 0.5, 0, 0.2, 1.2, C.white);
-  m.pop();
-  // Quay lights.
   m.block(1.0, 0.004, 0.02, 0, 0.02, -0.09, C.concrete, { glow: 1.0 });
   return m.build();
 }
 
-function factory(): THREE.BufferGeometry {
+function factory(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
   m.block(1.0, 0.1, 1.0, 0, -0.088, 0, C.concreteDark);
-  // Main production hall with a saw-tooth roof.
-  m.block(0.56, 0.12, 0.44, -0.12, 0.012, 0.1, C.brick);
-  for (let i = 0; i < 5; i++) {
-    m.push().translate(-0.12, 0.132, -0.08 + i * 0.09).prism(0.56, 0.05, 0.09, 0, 0, 0, C.steel, { team: 0.7 }).pop();
+  // 1 / 2 / 3 production halls with saw-tooth roofs.
+  const halls: [number, number][] = [[-0.12, 0.12], [-0.12, -0.2], [0.3, -0.25]];
+  for (let hIdx = 0; hIdx < L; hIdx++) {
+    const [hx, hz] = halls[hIdx];
+    const w = hIdx === 2 ? 0.3 : 0.56, d = hIdx === 2 ? 0.34 : 0.26;
+    m.block(w, 0.12, d, hx, 0.012, hz, C.brick);
+    const n = Math.max(2, Math.round(d / 0.09));
+    for (let i = 0; i < n; i++) {
+      m.push().translate(hx, 0.132, hz - d / 2 + 0.045 + i * (d - 0.09) / Math.max(1, n - 1)).prism(w, 0.05, 0.09, 0, 0, 0, C.steel, { team: 0.7 }).pop();
+    }
+    m.block(w + 0.01, 0.02, d + 0.01, hx, 0.08, hz, C.glass, { glow: 0.9 });
   }
-  m.block(0.57, 0.02, 0.45, -0.12, 0.08, 0.1, C.glass, { glow: 0.9 });
-  // Office block.
+  // Office block and storage tanks.
   m.block(0.24, 0.16, 0.16, 0.3, 0.012, 0.3, C.offWhite);
   m.block(0.245, 0.02, 0.165, 0.3, 0.12, 0.3, C.glass, { glow: 1 });
-  // Storage tanks.
-  m.cyl(0.07, 0.07, 0.1, 0.3, 0.012, -0.05, C.white, 12);
-  m.cyl(0.07, 0.07, 0.1, 0.3, 0.012, -0.22, C.white, 12);
-  m.dome(0.07, 0.3, 0.112, -0.05, C.white);
-  m.dome(0.07, 0.3, 0.112, -0.22, C.white);
-  // Smokestacks (red/white bands, aircraft warning lights).
-  for (const [x, z] of [[-0.34, -0.3], [-0.2, -0.3], [-0.06, -0.3]]) {
-    m.cyl(0.03, 0.04, 0.36, x, 0.012, z, C.offWhite, 10);
-    m.cyl(0.031, 0.034, 0.04, x, 0.26, z, C.red, 10);
-    m.cyl(0.031, 0.031, 0.03, x, 0.34, z, C.red, 10);
-    m.sphere(0.012, x, 0.38, z, 0xff2211, 4, 3, { heat: 0.6 });
+  for (let i = 0; i < L; i++) {
+    m.cyl(0.06, 0.06, 0.1, 0.38 - i * 0.14, 0.012, 0.05, C.white, 12);
+    m.dome(0.06, 0.38 - i * 0.14, 0.112, 0.05, C.white);
   }
-  // Pipes.
-  m.box(0.4, 0.015, 0.015, 0.02, 0.1, -0.16, C.steel);
+  // Smokestacks: two per level (red/white bands, warning lights).
+  for (let i = 0; i < 2 * L; i++) {
+    const x = -0.42 + i * 0.08, z = 0.38;
+    const hgt = 0.3 + 0.04 * (i % 2);
+    m.cyl(0.028, 0.038, hgt, x, 0.012, z, C.offWhite, 10);
+    m.cyl(0.029, 0.032, 0.04, x, hgt - 0.1, z, C.red, 10);
+    m.cyl(0.029, 0.029, 0.03, x, hgt - 0.02, z, C.red, 10);
+    m.sphere(0.012, x, hgt + 0.02, z, 0xff2211, 4, 3, { heat: 0.6 });
+  }
+  // A rail spur with wagons (the freight the factory ships).
+  m.block(0.9, 0.006, 0.03, 0, 0.01, 0.47, C.asphalt);
+  for (let i = 0; i < 2 * L; i++) m.block(0.08, 0.04, 0.025, -0.36 + i * 0.1, 0.016, 0.47, i % 2 ? C.rust : C.hullDark, { team: 0.3 });
   return m.build();
 }
 
-function defensePost(): THREE.BufferGeometry {
+function defensePost(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  // Earthwork ring and hexagonal concrete bunker with gun slits.
+  // L1: earthwork ring, bunker and trenches; L2: + artillery pits; L3: a concrete star fort.
   const berm = new THREE.TorusGeometry(0.38, 0.06, 4, 18);
   berm.rotateX(Math.PI / 2);
   berm.scale(1, 0.6, 1);
   m.add(berm, C.sand, { flat: true });
-  m.cyl(0.24, 0.28, 0.12, 0, 0, 0, C.concrete, 6, { flat: true });
-  m.cyl(0.2, 0.24, 0.05, 0, 0.12, 0, C.concreteDark, 6, { team: 0.7, flat: true });
-  m.cyl(0.285, 0.285, 0.02, 0, 0.06, 0, C.black, 6);
+  // Zig-zag trench lines outside the berm.
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    m.push().translate(Math.cos(a) * 0.46, 0.002, Math.sin(a) * 0.46).rotateY(-a + (i % 2 ? 0.5 : -0.5));
+    m.block(0.13, 0.012, 0.018, 0, 0, 0, C.oliveDark, { flat: true });
+    m.pop();
+  }
+  if (L >= 3) {
+    // Concrete fort: pentagonal walls with bastions.
+    m.cyl(0.33, 0.36, 0.1, 0, 0, 0, C.concreteDark, 5, { flat: true });
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      m.cyl(0.07, 0.08, 0.12, Math.cos(a) * 0.35, 0, Math.sin(a) * 0.35, C.concrete, 4, { flat: true });
+    }
+  }
+  m.cyl(0.24, 0.28, 0.12, 0, L >= 3 ? 0.1 : 0, 0, C.concrete, 6, { flat: true });
+  const top = L >= 3 ? 0.22 : 0.12;
+  m.cyl(0.2, 0.24, 0.05, 0, top, 0, C.concreteDark, 6, { team: 0.7, flat: true });
+  m.cyl(0.285, 0.285, 0.02, 0, top - 0.06, 0, C.black, 6);
   // Twin guns.
-  m.cylZ(0.015, 0.018, 0.3, 0.05, 0.19, -0.2, C.hullDark, 6);
-  m.cylZ(0.015, 0.018, 0.3, -0.05, 0.19, -0.2, C.hullDark, 6);
-  m.block(0.16, 0.05, 0.14, 0, 0.17, -0.02, C.oliveDark);
+  m.cylZ(0.015, 0.018, 0.3, 0.05, top + 0.07, -0.2, C.hullDark, 6);
+  m.cylZ(0.015, 0.018, 0.3, -0.05, top + 0.07, -0.2, C.hullDark, 6);
+  m.block(0.16, 0.05, 0.14, 0, top + 0.05, -0.02, C.oliveDark);
   // Flag pole and nation flag.
   m.cyl(0.006, 0.006, 0.4, 0.2, 0.0, 0.2, C.steel, 4);
   m.box(0.004, 0.08, 0.13, 0.2, 0.35, 0.265, C.white, { team: 1 });
-  // Sandbag nests.
+  // Sandbag nests, and artillery pits from level 2 (a howitzer in each).
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + 0.4;
     m.cyl(0.05, 0.06, 0.04, Math.cos(a) * 0.4, 0.02, Math.sin(a) * 0.4, C.sand, 7, { flat: true });
   }
-  m.sphere(0.012, 0, 0.2, 0, 0xffcc66, 4, 3, { glow: 1 });
+  if (L >= 2) {
+    for (let i = 0; i < 3 * (L - 1); i++) {
+      const a = (i / (3 * (L - 1))) * Math.PI * 2 + 0.9;
+      const x = Math.cos(a) * 0.2, z = Math.sin(a) * 0.2 + 0.0;
+      m.push().translate(x * 2.1, 0.005, z * 2.1).rotateY(-a);
+      m.cyl(0.055, 0.065, 0.03, 0, 0, 0, C.sand, 8, { flat: true });
+      m.block(0.04, 0.03, 0.05, 0, 0.03, 0, C.olive, { team: 0.6 });
+      m.cylZ(0.008, 0.01, 0.1, 0, 0.05, -0.06, C.hullDark, 5);
+      m.pop();
+    }
+  }
+  m.sphere(0.012, 0, top + 0.08, 0, 0xffcc66, 4, 3, { glow: 1 });
   return m.build();
 }
 
-function samSite(): THREE.BufferGeometry {
+function samSite(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
   m.cyl(0.46, 0.5, 0.1, 0, -0.09, 0, C.sand, 20);
-  // Four launcher trucks with raised canister packs in revetments.
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-    m.push().translate(Math.cos(a) * 0.3, 0.01, Math.sin(a) * 0.3).rotateY(-a + Math.PI / 2);
+  // 2 / 4 / 6 launcher trucks with raised canister packs in revetments around the radar truck.
+  const n = 2 * L;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.PI / 4;
+    const r = n > 4 ? 0.34 : 0.3;
+    m.push().translate(Math.cos(a) * r, 0.01, Math.sin(a) * r).rotateY(-a + Math.PI / 2);
     m.block(0.2, 0.03, 0.03, 0, 0, 0.09, C.sand, { flat: true });
     m.block(0.1, 0.05, 0.2, 0, 0, 0, C.olive);
     m.block(0.09, 0.04, 0.05, 0, 0.05, -0.08, C.oliveDark);
@@ -450,40 +498,40 @@ function samSite(): THREE.BufferGeometry {
     m.pop();
     m.pop();
   }
-  // Central engagement radar (dome + panel).
+  // Central engagement radar truck (dome + panel); a second panel from level 3.
   m.cyl(0.07, 0.08, 0.06, 0, 0.01, 0, C.offWhite, 10);
   m.dome(0.07, 0, 0.07, 0, C.white, 12, 5);
   m.push().translate(0, 0.16, 0.02).rotateX(-0.3).box(0.14, 0.12, 0.015, 0, 0, 0, C.hullDark, { team: 0.4 }).pop();
+  if (L >= 3) m.push().translate(0.12, 0.13, -0.12).rotateY(2.2).rotateX(-0.3).box(0.12, 0.1, 0.015, 0, 0, 0, C.hullDark, { team: 0.4 }).pop();
   m.sphere(0.01, 0, 0.23, 0, 0xff3322, 4, 3, { heat: 0.6 });
   return m.build();
 }
 
-function silo(): THREE.BufferGeometry {
+function silo(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  // Hardened pad with three silo doors, one open with the missile nose showing.
+  // Hardened pad with 1 / 2 / 3 silo doors (the first open, a missile nose showing).
   m.block(1.0, 0.1, 1.0, 0, -0.08, 0, C.concreteDark);
   m.block(0.9, 0.012, 0.9, 0, 0.02, 0, C.concrete);
-  const pos: [number, number][] = [[-0.25, -0.2], [0.22, -0.2], [0, 0.22]];
+  const pos: [number, number][] = [[-0.25, -0.2], [0.22, -0.2], [0, 0.22]].slice(0, L) as [number, number][];
   pos.forEach(([x, z], i) => {
     m.cyl(0.13, 0.15, 0.04, x, 0.02, z, C.concreteDark, 16);
     if (i === 0) {
       m.cyl(0.1, 0.1, 0.005, x, 0.06, z, C.black, 16);
       m.cyl(0.0, 0.06, 0.12, x, 0.02, z, C.white, 12);
       m.cyl(0.061, 0.061, 0.02, x, 0.02, z, C.white, 12, { team: 1 });
-      // Open door leaning aside.
       m.push().translate(x + 0.18, 0.06, z).rotateZ(0.9).cyl(0.11, 0.11, 0.02, 0, 0, 0, C.concrete, 16).pop();
     } else {
       m.cyl(0.11, 0.12, 0.03, x, 0.06, z, C.steel, 16, { team: 0.55 });
-      // Hazard stripes ring.
       m.cyl(0.125, 0.125, 0.006, x, 0.06, z, C.yellow, 16);
     }
   });
-  // Control bunker and antenna.
+  // Control bunker and antenna (a second antenna mast per level).
   m.block(0.2, 0.08, 0.14, 0.3, 0.02, 0.3, C.concrete);
   m.block(0.21, 0.015, 0.145, 0.3, 0.07, 0.3, C.glass, { glow: 0.8 });
-  m.cyl(0.005, 0.008, 0.3, 0.38, 0.1, 0.34, C.steel, 4);
-  m.sphere(0.012, 0.38, 0.4, 0.34, 0xff2211, 4, 3, { heat: 0.8 });
-  // Fence posts.
+  for (let i = 0; i < L; i++) {
+    m.cyl(0.005, 0.008, 0.3, 0.38 - i * 0.05, 0.1, 0.34, C.steel, 4);
+    m.sphere(0.012, 0.38 - i * 0.05, 0.4, 0.34, 0xff2211, 4, 3, { heat: 0.8 });
+  }
   for (let i = 0; i < 16; i++) {
     const t = i / 16, side = Math.floor(t * 4), f = (t * 4) % 1;
     const x = side === 0 ? -0.48 + f * 0.96 : side === 1 ? 0.48 : side === 2 ? 0.48 - f * 0.96 : -0.48;
@@ -493,49 +541,55 @@ function silo(): THREE.BufferGeometry {
   return m.build();
 }
 
-function airbase(): THREE.BufferGeometry {
+function airbase(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  m.block(1.0, 0.1, 0.5, 0, -0.094, 0.05, C.grass);
-  m.block(1.0, 0.1, 0.16, 0, -0.09, -0.12, C.concreteDark);
-  // Runway with markings and edge lights.
-  m.block(1.0, 0.01, 0.12, 0, 0.004, -0.12, C.asphalt);
-  for (let i = 0; i < 10; i++) m.plate(0.05, 0.008, -0.42 + i * 0.094, 0.0145, -0.12, C.white);
-  m.plate(0.03, 0.09, -0.47, 0.0145, -0.12, C.white);
-  m.plate(0.03, 0.09, 0.47, 0.0145, -0.12, C.white);
-  m.plate(1.0, 0.006, 0, 0.0146, -0.178, C.white, { glow: 1.2 });
-  m.plate(1.0, 0.006, 0, 0.0146, -0.062, C.white, { glow: 1.2 });
-  // Taxiway & apron.
-  m.block(0.8, 0.008, 0.04, 0, 0.004, 0.0, C.asphalt);
-  m.block(0.5, 0.008, 0.16, 0.1, 0.004, 0.14, C.concreteDark);
-  // Hangars (half-cylinders), nation-colored roofs.
-  for (const x of [-0.08, 0.1, 0.28]) {
-    const h = new THREE.CylinderGeometry(0.06, 0.06, 0.12, 10, 1, false, 0, Math.PI);
-    h.rotateZ(Math.PI / 2);
-    h.rotateY(Math.PI / 2);
-    h.translate(x, 0.01, 0.26);
-    m.add(h, C.steel, { team: 0.6 });
-  }
-  // Control tower.
-  m.cyl(0.025, 0.03, 0.2, -0.36, 0.006, 0.2, C.offWhite, 8);
-  m.cyl(0.05, 0.035, 0.04, -0.36, 0.2, 0.2, C.glass, 8, { glow: 1.2 });
-  m.cyl(0.052, 0.052, 0.01, -0.36, 0.24, 0.2, C.offWhite, 8);
-  m.sphere(0.01, -0.36, 0.26, 0.2, 0xff3322, 4, 3, { heat: 0.8 });
-  // Parked jets on the apron.
-  for (let i = 0; i < 4; i++) {
-    const x = -0.05 + i * 0.1;
-    m.push().translate(x, 0.014, 0.13).scale(0.08, 0.08, 0.08);
-    m.box(0.12, 0.08, 1.0, 0, 0.05, 0, C.steel);
-    m.wing([[0.05, -0.1], [0.45, 0.25], [0.45, 0.32], [0.05, 0.3]], 0.03, 0.03, C.steel, { team: 0.8 });
-    m.wing([[-0.05, -0.1], [-0.05, 0.3], [-0.45, 0.32], [-0.45, 0.25]], 0.03, 0.03, C.steel, { team: 0.8 });
+  m.block(1.0, 0.1, 1.0, 0, -0.094, 0, C.grass);
+  // 1 / 2 / 3 runways (the third crosses the others), with markings and edge lights.
+  const runway = (z: number, rot: number) => {
+    m.push().rotateY(rot).translate(0, 0, z);
+    m.block(1.0, 0.1, 0.16, 0, -0.09, 0, C.concreteDark);
+    m.block(1.0, 0.01, 0.12, 0, 0.004, 0, C.asphalt);
+    for (let i = 0; i < 10; i++) m.plate(0.05, 0.008, -0.42 + i * 0.094, 0.0145, 0, C.white);
+    m.plate(0.03, 0.09, -0.47, 0.0145, 0, C.white);
+    m.plate(0.03, 0.09, 0.47, 0.0145, 0, C.white);
+    m.plate(1.0, 0.006, 0, 0.0146, -0.058, C.white, { glow: 1.2 });
+    m.plate(1.0, 0.006, 0, 0.0146, 0.058, C.white, { glow: 1.2 });
+    m.pop();
+  };
+  runway(-0.32, 0);
+  if (L >= 2) runway(-0.08, 0);
+  if (L >= 3) {
+    m.push().scale(0.8, 1, 0.8);
+    runway(0.0, 0.9);
     m.pop();
   }
+  // Taxiway and apron.
+  m.block(0.8, 0.008, 0.04, 0, 0.004, 0.08, C.asphalt);
+  m.block(0.6, 0.008, 0.18, 0.05, 0.004, 0.2, C.concreteDark);
+  // Hangar rows (half-cylinders, nation-colored roofs): three per level.
+  for (let r = 0; r < L; r++) for (const x of [-0.08, 0.1, 0.28]) {
+    const hg = new THREE.CylinderGeometry(0.06, 0.06, 0.12, 10, 1, false, 0, Math.PI);
+    hg.rotateZ(Math.PI / 2);
+    hg.rotateY(Math.PI / 2);
+    hg.translate(x - (r === 2 ? 0.2 : 0), 0.01, 0.34 + (r === 1 ? 0.1 : 0) - (r === 2 ? 0.0 : 0));
+    m.add(hg, C.steel, { team: 0.6 });
+  }
+  // Control tower.
+  m.cyl(0.025, 0.03, 0.2, -0.38, 0.006, 0.3, C.offWhite, 8);
+  m.cyl(0.05, 0.035, 0.04, -0.38, 0.2, 0.3, C.glass, 8, { glow: 1.2 });
+  m.cyl(0.052, 0.052, 0.01, -0.38, 0.24, 0.3, C.offWhite, 8);
+  m.sphere(0.01, -0.38, 0.26, 0.3, 0xff3322, 4, 3, { heat: 0.8 });
   // Fuel tanks.
-  m.cyl(0.035, 0.035, 0.05, 0.42, 0.006, 0.24, C.white, 10);
-  m.cyl(0.035, 0.035, 0.05, 0.42, 0.006, 0.14, C.white, 10);
+  for (let i = 0; i < L + 1; i++) m.cyl(0.035, 0.035, 0.05, 0.44, 0.006, 0.44 - i * 0.09, C.white, 10);
   return m.build();
 }
 
-function armyBase(): THREE.BufferGeometry {
+/** Apron slots (model units, y = apron top) where docked aircraft are parked, 9 = the level-3 capacity. */
+export const AIRBASE_SLOTS: readonly [number, number][] = [
+  [-0.18, 0.2], [-0.06, 0.2], [0.06, 0.2], [0.18, 0.2], [0.3, 0.2], [-0.18, 0.13], [-0.06, 0.13], [0.06, 0.13], [0.18, 0.13],
+];
+
+function armyBase(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
   m.block(1.0, 0.1, 1.0, 0, -0.09, 0, C.sand);
   // Perimeter wall with corner towers.
@@ -547,73 +601,95 @@ function armyBase(): THREE.BufferGeometry {
     m.block(0.06, 0.12, 0.06, x, 0.01, z, C.concreteDark);
     m.sphere(0.01, x, 0.14, z, 0xffcc66, 4, 3, { glow: 1.2 });
   }
-  // Barracks rows.
-  for (let r = 0; r < 3; r++) {
-    m.block(0.32, 0.06, 0.08, -0.22, 0.01, -0.3 + r * 0.14, C.olive);
-    m.prism(0.32, 0.03, 0.08, -0.22, 0.07, -0.3 + r * 0.14, C.oliveDark, { team: 0.7 });
-    m.block(0.325, 0.012, 0.085, -0.22, 0.035, -0.3 + r * 0.14, C.glass, { glow: 0.9 });
+  // Barracks rows: one more per level.
+  for (let r = 0; r < L + 1; r++) {
+    m.block(0.32, 0.06, 0.08, -0.22, 0.01, -0.38 + r * 0.13, C.olive);
+    m.prism(0.32, 0.03, 0.08, -0.22, 0.07, -0.38 + r * 0.13, C.oliveDark, { team: 0.7 });
+    m.block(0.325, 0.012, 0.085, -0.22, 0.035, -0.38 + r * 0.13, C.glass, { glow: 0.9 });
   }
-  // Vehicle park: rows of tanks.
-  for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {
-    m.push().translate(0.12 + c * 0.1, 0.01, -0.3 + r * 0.16).scale(0.07, 0.07, 0.07);
+  // Vehicle park: 2 / 4 / 6 tank rows (the divisions it can host).
+  for (let r = 0; r < 2 * L; r++) for (let c = 0; c < 4; c++) {
+    m.push().translate(0.12 + c * 0.1, 0.01, -0.38 + r * 0.12).scale(0.07, 0.07, 0.07);
     m.block(0.5, 0.2, 1.0, 0, 0, 0, C.olive);
     m.block(0.36, 0.14, 0.4, 0, 0.2, 0.05, C.olive, { team: 0.8 });
     m.cylZ(0.04, 0.05, 0.6, 0, 0.27, -0.4, C.oliveDark, 5);
     m.pop();
   }
-  // Helipad.
-  m.cyl(0.1, 0.1, 0.008, 0.25, 0.01, 0.28, C.asphalt, 16);
-  m.plate(0.012, 0.08, 0.22, 0.019, 0.28, C.white);
-  m.plate(0.012, 0.08, 0.28, 0.019, 0.28, C.white);
-  m.plate(0.06, 0.012, 0.25, 0.019, 0.28, C.white);
+  // Repair workshop from level 2, a second helipad at level 3.
+  if (L >= 2) {
+    m.block(0.18, 0.09, 0.12, -0.3, 0.01, 0.12, C.steel);
+    m.prism(0.18, 0.03, 0.12, -0.3, 0.1, 0.12, C.hullDark, { team: 0.6 });
+  }
+  for (let i = 0; i < (L >= 3 ? 2 : 1); i++) {
+    const hx = 0.25 - i * 0.22, hz = 0.36;
+    m.cyl(0.08, 0.08, 0.008, hx, 0.01, hz, C.asphalt, 16);
+    m.plate(0.012, 0.07, hx - 0.025, 0.019, hz, C.white);
+    m.plate(0.012, 0.07, hx + 0.025, 0.019, hz, C.white);
+    m.plate(0.05, 0.012, hx, 0.019, hz, C.white);
+  }
   // HQ with flag.
-  m.block(0.2, 0.1, 0.14, -0.22, 0.01, 0.3, C.concrete);
-  m.block(0.205, 0.015, 0.145, -0.22, 0.07, 0.3, C.glass, { glow: 1 });
-  m.cyl(0.005, 0.005, 0.3, -0.1, 0.01, 0.3, C.steel, 4);
-  m.box(0.004, 0.07, 0.12, -0.1, 0.27, 0.36, C.white, { team: 1 });
+  m.block(0.2, 0.1, 0.14, -0.3, 0.01, 0.34, C.concrete);
+  m.block(0.205, 0.015, 0.145, -0.3, 0.07, 0.34, C.glass, { glow: 1 });
+  m.cyl(0.005, 0.005, 0.3, -0.18, 0.01, 0.34, C.steel, 4);
+  m.box(0.004, 0.07, 0.12, -0.18, 0.27, 0.4, C.white, { team: 1 });
   return m.build();
 }
 
-function navalYard(): THREE.BufferGeometry {
+function navalYard(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
   m.block(1.0, 0.11, 0.55, 0, -0.08, 0.22, C.concrete);
-  // Dry dock basin opening onto the water (-Z) with a warship under construction.
-  m.block(0.26, 0.004, 0.75, 0, 0.0, -0.12, C.water);
-  m.block(0.04, 0.05, 0.75, -0.15, 0, -0.12, C.concreteDark);
-  m.block(0.04, 0.05, 0.75, 0.15, 0, -0.12, C.concreteDark);
-  m.push().translate(0, 0.005, -0.1).scale(0.62, 0.62, 0.62).rotateY(Math.PI);
-  m.hull(shipOutline(0.25, 0.28, 0.04), 0, 0.06, 0.7, C.hull);
-  m.block(0.14, 0.06, 0.2, 0, 0.06, -0.02, C.offWhite);
-  m.block(0.02, 0.1, 0.02, 0, 0.12, -0.02, C.steel);
-  m.pop();
-  // Goliath gantry crane spanning the dock (nation colored).
-  m.block(0.03, 0.34, 0.03, -0.2, 0, -0.05, C.steel, { team: 0.95 });
-  m.block(0.03, 0.34, 0.03, 0.2, 0, -0.05, C.steel, { team: 0.95 });
-  m.block(0.46, 0.05, 0.05, 0, 0.34, -0.05, C.steel, { team: 0.95 });
+  // 1 / 2 / 3 dry dock basins opening onto the water (-Z), each with a warship under construction.
+  const docks = L === 1 ? [0] : L === 2 ? [-0.18, 0.18] : [-0.32, 0, 0.32];
+  const w = L === 3 ? 0.2 : 0.26;
+  for (const dx of docks) {
+    m.block(w, 0.004, 0.75, dx, 0.0, -0.12, C.water);
+    m.block(0.03, 0.05, 0.75, dx - w / 2 - 0.015, 0, -0.12, C.concreteDark);
+    m.block(0.03, 0.05, 0.75, dx + w / 2 + 0.015, 0, -0.12, C.concreteDark);
+    m.push().translate(dx, 0.005, -0.1).scale(w * 2.4, 0.62, 0.62).rotateY(Math.PI);
+    m.hull(shipOutline(0.25, 0.28, 0.04), 0, 0.06, 0.7, C.hull);
+    m.block(0.14, 0.06, 0.2, 0, 0.06, -0.02, C.offWhite);
+    m.block(0.02, 0.1, 0.02, 0, 0.12, -0.02, C.steel);
+    m.pop();
+  }
+  // Goliath gantry crane spanning the docks (nation colored).
+  const span = docks.length === 1 ? 0.2 : docks[docks.length - 1] + w / 2 + 0.05;
+  m.block(0.03, 0.34, 0.03, -span, 0, -0.05, C.steel, { team: 0.95 });
+  m.block(0.03, 0.34, 0.03, span, 0, -0.05, C.steel, { team: 0.95 });
+  m.block(2 * span + 0.06, 0.05, 0.05, 0, 0.34, -0.05, C.steel, { team: 0.95 });
   m.block(0.06, 0.04, 0.06, 0.05, 0.3, -0.05, C.offWhite);
-  m.sphere(0.01, -0.2, 0.4, -0.05, 0xff3322, 4, 3, { heat: 0.7 });
-  m.sphere(0.01, 0.2, 0.4, -0.05, 0xff3322, 4, 3, { heat: 0.7 });
+  m.sphere(0.01, -span, 0.4, -0.05, 0xff3322, 4, 3, { heat: 0.7 });
+  m.sphere(0.01, span, 0.4, -0.05, 0xff3322, 4, 3, { heat: 0.7 });
   // Workshops.
-  m.block(0.22, 0.1, 0.18, -0.32, 0.03, 0.3, C.steel);
-  m.prism(0.22, 0.04, 0.18, -0.32, 0.13, 0.3, C.hullDark, { team: 0.6 });
-  m.block(0.22, 0.1, 0.18, 0.32, 0.03, 0.3, C.steel);
-  m.prism(0.22, 0.04, 0.18, 0.32, 0.13, 0.3, C.hullDark, { team: 0.6 });
-  m.block(0.225, 0.015, 0.185, 0.32, 0.08, 0.3, C.glass, { glow: 1 });
-  m.block(0.225, 0.015, 0.185, -0.32, 0.08, 0.3, C.glass, { glow: 1 });
+  for (const x of [-0.32, 0.32]) {
+    m.block(0.22, 0.1, 0.18, x, 0.03, 0.35, C.steel);
+    m.prism(0.22, 0.04, 0.18, x, 0.13, 0.35, C.hullDark, { team: 0.6 });
+    m.block(0.225, 0.015, 0.185, x, 0.08, 0.35, C.glass, { glow: 1 });
+  }
   return m.build();
 }
 
-function radar(): THREE.BufferGeometry {
+function radar(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
   m.block(0.8, 0.1, 0.8, 0, -0.088, 0, C.concreteDark);
-  // Operations building, lattice tower and a radome.
+  // Operations building, lattice tower (the rotating dish sits on it) and 1 / 2 / 3 radomes.
   m.block(0.3, 0.1, 0.2, -0.18, 0.012, 0.2, C.offWhite);
   m.block(0.305, 0.015, 0.205, -0.18, 0.07, 0.2, C.glass, { glow: 1 });
   m.cyl(0.06, 0.1, 0.34, 0.1, 0.012, -0.05, C.steel, 4, { flat: true });
   m.cyl(0.07, 0.07, 0.03, 0.1, 0.35, -0.05, C.offWhite, 8, { team: 0.8 });
-  m.cyl(0.1, 0.1, 0.06, -0.22, 0.012, -0.22, C.offWhite, 14);
-  m.dome(0.1, -0.22, 0.07, -0.22, C.white, 14, 6);
+  const domes: [number, number][] = [[-0.22, -0.22], [0.25, 0.22], [-0.25, 0.02]];
+  for (let i = 0; i < L; i++) {
+    const [x, z] = domes[i];
+    m.cyl(0.1, 0.1, 0.06, x, 0.012, z, C.offWhite, 14);
+    m.dome(0.1, x, 0.07, z, C.white, 14, 6);
+  }
   m.sphere(0.01, 0.1, 0.39, -0.05, 0xff2211, 4, 3, { heat: 0.7 });
+  return m.build();
+}
+
+/** Foundation pad (DESIGN_V2 §10.7): a unit block from y = -1 to 0 over the footprint, scaled per structure. */
+function pad(): THREE.BufferGeometry {
+  const m = new ModelBuilder();
+  m.block(1.0, 1.0, 1.0, 0, -1.0, 0, C.concreteDark, { flat: true });
   return m.build();
 }
 
@@ -643,16 +719,27 @@ const UNIT_BUILDERS: Record<UnitModelKey, () => THREE.BufferGeometry> = {
   transport, trade, warship, tank, fighter, bomber, drone, cruise, icbm, warhead, sam, loco, wagon,
 };
 
-const STRUCT_BUILDERS: Record<StructModelKey, () => THREE.BufferGeometry> = {
-  cityBase, port, factory, defensePost, samSite, silo, airbase, armyBase, navalYard, radar, radarDish, beacon,
+const LEVEL_BUILDERS: Record<LevelledKey, (L: number) => THREE.BufferGeometry> = {
+  port, factory, defensePost, samSite, silo, airbase, armyBase, navalYard, radar,
 };
+const STRUCT_BUILDERS: Partial<Record<StructModelKey, () => THREE.BufferGeometry>> = { cityBase, radarDish, beacon, pad };
 
 export function buildUnitModel(k: UnitModelKey): THREE.BufferGeometry {
   return UNIT_BUILDERS[k]();
 }
 
 export function buildStructModel(k: StructModelKey): THREE.BufferGeometry {
-  return STRUCT_BUILDERS[k]();
+  const plain = STRUCT_BUILDERS[k];
+  if (plain) return plain();
+  const m = /^([a-zA-Z]+?)([23])?$/.exec(k)!;
+  return LEVEL_BUILDERS[m[1] as LevelledKey](m[2] ? Number(m[2]) : 1);
+}
+
+/** The model key of a structure type key at a level. */
+export function levelKey(base: StructModelKey, level: number): StructModelKey {
+  if (!(LEVELLED as readonly string[]).includes(base)) return base;
+  const L = Math.max(1, Math.min(3, Math.floor(level)));
+  return (L === 1 ? base : `${base}${L}`) as StructModelKey;
 }
 
 /** One skyscraper: a unit box (-0.5..0.5 XZ, 0..1 Y) with a rooftop block; instance-scaled per building. */

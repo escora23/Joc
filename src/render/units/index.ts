@@ -16,13 +16,15 @@
 import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
 import { FROZEN_TIME_SEC, presentationTime, shotView } from '../../shared/shots';
-import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, TILE_KM } from '../../shared/constants';
+import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, TILE_KM, structureLevel } from '../../shared/constants';
 import { labelRects } from '../globe/labels';
-import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, wrapDX } from '../../shared/geo';
+import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, vec3ToLatLon, wrapDX } from '../../shared/geo';
 import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
 import { hash3 } from '../../shared/rng';
 import { isWaterTerrain } from '../../shared/terrain';
-import { StructureType, UnitState, UnitType, type LatLon, type StructureView, type UnitView } from '../../shared/types';
+import { StructureType, UnitMode, UnitState, UnitType, type LatLon, type StructureView, type UnitView } from '../../shared/types';
+import { EFFECT_TILES, radarCovers, reachKm, tileCx, tileCy } from '../../shared/orders';
+import { viewRules } from '../../sim/rulesView';
 import { fxInternal, type FxInternal } from '../fx';
 import { PK } from '../fx/particles';
 import type { Trail, TrailStyleKey } from '../fx/trails';
@@ -33,7 +35,8 @@ import { IconLayer, unitCategory, type IconHit } from './icons';
 import { RouteManager, type RouteEnv } from './routes';
 import { relationsFor } from '../relations';
 import {
-  buildBuilding, buildSpire, buildStructModel, buildUnitModel, STRUCT_MODELS, UNIT_MODELS, type StructModelKey, type UnitModelKey,
+  AIRBASE_SLOTS, buildBuilding, buildSpire, buildStructModel, buildUnitModel, levelKey, STRUCT_MODELS, UNIT_MODELS,
+  type StructModelKey, type UnitModelKey,
 } from './models';
 import { Overlays } from './overlays';
 import { buildRailLinks, SurfaceRibbon } from './rails';
@@ -46,37 +49,53 @@ const UNIT_CAP: Record<UnitModelKey, number> = {
   transport: 512, trade: 768, warship: 768, tank: 2048, fighter: 1536, bomber: 512, drone: 2048, cruise: 256,
   icbm: 160, warhead: 512, sam: 384, loco: 384, wagon: 1536,
 };
-const STRUCT_CAP: Record<StructModelKey, number> = {
-  cityBase: 1536, port: 1024, factory: 1024, defensePost: 1536, samSite: 768, silo: 768, airbase: 768, armyBase: 768,
-  navalYard: 768, radar: 768, radarDish: 768, beacon: 6144,
-};
-const MAX_BUILDINGS = 26000;
-const MAX_SPIRES = 1536;
+/** Instance capacity per structure model key (level variants share the base type's budget). */
+const STRUCT_CAP = ((): Record<StructModelKey, number> => {
+  const base: Record<string, number> = {
+    cityBase: 1536, port: 1024, factory: 1024, defensePost: 1536, samSite: 768, silo: 768, airbase: 768, armyBase: 768,
+    navalYard: 768, radar: 768, radarDish: 768, beacon: 6144, pad: 8192,
+  };
+  const out = {} as Record<StructModelKey, number>;
+  for (const k of STRUCT_MODELS) out[k] = base[k.replace(/[23]$/, '')] ?? 512;
+  return out;
+})();
 
-/** Structure footprint (km) and model key. */
+/**
+ * Structure footprint (km) and model key (DESIGN_V2 §6.5, §10.7: real footprints, 2.5–6 km; a city 2.5 km + 0.35 km
+ * per level). The model changes with the level (levelKey), the footprint only slightly.
+ */
 const STRUCT_INFO: Record<StructureType, { key: StructModelKey; km: number }> = {
-  [StructureType.City]: { key: 'cityBase', km: 10 },
-  [StructureType.Port]: { key: 'port', km: 9 },
-  [StructureType.Factory]: { key: 'factory', km: 8 },
-  [StructureType.DefensePost]: { key: 'defensePost', km: 5 },
-  [StructureType.SamSite]: { key: 'samSite', km: 6.5 },
-  [StructureType.MissileSilo]: { key: 'silo', km: 6 },
-  [StructureType.Airbase]: { key: 'airbase', km: 13 },
-  [StructureType.ArmyBase]: { key: 'armyBase', km: 8 },
-  [StructureType.NavalYard]: { key: 'navalYard', km: 10 },
-  [StructureType.Radar]: { key: 'radar', km: 5.5 },
+  [StructureType.City]: { key: 'cityBase', km: 2.5 },
+  [StructureType.Port]: { key: 'port', km: 4 },
+  [StructureType.Factory]: { key: 'factory', km: 3.5 },
+  [StructureType.DefensePost]: { key: 'defensePost', km: 2.6 },
+  [StructureType.SamSite]: { key: 'samSite', km: 3 },
+  [StructureType.MissileSilo]: { key: 'silo', km: 3 },
+  [StructureType.Airbase]: { key: 'airbase', km: 6 },
+  [StructureType.ArmyBase]: { key: 'armyBase', km: 4 },
+  [StructureType.NavalYard]: { key: 'navalYard', km: 4.5 },
+  [StructureType.Radar]: { key: 'radar', km: 2.5 },
 };
 
 function structKm(type: StructureType, level: number): number {
   const base = STRUCT_INFO[type].km;
-  if (type === StructureType.City) return base + 1.3 * Math.min(10, level);
-  return base * (1 + 0.1 * (Math.max(1, level) - 1));
+  if (type === StructureType.City) return base + 0.35 * Math.min(10, Math.max(1, level));
+  return base * (1 + 0.05 * (Math.max(1, Math.min(3, level)) - 1));
 }
 
-const STRUCT_MIN_PX: Record<StructModelKey, number> = {
-  cityBase: 30, port: 26, factory: 24, defensePost: 18, samSite: 22, silo: 22, airbase: 30, armyBase: 24,
-  navalYard: 26, radar: 20, radarDish: 20, beacon: 9,
-};
+/** Minimum on-screen size of a structure model (px) while models fade in from orbit (per base type). */
+const STRUCT_MIN_PX = ((): Record<StructModelKey, number> => {
+  const base: Record<string, number> = {
+    cityBase: 30, port: 26, factory: 24, defensePost: 18, samSite: 22, silo: 22, airbase: 30, armyBase: 24,
+    navalYard: 26, radar: 20, radarDish: 20, beacon: 9, pad: 24,
+  };
+  const out = {} as Record<StructModelKey, number>;
+  for (const k of STRUCT_MODELS) out[k] = base[k.replace(/[23]$/, '')] ?? 22;
+  return out;
+})();
+
+const MAX_BUILDINGS = 26000;
+const MAX_SPIRES = 1536;
 
 const BUILDING_COLORS = [0xc9c3b6, 0xa9b4bf, 0x8d9aa6, 0xd8d6d0, 0x6f7f8e, 0xb8a58f, 0x9fa9a3, 0x7d8ea1];
 
@@ -156,7 +175,7 @@ interface CitySpec {
 }
 
 interface RadarInfo { id: number; anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; col: THREE.Color; built: number; hp: number; sel: number }
-interface FactoryInfo { anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; acc: number }
+interface FactoryInfo { anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; acc: number; level: number }
 
 export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const root = new THREE.Group();
@@ -198,6 +217,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   let railBuiltAt = -10;
   let lastStructFirst: StructureView | undefined;
   let lastStructSize = -1;
+  let lastStructSig = -1;
+  let lastSigTick = -1;
   const detailMode = true;
   let seenGen = 0;
   const radarList: RadarInfo[] = [];
@@ -207,7 +228,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const preview = {
     build: { structure: -1 as number, tile: -1, valid: false },
     target: { weapon: null as number | null, tile: -1, inner: 0, outer: 0, valid: false },
-    order: { unitId: -1, tile: -1, valid: false },
+    order: { unitId: -1, tile: -1, valid: false, unitIds: [] as number[], valids: [] as boolean[] },
+    offensive: { tile: -1, frontage: 0, ratio: 0, valid: false, origin: -1, originFor: -1 },
   };
 
   // Scratch.
@@ -247,6 +269,14 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     preview.order.unitId = e.unitId;
     preview.order.tile = e.tile;
     preview.order.valid = e.valid;
+    preview.order.unitIds = e.unitIds ?? [];
+    preview.order.valids = e.valids ?? [];
+  });
+  ctx.bus.on('offensivePreview', (e) => {
+    preview.offensive.tile = e.tile;
+    preview.offensive.frontage = e.frontageTiles;
+    preview.offensive.ratio = e.ratio;
+    preview.offensive.valid = e.valid;
   });
   ctx.bus.on('simTick', (e) => sampleTrails(e));
   ctx.bus.on('worldHover', (e) => {
@@ -774,6 +804,26 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return routeEnv;
   }
 
+  /** Apron slot of a docked aircraft: its rank among the docked aircraft of its base (by id), rebuilt per frame. */
+  const dockRank = new Map<number, number>();
+  let dockFrame = -1;
+  function dockSlot(u: UnitView): number {
+    if (dockFrame !== seenGen) {
+      dockFrame = seenGen;
+      dockRank.clear();
+      const per = new Map<number, number[]>();
+      for (const x of ctx.sim.view.units.values()) {
+        if (!isAir(x.type) || x.state !== UnitState.Docked) continue;
+        (per.get(x.home) ?? per.set(x.home, []).get(x.home)!).push(x.id);
+      }
+      for (const ids of per.values()) {
+        ids.sort((a, b) => a - b);
+        ids.forEach((id, i) => dockRank.set(id, i));
+      }
+    }
+    return dockRank.get(u.id) ?? -1;
+  }
+
   function updateUnits(frame: FrameInfo, fx: FxInternal | undefined): void {
     const view = ctx.sim.view;
     modelView.n = 0;
@@ -796,11 +846,39 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       t.seen = gen;
       if (renv) routes.unit(renv, u, Math.abs(u.x - u.prevX) + Math.abs(u.y - u.prevY) > 1e-4);
       if (isAir(u.type) && u.state === UnitState.Docked) {
-        t.hasPos = false;
         if (fx) for (let s = 0; s < t.trails.length; s++) stopTrail(fx, t, s);
-        // Docked aircraft: an icon beside their base (they cluster into one badge per owner).
-        tileXYToLatLon(u.x, u.y, ll2);
-        latLonToVec3(ll2.lat, ll2.lon, ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon), T);
+        // Docked aircraft (§7.2, W4): parked on their airbase's apron, one slot each, drawn as models when the base's
+        // model is drawn, and pickable there; from orbit an icon beside the base (they cluster into one badge).
+        const base = view.structures.get(u.home);
+        const g = base ? grounds.get(base.id) : undefined;
+        const slot = dockSlot(u);
+        if (base && g && slot >= 0) {
+          const [sx, sz] = AIRBASE_SLOTS[slot % AIRBASE_SLOTS.length];
+          T.copy(g.anchor).addScaledVector(g.right, sx * g.S).addScaledVector(g.back, sz * g.S).addScaledVector(g.up, 0.016 * g.S);
+        } else {
+          tileXYToLatLon(u.x, u.y, ll2);
+          latLonToVec3(ll2.lat, ll2.lon, ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon), T);
+        }
+        t.pos.copy(T);
+        t.ground.copy(T);
+        vec3ToLatLon(T, ll2);
+        t.lat = ll2.lat;
+        t.lon = ll2.lon;
+        t.hasPos = true;
+        t.size = g ? g.S * 0.07 * EARTH_RADIUS_KM : 0.4;
+        if (key && g && structModelsOn && lod.structModelFade > 0) {
+          const s = g.S * (u.type === UnitType.Bomber ? 0.1 : 0.075);
+          F.copy(g.back).negate();
+          const sel = selectedUnits.has(u.id) ? 1 : 0;
+          const col = ownerColor(u.owner);
+          const im = unitMeshes[key];
+          if (u.type === UnitType.DroneSwarm) {
+            for (let j = 0; j < 3; j++) {
+              Q.copy(T).addScaledVector(g.right, (j - 1) * s * 0.8);
+              put(im, Q, g.right, g.up, g.back, s * 0.6, s * 0.6, s * 0.6, col, 1, sel, u.hp, 0);
+            }
+          } else put(im, T, g.right, g.up, g.back, s, s, s, col, 1, sel, u.hp, 0);
+        }
         if (lod.unitIconMode !== 2) offerUnitIcon(u, T, selectedUnits.has(u.id), 15, -12);
         continue;
       }
@@ -859,7 +937,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           break;
         }
         case UnitType.ArmoredDivision: {
-          for (let j = 0; j < 4; j++) {
+          // One tank per 25 % of integrity (§6.3): a worn division is visibly thinner.
+          const tanks = Math.max(1, Math.min(4, Math.ceil(hp * 4 - 1e-6)));
+          for (let j = 0; j < tanks; j++) {
             Q.copy(G).addScaledVector(R, TANK_OFFS[j][0] * s).addScaledVector(B, TANK_OFFS[j][1] * s);
             Q.normalize();
             const rr = ctx.globe.surfaceRadiusAt(Math.asin(clamp(Q.y, -1, 1)) * (180 / Math.PI), Math.atan2(-Q.z, Q.x) * (180 / Math.PI));
@@ -1024,6 +1104,89 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
 
   const bR = new THREE.Vector3(), bB = new THREE.Vector3();
 
+  // -----------------------------------------------------------------------------------------------
+  // Grounding (DESIGN_V2 §10.7, F15/G01): a structure stands on the relief the globe draws. Its up vector is the normal
+  // of the plane fitted to the relief over its footprint (clamped to 15° from the radial), its base sits on that plane
+  // raised by the highest bump under the footprint (nothing pokes through), and a foundation pad with a skirt reaches
+  // down to the lowest point of the footprint + 5 % (nothing floats). Cached per structure, level and relief.
+  // -----------------------------------------------------------------------------------------------
+  interface Ground {
+    key: string;
+    anchor: THREE.Vector3;
+    up: THREE.Vector3;
+    right: THREE.Vector3;
+    back: THREE.Vector3;
+    /** Pad depth below the model base (world units) and the footprint size S (world units). */
+    pad: number;
+    S: number;
+    /** Plane-fit residuals (world units): the highest bump and the lowest hollow relative to the fitted plane. */
+    maxE: number;
+    minE: number;
+    /** Degrees: model up vs the fitted relief normal (0 unless clamped), and the relief tilt itself. */
+    devDeg: number;
+    tiltDeg: number;
+  }
+  const grounds = new Map<number, Ground>();
+  const GRID = 5;
+  const MAX_TILT = (15 * Math.PI) / 180;
+  const gP = new THREE.Vector3(), gN = new THREE.Vector3(), gC = new THREE.Vector3();
+  const gll: LatLon = { lat: 0, lon: 0 };
+  function groundOf(st: StructureView, S: number, heading: number): Ground {
+    const key = `${st.tile}:${st.level}:${S.toExponential(4)}:${heading.toFixed(4)}`;
+    let g = grounds.get(st.id);
+    if (g && g.key === key) return g;
+    tileToLatLon(st.tile, ll);
+    tangentFrame(ll.lat, ll.lon, E, N, U);
+    F.copy(N).multiplyScalar(Math.cos(heading)).addScaledVector(E, Math.sin(heading));
+    R.crossVectors(F, U).normalize();
+    B.copy(F).negate();
+    // Relief samples over the footprint (a 5 x 5 grid on the model's own axes).
+    const xs: number[] = [], zs: number[] = [], hs: number[] = [];
+    for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
+      const x = (i / (GRID - 1) - 0.5) * S, z = (j / (GRID - 1) - 0.5) * S;
+      gP.copy(U).addScaledVector(R, x).addScaledVector(B, z).normalize();
+      vec3ToLatLon(gP, gll);
+      xs.push(x);
+      zs.push(z);
+      hs.push(ctx.globe.surfaceRadiusAt(gll.lat, gll.lon) - 1);
+    }
+    // Least-squares plane h = a + b x + c z (symmetric grid: independent sums).
+    let a = 0, sxx = 0, szz = 0, sxh = 0, szh = 0;
+    for (let k = 0; k < hs.length; k++) {
+      a += hs[k];
+      sxx += xs[k] * xs[k];
+      szz += zs[k] * zs[k];
+      sxh += xs[k] * hs[k];
+      szh += zs[k] * hs[k];
+    }
+    a /= hs.length;
+    const b = sxh / sxx, c = szh / szz;
+    let maxE = -Infinity, minE = Infinity;
+    for (let k = 0; k < hs.length; k++) {
+      const e = hs[k] - (a + b * xs[k] + c * zs[k]);
+      if (e > maxE) maxE = e;
+      if (e < minE) minE = e;
+    }
+    // Normal of the fitted plane, clamped to 15° from the radial (a structure never lies on its side).
+    gN.copy(U).addScaledVector(R, -b).addScaledVector(B, -c).normalize();
+    const tilt = Math.acos(Math.min(1, gN.dot(U)));
+    const up = new THREE.Vector3().copy(gN);
+    if (tilt > MAX_TILT) {
+      gC.copy(gN).addScaledVector(U, -gN.dot(U)).normalize();
+      up.copy(U).multiplyScalar(Math.cos(MAX_TILT)).addScaledVector(gC, Math.sin(MAX_TILT)).normalize();
+    }
+    const right = new THREE.Vector3().copy(R).addScaledVector(up, -R.dot(up)).normalize();
+    const back = new THREE.Vector3().crossVectors(right, up).normalize();
+    // Base on the plane at the centre, raised by the highest bump; the pad reaches the lowest hollow + 5 % of the range.
+    const lift = Math.max(0, maxE);
+    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U)));
+    const range = Math.max(0, maxE - minE);
+    const pad = range * 1.05 + 0.04 * S;
+    g = { key, anchor, up, right, back, pad, S, maxE, minE, devDeg: (Math.acos(Math.min(1, up.dot(gN))) * 180) / Math.PI, tiltDeg: (tilt * 180) / Math.PI };
+    grounds.set(st.id, g);
+    return g;
+  }
+
   function updateStructures(): void {
     const view = ctx.sim.view;
     for (const key of STRUCT_MODELS) structMeshes[key].n = 0;
@@ -1036,33 +1199,37 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         structAnchor.delete(id);
         structHeading.delete(id);
         cityCache.delete(id);
+        grounds.delete(id);
       }
     }
     for (const st of view.structures.values()) {
-      tileToLatLon(st.tile, ll);
-      tangentFrame(ll.lat, ll.lon, E, N, U);
+      const h = headingFor(st);
+      const S = structKm(st.type, st.level) / EARTH_RADIUS_KM;
+      const g = groundOf(st, S, h);
       let anchor = structAnchor.get(st.id);
       if (!anchor) {
         anchor = new THREE.Vector3();
         structAnchor.set(st.id, anchor);
       }
-      latLonToVec3(ll.lat, ll.lon, ctx.globe.surfaceRadiusAt(ll.lat, ll.lon), anchor);
+      anchor.copy(g.anchor);
       if (!structModelsOn) continue;
       const col = ownerColor(st.owner);
       const sel = st.id === selectedStructure ? 1 : 0;
       const info = STRUCT_INFO[st.type];
-      const S = structKm(st.type, st.level) / EARTH_RADIUS_KM;
       const seed = (st.id * 0.618) % 1;
       if (!detailMode) {
         const bs = 2.2 / EARTH_RADIUS_KM;
         put(structMeshes.beacon, anchor, E, U, N, bs, bs, bs, col, 1, sel, st.hp, seed, anchor, bs);
         continue;
       }
-      const h = headingFor(st);
-      F.copy(N).multiplyScalar(Math.cos(h)).addScaledVector(E, Math.sin(h));
-      R.crossVectors(F, U).normalize();
-      B.copy(F).negate();
-      put(structMeshes[info.key], anchor, R, U, B, S, S, S, col, st.built, sel, st.hp, seed, anchor, S);
+      // Foundation pad under the land part of the footprint (ports and yards keep their piers over the water).
+      const coastal = st.type === StructureType.Port || st.type === StructureType.NavalYard;
+      tmpColor.setHex(0x55534e);
+      if (coastal) {
+        Q.copy(anchor).addScaledVector(g.back, 0.2 * S);
+        put(structMeshes.pad, Q, g.right, g.up, g.back, S * 1.02, g.pad, S * 0.62, tmpColor, st.built, sel, st.hp, seed, anchor, S);
+      } else put(structMeshes.pad, anchor, g.right, g.up, g.back, S * 1.03, g.pad, S * 1.03, tmpColor, st.built, sel, st.hp, seed, anchor, S);
+      put(structMeshes[levelKey(info.key, st.level)], anchor, g.right, g.up, g.back, S, S, S, col, st.built, sel, st.hp, seed, anchor, S);
       if (st.type === StructureType.City) {
         const capital = view.players[st.owner]?.capitalTile === st.tile;
         const cs = citySpec(st, capital);
@@ -1071,21 +1238,23 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           const o = i * 8;
           const bx = cs.b[o], bz = cs.b[o + 1], w = cs.b[o + 2] * S, d = cs.b[o + 3] * S, hh = cs.b[o + 4] * S, rot = cs.b[o + 5];
           const cr = Math.cos(rot), sr = Math.sin(rot);
-          bR.copy(R).multiplyScalar(cr).addScaledVector(B, sr);
-          bB.copy(B).multiplyScalar(cr).addScaledVector(R, -sr);
-          Q.copy(anchor).addScaledVector(R, bx * S).addScaledVector(B, bz * S).addScaledVector(U, 0.004 * S);
+          bR.copy(g.right).multiplyScalar(cr).addScaledVector(g.back, sr);
+          bB.copy(g.back).multiplyScalar(cr).addScaledVector(g.right, -sr);
+          Q.copy(anchor).addScaledVector(g.right, bx * S).addScaledVector(g.back, bz * S).addScaledVector(g.up, 0.004 * S);
           tmpColor.setHex(BUILDING_COLORS[cs.b[o + 6] | 0]);
-          put(buildings!, Q, bR, U, bB, w, hh, d, tmpColor, st.built, sel, cs.b[o + 7], 2 + (i % 2), anchor, S);
+          put(buildings!, Q, bR, g.up, bB, w, hh, d, tmpColor, st.built, sel, cs.b[o + 7], 2 + (i % 2), anchor, S);
           if (hh > 0.2 * S && sp < cs.spires) {
             sp++;
-            T.copy(Q).addScaledVector(U, hh);
-            put(spires!, T, bR, U, bB, w, w * 1.4, d, col, st.built, sel, st.hp, seed, anchor, S);
+            T.copy(Q).addScaledVector(g.up, hh);
+            put(spires!, T, bR, g.up, bB, w, w * 1.4, d, col, st.built, sel, st.hp, seed, anchor, S);
           }
         }
       } else if (st.type === StructureType.Radar) {
-        radarList.push({ id: st.id, anchor, e: R.clone(), n: F.clone(), u: U.clone(), S, col: col.clone(), built: st.built, hp: st.hp, sel });
+        F.copy(g.back).negate();
+        radarList.push({ id: st.id, anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, col: col.clone(), built: st.built, hp: st.hp, sel });
       } else if (st.type === StructureType.Factory && st.built >= 1) {
-        factoryList.push({ anchor, e: R.clone(), n: F.clone(), u: U.clone(), S, acc: Math.random() });
+        F.copy(g.back).negate();
+        factoryList.push({ anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, acc: Math.random(), level: Math.max(1, Math.min(3, st.level)) });
       }
     }
     for (const key of STRUCT_MODELS) if (key !== 'radarDish') commit(structMeshes[key]);
@@ -1101,7 +1270,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (!a || !toScreen(a)) continue;
       // Once the 3D model fades in (below 900 km) the icon floats above it instead of covering it: the model is what
       // the player looks at up close (owner feedback), the icon stays as a readable tag.
-      icons.add(true, st.id, st.type, st.owner, relations.relationTo(st.owner), scrXY.x, scrXY.y - 22 * lod.structModelFade, st.hp, st.level, st.id === selectedStructure, 0, st.type);
+      const iy = scrXY.y - 22 * lod.structModelFade;
+      icons.add(true, st.id, st.type, st.owner, relations.relationTo(st.owner), scrXY.x, iy, st.hp, st.level, st.id === selectedStructure, 0, st.type);
+      // v2 (W4, §10.7): an hourglass while building, upgrading or producing units.
+      if (st.built < 1 || (st.upgrade ?? 0) > 0 || (st.producing ?? 0) > 0) icons.addHourglass(scrXY.x + 13, iy - 11);
     }
   }
 
@@ -1133,9 +1305,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (T.dot(f.anchor) < 0) continue;
       const dist = T.length();
       const Se = Math.max(f.S, STRUCT_MIN_PX.factory * minPxScale.value * env.pixelK * dist);
-      const i = Math.floor(fx.particles.rand() * 3);
-      const lx = i === 0 ? -0.34 : i === 1 ? -0.2 : -0.06;
-      Q.copy(f.anchor).addScaledVector(f.e, lx * Se).addScaledVector(f.n, 0.3 * Se).addScaledVector(f.u, 0.4 * Se);
+      // Stacks of models.ts factory(L): 2 per level along the back edge (x = -0.42 + 0.08 i, z = +0.38).
+      const i = Math.floor(fx.particles.rand() * 2 * f.level);
+      const lx = -0.42 + i * 0.08;
+      Q.copy(f.anchor).addScaledVector(f.e, lx * Se).addScaledVector(f.n, -0.38 * Se).addScaledVector(f.u, (0.34 + 0.04 * (i % 2)) * Se);
       const s = Se * 0.08;
       fx.particles.emit(PK.Smoke, Q.x, Q.y, Q.z, f.u.x * s * 0.6 + f.e.x * s * 0.3, f.u.y * s * 0.6 + f.e.y * s * 0.3, f.u.z * s * 0.6 + f.e.z * s * 0.3,
         5 + fx.particles.rand() * 3, s * 0.6, s * 4, 0.3, s * 0.05);
@@ -1176,6 +1349,52 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     rails.end();
   }
 
+  /**
+   * The offensive corridor preview: from the human's land nearest to the cursor toward it, as wide as the frontage the
+   * committed troops buy (§4.3), coloured by the force ratio (red < 1, amber 1–2, green ≥ 2).
+   */
+  const cA: LatLon = { lat: 0, lon: 0 }, cB: LatLon = { lat: 0, lon: 0 };
+  function drawCorridor(ov: Overlays): void {
+    const view = ctx.sim.view;
+    const pv = preview.offensive;
+    if (pv.originFor !== pv.tile) {
+      pv.originFor = pv.tile;
+      pv.origin = -1;
+      const x0 = pv.tile % MAP_W, y0 = Math.floor(pv.tile / MAP_W);
+      let bd = Infinity;
+      for (let r = 1; r <= 40 && pv.origin < 0; r++) {
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const y = y0 + dy;
+          if (y < 0 || y >= 800) continue;
+          const t = y * MAP_W + (((x0 + dx) % MAP_W) + MAP_W) % MAP_W;
+          if (view.owner[t] !== HUMAN_ID) continue;
+          const d = dx * dx + dy * dy;
+          if (d < bd) { bd = d; pv.origin = t; }
+        }
+      }
+    }
+    if (pv.origin < 0) return;
+    const ox = tileCx(pv.origin), oy = tileCy(pv.origin), tx = tileCx(pv.tile), ty = tileCy(pv.tile);
+    let dx = tx - ox;
+    if (dx > MAP_W / 2) dx -= MAP_W;
+    if (dx < -MAP_W / 2) dx += MAP_W;
+    const cl = Math.max(0.2, Math.cos(((90 - (oy / 800) * 180) * Math.PI) / 180));
+    const ex = dx * cl, ey = ty - oy;
+    const len = Math.hypot(ex, ey);
+    if (len < 0.5) return;
+    // Corridor sides: ±frontage/2 tiles perpendicular to the axis (in local metric tiles), 30 % beyond the cursor.
+    const px = -ey / len, py = ex / len, half = pv.frontage / 2;
+    const c = pv.ratio >= 2 ? 0x3dff8a : pv.ratio >= 1 ? 0xffc24a : 0xff4a3a;
+    const ext = 1.3;
+    for (const side of [-1, 0, 1]) {
+      const sx = (px * half * side) / cl, sy = py * half * side;
+      tileXYToLatLon(ox + sx, oy + sy, cA);
+      tileXYToLatLon(ox + (dx * ext) + sx, oy + ey * ext + sy, cB);
+      ov.path.addArc(cA, cB, c, radiusAt, 12, 0.3);
+    }
+  }
+
   function updateOverlays(): void {
     const ov = overlays!;
     const view = ctx.sim.view;
@@ -1187,18 +1406,52 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       tmpColor.copy(ownerColor(u.owner)).lerp(white, 0.4);
       ov.ring({ lat: t.lat, lon: t.lon, radiusKm: t.size * 1.1, minPx: 22, style: 0, color: tmpColor.getHex(), alpha: 1, dashes: 12, spin: 0.25 }, radiusAt);
     }
-    // CAP circles while a fighter patrols (v2-stub(W2→W4): "patrolling" = airborne within 8 tiles of its target until
-    // W4 publishes the unit mode), warship patrol / blockade zones when selected.
+    // v2 (W4, §6.1, §10.8): CAP circles stay drawn while a fighter patrols (ours and those at war with us); the effect
+    // ring or zone of whatever is selected (SAM air and anti-ballistic, defense post, scramble radius, repair, radar,
+    // blockade, bombardment reach, a division's aura, an aircraft's reach from its base).
+    const rules = viewRules(view);
+    const zone = (lat: number, lon: number, km: number, color: number, alpha: number, style: 2 | 3, dashes = 40) =>
+      ov.ring({ lat, lon, radiusKm: km, minPx: 10, style, color, alpha, dashes, spin: style === 2 ? 0.02 : 0 }, radiusAt);
     for (const u of view.units.values()) {
-      if (u.type === UnitType.FighterSquadron && u.state !== UnitState.Docked && u.alt > 0.2) {
-        const dx = wrapDX(u.x, u.targetX), dy = u.targetY - u.y;
-        if (dx * dx + dy * dy < 64) {
-          tileXYToLatLon(u.targetX, u.targetY, ll2);
-          ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: 150, minPx: 10, style: 2, color: ownerColor(u.owner).getHex(), alpha: 0.7, dashes: 40, spin: 0.02 }, radiusAt);
+      if (u.type !== UnitType.FighterSquadron || u.mode !== UnitMode.Patrol) continue;
+      if (u.owner !== HUMAN_ID && relations.relationTo(u.owner) !== 'war' && !selectedUnits.has(u.id)) continue;
+      tileXYToLatLon(u.targetX, u.targetY, ll2);
+      zone(ll2.lat, ll2.lon, EFFECT_TILES.cap * TILE_KM, ownerColor(u.owner).getHex(), u.owner === HUMAN_ID ? 0.8 : 0.6, 2, 40);
+    }
+    for (const id of selectedUnits) {
+      const u = view.units.get(id);
+      if (!u) continue;
+      const oc = tmpColor.copy(ownerColor(u.owner)).lerp(white, 0.3).getHex();
+      tileXYToLatLon(u.x, u.y, ll);
+      switch (u.type) {
+        case UnitType.ArmoredDivision:
+          zone(ll.lat, ll.lon, EFFECT_TILES.attach * TILE_KM, oc, 0.55, 3);
+          break;
+        case UnitType.Warship:
+          if (u.mode === UnitMode.Blockade) {
+            tileXYToLatLon(u.targetX, u.targetY, ll2);
+            zone(ll2.lat, ll2.lon, EFFECT_TILES.engage * TILE_KM, 0xff4a3a, 0.75, 3);
+            zone(ll2.lat, ll2.lon, EFFECT_TILES.engage * TILE_KM, 0xff4a3a, 0.9, 2, 48);
+          } else if (u.mode === UnitMode.Bombard) {
+            tileXYToLatLon(u.targetX, u.targetY, ll2);
+            zone(ll.lat, ll.lon, EFFECT_TILES.bombard * TILE_KM, 0xff9a3d, 0.7, 3);
+          } else zone(ll.lat, ll.lon, EFFECT_TILES.engage * TILE_KM, oc, 0.6, 2, 36);
+          break;
+        case UnitType.FighterSquadron:
+        case UnitType.Bomber:
+        case UnitType.DroneSwarm: {
+          if (u.type === UnitType.DroneSwarm && u.mode === UnitMode.Support) {
+            tileXYToLatLon(u.targetX, u.targetY, ll2);
+            zone(ll2.lat, ll2.lon, EFFECT_TILES.support * TILE_KM, 0xffb347, 0.75, 3);
+          }
+          // Reach from its base (thin, faint): where it may be sent.
+          const base = view.structures.get(u.home);
+          if (base) {
+            tileToLatLon(base.tile, ll2);
+            zone(ll2.lat, ll2.lon, reachKm(u.type), oc, 0.35, 2, 90);
+          }
+          break;
         }
-      } else if (u.type === UnitType.Warship && selectedUnits.has(u.id)) {
-        tileXYToLatLon(u.targetX, u.targetY, ll2);
-        ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: 150, minPx: 10, style: 2, color: ownerColor(u.owner).getHex(), alpha: 0.8, dashes: 36, spin: 0.03 }, radiusAt);
       }
     }
     if (selectedStructure >= 0) {
@@ -1207,6 +1460,32 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         tileToLatLon(st.tile, ll);
         tmpColor.copy(ownerColor(st.owner)).lerp(white, 0.4);
         ov.ring({ lat: ll.lat, lon: ll.lon, radiusKm: structKm(st.type, st.level) * 0.8, minPx: 26, style: 0, color: tmpColor.getHex(), alpha: 1, dashes: 16, spin: 0.12 }, radiusAt);
+        const lv = structureLevel(st.type, st.level);
+        const radar = radarCovers(rules, st.owner, tileCx(st.tile), tileCy(st.tile));
+        switch (st.type) {
+          case StructureType.SamSite: {
+            const k = radar ? RADAR_SAM_RANGE_MUL : 1;
+            zone(ll.lat, ll.lon, (lv.rangeTiles ?? 8) * k * TILE_KM, 0x6fd6ff, 0.85, 2, 56);
+            zone(ll.lat, ll.lon, (lv.abmTiles ?? 5) * k * TILE_KM, 0xff6a3d, 0.85, 2, 36);
+            break;
+          }
+          case StructureType.DefensePost:
+            zone(ll.lat, ll.lon, (lv.radiusTiles ?? 3) * TILE_KM, 0xffc24a, 0.8, 3);
+            zone(ll.lat, ll.lon, (lv.radiusTiles ?? 3) * TILE_KM, 0xffc24a, 0.9, 2, 64);
+            break;
+          case StructureType.Airbase:
+            zone(ll.lat, ll.lon, (lv.scrambleTiles ?? 16) * (radar ? RADAR_SCRAMBLE_MUL : 1) * TILE_KM, 0x9fd6ff, 0.8, 2, 64);
+            break;
+          case StructureType.ArmyBase:
+          case StructureType.NavalYard:
+          case StructureType.Port:
+            zone(ll.lat, ll.lon, (lv.repairTiles ?? 3) * TILE_KM, 0x45f0a0, 0.7, 3);
+            break;
+          case StructureType.Radar:
+            zone(ll.lat, ll.lon, (lv.coverageTiles ?? 20) * TILE_KM, 0x8ab4ff, 0.45, 3);
+            zone(ll.lat, ll.lon, (lv.coverageTiles ?? 20) * TILE_KM, 0x8ab4ff, 0.8, 2, 80);
+            break;
+        }
       }
     }
     // Weapon targeting.
@@ -1226,19 +1505,26 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       ov.ring({ lat: ll.lat, lon: ll.lon, radiusKm: km * 0.7, minPx: 22, style: 3, color: preview.build.valid ? 0x3dff8a : 0xff4030, alpha: 0.9 }, radiusAt);
       ov.ghost(String(type), ll, km, STRUCT_MIN_PX[STRUCT_INFO[type].key] * minPxScale.value, preview.build.valid, radiusAt, env.camPos, env.pixelK);
     } else ov.ghost(null, null, 0, 0, false, radiusAt, env.camPos, env.pixelK);
-    // Order path.
+    // Order path (§7.4): one line per selected unit to the order's target, cyan when it can comply, red when not.
     ov.path.begin();
-    if (preview.order.unitId >= 0 && preview.order.tile >= 0) {
-      const t = tracks.get(preview.order.unitId);
-      if (t && t.hasPos) {
+    if (preview.order.tile >= 0 && (preview.order.unitId >= 0 || preview.order.unitIds.length)) {
+      const ids = preview.order.unitIds.length ? preview.order.unitIds : [preview.order.unitId];
+      tileToLatLon(preview.order.tile, ll2);
+      let any = false;
+      ids.forEach((id, i) => {
+        const t = tracks.get(id);
+        if (!t || !t.hasPos) return;
+        const ok = preview.order.valids.length ? preview.order.valids[i] : preview.order.valid;
         ll.lat = t.lat;
         ll.lon = t.lon;
-        tileToLatLon(preview.order.tile, ll2);
-        const c = preview.order.valid ? 0x46e0ff : 0xff4a3a;
-        ov.path.addArc(ll, ll2, c, radiusAt, 15, 0.3);
-        ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: 6, minPx: 14, style: 0, color: c, alpha: 1, dashes: 8, spin: -0.4 }, radiusAt);
-      }
+        ov.path.addArc(ll, ll2, ok ? 0x46e0ff : 0xff4a3a, radiusAt, 15, 0.3);
+        any = any || ok;
+      });
+      const c = any ? 0x46e0ff : 0xff4a3a;
+      ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: 6, minPx: 14, style: 0, color: c, alpha: 1, dashes: 8, spin: -0.4 }, radiusAt);
     }
+    // Offensive corridor (§7.7): what a left click launches, from our border toward the cursor, as wide as the troops.
+    if (preview.offensive.tile >= 0 && preview.offensive.valid) drawCorridor(ov);
     ov.path.end();
     ov.end();
   }
@@ -1303,6 +1589,32 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       return { x: scrXY.x + rect.left, y: scrXY.y + rect.top };
     },
     pick: (x: number, y: number) => iconHitAt(x, y),
+    /**
+     * v2 (W4, §10.7): how every structure stands on the relief. residualPct = the largest distance between the relief
+     * and the fitted plane over the footprint (% of the footprint), absorbed by the raised base and the pad;
+     * visibleErrorPct = what is left uncovered (a gap under the pad or relief above the base); upDevDeg = the model's up
+     * vector against the fitted relief normal; padOk = the pad reaches the lowest point of the footprint.
+     */
+    grounding: () => {
+      const out: { id: number; type: number; level: number; footprintKm: number; residualPct: number; maxVerticalErrorPct: number; visibleErrorPct: number; upDevDeg: number; tiltDeg: number; padKm: number; padOk: boolean }[] = [];
+      for (const st of ctx.sim.view.structures.values()) {
+        const S = structKm(st.type, st.level) / EARTH_RADIUS_KM;
+        const g = groundOf(st, S, headingFor(st));
+        const lift = Math.max(0, g.maxE);
+        const gap = Math.max(0, lift - g.minE - g.pad);
+        const poke = Math.max(0, g.maxE - lift);
+        const residual = Math.max(Math.abs(g.maxE), Math.abs(g.minE));
+        out.push({
+          id: st.id, type: st.type, level: st.level, footprintKm: +(S * EARTH_RADIUS_KM).toFixed(2),
+          residualPct: +((residual / S) * 100).toFixed(2), maxVerticalErrorPct: +((residual / S) * 100).toFixed(2),
+          visibleErrorPct: +((Math.max(gap, poke) / S) * 100).toFixed(3), upDevDeg: +g.devDeg.toFixed(3), tiltDeg: +g.tiltDeg.toFixed(2),
+          padKm: +(g.pad * EARTH_RADIUS_KM).toFixed(3), padOk: gap <= 1e-9,
+        });
+      }
+      return out;
+    },
+    /** Geometry of every structure model key (vertex count): level variants differ (structures-levels, §6.5). */
+    modelStats: () => Object.fromEntries(STRUCT_MODELS.map((k) => [k, structMeshes[k]?.mesh.geometry.getAttribute('position').count ?? 0])),
     /** Pickable icons drawn this frame, in client px (verification: clustering, scripted clicks). */
     icons: () => {
       const rect = ctx.canvas.getBoundingClientRect();
@@ -1398,6 +1710,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       preview.build.structure = -1;
       preview.target.weapon = null;
       preview.order.unitId = -1;
+      preview.offensive.tile = -1;
       radarList.length = 0;
       factoryList.length = 0;
       if (rails) {
@@ -1441,6 +1754,16 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       for (const s of view.structures.values()) {
         first = s;
         break;
+      }
+      // v2 (W4): levels, construction, damage and owners change the models too (a per-update signature).
+      if (view.tick !== lastSigTick) {
+        lastSigTick = view.tick;
+        let sig = 0;
+        for (const st of view.structures.values()) sig = (sig * 31 + st.id * 7 + st.level * 131 + Math.round(st.built * 40) * 17 + Math.round(st.hp * 20) * 3 + st.owner) >>> 0;
+        if (sig !== lastStructSig) {
+          lastStructSig = sig;
+          structDirty = true;
+        }
       }
       if (first !== lastStructFirst || view.structures.size !== lastStructSize) {
         lastStructFirst = first;
@@ -1504,6 +1827,24 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     },
     closeIconFan() {
       icons?.closeFan();
+    },
+    unitsInRect(x0, y0, x1, y1) {
+      const rect = ctx.canvas.getBoundingClientRect();
+      const ax = Math.min(x0, x1) - rect.left, bx = Math.max(x0, x1) - rect.left;
+      const ay = Math.min(y0, y1) - rect.top, by = Math.max(y0, y1) - rect.top;
+      const out: number[] = [];
+      const p = new THREE.Vector3();
+      for (const u of ctx.sim.view.units.values()) {
+        const t = tracks.get(u.id);
+        if (t && t.hasPos) p.copy(t.pos);
+        else {
+          tileXYToLatLon(u.x, u.y, ll2);
+          latLonToVec3(ll2.lat, ll2.lon, ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon), p);
+        }
+        if (!toScreen(p, 0)) continue;
+        if (scrXY.x >= ax && scrXY.x <= bx && scrXY.y >= ay && scrXY.y <= by) out.push(u.id);
+      }
+      return out;
     },
     getUnitWorldPosition(unitId, out) {
       const t = tracks.get(unitId);
