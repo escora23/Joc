@@ -34,7 +34,7 @@ export interface HoverInfo {
 }
 
 export class HudShared {
-  attackRatio = 0.3;
+  attackRatio = 0.5;
   mode: Mode = { kind: 'none' };
   selection: Selection = { kind: 'none' };
   hover: HoverInfo = { tile: -1, unitId: -1, structureId: -1, clientX: -1, clientY: -1, shift: false };

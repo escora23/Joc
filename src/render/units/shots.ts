@@ -146,7 +146,8 @@ registerShot('unit-closeup', 'units', 'One unit up close (&unit=Warship|Transpor
   const naval = type === UnitType.TransportShip || type === UnitType.TradeShip || type === UnitType.Warship;
   const air = type === UnitType.FighterSquadron || type === UnitType.Bomber || type === UnitType.DroneSwarm;
   const from: [number, number] = naval ? [39.3, 0.9] : air ? [39.4, -0.2] : [39.55, -1.2];
-  const to: [number, number] = naval ? [38.2, 4.5] : air ? [38.6, 3.5] : [39.3, -0.6];
+  // Trains get a long staged line (a short one can be finished, and the train gone, before the pause lands).
+  const to: [number, number] = naval ? [38.2, 4.5] : air ? [38.6, 3.5] : type === UnitType.Train ? [40.9, -2.9] : [39.3, -0.6];
   sim.debug({ type: 'spawnUnit', unit: type, owner: HUMAN_ID, tile: at(...from), targetTile: at(...to) });
   // A moment of motion so the unit is under way (aircraft airborne, ships with a heading), then paused.
   sim.setSpeed(1);

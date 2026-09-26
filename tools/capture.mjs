@@ -35,7 +35,7 @@ for (const shot of shots) {
   try { await page.waitForFunction(() => (window).__shotReady === true || (window).__ready === true, null, { timeout: readyTimeout }); } catch { logs.push('[capture] timeout waiting for __shotReady'); }
   await page.waitForTimeout(wait);
   const file = path.join(out, `${shot}${args.tag ? '-' + args.tag : ''}.png`);
-  await page.screenshot({ path: file });
+  await page.screenshot({ path: file, timeout: 240000 });
   const fps = await page.evaluate(() => (window).__fps ?? null).catch(() => null);
   console.log(`${file}${fps ? `  fps~${fps}` : ''}`);
   for (const l of logs.slice(0, 30)) console.log('   ', l);

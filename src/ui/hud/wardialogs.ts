@@ -95,7 +95,7 @@ export function openPeaceDialog(hs: HudShared, enemy: number): ModalHandle | nul
       tiles = Math.max(1, Math.round((max * Number(tilesSlider.input.value)) / 100));
       tl = previewBand(hs, loser, winner, tiles);
       tiles = Math.min(tiles, tl.length);
-      setText(band, t('peace.bandInfo', { tiles: formatNumber(tiles), max: formatNumber(max) }));
+      setText(band, tiles > 0 ? t('peace.bandInfo', { tiles: formatNumber(tiles), max: formatNumber(max) }) : t('peace.noBand', { name: hs.name(enemy) }));
       ctx.globe.setTileMarks?.(PREVIEW_KEY, tl, loser === HUMAN_ID ? 0xff4a4a : 0x45f0a0, true);
       const c = bandCentre(tl);
       if (c) ctx.bus.emit('focusRequest', { lat: c.lat, lon: c.lon, altitudeKm: 2600, durationMs: 700 });
@@ -177,7 +177,7 @@ export function openDemandDialog(hs: HudShared, target: number): ModalHandle | n
       const n = Math.max(1, Math.round(max * Math.max(0.05, f)));
       const tl = previewBand(hs, target, HUMAN_ID, n);
       demand = { kind: 'cede', tiles: tl.length };
-      setText(info, t('demand.cedeInfo', { tiles: formatNumber(tl.length), max: formatNumber(max) }));
+      setText(info, tl.length ? t('demand.cedeInfo', { tiles: formatNumber(tl.length), max: formatNumber(max) }) : t('msg.demandNoBorder'));
       ctx.globe.setTileMarks?.(PREVIEW_KEY, tl, 0xffb53d, true);
       const c = bandCentre(tl);
       if (c) ctx.bus.emit('focusRequest', { lat: c.lat, lon: c.lon, altitudeKm: 2600, durationMs: 700 });

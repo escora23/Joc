@@ -738,7 +738,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   /**
    * Waterline radius of a ship: the drawn sea surface (the globe mesh's relief, which near islands and coasts lifts the
    * water by up to a few hundred metres through texture filtering), plus 10 % of that lift for the mesh's own
-   * interpolation. A ship at radius 1 there sank under the drawn sea at close zoom.
+   * interpolation. A ship at radius 1 sank under the drawn sea at close zoom (owner clarification to FEEDBACK-1).
    */
   function seaRadius(lat: number, lon: number): number {
     const r = ctx.globe.meshRadiusAt(lat, lon);
@@ -755,6 +755,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       routeEnv = {
         fx, now: 0, realNow: 0, altitudeKm: 0, frozen: false,
         pathOf: (id) => ctx.sim.view.routes.get(id),
+        clearKm: (id) => {
+          const t = tracks.get(id);
+          return t && t.hasPos && lod.unitModelFade > 0 ? t.size * (isAir(t.type) ? 1.6 : 0.6) + 2 * env.pixelK * env.camPos.distanceTo(t.pos) * EARTH_RADIUS_KM : 0;
+        },
         relationTo: (o) => relations.relationTo(o),
         radiusAt,
         ownerColor: (o) => ownerColor(o),
@@ -1310,6 +1314,43 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     stats: () => ({ ...routes.stats({ relationTo: (o: number) => relations.relationTo(o) }), humanSuppressed: routes.humanSuppressed() }),
     route: (unitId: number) => routes.info(unitId),
     points: (unitId: number) => routes.points(unitId),
+    /**
+     * Ship lines over land (FEEDBACK #2/#10: a ship line never crosses land): every drawn ship line sampled every 5 km,
+     * leaving out 40 km at each end (the port and a landing beach are coastal land tiles). Per line: km over land.
+     */
+    overLand: () => {
+      const w = ctx.world;
+      if (!w) return null;
+      const A = new THREE.Vector3(), Bv = new THREE.Vector3(), C = new THREE.Vector3();
+      const lines = routes.shipLines().map((l) => {
+        let total = 0;
+        const seg: number[] = [];
+        for (let i = 3; i < l.pts.length; i += 3) {
+          A.set(l.pts[i - 3], l.pts[i - 2], l.pts[i - 1]);
+          Bv.set(l.pts[i], l.pts[i + 1], l.pts[i + 2]);
+          const km = A.distanceTo(Bv) * EARTH_RADIUS_KM;
+          seg.push(km);
+          total += km;
+        }
+        let at = 0, land = 0, samples = 0;
+        for (let i = 3, s = 0; i < l.pts.length; i += 3, s++) {
+          A.set(l.pts[i - 3], l.pts[i - 2], l.pts[i - 1]);
+          Bv.set(l.pts[i], l.pts[i + 1], l.pts[i + 2]);
+          const km = seg[s], n = Math.max(1, Math.ceil(km / 5));
+          for (let j = 0; j < n; j++) {
+            const d = at + (km * j) / n;
+            if (d < 40 || d > total - 40) continue;
+            C.lerpVectors(A, Bv, j / n).normalize();
+            const lat = Math.asin(clamp(C.y, -1, 1)) * (180 / Math.PI), lon = Math.atan2(-C.z, C.x) * (180 / Math.PI);
+            samples++;
+            if (!isWaterTerrain(w.terrain[latLonTile(lat, lon)])) land += km / n;
+          }
+          at += km;
+        }
+        return { unitId: l.unitId, kind: l.kind, plan: l.plan, km: +total.toFixed(0), landKm: +land.toFixed(1), samples };
+      });
+      return { lines: lines.length, maxLandKm: Math.max(0, ...lines.map((l) => l.landKm)), overLand: lines.filter((l) => l.landKm > 10) };
+    },
   };
   const api: UnitsApi = {
     async init(progress) {

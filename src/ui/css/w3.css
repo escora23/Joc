@@ -294,3 +294,6 @@
 .fu-hud-root[data-state='spawn'] .fu-hud-left { display: block; bottom: 0.9rem; }
 .fu-tut-hl { outline: 2px solid var(--fu-accent-2) !important; outline-offset: 2px; animation: fu-tut-glow 1.2s ease-in-out infinite; position: relative; z-index: 2; }
 @keyframes fu-tut-glow { 50% { outline-color: rgba(255, 181, 61, 0.25); box-shadow: 0 0 1.2rem rgba(255, 181, 61, 0.45); } }
+
+/* Peace terms and demands keep the map visible: the band they preview is drawn on the globe. */
+.fu-modal-scrim:has(.fu-peace-modal) { justify-content: flex-start; padding-left: 3rem; background: rgba(2, 6, 12, 0.18); backdrop-filter: none; }

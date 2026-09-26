@@ -22,7 +22,7 @@
 // Lines are drawn in the FX trail batch (render/fx/trails.ts route styles).
 
 import * as THREE from 'three';
-import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, UNIT_DEFS } from '../../shared/constants';
+import { EARTH_RADIUS_KM, HUMAN_ID, MAP_H, MAP_W, TILE_KM, UNIT_DEFS } from '../../shared/constants';
 import { smoothstep } from '../../shared/math';
 import { latLonToVec3, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { UnitState, UnitType, type LatLon, type UnitView } from '../../shared/types';
@@ -87,6 +87,11 @@ export interface RouteEnv {
   ownerColor(owner: number): THREE.Color;
   /** Tile owner lookup (enemy convoy alerts). */
   ownerOfXY(x: number, y: number): number;
+  /**
+   * Half the drawn length of a unit's model plus a margin (km), 0 when it is drawn as an icon: route lines end at the
+   * stern and the planned path starts at the bow, so a line drawn above everything never covers the model.
+   */
+  clearKm(unitId: number): number;
 }
 
 export interface TrailStats {
@@ -105,6 +110,16 @@ export interface TrailStats {
 }
 
 const tmpLL: LatLon = { lat: 0, lon: 0 };
+const HEAD = new THREE.Vector3();
+const off = { x: 0, y: 0 };
+
+/** Tile position `km` ahead of a unit along its heading (negative: behind). */
+function alongHeading(u: UnitView, km: number, out: { x: number; y: number }): { x: number; y: number } {
+  const lat = ((90 - (u.y / MAP_H) * 180) * Math.PI) / 180;
+  out.x = u.x + (Math.sin(u.heading) * km) / (TILE_KM * Math.max(0.05, Math.cos(lat)));
+  out.y = u.y - (Math.cos(u.heading) * km) / TILE_KM;
+  return out;
+}
 const tmpLL2: LatLon = { lat: 0, lon: 0 };
 const V = new THREE.Vector3();
 const VA = new THREE.Vector3();
@@ -394,6 +409,7 @@ export class RouteManager {
       this.startTrail(env, r, u, kind === 'air' && tileDistKm(u.originX, u.originY, u.x, u.y) < 2500);
     }
     const vis = this.visibility(env, protect, u.id);
+    const clear = env.clearKm(u.id);
     if (r.trail) {
       if (ship && path && path.length >= 2) {
         if (path !== r.path) {
@@ -416,8 +432,13 @@ export class RouteManager {
           r.pathK = k;
         }
       }
-      env.fx.trails.push(r.trail, r.last.x, r.last.y, r.last.z);
-      if (r.alert) env.fx.trails.push(r.alert, r.last.x, r.last.y, r.last.z);
+      // The line ends at the stern of the drawn model (lines draw above models).
+      if (clear > 0) {
+        alongHeading(u, -clear, off);
+        this.point(env, off.x, off.y, ship, HEAD);
+      } else HEAD.copy(r.last);
+      env.fx.trails.push(r.trail, HEAD.x, HEAD.y, HEAD.z);
+      if (r.alert) env.fx.trails.push(r.alert, HEAD.x, HEAD.y, HEAD.z);
       r.lastX = u.x;
       r.lastY = u.y;
       r.trail.opacity = vis;
@@ -425,7 +446,7 @@ export class RouteManager {
     }
     // Planned path ahead (dashed): convoys and sorties always; anything selected or hovered. Ships follow their sim
     // path (no path: no preview, never a guess across land); aircraft the great circle they fly.
-    const planned = (kind === 'convoy' || kind === 'air' || this.focus.has(u.id)) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > 30
+    const planned = (kind === 'convoy' || kind === 'air' || this.focus.has(u.id)) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > Math.max(30, 2 * clear)
       && (!ship || (!!path && path.length >= 2));
     if (planned && !r.suppressed) {
       if (!r.plan) {
@@ -438,10 +459,16 @@ export class RouteManager {
         r.planX = u.x;
         r.planY = u.y;
         let n: number;
+        // The dashed path starts at the bow of the drawn model.
+        if (clear > 0) alongHeading(u, clear, off);
+        else {
+          off.x = u.x;
+          off.y = u.y;
+        }
         if (ship && path) {
           const k = nearestSegment(path, u.x, u.y, r.path === path ? r.pathK : 0);
-          n = this.alongPath(env, path, u.x, u.y, k + 1, path.length - 1, NaN, NaN, Math.max(15, r.segKm), true, 240);
-        } else n = this.arc(env, u.x, u.y, u.targetX, u.targetY, Math.max(15, r.segKm), false, 200);
+          n = this.alongPath(env, path, off.x, off.y, k + 1, path.length - 1, NaN, NaN, Math.max(15, r.segKm), true, 240);
+        } else n = this.arc(env, off.x, off.y, u.targetX, u.targetY, Math.max(15, r.segKm), false, 200);
         if (n >= 2) env.fx.trails.setPath(r.plan, pathBuf, n);
       }
       r.plan.opacity = vis;
@@ -631,6 +658,29 @@ export class RouteManager {
       pts.push(tr.pts[i * 3], tr.pts[i * 3 + 1], tr.pts[i * 3 + 2]);
     }
     return { pts, color: '#' + tr.color.getHexString(), opacity: tr.opacity };
+  }
+
+  /** Every drawn ship line (live and ending), for verification (__trails.overLand()). */
+  shipLines(): { unitId: number; kind: RouteKind; plan: boolean; pts: number[] }[] {
+    const out: { unitId: number; kind: RouteKind; plan: boolean; pts: number[] }[] = [];
+    const dump = (tr: Trail): number[] => {
+      const cap = tr.style.maxPts, pts: number[] = [];
+      for (let k = tr.count - 1; k >= 0; k--) {
+        const i = (tr.head - k + cap * 2) % cap;
+        pts.push(tr.pts[i * 3], tr.pts[i * 3 + 1], tr.pts[i * 3 + 2]);
+      }
+      return pts;
+    };
+    for (const r of this.routes.values()) {
+      if (r.kind === 'air' || r.suppressed) continue;
+      if (r.trail && r.trail.count >= 2 && r.trail.opacity > 0) out.push({ unitId: r.unitId, kind: r.kind, plan: false, pts: dump(r.trail) });
+      if (r.plan && r.plan.count >= 2 && r.plan.opacity > 0) out.push({ unitId: r.unitId, kind: r.kind, plan: true, pts: dump(r.plan) });
+    }
+    for (const e of this.ending) {
+      const r = e.trail;
+      if (r.count >= 2 && r.opacity > 0 && r.style !== TRAIL_STYLES.routeAir) out.push({ unitId: e.unitId, kind: 'convoy', plan: false, pts: dump(r) });
+    }
+    return out;
   }
 
   /** Human units that are protected yet suppressed (must stay 0). */

@@ -414,7 +414,9 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       if (!mob && a.naval && (a.state === 'embarking' || a.state === 'sailing')) continue;
       const key = mob ? `mob:${a.attacker}` : `front:${a.frontKey || `a${a.attacker}`}`;
       let g = groups.get(key);
-      if (!g) groups.set(key, (g = { attacker: a.attacker, troops: 0, x: a.x, y: a.y, ratio: 0, ids: [], mobilizing: mob, eta: a.etaTicks }));
+      // Where the fighting is: the offensive's front (its origin on our border), not the far axis point it aims at.
+      const fx = mob || !(a.originX > 0) ? a.x : a.originX, fy = mob || !(a.originY > 0) ? a.y : a.originY;
+      if (!g) groups.set(key, (g = { attacker: a.attacker, troops: 0, x: fx, y: fy, ratio: 0, ids: [], mobilizing: mob, eta: a.etaTicks }));
       g.troops += a.troops;
       g.ratio = Math.max(g.ratio, a.ratio);
       g.ids.push(a.id);
@@ -496,22 +498,27 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
         }
       }
       let threat = best <= 25;
+      let axisBy = 0;
       for (const a of v.attacks) {
         if (a.defender !== HUMAN_ID || a.attacker === 0 || a.state === 'mobilizing') continue;
-        const d = d2(a.x, a.y);
-        if (d <= 100) {
+        // An offensive aimed at the capital (axis within 10 tiles) whose front is already within 500 km of it: AI war
+        // plans aim at the enemy capital from the first day, so the aim alone is not yet a threat.
+        if (d2(a.x, a.y) <= 100 && (!(a.originX > 0) || d2(a.originX, a.originY) <= 400)) {
           threat = true;
+          axisBy = a.attacker;
           by = by || a.attacker;
-          best = Math.min(best, d);
+          if (!Number.isFinite(best) && a.originX > 0) best = d2(a.originX, a.originY);
         }
       }
       if (threat && capitalAlarm === 0) {
         capitalAlarm = now;
         const ll = at(me.capitalTile)!;
-        const km = Math.max(25, Math.round((Math.sqrt(best) * 25) / 5) * 5);
+        const km = Number.isFinite(best) ? Math.max(25, Math.round((Math.sqrt(best) * 25) / 5) * 5) : 0;
+        const place = describeTile(v, me.capitalTile).name;
+        const title = best <= 25 || !axisBy ? t('alert.capitalThreat.title', { km: formatNumber(km), place }) : t('alert.capitalThreat.axis', { name: name(axisBy), place, km: formatNumber(km) });
         alert({
           kind: 'capitalThreat', severity: 'critical', icon: 'flag', lat: ll.lat, lon: ll.lon, actors: by ? [by] : [], autoPause: 'capitalThreat', groupKey: 'capital',
-          title: t('alert.capitalThreat.title', { km: formatNumber(km), place: describeTile(v, me.capitalTile).name }), body: t('alert.capitalThreat.body'),
+          title, body: t('alert.capitalThreat.body'),
         });
       } else if (!threat && capitalAlarm > 0 && now - capitalAlarm > 60_000) {
         capitalAlarm = 0;

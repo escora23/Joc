@@ -97,7 +97,7 @@ export function installAutosave(ctx: GameContext): void {
   let busy = false;
   setInterval(() => {
     const view = ctx.sim.view;
-    if (busy || ctx.app.state !== 'playing' || view.phase !== 'playing' || view.speed === 0) return;
+    if (busy || ctx.app.isShot || ctx.app.state !== 'playing' || view.phase !== 'playing' || view.speed === 0) return;
     if (lastTick >= 0 && view.tick < lastTick) lastTick = -1; // a new game
     if (lastTick >= 0 && view.tick - lastTick < TICKS_PER_GAME_DAY) return;
     if (lastTick < 0 && view.tick < TICKS_PER_GAME_DAY) return;

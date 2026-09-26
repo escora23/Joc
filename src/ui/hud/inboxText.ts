@@ -207,7 +207,8 @@ export function proposalAlert(hs: HudShared, p: ProposalView): AlertInput | null
         lon = c.lon;
       }
     }
-    const body = t(p.ultimatum ? 'proposal.incoming.ultimatumBody' : 'proposal.incoming.body', { countdown: cd.text, place: tiles && tiles.length ? describeTile(v, tiles[0]).name : '' });
+    let body = t(p.ultimatum ? 'proposal.incoming.ultimatumBody' : 'proposal.incoming.body', { countdown: cd.text });
+    if (tiles && tiles.length) body += ` ${t('proposal.bandMarked', { tiles: tiles.length, place: describeTile(v, tiles[Math.floor(tiles.length / 2)]).text })}`;
     return { ...base, kind, severity, autoPause, icon, title, body, sticky: true, tiles, lat, lon };
   }
   if (p.status === 'expired') return { ...base, kind: 'proposalExpired', severity: 'info', icon: 'clock', ttlSec: 20, title: t('proposal.expired', { name, what }), body: t('proposal.expired.body') };

@@ -252,7 +252,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   function maybeAutoPause(a: Alert, kind: AutoPauseKind): void {
     const s = ctx.settings.get();
     if (!s.autoPause?.[kind]) return;
-    if (ctx.app.state !== 'playing' || ctx.app.isShot) return;
+    if (ctx.app.state !== 'playing') return;
     const sp = view().speed;
     if (sp === 0 && !pausedBy) return;
     const resume = pausedBy ? pausedBy.resume : sp;

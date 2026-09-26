@@ -673,6 +673,15 @@ async function checkModels() {
           const p = ctx.camera.position.clone();
           let lat, lon;
           if (ctx.units.getUnitWorldPosition(id, p)) {
+            // Aim at the ground point behind the drawn model along the current view ray (an aircraft flies well above
+            // its ground point; with the camera tilted, centring on the ground point below would put it off screen).
+            const c = ctx.camera.position, dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+            const A = dx * dx + dy * dy + dz * dz, B = 2 * (c.x * dx + c.y * dy + c.z * dz), C = c.x * c.x + c.y * c.y + c.z * c.z - 1;
+            const disc = B * B - 4 * A * C;
+            if (disc > 0) {
+              const t = (-B - Math.sqrt(disc)) / (2 * A);
+              if (t > 0) p.set(c.x + dx * t, c.y + dy * t, c.z + dz * t);
+            }
             p.normalize();
             lat = Math.asin(Math.max(-1, Math.min(1, p.y))) * 180 / Math.PI;
             lon = Math.atan2(-p.z, p.x) * 180 / Math.PI;

@@ -119,7 +119,14 @@ void main() {
   vec2 tuv = uv;
 #endif
   float hg = textureLod(uRelief, vec2(tuv.x, 1.0 - tuv.y), 0.0).a;
-  vec3 wp = (modelMatrix * vec4(dir * (1.0 + hg * uReliefScale), 1.0)).xyz;
+  float lift = 0.0;
+#ifdef PATCH
+  // Where the patch overlaps the sphere (its rim, outside the sphere's cut at 0.93 of its extent, hundreds of km from
+  // the camera) it is raised by 400 m so it wins the depth test. A polygon offset did this before, but it pulled the
+  // whole patch toward the camera by about a pixel of depth, which at an oblique close view hid ship hulls.
+  lift = smoothstep(0.88, 0.93, max(abs(g.x), abs(g.y))) * (0.4 / ${EARTH_RADIUS_KM.toFixed(1)});
+#endif
+  vec3 wp = (modelMatrix * vec4(dir * (1.0 + hg * uReliefScale + lift), 1.0)).xyz;
   vUv = tuv;
   vDir = dir;
   vWorld = wp;
@@ -456,9 +463,9 @@ void main() {
   float terr = uTerritoryOpacity;
   float landK = 1.0 - water;
   int O = 0, Q = -1;
-  float distPx = 1e4, distT = 1e4;
+  float distPx = 1e4, distT = 1e4, borderFd = 1.0;
   float occ = 0.0, flash = 0.0, isl = 0.0, landCov = 1.0, shorePx = 1e4;
-  float flashAmt = 0.0;
+  float flashAmt = 0.0, flashEdgeK = 1.0;
   vec3 flashCol = vec3(0.0);
   bool playableHere = water < 0.5;
   vec2 tp0 = vec2(uv.x * ${MAP_W}.0, uvT.y * ${MAP_H}.0);
@@ -554,6 +561,7 @@ void main() {
       if (second >= 0) {
         Q = second;
         float fd = bestC - secondC;
+        borderFd = fd;
         vec2 gf = bestG - secondG;
         float gl = length(vec2(dot(gf, dxdX), dot(gf, dxdY)));
         distPx = gl > 1e-6 ? fd / gl : 1e4;
@@ -624,7 +632,7 @@ void main() {
       fillA *= mix(1.0, 0.7, occ);
       // Every nation reads against its ground (§16.3: ΔE >= 15 from orbit); up close (uCloseK) the ground detail must
       // read through the fill, so the floor drops.
-      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.21, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
+      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.23, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
 #if ATM_Q >= 1
       // Toward the limb the air washes colours out (col * vTrans + inscatter): compensate so a nation near the horizon
       // reads as clearly as one under the camera.
@@ -674,10 +682,19 @@ void main() {
       }
       // Conquest flash in the attacker's (new owner's) colour, 2 s: light of exactly the attacker's colour added on
       // screen (applied after the aerial perspective, in display space, see flashTone). Soft everywhere: the coverage
-      // weights feather it inside the attacker's land, and it ramps up over 8 px starting just past the border line
-      // (never a step against the line).
-      float flashEdge = Q >= 0 ? smoothstep(2.5, 10.5, distPx) : 1.0;
-      flashAmt = flash * flashEdge * terr * landK;
+      // weights feather it inside the attacker's land, and it ramps up from just past the border line (never a step
+      // against the line).
+      // distPx is exact only within a few px of the line (a coverage difference over its gradient) and overshoots
+      // beyond; the coverage difference itself rises over about a tile, so the distance is the smaller of the two
+      // estimates. The flash then ramps over 6 px from just past the line (a small capture seen from far glows
+      // softly without ever reaching a hard edge).
+      float edgePx = min(distPx, borderFd / max(pxT, 1e-6));
+      float flashEdge = Q >= 0 ? smoothstep(1.5, 7.5, edgePx) * smoothstep(0.05, 0.6, borderFd) : 1.0;
+      // The same soft ramp against a coast (no second owner there: the neighbour is the sea).
+      float coastPx = min(shorePx, (landCov - 0.3) / max(pxT, 1e-6));
+      flashEdge *= smoothstep(0.5, 6.5, coastPx) * smoothstep(0.35, 0.9, landCov);
+      flashAmt = flash * terr * landK;
+      flashEdgeK = flashEdge;
       vec3 ps = pal.rgb;
       flashCol = mix(ps / 12.92, pow((ps + 0.055) / 1.055, vec3(2.4)), step(0.04045, ps));
     } else if (landK > 0.0 && playableHere) {
@@ -919,7 +936,8 @@ void main() {
     // saturated channel compresses first and the flash reads cream instead of the attacker's colour (§10.3).
     vec3 d = flashTone(col);
     vec3 room = (vec3(0.93) - d) / max(flashCol, vec3(1e-3));
-    float k = clamp(0.55 * flashAmt, 0.0, max(0.0, min(room.r, min(room.g, room.b))));
+    // The ramp from the border applies after the headroom limit, so a bright fill never shortens it into a step.
+    float k = clamp(0.4 * flashAmt, 0.0, max(0.0, min(room.r, min(room.g, room.b)))) * flashEdgeK;
     col = flashUntone(d + flashCol * k);
   }
   gl_FragColor = vec4(col, 1.0);
@@ -979,7 +997,6 @@ export function createEarth(tex: PlanetTextures | null, planet: PlanetUniforms, 
   material.name = 'earth';
   const patchMaterial = new THREE.ShaderMaterial({
     vertexShader: vert, fragmentShader: frag, uniforms, defines: { ...defines, PATCH: 1 },
-    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
   });
   patchMaterial.name = 'earth-patch';
 

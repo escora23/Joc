@@ -180,7 +180,21 @@ function neighbour(ctx: ShotContext['ctx']): number {
   const hud = getHud();
   const list = ctx.sim.view.playerList.filter((p) => p.id !== HUMAN_ID && p.kind === 'nation' && p.alive).sort((a, b) => b.tiles - a.tiles);
   for (const p of list) if (hud?.shared.borders(p.id)) return p.id;
-  return list[0]?.id ?? 0;
+  // Nobody borders us yet: give the largest nation a foothold next to our land (staging only).
+  const id = list[0]?.id ?? 0;
+  const cap = ctx.sim.view.human?.capitalTile ?? -1;
+  if (id && cap >= 0) {
+    // The first tile north of our land that is not ours, then a disc beyond it (north of Iberia: France).
+    const view = ctx.sim.view;
+    const W = 1600;
+    let tile = cap;
+    for (let i = 1; i < 120; i++) {
+      tile = cap - i * W;
+      if (view.owner[tile] !== HUMAN_ID) break;
+    }
+    ctx.sim.debug({ type: 'conquer', playerId: id, centerTile: tile - 7 * W, radius: 7 });
+  }
+  return id;
 }
 
 async function ticks(s: ShotContext, n: number): Promise<void> {

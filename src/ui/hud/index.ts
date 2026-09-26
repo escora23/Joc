@@ -177,7 +177,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     shared: hs,
     setState,
     onGameStart() {
-      hs.attackRatio = 0.3;
+      hs.attackRatio = 0.5;
       hs.emit('ratio');
       hs.select({ kind: 'none' });
       hs.setMode({ kind: 'none' });
