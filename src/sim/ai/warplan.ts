@@ -15,19 +15,22 @@
 //      exhaustion ≥ 35 or when its goal is met, but a winner (score ≥ 40, exhaustion < 70) demands a cession (or a
 //      tribute at ≥ 25); a `conquest` goal is met only by capitulation (WarSystem).
 
-import { DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID, MAP_W, TENSION_LEAD_TICKS } from '../../shared/constants';
+import {
+  AI_MOBILIZE_TICKS, DIFFICULTY_INDEX, FRONTAGE_MAX, FRONTAGE_MIN, HUMAN_GRACE_TICKS, HUMAN_ID, MAP_W, TENSION_LEAD_TICKS, TROOPS_PER_FRONT_TILE,
+} from '../../shared/constants';
 import type { SimPlayer, SimWar } from '../../shared/simapi';
-import type { PeaceTerms, WarGoal } from '../../shared/types';
+import { UnitType, type PeaceTerms, type WarGoal } from '../../shared/types';
 import { alive, relation, strength, type AiContext } from './context';
 import type { Brain } from './state';
 import { scoreTarget } from './war';
+import { reachOf } from './naval';
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 /** War-plan and peace cadences (ticks). */
 const PLAN_EVERY = 120;
 const PEACE_EVERY = 240;
-const DECLARE_GAP = 720;
+const DECLARE_GAP = 1200;
 
 /**
  * Offensive discipline (§4.4–§4.9). A staff launches an offensive only with the odds that make it advance and bleed the
@@ -35,6 +38,53 @@ const DECLARE_GAP = 720;
  * it back when it stalls and cannot be fed, instead of throwing troops at a wall and relaunching every few hours.
  */
 export const LAUNCH_RATIO = 1.7;
+/**
+ * A grinding war (§4.6: R 1–1.7, "divisions, drones, terrain and front priority decide it") is accepted only by a
+ * coalition against the runaway leader (§4.18: the world gets its chance to stop it). Everyone else waits for the odds
+ * of LAUNCH_RATIO.
+ */
+export const GRIND_RATIO = 1.3;
+
+/** The ratio `p` needs to open an offensive against `q` as the aggressor. */
+export function aggressorRatio(ctx: AiContext, b: Brain, _p: SimPlayer, q: SimPlayer): number {
+  const w = ctx.world;
+  return w.leader === q.id && w.leaderShare > b.diff.coalitionShare ? GRIND_RATIO : LAUNCH_RATIO;
+}
+
+/** Attack power the staff can count on from its own armored divisions (+25 % each at the front, at most ×2, §4.4). */
+function armorPlan(ctx: AiContext, p: SimPlayer): number {
+  return 1 + 0.25 * Math.min(4, ctx.g.units(p.id, UnitType.ArmoredDivision).length);
+}
+
+/** Could `p` open a winning offensive on `q` with a third of its home troops (with its divisions)? */
+function isPrey(ctx: AiContext, p: SimPlayer, q: SimPlayer, contact: number): boolean {
+  return neededShare(p, enemyGarrison(ctx, p, q, contact), LAUNCH_RATIO, armorPlan(ctx, p)) <= PREY_SHARE;
+}
+const PREY_SHARE = 0.33;
+
+/** Troops of `q`'s allies expected to join a war `p` declares on it (§5.5 answer odds × their home troops). */
+function expectedAllies(ctx: AiContext, p: SimPlayer, q: SimPlayer): number {
+  const g = ctx.g;
+  let sum = 0;
+  for (const a of q.allies) {
+    const A = g.player(a);
+    if (!alive(A) || A.id === p.id || p.allies.has(a)) continue;
+    const loyalty = ctx.brains.get(a)?.prof.loyalty ?? 0.5;
+    const close = g.sharesBorder(p.id, a) || g.units(a, UnitType.Warship).length > 0;
+    sum += A.troops * ((close ? 0.5 : 0.3) + 0.5 * loyalty);
+  }
+  return sum;
+}
+
+/** Scale of the betrayal roll per decision cycle (§5.6): conqueror 1 − 0.45 → 0.55 % per war clock, turtle 0.08 %. */
+const BETRAYAL_ROLL = 0.01;
+
+/** Betrayal needs a large gain: never an ally that is also allied to one of our other allies (§5.6). */
+function betrayalBlocked(ctx: AiContext, p: SimPlayer, q: SimPlayer): boolean {
+  for (const a of q.allies) if (a !== p.id && p.allies.has(a)) return true;
+  return q.id === HUMAN_ID && ctx.g.tick < 18_000;
+}
+
 /** A defender counter-attacks only with a clear edge: its troops also hold the line. */
 export const COUNTER_RATIO = 2.1;
 /** A running offensive below this ratio is topped up to TOPUP_RATIO, or pulled back when that is not affordable. */
@@ -42,8 +92,21 @@ const HOLD_RATIO = 1.15;
 const TOPUP_RATIO = 1.6;
 /** No new offensive on the same enemy for this long after pulling one back (the staff regroups). */
 export const OFFENSIVE_COOLDOWN = 600;
-/** A staff opens at most one new land offensive per this many ticks, over all its wars (planning capacity). */
-const OFFENSIVE_TEMPO = 300;
+/** Enemies at least this large (tiles) are worth a second corridor on another front (§4.18: two corridors). */
+const SECOND_CORRIDOR_TILES = 4000;
+
+/**
+ * Troops for a corridor as wide as the enemy is worth (§4.3): about 1.5 × √(its tiles) tiles, 3 to 40, at
+ * TROOPS_PER_FRONT_TILE each. A small pocket needs a narrow corridor; a large nation is conquered on a broad front.
+ */
+function usefulWidthTroops(q: SimPlayer): number {
+  return clamp(1.5 * Math.sqrt(q.tiles), FRONTAGE_MIN, FRONTAGE_MAX) * TROOPS_PER_FRONT_TILE;
+}
+
+/** A staff opens at most one new offensive (land or landing) per this many ticks, over all its wars (planning capacity: one operation per 2.5 days). */
+const OFFENSIVE_TEMPO = 600;
+/** An aggressor's war with no offensive for this long after mobilization, and nothing gained, is abandoned. */
+const FAILED_WAR_TICKS = 1800;
 /** Home troops an offensive may take at most (the rest garrisons the other fronts and the land). */
 const MAX_COMMIT = 0.75;
 
@@ -75,13 +138,21 @@ function rawGarrison(ctx: AiContext, p: SimPlayer, q: SimPlayer, contact: number
  * The force ratio a staff sizes its offensives for: better staffs (difficulty `efficiency`, §5.9) mass more for a faster
  * decision; every one stays above the launch odds. Easy 1.8, Normal 2.3, Hard 2.6, Insane 2.7.
  */
-export function targetRatio(b: Brain): number {
+export function targetRatio(ctx: AiContext, b: Brain, q: SimPlayer): number {
+  // Protecting the human (§4.16, §5.9): on Easy and Normal the AI never brings overwhelming force against the human;
+  // it fights at the launch odds, so a war on the human is a contest, not an execution.
+  if (restrained(ctx, b, q)) return LAUNCH_RATIO;
   return LAUNCH_RATIO + 2 * (b.diff.efficiency - 0.5);
 }
 
+/** Easy/Normal restraint against the human (see targetRatio): no extra width or ratio beyond the launch odds. */
+function restrained(ctx: AiContext, b: Brain, q: SimPlayer): boolean {
+  return q.id === HUMAN_ID && DIFFICULTY_INDEX[ctx.g.difficulty] <= 1 && b.kind !== 'autopilot';
+}
+
 /** Share of home troops `p` must commit for an offensive at `ratio` against a garrison `G` (> MAX_COMMIT = cannot). */
-function neededShare(p: SimPlayer, G: number, ratio: number): number {
-  return (ratio * Math.max(1, G)) / Math.max(1, p.troops);
+function neededShare(p: SimPlayer, G: number, ratio: number, armor = 1): number {
+  return (ratio * Math.max(1, G)) / Math.max(1, p.troops * armor);
 }
 
 /**
@@ -147,9 +218,11 @@ function maxOffensiveWars(b: Brain): number {
 function mayDeclare(ctx: AiContext, b: Brain, p: SimPlayer): boolean {
   const g = ctx.g;
   if (g.tick - b.lastDeclareTick < DECLARE_GAP) return false;
+  // The declaration's queued offensive is the staff's next operation: it must fit the tempo.
+  if (g.tick + AI_MOBILIZE_TICKS[DIFFICULTY_INDEX[g.difficulty]] - b.lastOffensiveTick < OFFENSIVE_TEMPO) return false;
   if (g.war.exhaustion(p.id) > 50) return false;
   if (offensiveWars(ctx, p) >= maxOffensiveWars(b)) return false;
-  const gap = g.tick < 18_000 ? 120 : 60;
+  const gap = g.tick < 18_000 ? 360 : 240;
   if (g.tick - ctx.world.lastAiWarTick < gap) return false;
   return true;
 }
@@ -165,7 +238,13 @@ function chooseGoal(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): { goa
     return { goal: 'coalition', reasonKey: 'war.reason.runawayLeader', tensionKey: 'tension.coalition' };
   }
   const weak = strength(q) <= strength(p) * 0.5;
-  if (b.personality === 'conqueror' && weak) return { goal: 'conquest', reasonKey: 'war.reason.weakNeighbour', tensionKey: 'tension.weak' };
+  // Conquest (§5.8): conquerors against any much weaker neighbour; opportunists against one already bleeding in
+  // another war, nukers against a crushed one (a third of their strength or less).
+  const crushed = strength(q) <= strength(p) * 0.35 || isPrey(ctx, p, q, b.front.contact.get(q.id) ?? 1);
+  const bleeding = g.war.enemiesOf(q.id).length > 0;
+  if ((weak || crushed) && (b.personality === 'conqueror' || (b.personality === 'opportunist' && (bleeding || crushed)) || (b.personality === 'nuker' && crushed))) {
+    return { goal: 'conquest', reasonKey: 'war.reason.weakNeighbour', tensionKey: 'tension.weak' };
+  }
   if (b.personality === 'trader' && strength(q) < strength(p)) return { goal: 'tribute', reasonKey: 'war.reason.tribute', tensionKey: 'tension.grievance' };
   if (b.personality === 'opportunist' && g.war.enemiesOf(q.id).length > 0) return { goal: 'border', reasonKey: 'war.reason.opportunity', tensionKey: 'tension.weak' };
   if (r && r.grievance > 1.5) return { goal: 'border', reasonKey: 'war.reason.grievance', tensionKey: 'tension.grievance' };
@@ -197,18 +276,19 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
   if (b.tension) {
     const t = b.tension;
     const q = g.player(t.target);
-    const stale = !alive(q) || g.isAllied(p.id, t.target) || g.war.atWar(p.id, t.target) || g.tick - t.tick > lead * 4 + 600;
+    const stale = !alive(q) || (g.isAllied(p.id, t.target) && t.reasonKey !== 'war.reason.ambition') || g.war.atWar(p.id, t.target) || g.tick - t.tick > lead * 4 + 600;
     if (stale) {
       b.tension = null;
     } else if (g.tick - t.tick >= lead && mayDeclare(ctx, b, p) && !gate.swamped) {
       const naval = !g.sharesBorder(p.id, t.target);
       // The odds are re-read when the lead has run: a target that grew or made peace elsewhere is dropped.
-      const need = naval ? 0 : neededShare(p, enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1), LAUNCH_RATIO);
+      const need = naval ? 0 : neededShare(p, enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1), aggressorRatio(ctx, b, p, q!), armorPlan(ctx, p));
       if (need > MAX_COMMIT) {
         if (g.tick - t.tick > lead * 3) b.tension = null;
       } else if (g.war.declareError(p.id, t.target) === null) {
-        const size = naval ? commitRatio(b) : neededShare(p, enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1), targetRatio(b) * 1.05);
-        const ratio = clamp(Math.max(need * 1.05, Math.min(size, commitRatio(b) * 1.5)), 0.05, MAX_COMMIT);
+        const G0 = naval ? 0 : enemyGarrison(ctx, p, q!, b.front.contact.get(t.target) ?? 1);
+        const want = Math.min(commitRatio(b) * p.troops, Math.max(restrained(ctx, b, q!) ? 0 : usefulWidthTroops(q!), G0 * Math.max(LAUNCH_RATIO, targetRatio(ctx, b, q)) * 1.05));
+        const ratio = clamp(Math.max(need * 1.05, want / Math.max(1, p.troops)), 0.05, MAX_COMMIT);
         const aim = aimAt(ctx, b, q!);
         const ok = g.issue(p.id, {
           type: 'declareWar', target: t.target, goal: t.goal, reasonKey: t.reasonKey,
@@ -217,6 +297,8 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
         if (ok) {
           b.tension = null;
           b.lastDeclareTick = g.tick;
+          // The queued offensive is this staff's next operation (it starts when the mobilization ends).
+          b.lastOffensiveTick = Math.max(b.lastOffensiveTick, g.tick + AI_MOBILIZE_TICKS[d]);
           ctx.world.lastAiWarTick = g.tick;
           b.enemy = t.target;
           b.enemySince = g.tick;
@@ -230,36 +312,83 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
   if (gate.fill < gate.reserve * 0.9) return;
   // In the land rush nations do not start wars unless they are boxed in.
   if (g.tick < 900 && gate.neutral > 6) return;
-  let best: SimPlayer | null = null, bestScore = 0;
+  let best: SimPlayer | null = null, bestScore = 0, betray = false;
   const graceEnd = HUMAN_GRACE_TICKS[d];
   for (const [id, c] of b.front.contact) {
     if (id === 0) continue;
     const q = g.player(id);
     if (!alive(q) || q.kind === 'tribe') continue;
-    if (g.isAllied(p.id, id) || g.war.pairState(p.id, id) !== 'peace') continue;
+    if (g.war.pairState(p.id, id) !== 'peace') continue;
     // Protecting the human (§4.16): tension may start one lead before the grace ends, never earlier.
     if (id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < graceEnd - lead) continue;
     if (id === HUMAN_ID && g.war.declareError(p.id, id) === 'msg.warCap') continue;
-    const opinion = opinionProxy(ctx, b, p, q);
     const weak = strength(q) <= strength(p) * 0.5;
-    // Step 1 filter: hostile opinion (< −30), unless a conqueror faces a much weaker neighbour or an opportunist a cold
-    // one (< −10) already bleeding in another war (§5.8).
+    if (g.isAllied(p.id, id)) {
+      // Betrayal (§5.6): an ally is spared unless the gain is large (it is much weaker, and not allied to our other
+      // friends) and the personality's word gives way: 1 − loyalty, rolled once per decision cycle, scaled down.
+      if (!weak || betrayalBlocked(ctx, p, q)) continue;
+      if (ctx.rng.next() >= (1 - b.prof.loyalty) * BETRAYAL_ROLL) continue;
+      if (neededShare(p, enemyGarrison(ctx, p, q, c), LAUNCH_RATIO, armorPlan(ctx, p)) > MAX_COMMIT) continue;
+      const sc = scoreTarget(ctx, b, p, q, c, gate.neutral);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = q;
+        betray = true;
+      }
+      continue;
+    }
+    const opinion = opinionProxy(ctx, b, p, q);
+    // Step 1 filter: hostile opinion (< −30), unless a conqueror faces a much weaker neighbour, an opportunist a cold
+    // one (< −10) already bleeding in another war, or a conqueror, nuker or opportunist a cold neighbour it could beat
+    // with a third of its army (prey: the temptation of overwhelming local superiority, §5.8; turtles and traders go
+    // to war only when hostile).
     const bleeding = b.personality === 'opportunist' && opinion < -10 && g.war.enemiesOf(q.id).length > 0;
-    if (opinion >= -30 && !(b.personality === 'conqueror' && weak) && !bleeding) continue;
+    // After tick 18,000 the AI's humanFocus (§4.16, §5.9; Normal and above) also turns its attention to a human it
+    // could crush: a weak, passive human is prey unless the AI is friendly to it.
+    const humanPrey = q.id === HUMAN_ID && g.tick >= 18_000 && b.diff.humanFocus >= 0.8 && opinion < 0;
+    const prey = (b.personality === 'conqueror' || b.personality === 'nuker' || b.personality === 'opportunist' || humanPrey)
+      && (opinion < -10 || humanPrey) && isPrey(ctx, p, q, c);
+    if (opinion >= -30 && !(b.personality === 'conqueror' && weak) && !bleeding && !prey) continue;
+    // Deterrence: the troops the target's allies would bring, weighted by the §5.5 odds that they answer its call to
+    // arms (0.5 + 0.5·loyalty when they border us or have a navy, 0.3 + 0.5·loyalty otherwise).
+    if (expectedAllies(ctx, p, q) > p.troops * 0.5) continue;
     // No war it cannot fight: the first offensive must reach the launch odds against the garrison it will meet.
-    if (neededShare(p, enemyGarrison(ctx, p, q, c), LAUNCH_RATIO) > MAX_COMMIT) continue;
+    if (neededShare(p, enemyGarrison(ctx, p, q, c), aggressorRatio(ctx, b, p, q), armorPlan(ctx, p)) > MAX_COMMIT) continue;
     let s = scoreTarget(ctx, b, p, q, c, gate.neutral);
     s *= 1 + Math.min(0.5, (-opinion - 30) / 140);
     if (s > bestScore) {
       bestScore = s;
       best = q;
+      betray = false;
+    }
+  }
+  // Reachable players across the sea (§5.7 step 1, naval reach): only as prey for a conquest, never for a border quarrel.
+  if (!best && g.tick >= 6000 && b.front.shoreSample.length > 0 && (b.personality === 'conqueror' || b.personality === 'opportunist')) {
+    const reach = reachOf(ctx, b);
+    const base = b.homeTile;
+    for (const q of g.players()) {
+      if (q.id === p.id || !alive(q) || (q.kind !== 'nation' && q.kind !== 'human') || b.front.contact.has(q.id)) continue;
+      if (g.isAllied(p.id, q.id) || g.war.pairState(p.id, q.id) !== 'peace' || q.capitalTile < 0 || base < 0) continue;
+      if (q.id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < graceEnd - lead) continue;
+      if (q.id === HUMAN_ID && g.war.declareError(p.id, q.id) === 'msg.warCap') continue;
+      if (g.distance(base, q.capitalTile) > reach) continue;
+      const weak = strength(q) <= strength(p) * 0.5;
+      const prey = b.personality === 'conqueror' ? weak : weak && g.war.enemiesOf(q.id).length > 0;
+      if (!prey || opinionProxy(ctx, b, p, q) >= 10) continue;
+      const sc = scoreTarget(ctx, b, p, q, 6, gate.neutral) * 0.6;
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = q;
+      }
     }
   }
   if (!best || bestScore < gate.threshold) return;
   // Opening grace: no war between nations in the first hours unless the odds are crushing.
   const need = g.tick < 1800 ? 3.2 : g.tick < 3600 ? 1.8 : 0;
   if (need > 0 && p.troops < best.troops * need) return;
-  const goal = chooseGoal(ctx, b, p, best);
+  const goal = betray
+    ? { goal: 'conquest' as WarGoal, reasonKey: 'war.reason.ambition', tensionKey: 'tension.ambition' }
+    : chooseGoal(ctx, b, p, best);
   b.tension = { target: best.id, goal: goal.goal, reasonKey: goal.reasonKey, tick: g.tick };
   if (best.id === HUMAN_ID) g.war.recordTension(p.id, best.id);
   g.emit({ type: 'tension', tick: g.tick, from: p.id, to: best.id, reasonKey: goal.tensionKey, params: { goal: goal.goal } });
@@ -311,65 +440,103 @@ function runPlan(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar, reserve: num
   // Offensives: top up to the commit ratio and re-aim; start one when there is none and the odds are fair.
   const mine = g.outgoingAttacks(p.id).filter((a) => a.defender === enemyId);
   const land = mine.filter((a) => !a.naval);
+  if (mine.length) b.warActive.set(w.id, g.tick);
   const commit = commitRatio(b);
   const home = p.troops;
   const spare = home - reserve * p.maxTroops * 0.6;
   const aim = aimAt(ctx, b, q);
   if (g.sharesBorder(p.id, enemyId)) {
     const G = enemyGarrison(ctx, p, q, b.front.contact.get(enemyId) ?? 1);
-    if (land.length === 0) {
-      // A new offensive only with the odds (§4.6): the aggressor commits what it takes (up to MAX_COMMIT), a defender
-      // counter-attacks only with a clear edge; otherwise the staff waits for its troops to grow or the enemy to split.
-      if (g.tick < (b.offCooldown.get(enemyId) ?? 0) || g.tick - b.lastOffensiveTick < OFFENSIVE_TEMPO || aim < 0 || spare <= home * 0.05) return;
-      // Their offensive on the same front joins the defence of a counter-offensive at half weight (§4.8).
-      let incoming = 0;
-      for (const a of g.incomingAttacks(p.id)) if (a.attacker === enemyId && !a.naval) incoming += a.troops;
-      const need = neededShare(p, G + 0.5 * incoming, side === 0 ? LAUNCH_RATIO : COUNTER_RATIO);
-      if (need > MAX_COMMIT) return;
-      // Economy of force: size it for the staff's target ratio, keep the rest for the other fronts and the land.
-      const size = neededShare(p, G + 0.5 * incoming, Math.max(side === 0 ? LAUNCH_RATIO : COUNTER_RATIO, targetRatio(b)) * 1.05);
-      if (g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(Math.max(need * 1.05, Math.min(size, commit * 1.5)), 0.05, MAX_COMMIT), tile: aim })) {
-        b.lastOffensiveTick = g.tick;
+    // Their offensive on the same front joins the defence of a counter-offensive at half weight (§4.8).
+    let incoming = 0;
+    for (const a of g.incomingAttacks(p.id)) if (a.attacker === enemyId && !a.naval) incoming += a.troops;
+    const launchRatio = side === 0 ? aggressorRatio(ctx, b, p, q) : COUNTER_RATIO;
+    const armor = armorPlan(ctx, p);
+    const width = restrained(ctx, b, q) ? 0 : usefulWidthTroops(q);
+    // A new offensive only with the odds (§4.6); a second corridor on another front against a large enemy (§4.18).
+    const canOpen = g.tick >= (b.offCooldown.get(enemyId) ?? 0) && g.tick - b.lastOffensiveTick >= OFFENSIVE_TEMPO && spare > home * 0.05;
+    if (land.length === 0 || (land.length === 1 && side === 0 && q.tiles >= SECOND_CORRIDOR_TILES && land[0].troops >= width * 0.8)) {
+      if (!canOpen) return;
+      let tile = aim;
+      if (land.length === 1) {
+        // The second corridor opens on another front of this war (the longest one without our offensive).
+        tile = -1;
+        let best = 5;
+        for (const f of fronts) {
+          if (f.key === land[0].frontKey || f.length <= best) continue;
+          best = f.length;
+          tile = Math.floor(f.y) * MAP_W + Math.floor(((f.x % MAP_W) + MAP_W) % MAP_W);
+        }
       }
-    } else {
-      const goal = targetRatio(b);
-      for (const a of land) {
-        if (a.state === 'retreating') continue;
-        // In the contact phase the ratio is not measured yet: estimate it from the garrison it will meet.
-        const R = a.state === 'contact' ? a.troops / Math.max(1, G) : a.ratio;
-        if (R <= 0) continue;
-        // What the offensive meets teaches the staff the enemy's real strength (divisions, posts, modifiers).
-        if (a.state !== 'contact' && G > 0) {
-          const seen = clamp(a.troops / R / G, 0.5, 3);
-          b.intel.set(enemyId, (b.intel.get(enemyId) ?? 1) * 0.5 + seen * 0.5);
+      if (tile < 0) return;
+      const G1 = G + 0.5 * incoming;
+      const need = neededShare(p, G1, launchRatio, armor);
+      if (need > MAX_COMMIT) return;
+      // Sized for the odds and for a corridor as wide as the enemy is worth, within the personality's commit ratio.
+      const want = Math.min(commit * home, Math.max(width, G1 * Math.max(launchRatio, targetRatio(ctx, b, q)) * 1.05));
+      const ratio = clamp(Math.max(need * 1.05, want / Math.max(1, home)), 0.05, MAX_COMMIT);
+      if (g.issue(p.id, { type: 'attack', target: enemyId, ratio, tile })) b.lastOffensiveTick = g.tick;
+      return;
+    }
+    const goal = targetRatio(ctx, b, q);
+    for (const a of land) {
+      if (a.state === 'retreating') continue;
+      // In the contact phase the ratio is not measured yet: estimate it from the garrison it will meet.
+      const R = a.state === 'contact' ? a.troops / Math.max(1, G) : a.ratio;
+      if (R <= 0) continue;
+      // What the offensive meets teaches the staff the enemy's real strength (divisions, posts, modifiers).
+      if (a.state !== 'contact' && G > 0) {
+        const seen = clamp(a.troops / R / G, 0.5, 3);
+        b.intel.set(enemyId, (b.intel.get(enemyId) ?? 1) * 0.5 + seen * 0.5);
+      }
+      // Reinforcements go to this offensive's own axis (a far click would open a new offensive, §4.3).
+      const axis = a.clickX >= 0 ? Math.floor(a.clickY) * MAP_W + Math.floor(a.clickX) : -1;
+      if (R < HOLD_RATIO && a.state !== 'contact') {
+        // Stuck: feed it up to a winning ratio if we can, else pull it back before it bleeds out (§4.9).
+        const add = a.troops * (TOPUP_RATIO / R - 1);
+        if (axis >= 0 && add < spare && add / Math.max(1, home) <= MAX_COMMIT) {
+          g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(add / Math.max(1, home), 0.03, MAX_COMMIT), tile: axis });
+        } else if (a.state === 'stalled') {
+          g.issue(p.id, { type: 'retreat', attackId: a.id });
+          b.offCooldown.set(enemyId, g.tick + OFFENSIVE_COOLDOWN);
         }
-        if (R < HOLD_RATIO && a.state !== 'contact') {
-          // Stuck: feed it up to a winning ratio if we can, else pull it back before it bleeds out (§4.9).
-          const add = a.troops * (TOPUP_RATIO / R - 1);
-          if (add < spare && add / Math.max(1, home) <= MAX_COMMIT) {
-            g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(add / Math.max(1, home), 0.03, MAX_COMMIT), tile: aim });
-          } else if (a.state === 'stalled') {
-            g.issue(p.id, { type: 'retreat', attackId: a.id });
-            b.offCooldown.set(enemyId, g.tick + OFFENSIVE_COOLDOWN);
-          }
-          continue;
-        }
-        // Top up to the target ratio (casualties and the enemy's redeployment wear it down) on the same axis; once
-        // its axis point has fallen, re-aim it at the capital or the enemy's front (§5.7 step 6).
-        const add = R < goal * 0.85 ? Math.min(spare, a.troops * (goal / R - 1)) : 0;
-        const axis = a.clickX >= 0 ? Math.floor(a.clickY) * MAP_W + Math.floor(a.clickX) : -1;
-        const axisTaken = axis < 0 || g.ownerOf(axis) !== enemyId;
-        const tile = axisTaken && aim >= 0 && g.distance(aim, axis >= 0 ? axis : aim) <= 20 ? aim : axis;
-        if (tile >= 0 && home > 1 && (add > home * 0.01 || (axisTaken && tile === aim && aim !== axis))) {
-          g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(add / home, 0.005, MAX_COMMIT), tile });
-        }
+        continue;
+      }
+      // Top up (casualties and the enemy's redeployment wear it down) to the target ratio and the useful width, on
+      // the same axis; once its axis point has fallen, re-aim it at the capital or the enemy's front (§5.7 step 6).
+      const wantTroops = Math.max(R < goal * 0.85 ? a.troops * (goal / R) : 0, Math.min(commit * (home + a.troops), width));
+      const add = Math.max(0, Math.min(spare, wantTroops - a.troops));
+      const axisTaken = axis < 0 || g.ownerOf(axis) !== enemyId;
+      const tile = axisTaken && aim >= 0 && g.distance(aim, axis >= 0 ? axis : aim) <= 20 ? aim : axis;
+      if (tile >= 0 && home > 1 && (add > Math.max(home * 0.02, a.troops * 0.1) || (axisTaken && tile === aim && aim !== axis))) {
+        g.issue(p.id, { type: 'attack', target: enemyId, ratio: clamp(add / home, 0.005, MAX_COMMIT), tile });
       }
     }
-  } else if (mine.length === 0 && side === 0 && spare > home * 0.1) {
-    // No land front: a landing on their coast (the naval module picks beaches; here the capital's coast).
-    const coast = q.capitalTile >= 0 && g.isShore(q.capitalTile) ? q.capitalTile : aim;
-    if (coast >= 0) g.issue(p.id, { type: 'boatAttack', targetTile: coast, ratio: Math.min(0.45, commit) });
+  } else if (mine.length === 0 && side === 0 && spare > home * 0.1 && g.tick - b.lastOffensiveTick >= OFFENSIVE_TEMPO) {
+    // No land front: a landing on their coast nearest to our shores (their capital's coast when it has one).
+    const coast = q.capitalTile >= 0 && g.isShore(q.capitalTile) ? q.capitalTile : enemyCoast(ctx, b, q);
+    if (coast >= 0 && g.issue(p.id, { type: 'boatAttack', targetTile: coast, ratio: Math.min(0.45, commit) })) b.lastOffensiveTick = g.tick;
   }
+}
+
+/** A coastal tile of `q` near our shores (sampled), or -1. */
+function enemyCoast(ctx: AiContext, b: Brain, q: SimPlayer): number {
+  const g = ctx.g;
+  const ours = b.front.shoreSample.length ? b.front.shoreSample : b.homeTile >= 0 ? [b.homeTile] : [];
+  if (ours.length === 0) return -1;
+  let best = -1, bd = Infinity, n = 0;
+  for (const t of g.borderTiles(q.id)) {
+    if (!g.isShore(t)) continue;
+    for (const o of ours) {
+      const d = g.distance(t, o);
+      if (d < bd) {
+        bd = d;
+        best = t;
+      }
+    }
+    if (++n >= 400) break;
+  }
+  return best;
 }
 
 // =================================================================================================
@@ -440,6 +607,15 @@ export function thinkPeace(ctx: AiContext, b: Brain, p: SimPlayer): void {
     const ex = g.war.exhaustion(p.id);
     const s = g.war.warScore(p.id, enemy);
     const mineConquest = pressing(ctx, w, p.id);
+    // A war of ours that never got going (no offensive for FAILED_WAR_TICKS after mobilization, nothing gained): the
+    // plan failed; offer a white peace rather than keep an empty war open.
+    if (w.a === p.id && !w.joined) {
+      const active = Math.max(b.warActive.get(w.id) ?? 0, w.mobilizeUntilTick);
+      if (g.tick - active >= FAILED_WAR_TICKS && w.net <= 0 && answerWhite(ctx, w, enemy, p.id) === 'yes') {
+        makePeace(ctx, p.id, enemy, { kind: 'white' }, 0);
+        continue;
+      }
+    }
     // A losing, exhausted side sues for peace.
     if (ex >= 45 && s <= 0 && !(mineConquest && ex < 70)) {
       const ans = answerWhite(ctx, w, enemy, p.id);

@@ -71,7 +71,7 @@ function postUpdate(ticks: number, tickMs: number, full = false): void {
   if (!game) return;
   const u = game.buildUpdate(ticks, full);
   u.tickMs = tickMs;
-  u.clock = { ...clock };
+  u.clock = { ...clock, wallMs: Date.now() };
   post({ kind: 'update', u }, tickUpdateTransferables(u));
 }
 

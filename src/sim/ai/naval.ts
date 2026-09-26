@@ -10,15 +10,17 @@ import { dist2 } from './mapindex';
 import type { Brain } from './state';
 
 /** Settlement cadence (ticks) and the land race it waits for (§10.6). */
-export const SETTLE_EVERY = 200;
-const SETTLE_FROM_TICK = 1200;
-/** Settler convoys a nation runs at once. */
-const SETTLE_CONVOYS = 2;
+export const SETTLE_EVERY = 150;
+const SETTLE_FROM_TICK = 600;
+/** Settler convoys a nation runs at once: three at peace, one at war (the other transports carry invasions). */
+const SETTLE_CONVOYS_PEACE = 3, SETTLE_CONVOYS_WAR = 1;
 /** An island we could not reach (no sea route, no free beach) is left alone this long. */
 const SETTLE_RETRY_TICKS = 6000;
+/** Staff tempo for invasions of players (same as land offensives, warplan.ts). */
+const NAVAL_TEMPO = 600;
 
 /** How far (tiles) a nation's transports reach: grows through the game, longer for seafaring personalities. */
-function reachOf(ctx: AiContext, b: Brain): number {
+export function reachOf(ctx: AiContext, b: Brain): number {
   return Math.min(420, 90 + ctx.g.tick / 18) * (0.75 + 0.25 * b.prof.naval);
 }
 
@@ -41,7 +43,8 @@ export function thinkSettle(ctx: AiContext, b: Brain, p: SimPlayer): void {
     const isl = ctx.index.islands[i];
     if (isl && !isl.coast.some((t) => g.ownerOf(t) === p.id)) b.settleFail.set(i, g.tick + SETTLE_RETRY_TICKS);
   }
-  if (troopFill(p) < 0.3 || b.settling.size >= SETTLE_CONVOYS) return;
+  const convoys = g.war.enemiesOf(p.id).length > 0 ? SETTLE_CONVOYS_WAR : SETTLE_CONVOYS_PEACE;
+  if (troopFill(p) < 0.3 || b.settling.size >= convoys) return;
   const reach = reachOf(ctx, b);
   const origins: number[] = [base];
   for (const t of b.front.shoreSample) origins.push(t);
@@ -136,10 +139,15 @@ export function thinkNaval(ctx: AiContext, b: Brain, p: SimPlayer): void {
     }
   }
   if (best < 0 || bestScore < 0.5) return;
+  // An invasion of a player is an offensive: it waits for the staff's tempo like any other (§5.7 step 6).
+  if (bestOwner > 0 && g.tick - b.lastOffensiveTick < NAVAL_TEMPO) return;
   const ratio = bestOwner === 0 ? 0.18 + 0.1 * b.prof.naval : 0.3 + 0.1 * b.prof.aggression;
   if (g.issue(p.id, { type: 'boatAttack', targetTile: best, ratio: Math.min(0.5, ratio) })) {
     b.lastBoatTick = g.tick;
-    if (bestOwner > 0) relation(b, bestOwner).trust -= 0.1;
+    if (bestOwner > 0) {
+      relation(b, bestOwner).trust -= 0.1;
+      b.lastOffensiveTick = g.tick;
+    }
   }
 }
 

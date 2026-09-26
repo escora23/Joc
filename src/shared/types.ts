@@ -126,6 +126,9 @@ export interface ClockView {
   throttled?: boolean;
   /** The strategic speed chosen by the player (restored when crisis / observation ends). */
   speed: GameSpeed;
+  /** Worker wall time (Date.now()) when the update carrying this clock was posted: measurements independent of how
+   *  late the main thread (a slow renderer) gets to the message. */
+  wallMs?: number;
 }
 /** Setup option «Duración»: victory thresholds and the time limit (§4.18). */
 export type GameDuration = 'short' | 'normal' | 'long';

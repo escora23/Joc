@@ -62,7 +62,7 @@ export function thinkWar(ctx: AiContext, b: Brain, p: SimPlayer, interval: numbe
       // the assault, so it goes in only with a clear edge (COUNTER_RATIO) and at most 65 % of the home troops.
       const need = COUNTER_RATIO * (enemyGarrison(ctx, p, att, b.front.contact.get(att.id) ?? 1) + 0.5 * inc.top);
       const want = Math.min(need * 1.05, p.troops * 0.65);
-      if (want >= need && g.tick - b.lastOffensiveTick >= 300 && !g.outgoingAttacks(p.id).some((a) => a.defender === att.id && !a.naval)) {
+      if (want >= need && g.tick - b.lastOffensiveTick >= 600 && !g.outgoingAttacks(p.id).some((a) => a.defender === att.id && !a.naval)) {
         b.lastOffensiveTick = g.tick;
         const ratio = clamp(want / Math.max(1, p.troops), 0.05, 0.65);
         const aim = b.front.aim.get(att.id) ?? att.capitalTile;

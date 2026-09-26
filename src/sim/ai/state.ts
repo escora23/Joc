@@ -119,6 +119,8 @@ export interface Brain {
   intel: Map<number, number>;
   /** Last tick this staff opened a new land offensive (tempo, §5.7 step 6). */
   lastOffensiveTick: number;
+  /** War id -> last tick we had an offensive running in it (a war with none for long is a failed war). */
+  warActive: Map<number, number>;
 }
 
 export function emptyFront(): FrontInfo {

@@ -409,7 +409,10 @@ breaking a NAP, alliance or truce marks the aggressor as traitor (§5.6).
   division per 20 km of front, a realistic attack density), centred on the ray from the offensive's origin (the centroid
   of the attacker's contact tiles when the axis was set) through the axis point. Frontier tiles outside the corridor get
   no pressure and stay a quiet front. Past the axis point the corridor keeps pushing along the same ray until the axis
-  is moved or the offensive ends. The offensive's arrow (§11.2) is drawn as wide as its corridor.
+  is moved or the offensive ends. (W1c) A frontier tile takes pressure only from attacker tiles behind it or beside it
+  along the axis, never from one ahead of it: around an encircled pocket the offensive advances through it from the
+  side it comes from instead of peeling every side at once (the far side is another army's front; a corridor whose
+  every contact faces backwards falls back to pushing where it touches). The offensive's arrow (§11.2) is drawn as wide as its corridor.
 
 ### 4.4 Local power
 
@@ -463,7 +466,7 @@ For an offensive `a` of attacker A against defender D on front `f`:
 
   | Factor | Values |
   |---|---|
-  | `terrain(t)` (time multiplier, ≥ 1) | plains 1.0, hills 1.6, mountains 2.6; extra ×1.5 above 3,000 m, ×1.5 river, ×2 tile with a structure (urban), ×1.5 / 1.75 / 2.0 inside a defense-post zone L1/L2/L3, ×2 fallout, ×3 the defender's capital, ×1.4 within 3 tiles of an attached **defending** division |
+  | `terrain(t)` (time multiplier, ≥ 1) | plains 1.0, hills 1.6, mountains 2.6; extra ×1.5 above 3,000 m, ×1.5 river, ×2 tile with a structure (urban), ×1.5 / 1.75 / 2.0 inside a defense-post zone L1/L2/L3, ×2 fallout, ×3 the defender's capital district (the capital and its 8 neighbours; W1c: one 25 km tile was not a city, and a 50-tile spawn fell in ~140 ticks against the ~300 of the worked example), ×1.4 within 3 tiles of an attached **defending** division |
   | `armor(t)` | ×1.5 within 3 tiles of an attached **attacking** division (armor lets a weaker offensive reach the cap; it never exceeds it) |
   | `axis(t)` (≤ 1) | 1.0 within 3 tiles of the axis ray, 0.8 elsewhere inside the corridor (the corridor bulges toward the click); 0 outside it |
 
@@ -598,6 +601,9 @@ If D launches an offensive against A on a front where A already attacks D, the t
 
 ### 4.12 Sieges (encirclement v2)
 
+* (W1c) The nation's core, the component holding its capital (or, with the capital lost, its largest component when
+  that is most of its land), is the nation itself and never a pocket: a landlocked nation at war with every neighbour
+  fights with its whole army, it does not starve.
 * A pocket of a player's land that has no sea access and is fully surrounded by players **at war with it** becomes
   **besieged** (`siege` event, stage `start`, alert and news). A pocket touching neutral land or a neutral third party is
   not a siege.
@@ -619,7 +625,8 @@ If D launches an offensive against A on a front where A already attacks D, the t
   capture stamp in the owner texture (CM§15) is kept only for the 2 s conquest flash, because `rebuildAll()` resets it on
   every resync (T43).
 * **Capitulation (AI only)** is the main way large territories change hands (§4.18): an AI that has lost its capital
-  **and** ≥ 50 % of its pre-war land **and** has exhaustion ≥ 60 capitulates to the enemy that took most of its land:
+  **and** ≥ 40 % of its pre-war land **and** has exhaustion ≥ 50 (W1c retune within the §4.18 tuning rule; was 50 % and
+  60) capitulates to the enemy that took most of its land:
   its remaining land transfers to that enemy through a treaty, animated as a wave from the winner's border over 20
   ticks, announced in the news, with its population (§6.7) and structures. The human never capitulates automatically (it
   may propose surrender terms, §5.3).
@@ -879,7 +886,36 @@ current logic, re-timed).
 8. **Peace evaluation** every 240 ticks and on every peace proposal: sue for white peace at exhaustion ≥ 45 and war
    score ≤ 0; accept white peace at exhaustion ≥ 35 or when its goal is met, except while its war score is ≥ +40 and its
    exhaustion < 70 (winners hold out, §4.15); demand cession at war score ≥ 40 or tribute at ≥ 25; a `conquest` goal is
-   met only by capitulation; capitulate per §4.13 (capital lost, ≥ 50 % of the pre-war land lost, exhaustion ≥ 60).
+   met only by capitulation; capitulate per §4.13 (capital lost, ≥ 40 % of the pre-war land lost, exhaustion ≥ 50).
+
+**As built by W1c (stub build; W3 replaces the opinion proxy).** What the playtests and `pace-audit game` showed and
+what the pipeline does about it:
+
+* **Opinion proxy** from the §5.1 reasons the sim already knows (border long/short, size threat, runaway leader,
+  unprovoked war with a 20-day half-life, traitor, personality affinity, alliance, common enemy) on top of v1 trust and
+  grievance. Border friction alone never reaches −30.
+* **Step 1 exceptions** besides the conqueror's: an opportunist may strike a cold neighbour (< −10) already at war
+  elsewhere; conquerors, nukers and opportunists may strike a cold neighbour they could beat with a third of their army
+  (*prey*); after tick 18,000 on Normal and above (`humanFocus`), a human that is prey is a candidate unless the AI is
+  friendly. Conquerors, and opportunists against a bleeding target, also consider players across the sea within naval
+  reach, as prey for a conquest only. Allies are spared except for the rare **betrayal** of §5.6 (a much weaker ally not
+  allied to our other friends, `1 − loyalty` × 1 % per decision cycle, reason `war.reason.ambition`). A target whose
+  allies on our own border hold more than 60 % of our troops deters the declaration.
+* **Offensive discipline.** A staff declares and launches only at the odds of §4.6: estimated `R ≥ 1.7` against the
+  garrison it will meet (its own divisions counted, ×1.25 each up to ×2; an *intel* factor learned from the ratios its
+  offensives actually measured), `R ≥ 2.1` for a defender's counter-offensive, `1.3` for a coalition against the runaway
+  leader. It sizes an offensive for both odds and width (a target ratio of `1.7 + 2 × (efficiency − 0.5)` and a corridor
+  of `1.5 × √(enemy tiles)` tiles, within its commit ratio), opens a second corridor on another front against an enemy
+  of ≥ 4,000 tiles, tops offensives up on their own axis, and pulls back one that stalls below `R 1.15` when it cannot
+  feed it (cooldown 600 ticks on that enemy). **Tempo:** one new operation (offensive, landing, or the queued offensive
+  of a declaration) per staff per 600 ticks. On Easy and Normal the AI never brings more than the launch odds against
+  the human (§4.16).
+* **Failed wars end.** An aggressor whose war produced no offensive for 1,800 ticks after mobilization, having gained
+  nothing, offers a white peace. Winners press on: a war we are clearly winning (score ≥ 40, enemy capital held) is
+  fought to capitulation by every personality but turtles and traders; a `conquest` goal refuses every peace but
+  capitulation until exhaustion 70.
+* **Pacing limits** (within step 7's maxima): 1 declaration per AI per 1,200 ticks; worldwide 1 new AI war per 360
+  ticks before tick 18,000 and per 240 after (T17 counts calls to arms too, ~40 % of all declarations).
 
 ### 5.8 Personalities
 
@@ -918,6 +954,11 @@ nuclear launch per AI per 720 ticks; cruise missiles ≤ 1 per AI per 120 ticks 
 bomber sortie per squadron per rearm. Cruise missiles come from a war plan (a target list per war), never from a dice
 roll per military tick. Silos are built by AIs only when their personality `nukes` ≥ 0.3 or when an enemy at war owns
 silos (no more "every large nation builds silos").
+
+**Proportionate answers (W1c).** Retaliation is one for one: an AI answers each nuclear launch at it once, and a strike
+on an ally once per enemy; a first use (desperation, existential) happens at most once per enemy, only while the
+doomsday level is below 0.35, and the **nuclear taboo** allows 3 AI first uses per game. Before this, two nations traded
+atom bombs every time a silo reloaded (36 AI launches in one Normal game).
 
 ### 5.11 Nuclear consequences and the doomsday clock
 
@@ -1594,6 +1635,9 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
   Markers within 10 px of each other merge into one archipelago marker with a count.
 * Hover: «Malta · 1 casilla · libre»; left click and `B` act on the island tile (expand, invade).
 * The ground shader draws a 1 px white shoreline around these components above 1,500 km.
+* (W1c as built) From tick 600 every nation sends settler convoys (2–8 % of its troops) to the nearest unclaimed islands
+  within naval reach, scored by `√size / (1 + distance / 60)`, three at a time at peace and one at war, every 150 ticks;
+  a convoy that comes back without a foothold (no sea route, beach taken first) marks that island for 6,000 ticks.
 * The AI settles neutral islands after the land race (`ai/naval.ts` adds reachable neutral islands to its targets), so
   that ≥ 80 % of components with ≥ 5 tiles are owned by tick 18,000 (T39; Hawaii stayed neutral in v1). This is sim
   work and belongs to W1c, which rewrites `ai/naval.ts` anyway ("invasions only at war") and owns the pacing it depends

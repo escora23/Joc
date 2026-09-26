@@ -50,7 +50,13 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
 
   // Arrival log: what the worker sent and when it arrived (independent of the frame rate).
   const arrivals: { at: number; tick: number; ticks: number; mode: string; rate: number; events: { type: string; unitId?: number }[] }[] = [];
-  ctx.sim.onArrival = (u, at) => {
+  // Timed with the worker's own clock when the update carries it (a software renderer delivers messages seconds late);
+  // mapped onto performance.now() at the first arrival.
+  let wallOffset: number | null = null;
+  ctx.sim.onArrival = (u, arrivedAt) => {
+    const wall = u.clock?.wallMs;
+    if (wall !== undefined && wallOffset === null) wallOffset = arrivedAt - wall;
+    const at = wall !== undefined && wallOffset !== null ? wall + wallOffset : arrivedAt;
     arrivals.push({
       at, tick: u.tick, ticks: u.ticks, mode: u.clock?.mode ?? '', rate: u.clock?.rate ?? 0,
       events: u.events.filter((e) => e.type === 'nukeLaunched' || e.type === 'nukeDetonated' || e.type === 'nukeIntercepted' || e.type === 'clockChanged')
@@ -71,6 +77,8 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
     ctx.sim.debug({ type: 'launchNuke', weapon: (opts.weapon ?? UnitType.AtomBomb) as 8, owner: opts.owner ?? 2, fromTile: latLonToTile(...from), targetTile: latLonToTile(...to) });
     let launch = -1, unitId = -1, det = -1, strategic = -1;
     const modesInFlight = new Set<string>();
+    // What kept the clock off strategic after the impact (other launches, mode changes), for the report.
+    const after: string[] = [];
     while (performance.now() - t0 < (opts.timeoutSec ?? 60) * 1000) {
       await wait(50);
       for (let i = start; i < arrivals.length; i++) {
@@ -84,6 +92,10 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
         }
         if (launch >= 0 && det < 0 && a.at >= launch) modesInFlight.add(a.mode);
         if (det >= 0 && strategic < 0 && a.at >= det && a.mode === 'strategic') strategic = a.at;
+        if (det >= 0 && strategic < 0 && a.at >= det && after.length < 12) {
+          for (const e of a.events) if (e.type === 'nukeLaunched' || e.type === 'clockChanged') after.push(`${((a.at - det) / 1000).toFixed(1)}s ${e.type} ${JSON.stringify(e).slice(0, 120)}`);
+          if (after.length === 0 || !after[after.length - 1].includes(`mode ${a.mode}`)) after.push(`${((a.at - det) / 1000).toFixed(1)}s mode ${a.mode}`);
+        }
       }
       if (strategic >= 0) break;
     }
@@ -91,6 +103,7 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       flightSec: det >= 0 && launch >= 0 ? (det - launch) / 1000 : -1,
       backSec: strategic >= 0 ? (strategic - det) / 1000 : -1,
       modesInFlight: [...modesInFlight],
+      after,
     };
   };
 
@@ -133,6 +146,9 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
     }
     const t0 = performance.now();
     let ticks = 0;
+    // Measured depth speed of every running offensive, sampled per arriving update (its mean over the window: the
+    // per-tick EMA spikes when a tile falls on a narrow corridor, the mean is the speed the front actually made).
+    const depth = new Map<number, { sum: number; n: number; attacker: number; defender: number }>();
     const prevHook = ctx.sim.onArrival;
     const UFX = 3, UFY = 4, STRIDE = UNIT_STRIDE;
     ctx.sim.onArrival = (u, at) => {
@@ -153,14 +169,19 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
         }
         p.last = ll;
       }
+      for (const at of view.attacks) {
+        // Fronts between players (unclaimed land spreads radially: its area per corridor width is not a depth).
+        if (at.defender === 0 || (at.state !== 'advancing' && at.state !== 'consolidating')) continue;
+        const d = depth.get(at.id) ?? { sum: 0, n: 0, attacker: at.attacker, defender: at.defender };
+        d.sum += at.advanceKmh ?? 0;
+        d.n++;
+        depth.set(at.id, d);
+      }
     };
     await wait(seconds * 1000);
     ctx.sim.onArrival = prevHook;
     const realSec = (performance.now() - t0) / 1000;
     const ticksPerSec = ticks / realSec;
-    // Front depth: the fastest measured offensive (km per game hour = km per real s at 1x).
-    let front = 0;
-    for (const a of view.attacks) front = Math.max(front, a.advanceKmh ?? 0);
     const rows: ProbeRow[] = [];
     const byType = new Map<UnitType, { km: number; n: number }>();
     for (const p of probe.values()) {
@@ -187,8 +208,45 @@ export function installProbes(ctx: GameContext, target: Record<string, unknown>)
       }
       rows.push({ unit: def.id, kmPerRealSec: +kmPerRealSec.toFixed(1), ticksPerSec: +ticksPerSec.toFixed(2), kmPerTick: +kmPerTick.toFixed(2), kmPerSecAt1x: +at1x.toFixed(1), target, pass });
     }
-    rows.push({ unit: 'frontDepth', kmPerRealSec: +(front * ticksPerSec / 10).toFixed(2), ticksPerSec: +ticksPerSec.toFixed(2), kmPerTick: +(front / 10).toFixed(2), kmPerSecAt1x: +front.toFixed(2), target: '<= 8.8', pass: front <= 8.8 });
     if (opts.stage !== false) for (const id of probe.keys()) ctx.sim.debug({ type: 'removeUnit', unitId: id });
+    // Second phase, a real front for the depth reading (after the units, so a war does not change their behaviour):
+    // the last AI nation holds southern France, at war with us, and we attack it for the same window.
+    if (opts.stage !== false) {
+      let enemy = 0;
+      for (const p of view.playerList) if (p.alive && p.kind === 'nation' && p.id > enemy) enemy = p.id;
+      if (enemy > 0) {
+        ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: t(45.6, 1.5), radius: 12 });
+        ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, mobilizeTicks: 0 });
+        ctx.sim.debug({ type: 'addTroops', playerId: HUMAN_ID, amount: 1_500_000 });
+        await wait(600);
+        ctx.sim.send({ type: 'attack', target: enemy, ratio: 0.6, tile: t(46.5, 1.5) });
+        depth.clear();
+        const prev = ctx.sim.onArrival;
+        ctx.sim.onArrival = (u, at) => {
+          prev?.(u, at);
+          for (const at2 of view.attacks) {
+            if (at2.defender === 0 || (at2.state !== 'advancing' && at2.state !== 'consolidating')) continue;
+            const d = depth.get(at2.id) ?? { sum: 0, n: 0, attacker: at2.attacker, defender: at2.defender };
+            d.sum += at2.advanceKmh ?? 0;
+            d.n++;
+            depth.set(at2.id, d);
+          }
+        };
+        await wait(seconds * 1000);
+        ctx.sim.onArrival = prev;
+        ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, peace: true });
+      }
+    }
+    // Front depth: the fastest offensive by its mean measured speed over the window (km per game hour = km per real s
+    // at 1x); offensives seen for less than a quarter of the window are too short to measure.
+    let front = 0, most = 0, fastest = '';
+    for (const d of depth.values()) most = Math.max(most, d.n);
+    for (const [id, d] of depth) {
+      if (d.n < Math.max(3, most / 4) || d.sum / d.n <= front) continue;
+      front = d.sum / d.n;
+      fastest = `offensive ${id}: ${d.attacker} > ${d.defender || 'unclaimed land'}`;
+    }
+    rows.push({ unit: 'frontDepth', kmPerRealSec: +(front * ticksPerSec / 10).toFixed(2), ticksPerSec: +ticksPerSec.toFixed(2), kmPerTick: +(front / 10).toFixed(2), kmPerSecAt1x: +front.toFixed(2), target: `<= 8.8 (${fastest || 'no offensive'})`, pass: front <= 8.8 });
     console.table(rows);
     return rows;
   };

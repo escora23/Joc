@@ -14,6 +14,7 @@
 //                                                                    T14–T26, T33, T37, T39 on a full autopilot game
 //   npx tsx src/sim/test/pace-audit.mjs invariants                   §4.17 over a full Normal game
 //   npx tsx src/sim/test/pace-audit.mjs save                         T42: save at tick N, restore, compare 600 ticks
+//   npx tsx src/sim/test/pace-audit.mjs endgame [--duration short]   acceptance 18: hegemony countdown, reset, victory
 //
 // Common flags: --seed, --difficulty, --json <file> (machine-readable result), --quiet.
 
@@ -987,7 +988,7 @@ async function game(opts = {}) {
         if (!p.alive || p.kind === 'tribe') continue;
         let h = tilesHist.get(p.id);
         if (!h) tilesHist.set(p.id, (h = []));
-        h.push([g.tick, p.tiles, g.war.enemiesOf(p.id).filter((e) => g.war.between(e, p.id)?.a === e).length]);
+        h.push([g.tick, p.tiles, g.war.enemiesOf(p.id).filter((e) => g.war.between(e, p.id)?.a === e).length, g.war.enemiesOf(p.id).length]);
       }
     }
     if (g.tick === 6000) alive6000 = g.playerArr.filter((p) => p.kind === 'nation' && p.alive).length;
@@ -1059,9 +1060,13 @@ async function game(opts = {}) {
       const j = i + 20; // 1,200 ticks later
       if (j >= h.length) break;
       const loss = (h[i][1] - h[j][1]) / h[i][1];
-      const wars = Math.max(...h.slice(i, j + 1).map((x) => x[2]));
+      // Wars active against it: every war it fights (declared on it, or its own war whose enemy now takes its land).
+      const wars = Math.max(...h.slice(i, j + 1).map((x) => x[3]));
       const capitulated = events.some((e) => e.type === 'capitulation' && e.loser === id && e.tick >= h[i][0] && e.tick <= h[j][0]);
-      if (loss > 0.2 && wars < 2 && !capitulated) t19++;
+      if (loss > 0.2 && wars < 2 && !capitulated) {
+        if (t19 < 6) console.log(`  T19 window: ${g.playerById[id]?.name} ${h[i][1]} -> ${h[j][1]} tiles (${(loss * 100).toFixed(1)} %) ticks ${h[i][0]}-${h[j][0]}, wars ${wars}, declared on it ${Math.max(...h.slice(i, j + 1).map((x) => x[2]))}`);
+        t19++;
+      }
       if (wars < 2 && !capitulated) t19worst = Math.max(t19worst, loss);
     }
   }
@@ -1111,9 +1116,50 @@ async function game(opts = {}) {
 }
 
 // =================================================================================================
+// endgame (acceptance 18, §4.18): the hegemony countdown starts, resets when the condition breaks, and wins when held
+// =================================================================================================
+async function endgame() {
+  const duration = String(arg('duration', 'short'));
+  const { g, events, step } = controlledGame(Number(arg('seed', 5)), { duration });
+  const rules = { short: [0.35, 2.5, 1200], normal: [0.5, 3, 2400], long: [0.6, 4, 4800] }[duration];
+  const rival = addNation(g, 'Rival');
+  g.issue(rival, { type: 'spawn', tile: tileOf(-25, 135) });
+  const land = [];
+  for (let t = 0; t < g.owner.length; t++) if (g.playable[t]) land.push(t);
+  const nH = Math.ceil(g.landTiles * (rules[0] + 0.03)), nR = Math.floor(nH / rules[1]) - 200;
+  // The leader holds the first nH playable tiles; the rival the last nR (far apart: no front between them).
+  const H = new Set(land.slice(0, nH)), R = new Set(land.slice(land.length - nR));
+  stageLand(g, HUMAN_ID, (t) => H.has(t));
+  stageLand(g, rival, (t) => R.has(t));
+  const heg = () => events.filter((e) => e.type === 'hegemony');
+  for (let i = 0; i < 30; i++) step();
+  const s1 = heg().find((e) => e.stage === 'start');
+  row('A18', `leader at ${((100 * g.playerById[HUMAN_ID].tiles) / g.landTiles).toFixed(1)} %, rival ×${(g.playerById[HUMAN_ID].tiles / g.playerById[rival].tiles).toFixed(2)}: countdown starts`, s1 ? `start at ${s1.tick}, until ${s1.untilTick}` : 'no event', `start, until = tick + ${rules[2]}`, !!s1 && s1.untilTick - s1.tick === rules[2]);
+  for (let i = 0; i < 300; i++) step();
+  // The rival grows past leader / ratio: the hegemony breaks.
+  const give = land.slice(nH - Math.ceil(nH * 0.4), nH);
+  stageLand(g, rival, (t) => give.includes(t));
+  for (let i = 0; i < 30; i++) step();
+  const br = heg().find((e) => e.stage === 'broken');
+  row('A18', 'condition breaks (the rival grows): countdown reset', br ? `broken at ${br.tick}` : 'no event', 'broken', !!br);
+  // The leader takes it back: a new countdown from zero.
+  const back = new Set(give);
+  stageLand(g, HUMAN_ID, (t) => back.has(t));
+  for (let i = 0; i < 30; i++) step();
+  const s2 = heg().filter((e) => e.stage === 'start')[1];
+  row('A18', 'condition restored: a new countdown', s2 ? `start at ${s2.tick}, until ${s2.untilTick}` : 'no event', `start after ${br?.tick ?? '-'}, full ${rules[2]} ticks`, !!s2 && !!br && s2.tick > br.tick && s2.untilTick - s2.tick === rules[2]);
+  let n = 0;
+  while (g.phase !== 'ended' && n++ < rules[2] + 100) step();
+  const won = heg().find((e) => e.stage === 'won');
+  const over = events.find((e) => e.type === 'gameOver');
+  row('A18', 'held for the whole countdown: hegemony victory', over ? `${over.reason} at ${over.tick} (winner ${over.winner})` : 'no end', `hegemony at ${s2 ? s2.untilTick : '-'} ± 10`, !!won && !!over && over.reason === 'hegemony' && Math.abs(over.tick - (s2?.untilTick ?? 0)) <= 10);
+  return printTable(`pace-audit endgame (${duration})`);
+}
+
+// =================================================================================================
 // dispatch
 // =================================================================================================
-const modes = { speeds, conquest, depth, attrition, regrowth, empire, warning, nuke, population, occupation, survival, save, game, invariants: () => game({ invariantsOnly: true }) };
+const modes = { endgame, speeds, conquest, depth, attrition, regrowth, empire, warning, nuke, population, occupation, survival, save, game, invariants: () => game({ invariantsOnly: true }) };
 if (!modes[mode]) {
   console.error(`unknown mode ${mode}; modes: ${Object.keys(modes).join(', ')}`);
   process.exit(2);

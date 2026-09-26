@@ -62,7 +62,7 @@ export function createAiDirector(game: SimGame): AiDirector {
       relations: new Map(), front: emptyFront(), pending: [], lastTiles: 0, idleTicks: 0, rushTile: -1, rushUntil: 0,
       allyTarget: 0, allyTargetUntil: 0, buildFails: 0, lastBoatTick: -1_000_000, lastNukeTick: -1_000_000,
       nukesLaunched: 0, coalitionAnnounced: false, homeTile: p.capitalTile, homeCheckTick: -1_000_000, scratch: [],
-      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(), offCooldown: new Map(), settleFail: new Map(), settling: new Map(), intel: new Map(), lastOffensiveTick: -1_000_000,
+      tension: null, lastDeclareTick: -1_000_000, plans: new Map(), nextPeace: t + 240 + rng.int(240), allyNukedBy: new Map(), offCooldown: new Map(), settleFail: new Map(), settling: new Map(), intel: new Map(), lastOffensiveTick: -1_000_000, warActive: new Map(),
     };
     if (kind === 'rebel' && b.parent > 0) {
       b.enemy = b.parent;
@@ -425,6 +425,7 @@ export function createAiDirector(game: SimGame): AiDirector {
         b.settling ??= new Map();
         b.intel ??= new Map();
         b.lastOffensiveTick ??= -1_000_000;
+        b.warActive ??= new Map();
       }
       world = s.world;
       world.firstUses ??= 0;

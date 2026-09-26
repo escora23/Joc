@@ -471,8 +471,9 @@ export class AttackSystem {
     }
     const o = g.owner[tile];
     const D = g.playerObj(o);
-    if (o === p.id || g.isAllied(p.id, o) || !g.playable[tile] || (D && D.kind !== 'tribe' && !g.war.atWar(p.id, o))) {
-      // Friendly (or no longer hostile) shore: the troops simply disembark into the reserve.
+    if (o === p.id || g.isAllied(p.id, o) || !g.playable[tile] || (D && D.kind !== 'tribe' && (!g.war.atWar(p.id, o) || g.war.mobilizingUntil(p.id, o) > 0))) {
+      // Friendly (or no longer hostile) shore, or an enemy we are still mobilizing against (invariant 4: no offensive
+      // before the mobilization ends): the troops do not storm it and go back to the reserve.
       this.end(a, 'cancelled', true);
       return;
     }

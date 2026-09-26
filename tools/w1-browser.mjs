@@ -88,7 +88,7 @@ if (want('topbar')) {
     await setSpeed(sp);
     // The HUD text refreshes with the frames (a software renderer draws a frame every 1-2 s here).
     let chip = '';
-    for (let i = 0; i < 40 && chip !== want; i++) {
+    for (let i = 0; i < 100 && chip !== want; i++) {
       await sleep(250);
       chip = await ev(() => document.querySelector('.fu-clockchip')?.textContent ?? '');
     }
@@ -142,6 +142,7 @@ async function crisisRun(speed) {
   row('T28', `${speed}x: clock during the flight`, r.modesInFlight.join(','), 'crisis', crisisOnly);
   row('T28', `${speed}x: flight Madrid->Paris`, `${r.flightSec.toFixed(1)} real s`, '10–20 real s', r.flightSec >= 10 && r.flightSec <= 20);
   row('T28', `${speed}x: strategic again after impact`, `${r.backSec.toFixed(1)} real s`, '<= 4 real s', r.backSec >= 0 && r.backSec <= 4);
+  if (!(r.backSec >= 0 && r.backSec <= 4)) for (const l of r.after ?? []) log(`   after impact: ${l}`);
   await setSpeed(1);
 }
 if (want('crisis')) {
@@ -173,7 +174,7 @@ if (want('speed')) {
   await look(42, -8, 3500);
   await setSpeed(1);
   await sleep(1000);
-  const rows = await ev(() => window.__front.speedProbe({ seconds: 10 }));
+  const rows = await ev(() => window.__front.speedProbe({ seconds: 6 }));
   for (const r of rows) row('T27b', `${r.unit} on-screen km/s at 1x (measured ${r.ticksPerSec} ticks/s)`, r.kmPerSecAt1x, r.target, r.pass);
 }
 
@@ -229,8 +230,12 @@ if (want('declare')) {
   await sleep(1500);
   // The raw command at peace is rejected.
   await ev((a) => window.__front.ctx.sim.send({ type: 'attack', target: a.enemy, ratio: 0.5, tile: a.target }), st);
-  await sleep(1500);
-  const msgs = await ev(() => window.__decl.msgs.slice());
+  // The worker's answer reaches the bus with the next update (a software renderer can take seconds per frame).
+  let msgs = [];
+  for (let i = 0; i < 60 && !msgs.includes('msg.notAtWar'); i++) {
+    await sleep(250);
+    msgs = await ev(() => window.__decl.msgs.slice());
+  }
   row('A15', 'raw attack on a nation at peace', msgs.includes('msg.notAtWar') ? 'msg.notAtWar' : msgs.join(',') || 'accepted', 'msg.notAtWar', msgs.includes('msg.notAtWar'));
   // A left click on its land opens the minimal declaration modal.
   await ev((a) => window.__front.ctx.bus.emit('worldClick', { button: 0, tile: a.target, lat: 43.2, lon: -0.5, unitId: -1, structureId: -1, clientX: 640, clientY: 360, shift: false, ctrl: false, alt: false }), st);
