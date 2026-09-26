@@ -511,18 +511,34 @@ async function checkFlash() {
     const labF = linLab(sr * k, sg * k, sb * k), labA = linLab(ar, ag, ab);
     const hueDE = Math.hypot(labF[0] - labA[0], labF[1] - labA[1], labF[2] - labA[2]);
     // Edge: the largest step of the flash signal between neighbouring pixels, as a fraction of the peak (a step of
-    // at most 1/3 means the flash takes >= 3 px to rise from nothing to full: no hard edge).
-    const steps = [];
+    // at most 1/3 means the flash takes >= 3 px to rise from nothing to full: no hard edge). Measured on the 3x3
+    // median of the signal: a hard edge along a contour survives a median, while isolated pixels do not (the
+    // anti-aliased border line shifts by a fraction of a pixel between the two frames while the capture wave settles,
+    // which changes single line pixels by more than the flash). The raw figures are reported too.
+    const M = new Float32Array(W * H), nb = new Float32Array(9);
     for (let y = 1; y < H - 1; y++) {
       for (let x = 1; x < W - 1; x++) {
-        const i = y * W + x;
-        if (Math.max(Y[i], Y[i + 1], Y[i + W]) < peak * 0.1) continue;
-        steps.push(Math.abs(Y[i + 1] - Y[i]) / peak, Math.abs(Y[i + W] - Y[i]) / peak);
+        let q = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) nb[q++] = Y[(y + dy) * W + x + dx];
+        nb.sort();
+        M[y * W + x] = nb[4];
       }
     }
-    steps.sort((p, q) => p - q);
-    const maxStep = steps.length ? steps[steps.length - 1] : 1, p999 = steps.length ? steps[Math.floor(steps.length * 0.999)] : 1;
-    results.push({ alt, tiles: fl.length, owner: fl[0].owner, color: col, age: fl[0].age, flashPx, hueDE: +hueDE.toFixed(2), maxStep: +maxStep.toFixed(3), p999Step: +p999.toFixed(3), flashLab: labF.map((v) => +v.toFixed(1)), attackerLab: labA.map((v) => +v.toFixed(1)) });
+    const stepStats = (S) => {
+      const st = [];
+      for (let y = 1; y < H - 2; y++) {
+        for (let x = 1; x < W - 2; x++) {
+          const i = y * W + x;
+          if (Math.max(S[i], S[i + 1], S[i + W]) < peak * 0.1) continue;
+          st.push(Math.abs(S[i + 1] - S[i]) / peak, Math.abs(S[i + W] - S[i]) / peak);
+        }
+      }
+      st.sort((p, q) => p - q);
+      return st.length ? [st[st.length - 1], st[Math.floor(st.length * 0.999)]] : [1, 1];
+    };
+    const [maxStep, p999] = stepStats(M);
+    const [rawMaxStep, rawP999] = stepStats(Y);
+    results.push({ alt, tiles: fl.length, owner: fl[0].owner, color: col, age: fl[0].age, flashPx, hueDE: +hueDE.toFixed(2), maxStep: +maxStep.toFixed(3), p999Step: +p999.toFixed(3), rawMaxStep: +rawMaxStep.toFixed(3), rawP999Step: +rawP999.toFixed(3), flashLab: labF.map((v) => +v.toFixed(1)), attackerLab: labA.map((v) => +v.toFixed(1)) });
     console.log('  flash', JSON.stringify(results[results.length - 1]));
   }
   save('flash', results);

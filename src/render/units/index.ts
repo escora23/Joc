@@ -178,7 +178,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   // The after-arrival hold and fade of route lines run on real seconds (frozen with &freeze=1), evaluated every frame
   // and also on this timer, so a slow or stalled frame never leaves a line drawn past its hold + fade (§10.8).
   routes.clock = () => presentationTime(performance.now() / 1000);
-  setInterval(() => routes.tickEnding(), 200);
+  setInterval(() => routes.tickEnding(), 100);
   let routeEnv: RouteEnv | null = null;
   let hoverUnit = -1;
   let viewW = 1, viewH = 1;
@@ -1400,6 +1400,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     },
     update(frame: FrameInfo) {
       if (!built) return;
+      // Ending route lines: opacity from the clock on every rendered frame, before anything else (§10.8).
+      routes.tickEnding();
       const fx = fxInternal(ctx);
       const paused = ctx.sim.running && ctx.sim.view.speed === 0;
       refreshEnv(frame.frame, ctx.camera, ctx.canvas, (o) => ctx.globe.getSunDirection(o), ctx.cameraRig.getState(camState).altitudeKm, presentationTime(frame.time), paused, frame.now);

@@ -463,7 +463,7 @@ void main() {
   float terr = uTerritoryOpacity;
   float landK = 1.0 - water;
   int O = 0, Q = -1;
-  float distPx = 1e4, distT = 1e4, borderFd = 1.0;
+  float distPx = 1e4, distT = 1e4, borderFd = 1.0, ownCov = 1.0;
   float occ = 0.0, flash = 0.0, isl = 0.0, landCov = 1.0, shorePx = 1e4;
   float flashAmt = 0.0, flashEdgeK = 1.0;
   vec3 flashCol = vec3(0.0);
@@ -558,6 +558,7 @@ void main() {
         }
       }
       O = max(best, 0);
+      ownCov = max(bestC, 0.0);
       if (second >= 0) {
         Q = second;
         float fd = bestC - secondC;
@@ -684,12 +685,13 @@ void main() {
       // screen (applied after the aerial perspective, in display space, see flashTone). Soft everywhere: the coverage
       // weights feather it inside the attacker's land, and it ramps up from just past the border line (never a step
       // against the line).
-      // distPx is exact only within a few px of the line (a coverage difference over its gradient) and overshoots
-      // beyond; the coverage difference itself rises over about a tile, so the distance is the smaller of the two
-      // estimates. The flash then ramps over 6 px from just past the line (a small capture seen from far glows
-      // softly without ever reaching a hard edge).
+      // The ramp is the attacker's own coverage (a cubic B-spline sum over its texels, continuous everywhere): 0.5 on
+      // the line, full about a tile inside, so the glow rises over ~0.8 tile (8-9 px at 1500 km, ~40 px at 300 km) and
+      // never steps. A ramp on the pixel distance to the line (distPx) was steeper than intended (the distance grows
+      // ~1.4 px per screen px across a slanted line) and saturates near one tile, so it only keeps the line itself
+      // clear here.
       float edgePx = min(distPx, borderFd / max(pxT, 1e-6));
-      float flashEdge = Q >= 0 ? smoothstep(1.5, 7.5, edgePx) * smoothstep(0.05, 0.6, borderFd) : 1.0;
+      float flashEdge = Q >= 0 ? smoothstep(0.5, 1.0, ownCov) * smoothstep(0.5, 2.5, edgePx) : 1.0;
       // The same soft ramp against a coast (no second owner there: the neighbour is the sea).
       float coastPx = min(shorePx, (landCov - 0.3) / max(pxT, 1e-6));
       flashEdge *= smoothstep(0.5, 6.5, coastPx) * smoothstep(0.35, 0.9, landCov);
@@ -937,8 +939,12 @@ void main() {
     vec3 d = flashTone(col);
     vec3 room = (vec3(0.93) - d) / max(flashCol, vec3(1e-3));
     // The ramp from the border applies after the headroom limit, so a bright fill never shortens it into a step.
-    float k = clamp(0.4 * flashAmt, 0.0, max(0.0, min(room.r, min(room.g, room.b)))) * flashEdgeK;
-    col = flashUntone(d + flashCol * k);
+    // Never on the border line itself (a bright line pixel would jump): the line stays the frontier's crisp edge.
+    float k = clamp(0.4 * flashAmt, 0.0, max(0.0, min(room.r, min(room.g, room.b)))) * flashEdgeK
+      * (1.0 - clamp(lineCov + outlineCov, 0.0, 1.0));
+    // Added as a difference of two inverse mappings: exactly nothing where k is 0 (the inverse fit does not round-trip
+    // bright pixels exactly, which made the white border line change colour under a flash).
+    if (k > 0.0) col = max(col + flashUntone(d + flashCol * k) - flashUntone(d), 0.0);
   }
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
