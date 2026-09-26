@@ -237,6 +237,39 @@ export class EconomySystem {
     return found;
   }
 
+  /**
+   * One tick of a player's land economy, without side effects (the economy step applies it; pace-audit nuke measures
+   * it per tile). §6.7: occupied tiles count 50 % for the troop cap and 25 % for taxes. §4.14: fallout tiles pay no
+   * taxes and produce no troop growth (growth is the nation's logistic × clean tiles / tiles); they still count 20 %
+   * for the cap, so a strike does not also make the surviving army desert (over-cap troops bleed off, §4.6).
+   */
+  yieldOf(p: Player, atWar: boolean): { maxTroops: number; growth: number; income: number; recruitment: number } {
+    const g = this.g;
+    const tick = g.tick;
+    const diff = g.difficulty;
+    const fPop = p.popTarget > 0 ? Math.min(1, Math.max(0.3, p.pop / p.popTarget)) : 1;
+    const occ = Math.min(p.occupied, p.tiles);
+    const fallout = Math.min(p.falloutTiles, p.tiles);
+    const eff = Math.max(0, p.tiles - fallout * 0.8 - occ * 0.5);
+    const effTax = Math.max(0, p.tiles - fallout - occ * 0.75);
+    const cityLv = p.structLevels[StructureType.City];
+    const armyLv = p.structLevels[StructureType.ArmyBase];
+    const facLv = p.structLevels[StructureType.Factory];
+    const maxTroops = baseMaxTroops(eff, cityLv, armyLv) * kindCapMul(p.kind, diff) * p.mod('maxTroops', tick);
+    let growth = troopGrowthPerTick(p.troops, maxTroops);
+    // Recruitment (§6.7): f_pop × (1 − 0.5 × occupied / tiles).
+    const recruitment = fPop * (p.tiles > 0 ? 1 - 0.5 * (occ / p.tiles) : 1);
+    if (growth > 0) {
+      const cleanFrac = p.tiles > 0 ? 1 - fallout / p.tiles : 1;
+      growth *= TROOP_REGROWTH_SCALE * recruitment * kindGrowthMul(p.kind, diff) * p.mod('troopGrowth', tick)
+        * cleanFrac * (atWar ? WAR_GROWTH_MUL : 1);
+    }
+    const base = p.kind === 'tribe' ? GOLD_BASE_PER_TICK * 0.5 : GOLD_BASE_PER_TICK;
+    const income = (base + GOLD_PER_TILE_PER_TICK * effTax * fPop + GOLD_PER_CITY_LEVEL_PER_TICK * cityLv
+      + (facLv * BALANCE.goldPerFactoryPerSec) / 10) * kindGoldMul(p.kind, diff) * p.mod('goldIncome', tick);
+    return { maxTroops, growth, income, recruitment };
+  }
+
   // =================================================================================================
   // Tick
   // =================================================================================================
@@ -259,31 +292,13 @@ export class EconomySystem {
       if (p.pop < p.popTarget) p.pop = Math.min(p.popTarget, p.pop + drift);
       else if (p.pop > p.popTarget) p.pop = Math.max(p.popTarget, p.pop - drift);
       p.civilians = p.pop;
-      const fPop = p.popTarget > 0 ? Math.min(1, Math.max(0.3, p.pop / p.popTarget)) : 1;
-      // v2 (§4.13, §6.7): occupied tiles count 50 % for the troop cap and 25 % for taxes; fallout 20 % / 0 %.
-      const occ = Math.min(p.occupied, p.tiles);
-      const eff = Math.max(0, p.tiles - p.falloutTiles * 0.8 - occ * 0.5);
-      const effTax = Math.max(0, p.tiles - p.falloutTiles - occ * 0.75);
-      const cityLv = p.structLevels[StructureType.City];
-      const armyLv = p.structLevels[StructureType.ArmyBase];
-      const facLv = p.structLevels[StructureType.Factory];
-      // Troops.
-      const max = baseMaxTroops(eff, cityLv, armyLv) * kindCapMul(p.kind, diff) * p.mod('maxTroops', tick);
-      p.maxTroops = max;
-      let growth = troopGrowthPerTick(p.troops, max);
-      // Recruitment (§6.7): f_pop × (1 − 0.5 × occupied / tiles).
-      p.recruitment = fPop * (p.tiles > 0 ? 1 - 0.5 * (occ / p.tiles) : 1);
-      if (growth > 0) {
-        const falloutFrac = p.tiles > 0 ? p.falloutTiles / p.tiles : 0;
-        growth *= TROOP_REGROWTH_SCALE * p.recruitment * kindGrowthMul(p.kind, diff) * p.mod('troopGrowth', tick)
-          * (1 - 0.75 * falloutFrac) * (atWar.has(p.id) ? WAR_GROWTH_MUL : 1);
-      }
-      p.troopGrowth = growth;
-      p.troops = Math.max(0, p.troops + growth);
+      const y = this.yieldOf(p, atWar.has(p.id));
+      p.maxTroops = y.maxTroops;
+      p.recruitment = y.recruitment;
+      p.troopGrowth = y.growth;
+      p.troops = Math.max(0, p.troops + y.growth);
       // Gold.
-      const base = p.kind === 'tribe' ? GOLD_BASE_PER_TICK * 0.5 : GOLD_BASE_PER_TICK;
-      let income = (base + GOLD_PER_TILE_PER_TICK * effTax * fPop + GOLD_PER_CITY_LEVEL_PER_TICK * cityLv
-        + (facLv * BALANCE.goldPerFactoryPerSec) / 10) * kindGoldMul(p.kind, diff) * p.mod('goldIncome', tick);
+      let income = y.income;
       // Tribute after a lost war (§4.15): a share of the income goes to the winner.
       if (p.tributeTo && tick < p.tributeUntil) {
         const w = g.playerById[p.tributeTo];
@@ -329,7 +344,8 @@ export class EconomySystem {
     }
     if (progressDirty && tick % 5 === 0) g.structuresDirty = true;
     if (this.railDirty && tick - this.lastRailBuild >= 60) this.rebuildRail();
-    if (tick % 50 === 0) g.weapons.maintainFallout();
+    // Owners change under fallout (recount every 50 ticks); a tile clears exactly when its §2.4 duration ends.
+    if (tick % 50 === 0 || tick >= g.weapons.falloutNextExpiry) g.weapons.maintainFallout();
   }
 
   // =================================================================================================

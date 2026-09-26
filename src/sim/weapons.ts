@@ -38,6 +38,8 @@ export class WeaponSystem {
   private readonly engagedThisTick = new Map<number, number>();
   private falloutStamp: Uint32Array;
   private falloutGen = 1;
+  /** The earliest tick a counted fallout tile clears: the economy recounts then, so fallout lasts exactly §2.4. */
+  falloutNextExpiry = 0;
   // --- v2 (W1): the AI caps of §5.10 and the nuclear record for retaliation ---
   private lastAiNukeTick = -1_000_000;
   private readonly aiNukeTick = new Map<number, number>();
@@ -694,6 +696,7 @@ export class WeaponSystem {
         if (g.falloutUntil[t] < until) {
           const wasClean = g.falloutUntil[t] <= tick;
           g.falloutUntil[t] = until;
+          if (until < this.falloutNextExpiry) this.falloutNextExpiry = until;
           if (wasClean && o > 0) g.playerById[o]!.falloutTiles++;
         }
       }
@@ -782,7 +785,6 @@ export class WeaponSystem {
   /** Recount fallout tiles per player and retire expired scars (every ~50 ticks). */
   maintainFallout(): void {
     const g = this.g;
-    if (g.scars.length === 0) return;
     const tick = g.tick;
     for (let i = g.scars.length - 1; i >= 0; i--) {
       if (g.scars[i].until <= tick) {
@@ -791,20 +793,26 @@ export class WeaponSystem {
       }
     }
     for (const p of g.playerArr) p.falloutTiles = 0;
+    this.falloutNextExpiry = 0xffffffff;
+    if (g.scars.length === 0) return;
     const gen = ++this.falloutGen;
     const stamp = this.falloutStamp;
     for (const s of g.scars) {
-      const cosLat = Math.max(0.12, Math.cos((90 - (s.y / MAP_H) * 180) * DEG));
-      const rx = Math.ceil(s.radius / cosLat), ry = Math.ceil(s.radius);
+      const ry = Math.ceil(s.radius) + 1;
       const x0 = Math.floor(s.x), y0 = Math.floor(s.y);
       for (let dy = -ry; dy <= ry; dy++) {
         const y = y0 + dy;
         if (y < 0 || y >= MAP_H) continue;
+        // Per row: the scar is a circle on the sphere, wider in tiles on its pole-ward rows (its own latitude's cosine
+        // under-counted the edge tiles, which then paid taxes in fallout).
+        const cosLat = Math.max(0.12, Math.min(Math.cos((90 - (y / MAP_H) * 180) * DEG), Math.cos((90 - ((y + 1) / MAP_H) * 180) * DEG)));
+        const rx = Math.min(MAP_W >> 1, Math.ceil((s.radius + 1) / cosLat));
         for (let dx = -rx; dx <= rx; dx++) {
           const t = y * MAP_W + ((x0 + dx + MAP_W) % MAP_W);
           if (stamp[t] === gen) continue;
           stamp[t] = gen;
           if (g.falloutUntil[t] <= tick) continue;
+          if (g.falloutUntil[t] < this.falloutNextExpiry) this.falloutNextExpiry = g.falloutUntil[t];
           const o = g.owner[t];
           if (o > 0) g.playerById[o]!.falloutTiles++;
         }

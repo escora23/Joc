@@ -212,7 +212,7 @@ Purely visual projectiles (shells, SAM streaks, tracers from `combat` events) ge
 | Truce after a peace treaty | 20 days | 4,800 | 8 min |
 | Notice to leave an alliance | 48 h | 480 | |
 | Occupation → integration of conquered land | 72 h | 720 | |
-| Fallout (atom / H-bomb inner; outer ×0.5) | 30 / 60 days | 7,200 / 14,400 | 12 / 24 min |
+| Fallout (atom / H-bomb inner; outer ×0.5): no taxes, no troop growth, no construction on the tile (§4.14) | 30 / 60 days | 7,200 / 14,400 | 12 / 24 min |
 | Human grace (no AI war declaration on you) Easy/Normal/Hard/Insane | 37.5 / 25 / 15 / 10 days | 9,000 / 6,000 / 3,600 / 2,400 | 15 / 10 / 6 / 4 min |
 | AI clocks (war / build / military / naval / diplomacy, Normal) | 2.8 / 10 / 19 / 65 / 33 h | unchanged tick values (CM§7) | |
 | Spawn phase | waits for the human (§12.6) | – | – |
@@ -642,7 +642,11 @@ If D launches an offensive against A on a front where A already attacks D, the t
 Nuclear detonations **never change ownership**. They destroy structures (inner radius), damage them (outer), kill troops
 (the defender's garrison share in the radius: 60 % inner, 25 % outer) and civilians (70 % / 20 % of the population of
 the tiles hit, using the per-tile share of §6.7), and leave fallout (§2.4): no income, no troop growth, no construction,
-advance ×0.5 (time ×2) through it. Radii are in §6.3. This removes the empire-scale swings of A06.
+advance ×0.5 (time ×2) through it. Exactly: a fallout tile pays no taxes; troop growth is the nation's logistic of §4.6 ×
+(clean tiles / tiles), so a fallout tile adds none of it (a nation with all its land in fallout grows 0); it still counts
+20 % for the troop cap, because the army standing there is not the land's yield and a lower cap would also bleed the
+surviving troops off (§4.6). The economy recounts fallout the tick a tile clears, so the block lasts exactly the §2.4
+duration (`pace-audit nuke` measures the tile's income and growth before, during and after). Radii are in §6.3. This removes the empire-scale swings of A06.
 
 **Aim points.** The AI rejects any nuclear aim point whose outer radius covers land of a player it is not at war with
 (invariant 6). The human may aim anywhere; the confirmation dialog lists every nation whose land lies inside the outer
@@ -1152,7 +1156,7 @@ relief, and they stand on a foundation pad whose skirt reaches the lowest ground
   its ships sail), rail freight (60 per factory level) and tribute as received; all multiplied by the kind and difficulty
   multipliers of v1.
 * **Troop cap**: `100,000 + 2,000 × tiles^0.6` (occupied tiles count 50 %, fallout 20 %) `+ 250,000 × city levels +
-  60,000 × army-base levels`, × kind multiplier.
+  60,000 × army-base levels`, × kind multiplier. Troop growth × (clean tiles / tiles): fallout tiles grow no troops (§4.14).
 * **Population** stops being cosmetic, and **people move with the land**:
   * Each tile has a target weight `targetOf(t) = 25,000 + 800,000 × cityLevel(t)`; a nation's target is the sum over
     its tiles. Its real population `pop` moves toward the target by 0.2 % of the target per game hour.

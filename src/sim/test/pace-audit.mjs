@@ -666,6 +666,43 @@ async function nuke() {
   const owners0 = g.owner.slice();
   const pop0 = P.pop, troops0 = P.troops, target0 = P.popTarget;
   const tiles = P.tiles;
+  // Yield of one tile (Economy.yieldOf, at peace, troops held at 30 % of the cap so the logistic grows): the nation's
+  // yield minus its yield with the tile marked as fallout through a temporary zero-radius scar (the real counter).
+  const yieldNow = () => {
+    const troops = P.troops;
+    P.troops = 0.3 * P.maxTroops;
+    const y = g.economy.yieldOf(P, false);
+    P.troops = troops;
+    return y;
+  };
+  const tileYield = (t) => {
+    g.weapons.maintainFallout();
+    const a = yieldNow();
+    const until = g.falloutUntil[t];
+    g.falloutUntil[t] = Math.max(until, g.tick + 1);
+    g.scars.push({ id: -1, x: (t % W) + 0.5, y: Math.floor(t / W) + 0.5, radius: 0, weapon: UnitType.AtomBomb, tick: g.tick, until: g.tick + 1 });
+    g.weapons.maintainFallout();
+    const b = yieldNow();
+    g.scars.pop();
+    g.falloutUntil[t] = until;
+    g.weapons.maintainFallout();
+    return { income: a.income - b.income, growth: a.growth - b.growth };
+  };
+  // Every tile of the nation in fallout (counter forced, then recounted).
+  const allFallout = () => {
+    const f = P.falloutTiles;
+    P.falloutTiles = P.tiles;
+    const y = yieldNow();
+    P.falloutTiles = f;
+    const tiles = P.tiles;
+    P.tiles = 0;
+    const base = g.economy.yieldOf(P, false).income;
+    P.tiles = tiles;
+    return { landIncome: y.income - base, growth: y.growth };
+  };
+  const cleanTile = tileOf(43.6, 1.44);
+  if (g.owner[cleanTile] !== E) throw new Error('clean tile (Toulouse) is not the target nation\'s');
+  const gzBefore = tileYield(aim);
   const u = g.weapons.launch(H, UnitType.AtomBomb, tileOf(40.4, -3.7), aim, 0);
   let troopsAt = P.troops, troopsAfter = P.troops;
   const det = g.weapons.detonate.bind(g.weapons);
@@ -700,7 +737,34 @@ async function nuke() {
   P.gold = 1e9;
   row('A14', 'no construction in fallout', g.buildError(E, StructureType.City, aim) ?? 'allowed', 'msg.buildFallout', g.buildError(E, StructureType.City, aim) === 'msg.buildFallout');
   step();
-  row('A14', 'fallout tiles pay no taxes and do not count for growth', `${P.falloutTiles} fallout tiles`, '> 0', P.falloutTiles > 0);
+  let truth = 0;
+  for (let t = 0; t < g.owner.length; t++) if (g.owner[t] === E && g.falloutUntil[t] > g.tick) truth++;
+  row('A14', 'fallout tiles counted by the economy', `${P.falloutTiles} fallout tiles`, `${truth} (owned tiles in fallout)`, P.falloutTiles > 0 && P.falloutTiles === truth);
+  // Income and troop growth of single tiles, measured with the economy's own yield (Economy.yieldOf) and the real
+  // fallout counter: a tile's yield = the nation's yield minus its yield with that tile marked as fallout.
+  const fmt = (y) => `${y.income.toFixed(3)} gold, ${y.growth.toFixed(2)} troops per tick`;
+  row('A14', 'ground zero before the strike: income / growth of the tile', fmt(gzBefore), '> 0 / > 0', gzBefore.income > 0 && gzBefore.growth > 0);
+  const gzIn = tileYield(aim), cleanIn = tileYield(cleanTile);
+  row('A14', 'ground zero in fallout: income / growth of the tile', fmt(gzIn), '0 / 0', Math.abs(gzIn.income) < 1e-9 && Math.abs(gzIn.growth) < 1e-9);
+  row('A14', 'clean tile of the same nation meanwhile', fmt(cleanIn), '> 0 / > 0', cleanIn.income > 0 && cleanIn.growth > 0);
+  // Whole-nation view: land income lost = one tile's tax × fallout tiles; growth scaled by the clean share only.
+  const all = allFallout();
+  row('A14', 'nation with all its land in fallout: land income / troop growth', `${all.landIncome.toFixed(3)} gold, ${all.growth.toFixed(2)} troops per tick`, '0 / 0', Math.abs(all.landIncome) < 1e-9 && Math.abs(all.growth) < 1e-9);
+  // Hold for the §2.4 duration, then expire.
+  const untilGz = g.falloutUntil[aim];
+  while (g.tick < untilGz - 60) step();
+  const gzLate = tileYield(aim);
+  row('A14', `ground zero ${untilGz - g.tick} ticks before expiry (tick ${g.tick})`, fmt(gzLate), '0 / 0; msg.buildFallout', Math.abs(gzLate.income) < 1e-9 && Math.abs(gzLate.growth) < 1e-9 && g.buildError(E, StructureType.City, aim) === 'msg.buildFallout');
+  let back = -1;
+  while (g.tick < untilGz + 120) {
+    step();
+    // The game's own counter (no recount by the audit): the tick the nation's economy stops counting the fallout.
+    if (back < 0 && P.falloutTiles === 0) back = g.tick;
+  }
+  const gzAfter = tileYield(aim);
+  row('A14', 'fallout lifted: tick the economy stops counting it', back < 0 ? 'never' : `${back} (fallout until ${untilGz}, +${back - untilGz})`, `${untilGz} (the §2.4 duration, exact)`, back === untilGz);
+  row('A14', 'ground zero after expiry: income / growth of the tile', fmt(gzAfter), `≈ before (${fmt(gzBefore)}) ± 25 %`, Math.abs(gzAfter.income / gzBefore.income - 1) <= 0.25 && gzAfter.growth > 0);
+  row('A14', 'construction on ground zero after expiry', g.buildError(E, StructureType.City, aim) ?? 'allowed', 'not msg.buildFallout', g.buildError(E, StructureType.City, aim) !== 'msg.buildFallout');
   return printTable('pace-audit nuke (acceptance 14)');
 }
 
