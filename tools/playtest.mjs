@@ -336,8 +336,9 @@ try {
       for (let t = 1600; t < v.owner.length - 1600; t++) {
         if (v.owner[t] !== p.id) continue;
         if (v.owner[t - 1] !== p.id || v.owner[t + 1] !== p.id || v.owner[t - 1600] !== p.id || v.owner[t + 1600] !== p.id) continue;
+        // Not under the nation's label and capital icon (a click there picks the icon): 5+ tiles away from it.
         const d = Math.hypot((t % 1600) - p.labelX, Math.floor(t / 1600) - p.labelY);
-        if (d < bd) { bd = d; best = t; }
+        if (d >= 5 && d < bd) { bd = d; best = t; }
       }
       return best >= 0 ? { id: p.id, tile: best } : null;
     });
@@ -440,7 +441,7 @@ try {
     await shot('04-speed-4x');
     // The headless harness acts ~10x slower than a player (software WebGL), so the scripted actions run at 1x
     // (the 1x button) to keep the game clock in step with what a player would do in the same number of moves.
-    await page.locator('.fu-time-seg button').nth(2).click(); // [pause, 0.5x, 1x, 2x, 4x]
+    await page.locator('.fu-time-seg button').nth(2).click({ force: true }); // [pause, 0.5x, 1x, 2x, 4x]; the advisor may pulse it
     check(await until(() => window.__front.ctx.sim.view.speed === 1, null, 10000), '1x button did not work');
     // Short test on a slow software renderer: grant the treasury the arsenal needs, troops, and a ring of land
     // around the capital (debug actions, like the scripted shots' head start) so ten structures fit.
@@ -1024,6 +1025,7 @@ await browser.close();
 console.log('\n================ PLAYTEST REPORT ================');
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  [${r.stage}] ${r.name.padEnd(60)} ${r.sec.toFixed(0).padStart(4)}s  ${r.detail}`);
 console.log(`\nevents: ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(' ')}`);
+console.log(`emote events: ${counts.emote ?? 0} (v2 has no emotes)`);
 if (cues) console.log(`audio cues: ${Object.entries(cues).map(([k, v]) => `${k}=${v}`).join(' ')}`);
 if (messages.length) console.log(`sim messages to the human: ${[...new Set(messages)].join(', ')}`);
 const realErrors = errors.filter((e) => !/favicon/i.test(e));

@@ -15,6 +15,7 @@
 //   D5  betrayal detected for a NAP, a truce and an alliance (acceptance 4)
 //   D6  opinions: a gift, a trade agreement and a declaration change the published reasons within one update (acc. 8)
 //   D7  save / restore: treaties, proposals, opinions and pending inbox items identical (acceptance 17, T42 extended)
+//   D8  «Pedir ayuda»: the human's calls to arms are answered by every ally with a reason (acceptance 12)
 
 import fs from 'node:fs';
 import { loadWorldInit } from './world.mjs';
@@ -351,6 +352,30 @@ function d7() {
   row('D7b', 'the same 300 ticks later', b2 === a2 ? 'identical' : 'differ', 'identical', b2 === a2);
 }
 
+// =================================================================================================
+// D8 «Pedir ayuda»: the human's call to arms is answered by each ally with a reason (acceptance 12)
+// =================================================================================================
+function d8() {
+  const { g, events, step } = newGame(SEED + 7);
+  step(400);
+  const ns = nations(g);
+  const X = ns[0];
+  const allies = ns.slice(1, 5);
+  for (const a of allies) g.diplomacy.debugSign(HUMAN_ID, a.id, 'alliance');
+  g.applyDebug({ type: 'war', a: X.id, b: HUMAN_ID, mobilizeTicks: 60, reasonKey: 'war.reason.border' });
+  step(5);
+  // The UI's «Pedir ayuda» sends exactly this command per ally.
+  const p0 = events.length;
+  for (const a of allies) g.issue(HUMAN_ID, { type: 'propose', target: a.id, kind: 'callToArms', against: X.id });
+  step(400);
+  const calls = events.slice(p0).filter((e) => e.type === 'proposal' && e.proposal.from === HUMAN_ID && e.proposal.kind === 'callToArms');
+  const ids = [...new Set(calls.map((e) => e.proposal.id))];
+  const answers = ids.map((id) => calls.filter((e) => e.proposal.id === id).pop().proposal).filter((q) => q.status !== 'considering' && q.status !== 'pending');
+  const withReason = answers.filter((q) => (q.reasons ?? []).length >= 1).length;
+  const joined = answers.filter((q) => q.status === 'accepted').length;
+  row('D8', 'calls to arms from the human answered by allies with a reason', `${answers.length}/${ids.length} answered, ${withReason} with a reason, ${joined} joined (${answers.map((q) => `${q.status}:${q.reasons?.[0]?.key ?? '-'}`).join(', ')})`, 'all, with reasons', ids.length > 0 && answers.length === ids.length && withReason === answers.length);
+}
+
 const t0 = Date.now();
 d1();
 d2();
@@ -358,6 +383,7 @@ d3();
 d4d5();
 d6();
 d7();
+d8();
 console.log(`\n=== diplomacy audit (${DIFF}, seed ${SEED}) · ${((Date.now() - t0) / 1000).toFixed(0)} s ===`);
 const w = Math.max(...results.map((r) => r.what.length));
 for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.id.padEnd(5)} ${r.what.padEnd(w)}  ${String(r.value).padEnd(28)} target ${r.target}`);

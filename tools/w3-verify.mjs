@@ -251,9 +251,11 @@ for (const lang of langs) {
       }
       const flown = await until(({ lat, lon }) => {
         const q = window.__V.onScreen(lat, lon);
+        window.__V.lastFly = { q, cam: window.__front.ctx.cameraRig.getState() };
         return q && q.dx < 0.25 && q.dy < 0.3 ? q : null;
       }, { lat: o.lat, lon: o.lon }, 20000, 250);
-      row('V5c', 'clicking the offensive alert flies there', flown ? `place ${(flown.dx * 100).toFixed(0)} % / ${(flown.dy * 100).toFixed(0)} % from the screen centre` : 'no', 'near the centre', flown);
+      const lastFly = flown ? null : await page.evaluate(() => window.__V.lastFly);
+      row('V5c', 'clicking the offensive alert flies there', flown ? `place ${(flown.dx * 100).toFixed(0)} % / ${(flown.dy * 100).toFixed(0)} % from the screen centre` : `no: alert at ${o.lat.toFixed(1)}, ${o.lon.toFixed(1)}; ${JSON.stringify(lastFly)}`, 'near the centre', flown);
       await shot(`${lang}-V5-offensive`);
     }
     await page.evaluate(() => window.__V.resume());
@@ -324,7 +326,12 @@ for (const lang of langs) {
   // ------------------------------------------------------------------------------------------ V16 crisis
   {
     await page.evaluate(() => window.__V.resume());
-    const [x, y] = [S.o[1], S.o[2]];
+    // Two nations still standing with a capital: a launcher and a foreign target.
+    const [x, y] = await page.evaluate((o) => {
+      const v = window.__front.ctx.sim.view;
+      const ok = o.filter((id) => v.players[id]?.alive && v.players[id].capitalTile >= 0);
+      return [ok[1] ?? ok[0], ok[2] ?? ok[1]];
+    }, S.o);
     await page.evaluate(({ x, y }) => {
       const { ctx } = window.__front;
       const v = ctx.sim.view;
@@ -341,8 +348,8 @@ for (const lang of langs) {
       // A second weapon on our land from another silo: the alarm must list every weapon in flight.
       ctx.sim.debug({ type: 'launchNuke', weapon: 8 /* UnitType.AtomBomb */, owner: x, fromTile: ctx.sim.view.players[x].capitalTile, targetTile: cap + 6 });
     }, { x, cap: S.cap });
-    const red = await until(() => { const c = window.__fuCrisis(); return c.red ? c : null; }, null, 15000, 200);
-    row('V16b', 'launch at the human -> red alarm listing every weapon, no v1 banner', red ? `${red.n} in flight; v1 banner ${red.v1Banner}; «${red.text.replace(/\s+/g, ' ').slice(0, 100)}»` : 'no red', 'red, >=2 flights, no v1', red && red.n >= 2 && !red.v1Banner);
+    const red = await until(() => { const c = window.__fuCrisis(); if (window.__front.ctx.sim.view.speed === 0) window.__V.resume(); return c.red && c.n >= 2 ? c : null; }, null, 30000, 200) ?? await page.evaluate(() => window.__fuCrisis());
+    row('V16b', 'launch at the human -> red alarm listing every weapon, no v1 banner', red.red ? `${red.n} in flight; v1 banner ${red.v1Banner}; «${red.text.replace(/\s+/g, ' ').slice(0, 100)}»` : `no red (${JSON.stringify(red).slice(0, 120)})`, 'red, >=2 flights, no v1', red.red && red.n >= 2 && !red.v1Banner);
     await shot(`${lang}-V16-red`);
     // Let the weapons land and the crisis end.
     await until(() => { window.__V.resume(); return !window.__fuCrisis().active; }, null, 120000, 1000);
@@ -502,6 +509,10 @@ for (const lang of langs) {
       await el.hover().catch(() => {});
       await sleep(900);
       txt = (await page.evaluate(() => window.__fuTip?.() ?? '')).replace(/\s+/g, ' ');
+    }
+    if (!txt) {
+      // What covers it: the element under its centre.
+      txt = `(no tooltip; under its centre: ${await page.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e ? `${e.tagName}.${e.className}`.slice(0, 80) : 'nothing'; }, sel)})`;
     }
     tipTexts.push(`${sel}: ${txt.slice(0, 90)}`);
     await page.mouse.move(800, 450);
