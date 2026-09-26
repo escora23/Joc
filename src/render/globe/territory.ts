@@ -298,6 +298,10 @@ export function createTerritoryLayer(ctx: GameContext): TerritoryLayer {
       uniforms.uFlashNow.value = (newest + ageSec * FLASH_UNITS) % 65536;
     },
     queued: () => qLen,
+    /** Shots: show these tiles as captured now (a staged conquest arrives as a resync, which never flashes). */
+    stampCapture(tiles: readonly number[]): void {
+      for (const t of tiles) applyTile(t, mirror[t]);
+    },
   };
 
   ctx.bus.on('tilesChanged', (e) => {

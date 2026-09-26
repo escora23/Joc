@@ -608,7 +608,12 @@ async function checkZoom() {
     const W = base.width, H = base.height;
     const under = (x, y) => occ.some((q) => x >= q[0] - 2 && x <= q[2] + 2 && y >= q[1] - 2 && y <= q[3] + 2);
     const cls = new Uint8Array(W * H);
-    for (let i = 0; i < W * H; i++) cls[i] = Math.floor(mask.data[i * 4 + 2] / 40);
+    // Exact OWNER_MASK codes only (HUD pixels drawn over the mask never decode as a class): water (0,0,40|60),
+    // owned (id, id>>8, 160|180).
+    for (let i = 0; i < W * H; i++) {
+      const r = mask.data[i * 4], g = mask.data[i * 4 + 1], b = mask.data[i * 4 + 2];
+      cls[i] = (b === 40 || b === 60) && r === 0 && g === 0 ? 1 : (b === 160 || b === 180) && (r > 0 || g > 0) ? 4 : 0;
+    }
     let oN = 0, oDE = 0, wN = 0, wDE = 0, nearN = 0, nearDE = 0;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;

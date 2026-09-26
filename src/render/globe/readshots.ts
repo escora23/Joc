@@ -181,9 +181,20 @@ registerShot('borders-close', 'globe', 'Borders up close (&alt=1500 default, &al
     const dx = ((other % MAP_W) - (tile % MAP_W) + MAP_W + MAP_W / 2) % MAP_W - MAP_W / 2;
     const dy = Math.floor(other / MAP_W) - Math.floor(tile / MAP_W);
     const cx = ((other % MAP_W) + dx * 2 + MAP_W) % MAP_W, cy = Math.min(MAP_H - 1, Math.max(0, Math.floor(other / MAP_W) + dy * 2));
+    const view = s.ctx.sim.view;
+    const before = Uint16Array.from(view.owner);
     s.ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: cy * MAP_W + cx, radius: num(s.params, 'r', 3) });
-    const hook = (window as unknown as { __territory?: { flashing(): unknown[]; queued(): number; pinFlash(a: number | null): void } }).__territory;
-    for (let i = 0; i < 100 && hook && (hook.flashing().length === 0 || hook.queued() > 0); i++) await s.wait(100);
+    const changed = (): number[] => {
+      const out: number[] = [];
+      for (let t = 0; t < before.length; t++) if (view.owner[t] !== before[t] && view.owner[t] === HUMAN_ID) out.push(t);
+      return out;
+    };
+    for (let i = 0; i < 100 && changed().length === 0; i++) await s.wait(100);
+    await s.waitFrames(2);
+    const hook = (window as unknown as { __territory?: { stampCapture(t: number[]): void; pinFlash(a: number | null): void } }).__territory;
+    // The staged transfer reaches the client as a resync (no flash): stamp the captured tiles as the wave would.
+    hook?.stampCapture(changed());
+    await s.waitFrames(1);
     hook?.pinFlash(num(s.params, 'flashAge', 0.5));
   }
   await s.waitFrames(6);
