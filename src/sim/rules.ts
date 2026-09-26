@@ -66,6 +66,7 @@ export function createSimRules(g: Game): SimRules {
       if (!comps) comps = landComponents(g.terrain, (t) => g.playable[t] === 1);
       return tile >= 0 && tile < TILE_COUNT ? comps[tile] : -1;
     },
+    waterComponent: (tile) => (tile >= 0 && tile < TILE_COUNT ? g.nav.comp[tile] : -1),
     railLinks: () => g.economy.railPairs(),
   };
 }

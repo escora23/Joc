@@ -14,7 +14,7 @@ for (const [shot, params] of shots) {
   await page.waitForTimeout(3000);
   const r = await page.evaluate(() => ({ land: window.__trails.overLand(), stats: window.__trails.stats(), alt: window.__front.ctx.cameraRig.getState().altitudeKm }));
   res[shot] = r;
-  console.log(shot, JSON.stringify({ alt: r.alt, lines: r.land?.lines, maxLandKm: r.land?.maxLandKm, over: r.land?.overLand?.slice(0, 8), routes: r.stats.routes, human: r.stats.human }));
+  console.log(shot, JSON.stringify({ alt: r.alt, lines: r.land?.lines, maxLandKm: r.land?.maxLandKm, over: r.land?.overLand?.slice(0, 4), routes: r.stats.routes, human: r.stats.human }));
   await page.screenshot({ path: `${out}/${shot}.png` });
   await page.close();
 }

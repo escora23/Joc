@@ -89,6 +89,8 @@ export interface RulesView {
   sharesBorder(a: number, b: number): boolean;
   /** Land component id of a playable tile (islands and continents), -1 for water. */
   landComponent(tile: number): number;
+  /** Sea component id of a navigable water tile (the sim's navigation components), -1 for land. */
+  waterComponent(tile: number): number;
   /** Rail network: station-id pairs (§14.5). */
   railLinks(): Int32Array;
 }
@@ -284,7 +286,47 @@ function divisionCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: nu
   return null;
 }
 
+/** The sea a ship sails on: the component of its tile, or of a navigable neighbour when it sits on a coast tile. */
+export function shipComponent(r: RulesView, u: UnitLike): number {
+  const here = hereTile(u);
+  const c = r.waterComponent(here);
+  if (c >= 0) return c;
+  const x = here % MAP_W, y = (here / MAP_W) | 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    const yy = y + dy;
+    if (yy < 0 || yy >= MAP_H) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      const cc = r.waterComponent(yy * MAP_W + (((x + dx) % MAP_W) + MAP_W) % MAP_W);
+      if (cc >= 0) return cc;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Where a warship stations to bombard land tile `tile`: the navigable tile of its sea nearest to the target within
+ * WARSHIP_BOMBARD_TILES (surface-true), -1 when that coast is out of reach from its sea.
+ */
+export function bombardStation(r: RulesView, tile: number, comp: number): number {
+  let best = -1, bd = Infinity;
+  const tx = tileCx(tile), ty = tileCy(tile);
+  someTileWithin(tile, WARSHIP_BOMBARD_TILES, (t) => {
+    if (r.waterComponent(t) !== comp || comp < 0) return false;
+    const d = tileKm(tx, ty, tileCx(t), tileCy(t));
+    if (d < bd - 1e-9 || (Math.abs(d - bd) <= 1e-9 && t < best)) {
+      bd = d;
+      best = t;
+    }
+    return false;
+  });
+  return best;
+}
+
 function warshipCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: number, targetId: number): OrderIssue | null {
+  const sea = (t: number): OrderIssue | null => {
+    if (!isNavigable(r.terrainOf(t))) return { key: 'order.err.shipLand' };
+    return r.waterComponent(t) === shipComponent(r, u) ? null : { key: 'order.err.otherSea' };
+  };
   switch (order) {
     case 'hold': return null;
     case 'return': {
@@ -293,9 +335,10 @@ function warshipCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: num
     }
     case 'move':
     case 'patrol':
-      return isNavigable(r.terrainOf(tile)) ? null : { key: 'order.err.shipLand' };
+      return sea(tile);
     case 'blockade': {
-      if (!isNavigable(r.terrainOf(tile))) return { key: 'order.err.shipLand' };
+      const e = sea(tile);
+      if (e) return e;
       let enemy = 0;
       someTileWithin(tile, WARSHIP_ENGAGE_TILES, (t) => {
         const o = r.ownerOf(t);
@@ -311,8 +354,7 @@ function warshipCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: num
       const o = r.ownerOf(tile);
       if (!r.playable(tile) || o === 0 || o === u.owner) return { key: 'order.err.bombardTarget' };
       if (!hostileTo(r, u.owner, o)) return { key: 'order.err.atPeace', params: nameParam(o) };
-      const coast = someTileWithin(tile, WARSHIP_BOMBARD_TILES, (t) => isNavigable(r.terrainOf(t)));
-      return coast ? null : { key: 'order.err.bombardRange', params: { tiles: WARSHIP_BOMBARD_TILES } };
+      return bombardStation(r, tile, shipComponent(r, u)) >= 0 ? null : { key: 'order.err.bombardRange', params: { tiles: WARSHIP_BOMBARD_TILES } };
     }
     case 'attack': {
       const t = r.unit(targetId);
@@ -686,6 +728,35 @@ export function levelsOf(type: StructureType): number {
 // =================================================================================================
 
 const compCache = new WeakMap<Uint8Array, Int32Array>();
+const seaCache = new WeakMap<Uint8Array, Int32Array>();
+
+/** Sea component per tile (4-neighbourhood over navigable water, horizontal wrap), -1 for land. Same labels as the sim's nav. */
+export function waterComponents(terrain: Uint8Array): Int32Array {
+  let c = seaCache.get(terrain);
+  if (c) return c;
+  c = new Int32Array(TILE_COUNT).fill(-1);
+  const stack = new Int32Array(TILE_COUNT);
+  let id = 0;
+  for (let s = 0; s < TILE_COUNT; s++) {
+    if (c[s] !== -1 || !isNavigable(terrain[s])) continue;
+    let sp = 0;
+    stack[sp++] = s;
+    c[s] = id;
+    while (sp > 0) {
+      const t = stack[--sp];
+      const x = t % MAP_W;
+      const l = x === 0 ? t + MAP_W - 1 : t - 1;
+      const rr = x === MAP_W - 1 ? t - MAP_W + 1 : t + 1;
+      if (c[l] === -1 && isNavigable(terrain[l])) { c[l] = id; stack[sp++] = l; }
+      if (c[rr] === -1 && isNavigable(terrain[rr])) { c[rr] = id; stack[sp++] = rr; }
+      if (t >= MAP_W && c[t - MAP_W] === -1 && isNavigable(terrain[t - MAP_W])) { c[t - MAP_W] = id; stack[sp++] = t - MAP_W; }
+      if (t < TILE_COUNT - MAP_W && c[t + MAP_W] === -1 && isNavigable(terrain[t + MAP_W])) { c[t + MAP_W] = id; stack[sp++] = t + MAP_W; }
+    }
+    id++;
+  }
+  seaCache.set(terrain, c);
+  return c;
+}
 
 /** Land component per tile (4-neighbourhood, horizontal wrap), -1 for water and ice. Cached per terrain array. */
 export function landComponents(terrain: Uint8Array, playable: (t: number) => boolean): Int32Array {

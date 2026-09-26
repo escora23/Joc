@@ -120,8 +120,10 @@ export class Structure implements SimStructure {
   lastDamageTick = -1_000_000;
   /** Rail links (station ids). */
   rail: number[] = [];
-  /** Factory: tick when the next train leaves. SAM: missiles fired in the current salvo. */
+  /** Factory: tick when the next train leaves. */
   timer = 0;
+  /** SAM: interceptors fired in the current salvo (the reload starts when it reaches the level's salvo). */
+  salvoFired = 0;
   /** Operational ticks counter used for staggering. */
   age = 0;
   // --- v2 (W4) ---

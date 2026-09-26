@@ -5,7 +5,7 @@
 
 import type { GameView } from '../shared/api';
 import { MAP_W, TILE_COUNT } from '../shared/constants';
-import { landComponents, type FrontLike, type RulesView, type StructureLike, type UnitLike } from '../shared/orders';
+import { landComponents, waterComponents, type FrontLike, type RulesView, type StructureLike, type UnitLike } from '../shared/orders';
 import { isPlayableTerrain } from '../shared/terrain';
 import { UnitState, type PairState, type PlayerKind, type StructureView, type TreatyKind, type UnitView } from '../shared/types';
 
@@ -145,6 +145,11 @@ function createRules(view: GameView): ClientRules {
         compsWorld = w;
       }
       return comps[tile];
+    },
+    waterComponent(tile) {
+      const w = view.world;
+      if (!w || tile < 0 || tile >= TILE_COUNT) return -1;
+      return waterComponents(w.terrain)[tile];
     },
     railLinks: () => view.rail,
   };

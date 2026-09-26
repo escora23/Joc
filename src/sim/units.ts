@@ -24,7 +24,7 @@ import {
   kmhToKmPerTick, structureLevel, ARMOR_RAIL_KMH,
 } from '../shared/constants';
 import {
-  baseCapacity, canTransit, hostileTo, homeTypeOf, inferOrder, isAircraft, orderCheck, planDivision, strikeTarget, tileCx,
+  baseCapacity, bombardStation, canTransit, hostileTo, shipComponent, homeTypeOf, inferOrder, isAircraft, orderCheck, planDivision, strikeTarget, tileCx,
   tileCy, tileKm, type StationLike,
 } from '../shared/orders';
 import {
@@ -635,8 +635,8 @@ export class UnitSystem {
       case 'bombard': {
         const o = g.owner[tile];
         u.enemy = o;
-        // Station: the water tile nearest to the target within reach.
-        const w = this.waterNearTile(tile, WARSHIP_BOMBARD_TILES, g.nav.comp[this.nearestWater(u)]);
+        // Station: the water tile of its sea nearest to the target within reach (the rule the preview checks).
+        const w = bombardStation(g.rules, tile, shipComponent(g.rules, g.rules.unit(u.id)!));
         if (w < 0) return false;
         this.raiseMilitary(p, o);
         const ok = this.sailTo(u, w, Mode.Bombard);
@@ -1412,27 +1412,6 @@ export class UnitSystem {
     return w >= 0 ? w : t;
   }
 
-  /** A navigable water tile of component `comp` within `r` tiles of land tile `tile`, nearest to it. */
-  private waterNearTile(tile: number, r: number, comp: number): number {
-    const g = this.g;
-    const cx = tile % MAP_W, cy = (tile / MAP_W) | 0;
-    let best = -1, bd = Infinity;
-    for (let dy = -r; dy <= r; dy++) {
-      const y = cy + dy;
-      if (y < 0 || y >= MAP_H) continue;
-      for (let dx = -r; dx <= r; dx++) {
-        const t = y * MAP_W + (((cx + dx) % MAP_W) + MAP_W) % MAP_W;
-        if (g.nav.comp[t] < 0 || (comp >= 0 && g.nav.comp[t] !== comp)) continue;
-        const d = dx * dx + dy * dy;
-        if (d < bd && d <= r * r) {
-          bd = d;
-          best = t;
-        }
-      }
-    }
-    return best;
-  }
-
   // =================================================================================================
   // Tick
   // =================================================================================================
@@ -2115,7 +2094,8 @@ export class UnitSystem {
       if (tileKm(cx, cy, o.x, o.y) > rKm) return;
       const tries = (o.capTries ??= new Map());
       const last = tries.get(u.id);
-      if (last !== undefined && g.tick - last < 30) return;
+      // A raider inside the circle is engaged again every half hour while it crosses it (the patrol rotates pairs).
+      if (last !== undefined && g.tick - last < 5) return;
       tries.set(u.id, g.tick);
       this.engage(u, o, o.type === UnitType.CruiseMissile ? CAP_HIT_CRUISE : CAP_HIT_AIRCRAFT);
     });
@@ -2256,9 +2236,13 @@ export class UnitSystem {
         const direct = bomb ? BOMBER_DIRECT_DMG : DRONE_DIRECT_DMG;
         const splash = bomb ? BOMBER_STRUCT_DMG : DRONE_STRUCT_DMG;
         const before = s.hp;
+        // Splash on the neighbours first (a destroyed target leaves the grid mid-query), then the direct hit.
+        const near: typeof s[] = [];
         g.structGrid.query(s.x, s.y, 1.6, (o) => {
-          if (o.owner === victim) g.weapons.damageStructure(o, o === s ? direct : splash, u.owner);
+          if (o.owner === victim && o !== s) near.push(o);
         });
+        for (const o of near) g.weapons.damageStructure(o, splash, u.owner);
+        g.weapons.damageStructure(s, direct, u.owner);
         damage = Math.min(before, direct);
         destroyed = !g.structureMap.has(s.id);
       }

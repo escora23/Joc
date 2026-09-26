@@ -427,7 +427,7 @@ export class WeaponSystem {
       if (s.cooldownTicks > 0) {
         s.cooldownTicks--;
         if (s.cooldownTicks % 10 === 0) g.structuresDirty = true;
-        if (s.cooldownTicks === 0 && s.type === StructureType.SamSite) s.timer = 0;
+        if (s.cooldownTicks === 0 && s.type === StructureType.SamSite) s.salvoFired = 0;
       }
     }
     if (threats.length === 0) return;
@@ -472,8 +472,8 @@ export class WeaponSystem {
     }
     if (!best) return;
     this.fireInterceptor(s, best, radar);
-    s.timer++;
-    if (s.timer >= (lv.salvo ?? 1)) {
+    s.salvoFired++;
+    if (s.salvoFired >= (lv.salvo ?? 1)) {
       s.cooldownTicks = lv.reloadTicks ?? 20;
       g.structuresDirty = true;
     }

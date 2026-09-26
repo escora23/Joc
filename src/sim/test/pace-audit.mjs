@@ -15,6 +15,8 @@
 //   npx tsx src/sim/test/pace-audit.mjs invariants                   §4.17 over a full Normal game
 //   npx tsx src/sim/test/pace-audit.mjs save                         T42: save at tick N, restore, compare 600 ticks
 //   npx tsx src/sim/test/pace-audit.mjs endgame [--duration short]   acceptance 18: hegemony countdown, reset, victory
+//   npx tsx src/sim/test/pace-audit.mjs armor                        W4 6/19: attached divisions, integrity
+//   npx tsx src/sim/test/pace-audit.mjs economy [--no-game]          T38: Port/Factory rates per hour, trader AI share
 //
 // Common flags: --seed, --difficulty, --json <file> (machine-readable result), --quiet.
 
@@ -1224,9 +1226,303 @@ async function endgame() {
 }
 
 // =================================================================================================
+// armor (W4 acceptance 6, 19): what one armored division is worth on a front
+// =================================================================================================
+/**
+ * The depth block of T30 at a force ratio well under the cap (R ≈ 1.6, the division matters there), in three runs:
+ * without divisions, with one attacking division attached to the offensive, and with one defending division attached
+ * in the sector. The first 10 axis tiles past the contact rows are timed, and the attacker's casualties per tile taken.
+ * `quiet` also measures field repair on a quiet front (acceptance 19b).
+ */
+function armorRun(variant, dTroops = Number(arg('dtroops', 60_000)), committed = 120_000, ticks = 2600) {
+  const { g, step } = controlledGame(Number(arg('seed', 7)));
+  const H = HUMAN_ID;
+  const W = 1600;
+  stageLand(g, 0, (t) => g.owner[t] === H);
+  const c = latLonToTileXY(40, -100);
+  const cx = Math.floor(c.x), cy = Math.floor(c.y);
+  const half = 30;
+  const A = addNation(g, 'Atacante');
+  g.transferContext = 'staging';
+  for (let y = cy - half; y <= cy + half; y++) {
+    for (let dx = -half; dx <= half; dx++) {
+      const x = (cx + dx + W) % W;
+      const t = y * W + x;
+      g.setOwner(t, y - (cy - half) < 3 ? A : H);
+      g.attacks.terrainTime[t] = 1;
+      g.structAt[t] = 0;
+    }
+  }
+  g.transferContext = 'none';
+  const D = g.playerById[H], P = g.playerById[A];
+  D.spawned = P.spawned = true;
+  D.capitalTile = (cy + half - 1) * W + cx;
+  step();
+  D.troops = dTroops;
+  P.troops = committed;
+  g.war.declare(A, H, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+  const lineRow = cy - half + 2; // the attacker's last row
+  let div = null;
+  if (variant === 'atk') {
+    g.applyDebug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: A, tile: lineRow * W + cx, targetTile: -1 });
+    div = [...g.unitMap.values()].find((u) => u.type === UnitType.ArmoredDivision && u.owner === A);
+    g.unitSys.order(P, [div.id], 'attach', (lineRow + 1) * W + cx, 0);
+  } else if (variant === 'def') {
+    g.applyDebug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: H, tile: (lineRow + 1) * W + cx, targetTile: -1 });
+    div = [...g.unitMap.values()].find((u) => u.type === UnitType.ArmoredDivision && u.owner === H);
+    g.unitSys.order(D, [div.id], 'attach', lineRow * W + cx, 0);
+  }
+  step();
+  const axisTile = (cy + half) * W + cx;
+  g.attacks.command(P, H, 1, axisTile);
+  const a = g.attackList.find((x) => !x.ended && x.attacker === A);
+  const axis = [];
+  for (let k = 3; k < 2 * half - 2; k++) axis.push((cy - half + k) * W + cx);
+  const fall = [];
+  let lossAt10 = -1, tilesAt10 = -1, minHp = 1, rSum = 0, rN = 0, maxKmh = 0;
+  for (let i = 0; i < ticks && a && !a.ended; i++) {
+    D.troops = Math.min(D.troops, dTroops);
+    D.troops = Math.max(D.troops, dTroops * 0.98);
+    step();
+    if (g.tick > a.contactUntil) {
+      rSum += a.ratio;
+      rN++;
+      maxKmh = Math.max(maxKmh, a.advanceKmh);
+    }
+    if (div && !div.dead) minHp = Math.min(minHp, div.hp / div.maxHp);
+    for (let k = 0; k < axis.length; k++) if (fall[k] === undefined && g.owner[axis[k]] === A) fall[k] = g.tick;
+    if (lossAt10 < 0 && fall[10] !== undefined) {
+      lossAt10 = a.attackerLosses;
+      tilesAt10 = a.tilesTaken;
+    }
+    if (fall[10] !== undefined && variant !== 'atk') break;
+  }
+  const t10 = fall[10] !== undefined && fall[0] !== undefined ? fall[10] - fall[0] : Infinity;
+  // Depth speed along the axis (the quantity the cap bounds, as T30 measures it): fastest 5-tile stretch.
+  let depthKmh = 0;
+  for (let k = 0; k + 5 < axis.length; k++) {
+    if (fall[k] === undefined || fall[k + 5] === undefined) continue;
+    const dt = fall[k + 5] - fall[k];
+    if (dt > 0) depthKmh = Math.max(depthKmh, (5 * 25) / (dt / 10));
+  }
+  return {
+    depthKmh,
+    t10, perTile: tilesAt10 > 0 ? lossAt10 / tilesAt10 : Infinity, R: rN ? rSum / rN : 0, maxKmh,
+    divHp: div ? (div.dead ? 0 : div.hp / div.maxHp) : -1, minHp, divAttached: div ? div.mode : -1, g, a, div,
+  };
+}
+
+async function armor() {
+  const base = armorRun('none');
+  const atk = armorRun('atk');
+  const def = armorRun('def');
+  console.log(`none: 10 axis tiles in ${base.t10} ticks, ${base.perTile.toFixed(0)} attacker troops lost per tile, mean R ${base.R.toFixed(2)}`);
+  console.log(`atk : 10 axis tiles in ${atk.t10} ticks, ${atk.perTile.toFixed(0)} per tile, mean R ${atk.R.toFixed(2)}, max ${atk.maxKmh.toFixed(2)} km/h, division ${(atk.divHp * 100).toFixed(1)} %`);
+  console.log(`def : 10 axis tiles in ${def.t10} ticks, ${def.perTile.toFixed(0)} per tile, mean R ${def.R.toFixed(2)}`);
+  const tr = atk.t10 / base.t10, cr = atk.perTile / base.perTile;
+  row('W4-6', 'attached attacking division: time for the first 10 axis tiles', `${atk.t10} vs ${base.t10} ticks (×${tr.toFixed(2)})`, '<= 0.75×', tr <= 0.75);
+  row('W4-6', 'attached attacking division: attacker casualties per tile', `${atk.perTile.toFixed(0)} vs ${base.perTile.toFixed(0)} (×${cr.toFixed(2)})`, '<= 0.8×', cr <= 0.8);
+  row('W4-6', 'never above the cap: fastest 5-tile depth speed with the division', `${atk.depthKmh.toFixed(2)} km/h`, '<= 8 (+10 % tile quantisation)', atk.depthKmh <= 8.8);
+  const dr = def.t10 / base.t10;
+  row('W4-6', 'defending division in the sector: attacker time per tile', `${def.t10} vs ${base.t10} ticks (×${dr.toFixed(2)})`, '>= 1.3×', dr >= 1.3);
+  // Acceptance 19a: an attached attacking division through a full conquest --mult 2 offensive to half the land.
+  const cq = conquestWithDivision(2);
+  row('W4-19', 'attached division through a conquest --mult 2 offensive to half the land', `half at ${cq.half}, division ${cq.dead ? 'destroyed' : `${(cq.hp * 100).toFixed(1)} %`} (engaged ${cq.engaged} ticks)`, '>= 50 % integrity', !cq.dead && cq.hp >= 0.5 && cq.half > 0);
+  // Acceptance 19b: a division on a quiet front regains +0.25 %/h.
+  const q = quietFrontRepair();
+  row('W4-19', 'division on a quiet front: field repair', `${q.perHour.toFixed(3)} %/h over ${q.hours} h`, '+0.25 %/h ± 0.02', Math.abs(q.perHour - 0.25) <= 0.02);
+  return printTable('pace-audit armor (W4 acceptance 6, 19)');
+}
+
+/** conquestRun's staging with one attacking division of the aggressor attached near the axis. */
+function conquestWithDivision(mult) {
+  const { g, step } = controlledGame(Number(arg('seed', 7)));
+  const H = HUMAN_ID;
+  const iber = new Set(['ESP', 'PRT', 'AND', 'GIB'].map(countryIdx).filter((i) => i >= 0));
+  const fra = countryIdx('FRA');
+  const W = 1600;
+  stageLand(g, 0, (t) => g.owner[t] === H);
+  const start = stageLand(g, H, (t) => iber.has(world.country[t]));
+  const A = addNation(g, 'Atacante');
+  stageLand(g, A, (t) => {
+    if (world.country[t] !== fra) return false;
+    const ll = tileXYToLatLon((t % W) + 0.5, Math.floor(t / W) + 0.5);
+    return ll.lat > 41 && ll.lat < 51.5 && ll.lon > -5.5 && ll.lon < 10;
+  });
+  const D = g.playerById[H], P = g.playerById[A];
+  D.capitalTile = tileOf(40.42, -3.7);
+  P.capitalTile = tileOf(48.85, 2.35);
+  g.economy.refreshAll();
+  step();
+  D.troops = D.maxTroops;
+  P.troops = D.troops * mult;
+  const w = g.war.declare(A, H, 'conquest', 'war.reason.debug', { force: true, queuedAttack: { tile: aimPoint(g, H), ratio: 1 } });
+  // The division waits at Perpignan-Toulouse and attaches to the Pyrenees front when the war starts.
+  g.applyDebug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: A, tile: tileOf(43.1, 1.0), targetTile: -1 });
+  const div = [...g.unitMap.values()].find((u) => u.type === UnitType.ArmoredDivision && u.owner === A);
+  g.unitSys.order(P, [div.id], 'attach', tileOf(42.6, 0.5), 0);
+  let half = -1, engaged = 0, t0 = -1;
+  for (let i = 0; i < 5200 && D.alive; i++) {
+    if (w && g.tick === w.mobilizeUntilTick - 1) P.troops = D.troops * mult;
+    const hp0 = div.hp;
+    step();
+    if (!div.dead && div.hp < hp0) engaged++;
+    const a = g.attackList.find((x) => !x.ended && x.attacker === A && x.defender === H);
+    if (t0 < 0 && a) t0 = g.tick;
+    if (t0 < 0) continue;
+    const rel = g.tick - t0;
+    if (half < 0 && D.tiles <= start / 2) {
+      half = rel;
+      break;
+    }
+    if (rel > 0 && rel % 200 === 0) {
+      const aim = aimPoint(g, H);
+      if (aim >= 0 && a) g.attacks.setAxis(a, aim);
+      else if (aim >= 0 && P.troops > 1000) g.attacks.command(P, H, 1, aim);
+    }
+  }
+  return { half, hp: div.dead ? 0 : div.hp / div.maxHp, dead: div.dead, engaged };
+}
+
+/** A division attached to a quiet front (at war, no offensive) regains +0.25 %/h. */
+function quietFrontRepair() {
+  const { g, step } = controlledGame(Number(arg('seed', 7)));
+  const H = HUMAN_ID;
+  stageLand(g, 0, (t) => g.owner[t] === H);
+  const A = addNation(g, 'Vecino');
+  const W = 1600;
+  const c = latLonToTileXY(40, -100);
+  const cx = Math.floor(c.x), cy = Math.floor(c.y);
+  stageLand(g, H, (t) => Math.abs((t % W) - cx) <= 10 && Math.abs(Math.floor(t / W) - cy) <= 10 && (t % W) < cx);
+  stageLand(g, A, (t) => Math.abs((t % W) - cx) <= 10 && Math.abs(Math.floor(t / W) - cy) <= 10 && (t % W) >= cx);
+  step();
+  g.war.declare(A, H, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+  g.applyDebug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: H, tile: cy * W + cx - 2, targetTile: -1 });
+  const div = [...g.unitMap.values()].find((u) => u.type === UnitType.ArmoredDivision && u.owner === H);
+  g.unitSys.order(g.playerById[H], [div.id], 'attach', cy * W + cx + 1, 0);
+  div.hp = div.maxHp * 0.6;
+  for (let i = 0; i < 20; i++) step();
+  const h0 = div.hp / div.maxHp, tk0 = g.tick;
+  for (let i = 0; i < 400; i++) step();
+  const hours = (g.tick - tk0) / 10;
+  return { perHour: ((div.hp / div.maxHp - h0) * 100) / hours, hours };
+}
+
+// =================================================================================================
+// economy (T38, W4 acceptance 18): Port and Factory rates paid per trip
+// =================================================================================================
+/** One structure of the human at level L with partners; the gold its carriers bring per game hour. */
+function economyRun(kind, level, warm = 600, span = 4000) {
+  const { g, events, step } = controlledGame(Number(arg('seed', 7)));
+  const H = HUMAN_ID;
+  const iber = new Set(['ESP', 'PRT'].map(countryIdx).filter((i) => i >= 0));
+  stageLand(g, 0, (t) => g.owner[t] === H);
+  stageLand(g, H, (t) => iber.has(world.country[t]));
+  let sid = 0;
+  if (kind === 'port') {
+    const B = addNation(g, 'Socio');
+    const ita = countryIdx('ITA');
+    stageLand(g, B, (t) => world.country[t] === ita);
+    g.applyDebug({ type: 'spawnStructure', structure: StructureType.Port, owner: H, tile: coastal(g, 38.72, -9.3), level });
+    for (const [la, lo] of [[40.85, 14.25], [44.4, 8.9], [38.1, 13.35], [45.44, 12.33]]) {
+      g.applyDebug({ type: 'spawnStructure', structure: StructureType.Port, owner: B, tile: coastal(g, la, lo), level: 1 });
+    }
+    sid = [...g.structureMap.values()].find((s) => s.owner === H && s.type === StructureType.Port).id;
+  } else {
+    g.applyDebug({ type: 'spawnStructure', structure: StructureType.Factory, owner: H, tile: tileOf(40.42, -3.7), level });
+    for (const [la, lo] of [[41.39, 2.17], [37.39, -5.98], [43.26, -2.93], [39.47, -0.38], [42.88, -8.54]]) {
+      g.applyDebug({ type: 'spawnStructure', structure: StructureType.City, owner: H, tile: tileOf(la, lo), level: 1 });
+    }
+    sid = [...g.structureMap.values()].find((s) => s.owner === H && s.type === StructureType.Factory).id;
+  }
+  g.economy.refreshAll?.();
+  for (let i = 0; i < warm; i++) step();
+  let gold = 0, trips = 0, atSeaSum = 0;
+  const e0 = events.length;
+  const onPay = () => {
+    for (let i = e0; i < events.length; i++) {
+      const e = events[i];
+      if (kind === 'port' && e.type === 'tradeCompleted' && e.owner === H) {
+        gold += e.gold;
+        trips++;
+      }
+    }
+  };
+  // tradeCompleted is filtered out of `events` by newGame: count through a tap instead.
+  const emit = g.emit.bind(g);
+  g.emit = (e) => {
+    if (kind === 'port' && e.type === 'tradeCompleted' && e.owner === H && g.tick > 0) {
+      gold += e.gold;
+      trips++;
+    }
+    if (kind === 'factory' && e.type === 'goldBonus' && e.reason === 'train' && e.playerId === H) {
+      gold += e.gold;
+      trips++;
+    }
+    emit(e);
+  };
+  onPay();
+  const carrier = kind === 'port' ? UnitType.TradeShip : UnitType.Train;
+  for (let i = 0; i < span; i++) {
+    step();
+    let n = 0;
+    for (const u of g.unitsByOwner.get(H) ?? []) if (u.type === carrier && u.home === sid) n++;
+    atSeaSum += n;
+  }
+  const perHour = gold / (span / 10);
+  return { perHour, trips, carriers: atSeaSum / span };
+}
+
+function coastal(g, lat, lon) {
+  const t0 = tileOf(lat, lon);
+  const W = 1600;
+  for (let r = 0; r < 6; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const t = t0 + dy * W + dx;
+        if (g.playable[t] && g.nav.coastal[t]) return t;
+      }
+    }
+  }
+  return t0;
+}
+
+async function economy() {
+  const PORT = [0, 150, 300, 450], RAIL = [0, 60, 120, 180];
+  for (const L of [1, 2, 3]) {
+    const r = economyRun('port', L);
+    row('T38', `Port L${L}: trade gold per game hour (${r.trips} trips, ${r.carriers.toFixed(1)} ships at sea)`, r.perHour.toFixed(0), `${PORT[L]} ± 15 %`, Math.abs(r.perHour / PORT[L] - 1) <= 0.15);
+  }
+  for (const L of [1, 2, 3]) {
+    const r = economyRun('factory', L);
+    row('T38', `Factory L${L}: rail freight gold per game hour (${r.trips} trips, ${r.carriers.toFixed(1)} trains)`, r.perHour.toFixed(0), `${RAIL[L]} ± 15 %`, Math.abs(r.perHour / RAIL[L] - 1) <= 0.15);
+  }
+  if (!flag('no-game')) {
+    // A trader AI in a full autopilot game at tick 18,000: its share of income from trade and trains.
+    const N = Number(arg('at', 18000));
+    const { g, step } = newGame(Number(arg('seed', 11)), tileOf(40.4, -3.7), true, true, {});
+    const snap = new Map();
+    while (g.tick < N) {
+      step();
+      if (g.tick === N - 2400) for (const p of g.playerArr) snap.set(p.id, { trade: p.tradeGold, earned: p.stats.goldEarned });
+    }
+    const traders = g.playerArr.filter((p) => p.personality === 'trader' && p.alive && p.kind === 'nation');
+    const shares = traders.map((p) => {
+      const s = snap.get(p.id) ?? { trade: 0, earned: 0 };
+      const earned = p.stats.goldEarned - s.earned;
+      return { name: p.name, share: earned > 0 ? (p.tradeGold - s.trade) / earned : 0, total: p.stats.goldEarned > 0 ? p.tradeGold / p.stats.goldEarned : 0 };
+    });
+    for (const s of shares) console.log(`  trader ${s.name}: last day ${(s.share * 100).toFixed(1)} %, whole game ${(s.total * 100).toFixed(1)} %`);
+    const med = shares.map((s) => s.share).sort((a, b) => a - b)[Math.floor(shares.length / 2)] ?? 0;
+    row('T38', `trader AI (${shares.length}): median share of income from trade and trains, last day before ${N}`, `${(med * 100).toFixed(1)} %`, '15–30 %', med >= 0.15 && med <= 0.3);
+  }
+  return printTable('pace-audit economy (T38)');
+}
+
+// =================================================================================================
 // dispatch
 // =================================================================================================
-const modes = { endgame, speeds, conquest, depth, attrition, regrowth, empire, warning, nuke, population, occupation, survival, save, game, invariants: () => game({ invariantsOnly: true }) };
+const modes = { armor, economy, endgame, speeds, conquest, depth, attrition, regrowth, empire, warning, nuke, population, occupation, survival, save, game, invariants: () => game({ invariantsOnly: true }) };
 if (!modes[mode]) {
   console.error(`unknown mode ${mode}; modes: ${Object.keys(modes).join(', ')}`);
   process.exit(2);

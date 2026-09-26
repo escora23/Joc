@@ -1333,6 +1333,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           total += km;
         }
         let at = 0, land = 0, samples = 0;
+        const worst: { seg: number; of: number; km: number; from: number[]; to: number[] }[] = [];
         for (let i = 3, s = 0; i < l.pts.length; i += 3, s++) {
           A.set(l.pts[i - 3], l.pts[i - 2], l.pts[i - 1]);
           Bv.set(l.pts[i], l.pts[i + 1], l.pts[i + 2]);
@@ -1343,11 +1344,17 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
             C.lerpVectors(A, Bv, j / n).normalize();
             const lat = Math.asin(clamp(C.y, -1, 1)) * (180 / Math.PI), lon = Math.atan2(-C.z, C.x) * (180 / Math.PI);
             samples++;
-            if (!isWaterTerrain(w.terrain[latLonTile(lat, lon)])) land += km / n;
+            if (!isWaterTerrain(w.terrain[latLonTile(lat, lon)])) {
+              land += km / n;
+              if (worst.length < 4 && (worst.length === 0 || worst[worst.length - 1].seg !== s)) {
+                const ll = (V: THREE.Vector3): number[] => { const q = V.clone().normalize(); return [+(Math.asin(clamp(q.y, -1, 1)) * 57.2958).toFixed(2), +(Math.atan2(-q.z, q.x) * 57.2958).toFixed(2)]; };
+                worst.push({ seg: s, of: seg.length, km: +km.toFixed(1), from: ll(A), to: ll(Bv) });
+              }
+            }
           }
           at += km;
         }
-        return { unitId: l.unitId, kind: l.kind, plan: l.plan, km: +total.toFixed(0), landKm: +land.toFixed(1), samples };
+        return { unitId: l.unitId, kind: l.kind, plan: l.plan, km: +total.toFixed(0), landKm: +land.toFixed(1), samples, worst };
       });
       return { lines: lines.length, maxLandKm: Math.max(0, ...lines.map((l) => l.landKm)), overLand: lines.filter((l) => l.landKm > 10) };
     },
