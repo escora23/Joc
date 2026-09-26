@@ -1175,6 +1175,9 @@ export class Game implements SimGame {
         this.war.declare(a.a, a.b, a.goal ?? 'conquest', a.reasonKey ?? 'war.reason.debug', { mobilizeTicks: a.mobilizeTicks ?? 0, force: true });
         break;
       }
+      case 'escalate':
+        this.war.raiseEscalation(a.by, a.against, a.level, 'escalation.reason.military');
+        break;
       case 'removeUnit': {
         const u = this.unitMap.get(a.unitId);
         if (u) this.unitSys.remove(u, false);

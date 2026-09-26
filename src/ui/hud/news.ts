@@ -331,7 +331,10 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
   bus.on('unitReady', (e) => {
     if (e.owner !== HUMAN_ID) return;
     const ll = atXY(e.x, e.y);
-    alert({ kind: 'unitReady', severity: 'info', icon: UNIT_DEFS[e.unit]?.id ?? 'info', lat: ll.lat, lon: ll.lon, title: t('alert.unitReady.title', { unit: unitLabel(e.unit, e.serial), place: describeXY(view(), e.x, e.y).text, g: t(`unit.${UNIT_DEFS[e.unit]?.id ?? 'armoredDivision'}.g`) === 'f' ? 'f' : 'm' }) });
+    // v2 (W4): named after its base («1.ª División Acorazada lista en la base de Zaragoza»); the click selects it.
+    const base = view().structures.get(e.structureId);
+    const place = base ? t('alert.unitReady.base', { place: describeTile(view(), base.tile).name }) : describeXY(view(), e.x, e.y).text;
+    alert({ kind: 'unitReady', severity: 'info', icon: UNIT_DEFS[e.unit]?.id ?? 'info', lat: ll.lat, lon: ll.lon, unitId: e.unitId, title: t('alert.unitReady.title', { unit: unitLabel(e.unit, e.serial), place, g: t(`unit.${UNIT_DEFS[e.unit]?.id ?? 'armoredDivision'}.g`) === 'f' ? 'f' : 'm' }) });
   });
   const LOSS_ALERT = new Set<number>([UnitType.ArmoredDivision, UnitType.Warship, UnitType.FighterSquadron, UnitType.Bomber, UnitType.DroneSwarm, UnitType.TransportShip]);
   bus.on('unitDestroyed', (e) => {

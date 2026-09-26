@@ -1,0 +1,101 @@
+/* FRONT ULTRA — W4 styles: the Fuerzas panel, unit and structure cards, the order chip, the selection box. */
+
+/* ---------------------------------------------------------------------------------------------
+   Fuerzas drawer (U)
+   --------------------------------------------------------------------------------------------- */
+.fu-forces { position: absolute; top: 0.9rem; right: 0.9rem; bottom: 0.9rem; width: 24rem; z-index: 25; display: flex; flex-direction: column; animation: fu-slide-right 0.3s var(--fu-ease) both; }
+.fu-fo-tabn { margin-left: 0.3rem; font-size: 0.66rem; color: var(--fu-accent); }
+.fu-fo-body { display: flex; flex-direction: column; gap: 0.2rem; }
+.fu-fo-group { display: flex; align-items: center; justify-content: space-between; margin: 0.55rem 0 0.15rem; font: 700 0.62rem var(--fu-font-cond); letter-spacing: 0.2em; text-transform: uppercase; color: var(--fu-accent); border-bottom: 1px solid var(--fu-line); padding-bottom: 0.2rem; }
+.fu-fo-group.is-combat { color: #ff8a6a; }
+.fu-fo-group.is-moving { color: #6fd6ff; }
+.fu-fo-group.is-patrol { color: #b89cff; }
+.fu-fo-group.is-base { color: #9fb3c8; }
+.fu-fo-group.is-production { color: var(--fu-accent-2); }
+.fu-fo-row { display: flex; align-items: center; gap: 0.55rem; padding: 0.35rem 0.45rem; background: rgba(255, 255, 255, 0.02); border: 1px solid transparent; cursor: pointer; }
+.fu-fo-row:hover { border-color: var(--fu-line-strong); background: var(--fu-glass-hi); }
+.fu-fo-row.is-sel { border-color: var(--fu-accent); background: var(--fu-accent-dim); }
+.fu-fo-ico { width: 1.9rem; height: 1.9rem; flex: none; display: grid; place-items: center; border: 1px solid var(--fu-line); color: #fff; }
+.fu-fo-ico .fu-ico { width: 1.3rem; height: 1.3rem; }
+.fu-fo-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.08rem; }
+.fu-fo-line { display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; }
+.fu-fo-line b { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-fo-front { font: 600 0.6rem var(--fu-font-cond); letter-spacing: 0.1em; text-transform: uppercase; color: #ff9a7a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-fo-state { font-size: 0.72rem; color: var(--fu-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-fo-place { font-size: 0.64rem; color: var(--fu-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-fo-hp { display: flex; align-items: center; gap: 0.4rem; }
+.fu-fo-hp .fu-sel-bar { flex: 1; height: 0.25rem; }
+.fu-fo-hp .fu-mono { font-size: 0.62rem; color: var(--fu-text-dim); min-width: 3.2rem; text-align: right; }
+.fu-sel-bar.is-amber i { background: linear-gradient(90deg, #ffb53d, #ffe29a); }
+.fu-fo-btns { display: flex; flex-direction: column; gap: 0.2rem; }
+.fu-btn--xs { padding: 0.25rem; min-width: 0; line-height: 0; }
+.fu-btn--xs .fu-ico { width: 0.95rem; height: 0.95rem; }
+.fu-fo-empty { padding: 0.8rem 0.3rem; font-size: 0.78rem; color: var(--fu-text-dim); line-height: 1.4; }
+.fu-fo-hint { display: flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.8rem; font-size: 0.68rem; color: var(--fu-text-dim); border-top: 1px solid var(--fu-line); }
+.fu-fo-hint .fu-ico { width: 0.9rem; height: 0.9rem; color: var(--fu-accent); flex: none; }
+.fu-fo-foot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.3rem; padding: 0.45rem 0.8rem 0.7rem; }
+.fu-fo-cap { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.3rem 0.4rem; border: 1px solid var(--fu-line); font: 600 0.58rem var(--fu-font-cond); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fu-text-dim); }
+.fu-fo-cap b { font-size: 0.86rem; color: var(--fu-text); letter-spacing: 0; }
+.fu-fo-cap.is-full b { color: var(--fu-accent-2); }
+
+/* ---------------------------------------------------------------------------------------------
+   Cards (bottom-right)
+   --------------------------------------------------------------------------------------------- */
+.fu-hud-br .fu-sel { max-height: calc(100vh - 13rem); overflow-y: auto; }
+.fu-w4-role { font-style: italic; }
+.fu-w4-state { font-size: 0.82rem; color: var(--fu-text); padding-left: 0.5rem; border-left: 2px solid var(--fu-accent); }
+.fu-w4-lines { display: flex; flex-direction: column; gap: 0.25rem; }
+.fu-w4-line { display: grid; grid-template-columns: 5.6rem 1fr; gap: 0.5rem; align-items: baseline; font-size: 0.78rem; }
+.fu-w4-line small { font: 600 0.58rem var(--fu-font-cond); letter-spacing: 0.16em; text-transform: uppercase; color: var(--fu-text-dim); }
+.fu-w4-val { color: var(--fu-text); line-height: 1.3; }
+.fu-w4-val em { display: block; font-style: normal; font-size: 0.68rem; color: var(--fu-text-dim); }
+.fu-w4-line.is-effect .fu-w4-val { color: #9ff0c4; }
+.fu-w4-orders { display: grid; grid-template-columns: repeat(auto-fill, minmax(6.4rem, 1fr)); }
+.fu-w4-orders .fu-btn { font-size: 0.66rem; padding: 0.4rem 0.4rem; }
+.fu-btn.is-disabled { opacity: 0.45; filter: grayscale(0.6); cursor: not-allowed; }
+.fu-w4-pips { display: inline-flex; gap: 0.2rem; margin-top: 0.3rem; }
+.fu-w4-pips i { width: 0.5rem; height: 0.5rem; border-radius: 50%; border: 1px solid var(--oc, #fff); }
+.fu-w4-pips i.is-on { background: var(--oc, #fff); box-shadow: 0 0 0.35rem var(--oc, #fff); }
+.fu-w4-pips b { font-size: 0.7rem; color: var(--oc); }
+.fu-w4-gold { display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.5rem; background: rgba(255, 200, 80, 0.08); border: 1px solid rgba(255, 200, 80, 0.25); color: #ffd27a; }
+.fu-w4-gold .fu-ico { width: 1.1rem; height: 1.1rem; flex: none; }
+.fu-w4-gold b { font-size: 0.9rem; }
+.fu-w4-gold small { font-size: 0.66rem; color: var(--fu-text-dim); }
+.fu-w4-eff { display: flex; flex-direction: column; gap: 0.12rem; }
+.fu-w4-eh { font: 700 0.6rem var(--fu-font-cond); letter-spacing: 0.2em; text-transform: uppercase; color: var(--fu-accent); margin-bottom: 0.1rem; }
+.fu-w4-eff.is-next .fu-w4-eh { color: var(--fu-success); }
+.fu-w4-eff.is-next .fu-w4-er b { color: #9ff0c4; }
+.fu-w4-er { display: flex; justify-content: space-between; gap: 0.6rem; font-size: 0.74rem; color: var(--fu-text-2); }
+.fu-w4-er b { font-weight: 500; color: var(--fu-text); text-align: right; }
+.fu-w4-why { font-size: 0.72rem; color: var(--fu-danger); min-height: 0; }
+.fu-w4-why:empty { display: none; }
+.fu-w4-hosted { display: flex; flex-direction: column; gap: 0.2rem; max-height: 12rem; overflow-y: auto; }
+.fu-w4-hrow { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--fu-line); color: var(--fu-text); cursor: pointer; text-align: left; }
+.fu-w4-hrow:hover { border-color: var(--fu-accent); background: var(--fu-accent-dim); }
+.fu-w4-hrow .fu-ico { width: 1.15rem; height: 1.15rem; flex: none; }
+.fu-w4-hrow > span:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fu-w4-hrow b { font-size: 0.76rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-w4-hrow small { font-size: 0.64rem; color: var(--fu-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-w4-hrow .fu-mono { font-size: 0.66rem; color: var(--fu-text-dim); }
+.fu-sel-prod-btn small { font-size: 0.6rem; color: var(--fu-text-dim); letter-spacing: 0; }
+.fu-sel-prod-btn.is-disabled { opacity: 0.4; cursor: not-allowed; }
+.fu-sel-prod-btn.is-poor b { color: var(--fu-danger); }
+.fu-w4-queue { display: flex; flex-direction: column; gap: 0.2rem; }
+.fu-w4-qrow { display: grid; grid-template-columns: 1.1rem 1fr 4rem 3rem; gap: 0.4rem; align-items: center; font-size: 0.7rem; color: var(--fu-text-2); }
+.fu-w4-qrow .fu-ico { width: 1rem; height: 1rem; }
+.fu-w4-qrow .fu-sel-bar i { background: linear-gradient(90deg, #ffb53d, #ffe29a); }
+.fu-w4-qrow .fu-mono { text-align: right; font-size: 0.66rem; }
+.fu-w4-mix { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.fu-w4-mixi { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.45rem; border: 1px solid var(--fu-line); font-size: 0.72rem; }
+.fu-w4-mixi .fu-ico { width: 1rem; height: 1rem; }
+
+/* Build bar: production time under the price. */
+.fu-bb-time { position: absolute; left: 0.2rem; top: 0.15rem; font-size: 0.56rem; color: var(--fu-text-dim); }
+
+/* ---------------------------------------------------------------------------------------------
+   Selection box (Shift + drag)
+   --------------------------------------------------------------------------------------------- */
+.fu-selbox { position: absolute; left: 0; top: 0; border: 1px solid var(--fu-accent); background: rgba(63, 208, 255, 0.08); box-shadow: 0 0 0.6rem rgba(63, 208, 255, 0.35); pointer-events: none; z-index: 40; }
+
+/* Order chip: warn when only some units can comply. */
+.fu-chip.is-warn { border-color: var(--fu-accent-2); }

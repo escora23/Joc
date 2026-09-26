@@ -7,11 +7,13 @@ import { isTyping } from '../dom';
 import { attackNation } from './diplomacy';
 import { needsDeclaration, openDeclareWar } from './declare';
 import type { HudShared } from './shared';
+import { isListedForce } from './forcesInfo';
+import { issueOrders, previewOrders, selectedUnitIds } from './orderCtl';
 import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon } from '../../shared/geo';
 import { t } from '../../shared/i18n';
 import { isPlayableTerrain, isWaterTerrain } from '../../shared/terrain';
-import { STRUCTURE_TYPES, StructureType, UnitType, type GameSpeed, type WeaponType } from '../../shared/types';
+import { STRUCTURE_TYPES, StructureType, UnitMode, UnitType, type GameSpeed, type WeaponType } from '../../shared/types';
 
 export interface ControllerHooks {
   openRadial(x: number, y: number, tile: number): void;
@@ -27,8 +29,13 @@ export interface ControllerHooks {
   modalOpen(): boolean;
   /** v2 (W3): the nations drawer (N) and the alert log (L). closeNations returns true when it was open. */
   toggleNations?(): void;
+  /** v2 (W4): the Fuerzas panel (U). */
+  toggleForces?(): void;
+  /** v2 (W4): the selection rectangle drawn while Shift + dragging (null hides it). */
+  showBox?(r: { x0: number; y0: number; x1: number; y1: number } | null): void;
   openLog?(): void;
   closeNations?(): boolean;
+  closeForces?(): boolean;
 }
 
 const WEAPON_HOTKEYS: Record<string, WeaponType> = {
@@ -44,6 +51,28 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
   const ctx = hs.ctx;
   const bus = ctx.bus;
   const playing = () => ctx.app.state === 'playing';
+  const lastUnitClick = { id: -1, at: 0 };
+  let idleCursor = 0;
+
+  // ---- Shift + drag: box selection of own units (§7.1) -------------------------------------------
+  bus.on('worldBox', (b) => {
+    if (!playing() || b.phase === 'cancel') {
+      hooks.showBox?.(null);
+      return;
+    }
+    if (b.phase === 'drag') {
+      hooks.showBox?.(b);
+      return;
+    }
+    hooks.showBox?.(null);
+    const view = ctx.sim.view;
+    const ids = (ctx.units.unitsInRect?.(b.x0, b.y0, b.x1, b.y1) ?? []).filter((id) => {
+      const u = view.units.get(id);
+      return !!u && isListedForce(u);
+    });
+    hs.select({ kind: 'units', ids });
+    hs.sound(ids.length ? 'click' : 'cancel');
+  });
 
   bus.on('worldHover', (e) => hs.setHover(e));
 
@@ -75,11 +104,27 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       hooks.closeRadial();
       if (e.button === 0) return;
     }
-    // ---------------------------------------------------------------- right click: radial
+    // ---------------------------------------------------------------- right click: orders, else the radial
     if (e.button === 2) {
-      if (hs.mode.kind !== 'none') {
+      if (hs.mode.kind !== 'none' && hs.mode.kind !== 'order') {
         hs.setMode({ kind: 'none' });
         hs.sound('cancel');
+        return;
+      }
+      // v2 (§7.3): with own units selected the right click orders them by context (the chip previewed it).
+      const ids = selectedUnitIds(hs);
+      if (ids.length) {
+        if (hs.mode.kind === 'order') hs.setMode({ kind: 'none' });
+        const pv = previewOrders(hs, ids, e.tile, e.unitId, e.structureId, e.shift);
+        if (!pv) return;
+        if (pv.n === 0) {
+          hs.sound('error');
+          hooks.ripple(e.clientX, e.clientY, 'bad');
+          return;
+        }
+        issueOrders(hs, pv, e.tile);
+        hs.sound('confirm');
+        hooks.ripple(e.clientX, e.clientY, 'order');
         return;
       }
       if (e.tile >= 0 && !isWaterTerrain(world.terrain[e.tile])) hooks.openRadial(e.clientX, e.clientY, e.tile);
@@ -117,29 +162,51 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       if (!e.shift) hs.setMode({ kind: 'none' });
       return;
     }
-    // ---------------------------------------------------------------- unit orders
-    if (m.kind === 'order' && e.unitId < 0 && e.structureId < 0) {
-      const u = view.units.get(m.unitId);
-      if (!u || e.tile < 0) {
+    // ---------------------------------------------------------------- unit orders from a card button (touchpads)
+    if (m.kind === 'order') {
+      const ids = selectedUnitIds(hs);
+      if (!ids.length || e.tile < 0) {
         hs.setMode({ kind: 'none' });
         return;
       }
-      if (u.type === UnitType.ArmoredDivision) ctx.sim.send({ type: 'deployArmor', unitId: u.id, targetTile: e.tile });
-      else if (u.type === UnitType.Warship) ctx.sim.send({ type: 'moveUnit', unitId: u.id, tile: e.tile });
-      else ctx.sim.send({ type: 'airStrike', unitId: u.id, targetTile: e.tile });
+      const pv = previewOrders(hs, ids, e.tile, e.unitId, e.structureId, e.shift, m.order);
+      if (!pv || pv.n === 0) {
+        hs.sound('error');
+        hooks.ripple(e.clientX, e.clientY, 'bad');
+        return;
+      }
+      issueOrders(hs, pv, e.tile);
       hs.sound('confirm');
       hooks.ripple(e.clientX, e.clientY, 'order');
       if (!e.shift) hs.setMode({ kind: 'none' });
       return;
     }
-    // ---------------------------------------------------------------- selection
+    // ---------------------------------------------------------------- selection (§7.1, §7.2)
     if (e.unitId >= 0) {
       const u = view.units.get(e.unitId);
       if (u) {
-        hs.select({ kind: 'unit', id: u.id });
+        const own = u.owner === HUMAN_ID;
+        const now = performance.now();
+        const dbl = own && lastUnitClick.id === u.id && now - lastUnitClick.at < 420;
+        lastUnitClick.id = u.id;
+        lastUnitClick.at = now;
+        if (dbl) {
+          // Double click: every own unit of that type on screen.
+          const rect = ctx.canvas.getBoundingClientRect();
+          const ids = (ctx.units.unitsInRect?.(rect.left, rect.top, rect.right, rect.bottom) ?? [])
+            .filter((id) => {
+              const x = view.units.get(id);
+              return !!x && x.owner === HUMAN_ID && x.type === u.type;
+            });
+          hs.select({ kind: 'units', ids: ids.length ? ids : [u.id] });
+        } else if (e.shift && own) {
+          const ids = selectedUnitIds(hs);
+          const i = ids.indexOf(u.id);
+          if (i >= 0) ids.splice(i, 1);
+          else ids.push(u.id);
+          hs.select({ kind: 'units', ids });
+        } else hs.select({ kind: 'unit', id: u.id });
         hs.sound('click');
-        const orderable = u.owner === HUMAN_ID && (u.type === UnitType.ArmoredDivision || u.type === UnitType.Warship || u.type === UnitType.FighterSquadron || u.type === UnitType.Bomber || u.type === UnitType.DroneSwarm);
-        hs.setMode(orderable ? { kind: 'order', unitId: u.id } : { kind: 'none' });
         return;
       }
     }
@@ -187,6 +254,7 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         hs.sound('cancel');
       } else if (hooks.radialOpen()) hooks.closeRadial();
       else if (hooks.closeNations?.()) return;
+      else if (hooks.closeForces?.()) return;
       else if (hs.selection.kind !== 'none') {
         hs.select({ kind: 'none' });
         hs.sound('close');
@@ -270,6 +338,26 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       case 'n':
         hooks.toggleNations?.();
         return;
+      case 'u':
+        hooks.toggleForces?.();
+        return;
+      case 'i': {
+        // The next idle own unit: select it and fly there (§7.1).
+        const view = ctx.sim.view;
+        const idle = [...view.units.values()].filter((u) => isListedForce(u) && u.type !== UnitType.TransportShip
+          && (u.mode === UnitMode.Idle || u.mode === UnitMode.Docked)).sort((a, b) => a.id - b.id);
+        if (!idle.length) {
+          hs.sound('error');
+          bus.emit('toast', { text: t('forces.noIdle'), kind: 'info', durationMs: 2200 });
+          return;
+        }
+        const u = idle[idleCursor++ % idle.length];
+        hs.select({ kind: 'unit', id: u.id });
+        const ll = tileToLatLon(Math.floor(u.y) * 1600 + ((Math.floor(u.x) % 1600) + 1600) % 1600);
+        bus.emit('focusRequest', { lat: ll.lat, lon: ll.lon, altitudeKm: 900, durationMs: 1000 });
+        hs.sound('click');
+        return;
+      }
       case 'l':
         hooks.openLog?.();
         return;

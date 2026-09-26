@@ -143,7 +143,7 @@ const isNavigable = (terrain: number): boolean => (terrain & TerrainFlag.Navigab
 
 /**
  * May units of `unitOwner` enter land of `tileOwner`: their own, an ally's, or a nation that granted open borders.
- * v2-stub(W4→W3): RulesView.hasTreaty knows alliances only until W3's DiplomacySystem answers it (open borders).
+ * Treaties come from W3's DiplomacySystem (sim) and TickUpdate.treaties (client): alliances and open borders.
  */
 export function canTransit(r: RulesView, unitOwner: number, tileOwner: number): boolean {
   if (tileOwner === unitOwner) return true;
@@ -707,6 +707,16 @@ export function planDivision(r: RulesView, u: UnitLike, tile: number, scratch: S
   const stations = railStations(r, u.owner, scratch);
   const free = railUsed(r, u.owner) < railSlots(r, u.owner);
   return divisionRoute(stations, r.railLinks(), (o) => canTransit(r, u.owner, o), u.x, u.y, tileCx(tile), tileCy(tile), free);
+}
+
+/** Is (x, y) inside the coverage of one of `owner`'s operational radars (§6.2, the sim's economy.radarCovers)? */
+export function radarCovers(r: RulesView, owner: number, x: number, y: number): boolean {
+  for (const s of r.structuresOf(owner)) {
+    if (s.type !== StructureType.Radar || s.built < 1) continue;
+    const cov = (structureLevel(s.type, s.level).coverageTiles ?? 0) * TILE_KM;
+    if (tileKm(tileCx(s.tile), tileCy(s.tile), x, y) <= cov) return true;
+  }
+  return false;
 }
 
 /** Radii of the effect rings drawn for a selected unit (tiles): CAP circle, blockade/engagement zone, bombard reach. */

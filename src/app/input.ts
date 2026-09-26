@@ -20,6 +20,8 @@ export function createInputRouter(ctx: GameContext): InputRouter {
   const canvas = ctx.canvas;
   let enabled = false;
   let down: { x: number; y: number; t: number; button: number } | null = null;
+  // v2 (W4): Shift + left drag draws a selection box instead of panning (§7.1).
+  let box: { x: number; y: number; moved: boolean } | null = null;
   let hover: { x: number; y: number; shift: boolean; ctrl: boolean; alt: boolean } | null = null;
   let hoverDirty = false;
   const ll: LatLon = { lat: 0, lon: 0 };
@@ -48,13 +50,26 @@ export function createInputRouter(ctx: GameContext): InputRouter {
   canvas.addEventListener('pointerdown', (e) => {
     // Event timestamps (not handler time): on a slow frame both events can be handled late and far apart.
     down = { x: e.clientX, y: e.clientY, t: e.timeStamp, button: e.button };
+    box = enabled && e.button === 0 && e.shiftKey ? { x: e.clientX, y: e.clientY, moved: false } : null;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!box) return;
+    if (!box.moved && Math.hypot(e.clientX - box.x, e.clientY - box.y) <= CLICK_SLOP) return;
+    box.moved = true;
+    ctx.bus.emit('worldBox', { x0: box.x, y0: box.y, x1: e.clientX, y1: e.clientY, phase: 'drag' });
+  });
+  window.addEventListener('pointerup', (e) => {
+    const b = box;
+    box = null;
+    if (!b || !b.moved) return;
+    ctx.bus.emit('worldBox', { x0: b.x, y0: b.y, x1: e.clientX, y1: e.clientY, phase: enabled ? 'end' : 'cancel' });
   });
   canvas.addEventListener('pointerup', (e) => {
     const d = down;
     down = null;
     if (!enabled || !d || d.button !== e.button) return;
     const moved = Math.hypot(e.clientX - d.x, e.clientY - d.y);
-    if (moved > CLICK_SLOP || e.timeStamp - d.t > CLICK_MS) return;
+    if (moved > CLICK_SLOP || (e.timeStamp - d.t > CLICK_MS && !(e.shiftKey && e.button === 0))) return;
     if (e.button === 0) {
       // A cluster of icons (DESIGN_V2 §10.7): the first click fans its members out so each can be picked.
       const hit = ctx.units.pickIcon?.(e.clientX, e.clientY);

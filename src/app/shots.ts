@@ -1,6 +1,7 @@
 // FRONT ULTRA — shot registry wiring (owner: app). Importing an owner's shots module registers its shots.
 // Owners add shots only in their own `shots.ts`; app lists the modules here.
 import '../ui/shots';
+import '../ui/shotsW4';
 import '../data/shots';
 import '../render/globe/shots';
 import '../render/units/shots';

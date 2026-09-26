@@ -103,6 +103,8 @@ export function createCameraRig(ctx: GameContext): CameraRigApi {
 
   el.addEventListener('pointerdown', (e) => {
     if (!active()) return;
+    // v2 (W4): Shift + left drag is the selection box (§7.1): the camera does not pan.
+    if (e.button === 0 && e.shiftKey) return;
     const grab = e.button === 0 ? ctx.globe.pickLatLon(e.clientX, e.clientY, { lat: 0, lon: 0 }) : null;
     drag = { button: e.button, x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY, grab, moved: false };
     panVel.lat = 0;
@@ -133,6 +135,8 @@ export function createCameraRig(ctx: GameContext): CameraRigApi {
   }, { passive: false });
   el.addEventListener('dblclick', (e) => {
     if (!active()) return;
+    // A double click on a unit selects its type on screen (§7.1), it does not zoom.
+    if (ctx.units.pickUnit(e.clientX, e.clientY) >= 0) return;
     const p = ctx.globe.pickLatLon(e.clientX, e.clientY, { lat: 0, lon: 0 });
     if (!p) return;
     const alt = clamp(goal.altitudeKm * 0.35, 3, CAMERA_MAX_ALT_KM);

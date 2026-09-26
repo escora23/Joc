@@ -342,6 +342,7 @@ export class UnitSystem {
     if (g.phase !== 'playing' || !Array.isArray(unitIds)) return false;
     const accepted: number[] = [];
     let firstErr: string | null = null;
+    let firstParams: Record<string, string | number> | undefined;
     let strategicConfirmed = false;
     const ai = p.kind !== 'human';
     for (const id of unitIds.slice(0, 64)) {
@@ -352,7 +353,10 @@ export class UnitSystem {
       }
       const err = orderCheck(g.rules, id, order, tile, targetId, { confirm, ai });
       if (err) {
-        firstErr ??= err.key;
+        if (!firstErr) {
+          firstErr = err.key;
+          firstParams = err.params;
+        }
         continue;
       }
       if (this.apply(p, u, order, tile, targetId)) {
@@ -366,8 +370,8 @@ export class UnitSystem {
       if (tgt && tgt.strategic && g.war.escalation(p.id, tgt.owner) < 2) g.war.raiseEscalation(p.id, tgt.owner, 2, 'escalation.reason.player');
     }
     if (p.id === HUMAN_ID) {
-      g.emit({ type: 'orderAck', tick: g.tick, owner: p.id, order, unitIds: unitIds.slice(0, 64), accepted, tile, errorKey: accepted.length ? null : firstErr });
-      if (!accepted.length && firstErr) g.message(p.id, firstErr, 'warning');
+      // The UI turns a refusal into a toast with the reason and its parameters (ui/hud/forcesNews.ts).
+      g.emit({ type: 'orderAck', tick: g.tick, owner: p.id, order, unitIds: unitIds.slice(0, 64), accepted, tile, errorKey: accepted.length ? null : firstErr, errorParams: accepted.length ? undefined : firstParams });
     }
     return accepted.length > 0;
   }

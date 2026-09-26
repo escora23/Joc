@@ -6,7 +6,10 @@ import { h, setStyle, setText, toggleClass } from '../dom';
 import { icon } from '../icons';
 import { nationRelation } from './diplomacy';
 import type { HudShared } from './shared';
-import { HUMAN_ID, NUKE_DEFS, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
+import { chipText, previewOrders, selectedUnitIds, type OrderPreview } from './orderCtl';
+import { HUMAN_ID, NUKE_DEFS, OFFENSIVE_CONTACT_TICKS, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
+import { predictOffensive } from '../../shared/orders';
+import { viewRules } from '../../sim/rulesView';
 import { hexToCss } from '../../shared/color';
 import { tileToLatLon } from '../../shared/geo';
 import { countryName, formatCompact, formatNumber, t } from '../../shared/i18n';
@@ -44,6 +47,8 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
   const el = h('div', { class: 'fu-cursor-layer' }, tooltip, chip, reticle);
 
   let lastKey = '';
+  let orderKey = '';
+  let orderPv: OrderPreview | null = null;
   let lastPaint = 0;
   let chipKey = '';
 
@@ -88,11 +93,61 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     return `${t(k)} · ${country}`;
   }
 
+  /**
+   * §7.7: «CLIC: ofensiva con 120.000 (50 %) · relación 2,3 : 1 · frente de 6 casillas (150 km) · avance ≈ 5 km/h en
+   * llano», red / amber / green by the ratio; «ofensiva preparada; empezará en 4 h» while mobilizing; the declaration at
+   * peace; «Sin frontera…» when neither a border nor a coast is in reach. The corridor is drawn on the map.
+   */
+  function offensiveLine(owner: number, tile: number): { text: string; cls: string } {
+    const view = ctx.sim.view;
+    const me = view.human!;
+    const send = me.troops * hs.attackRatio;
+    const pctS = Math.round(hs.attackRatio * 100);
+    const r = viewRules(view);
+    const borders = hs.borders(owner);
+    const emit = (valid: boolean, frontage: number, ratio: number) => {
+      const k = `${tile}:${valid}:${Math.round(frontage)}:${ratio.toFixed(1)}`;
+      if (k === offKey) return;
+      offKey = k;
+      ctx.bus.emit('offensivePreview', { tile, frontageTiles: frontage, ratio, valid });
+    };
+    if (owner !== 0 && view.players[owner]?.kind !== 'tribe' && view.pairState(HUMAN_ID, owner) !== 'war') {
+      emit(false, 0, 0);
+      return { text: t('tt.declare', { name: hs.name(owner) }), cls: 'is-risky' };
+    }
+    if (!borders) {
+      const shore = hs.nearestShoreOf(owner, tile, 30);
+      emit(false, 0, 0);
+      if (shore < 0) return { text: t('tt.noBorder'), cls: 'is-bad' };
+      return { text: t('tt.naval', { n: formatCompact(send), p: pctS }), cls: 'is-risky' };
+    }
+    const pr = predictOffensive(r, HUMAN_ID, owner, send, tile);
+    const fr = Math.round(pr.frontageTiles);
+    const km = formatNumber(Math.round(pr.frontageTiles * 25));
+    if (owner === 0 || view.players[owner]?.kind === 'tribe' && pr.garrison <= 0) {
+      emit(true, pr.frontageTiles, 3);
+      return { text: t('tt.expandV2', { n: formatCompact(send), p: pctS, f: fr, km, v: formatNumber(pr.advanceKmh, 1) }), cls: 'is-go' };
+    }
+    emit(true, pr.frontageTiles, pr.ratio);
+    const mob = pr.startsInTicks - OFFENSIVE_CONTACT_TICKS;
+    if (mob > 0) return { text: t('tt.offensiveQueued', { h: formatNumber(Math.max(1, Math.round(mob / 10))), n: formatCompact(send) }), cls: 'is-risky' };
+    const ratio = formatNumber(pr.ratio, 1);
+    const text = t('tt.offensive', { n: formatCompact(send), p: pctS, r: ratio, f: fr, km, v: formatNumber(pr.advanceKmh, 1) }) + (pr.ratio < 1 ? ` · ${t('tt.offensive.stall')}` : '');
+    return { text, cls: pr.ratio >= 2 ? 'is-go' : pr.ratio >= 1 ? 'is-risky' : 'is-bad' };
+  }
+  let offKey = '';
+  function clearOffensive(): void {
+    if (offKey === 'off') return;
+    offKey = 'off';
+    ctx.bus.emit('offensivePreview', { tile: -1, frontageTiles: 0, ratio: 0, valid: false });
+  }
+
   function paintTooltip(tile: number): void {
     const view = ctx.sim.view;
     const world = view.world;
     if (!world || tile < 0 || isWaterTerrain(world.terrain[tile]) || hs.radialOpen) {
       tooltip.classList.add('fu-hidden');
+      clearOffensive();
       return;
     }
     const owner = view.owner[tile];
@@ -112,8 +167,11 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
       setText(ttRel, '');
       ttRel.className = 'fu-tt-rel';
       setText(ttStats, '');
-      setText(ttAction, isPlayableTerrain(world.terrain[tile]) && me ? t('tt.expand', { n: formatCompact(me.troops * hs.attackRatio) }) : '');
-      ttAction.className = 'fu-tt-action is-go';
+      if (isPlayableTerrain(world.terrain[tile]) && me) {
+        const o = offensiveLine(0, tile);
+        setText(ttAction, o.text);
+        ttAction.className = `fu-tt-action ${o.cls}`;
+      } else setText(ttAction, '');
       return;
     }
     const p = view.players[owner];
@@ -126,16 +184,17 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     const land = world.landTiles || 1;
     setText(ttStats, `⚔ ${formatCompact(p.troops)}   ▦ ${((p.tiles / land) * 100).toFixed(2)}%   ◈ ${formatCompact(p.gold)}`);
     if (owner === HUMAN_ID) {
+      clearOffensive();
       setText(ttAction, t('tt.own'));
       ttAction.className = 'fu-tt-action';
     } else if (rel === 'ally') {
       setText(ttAction, t('tt.ally'));
       ttAction.className = 'fu-tt-action is-ally';
     } else if (me) {
-      const send = me.troops * hs.attackRatio;
-      const odds = send / Math.max(1, p.troops);
-      setText(ttAction, t('tt.attack', { n: formatCompact(send) }));
-      ttAction.className = `fu-tt-action ${odds > 0.6 ? 'is-go' : odds > 0.25 ? 'is-risky' : 'is-bad'}`;
+      // v2 (§7.7): what a left click does here, with the prediction the sim's rules give.
+      const o = offensiveLine(owner, tile);
+      setText(ttAction, o.text);
+      ttAction.className = `fu-tt-action ${o.cls}`;
     }
   }
 
@@ -196,29 +255,47 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
       }
       return true;
     }
-    if (m.kind === 'order') {
-      const u = view.units.get(m.unitId);
-      if (!u) return false;
-      const world = view.world;
-      const water = tile >= 0 && world ? isWaterTerrain(world.terrain[tile]) : false;
-      const valid = tile >= 0 && (u.type === UnitType.Warship ? water : u.type === UnitType.ArmoredDivision ? !water : true);
-      const key = `o${m.unitId}:${valid}`;
-      if (key !== chipKey) {
-        chipKey = key;
-        markDirty(chip);
-        chipIco.replaceChildren(icon(UNIT_DEFS[u.type].id));
-        setText(chipName, t(`unit.${UNIT_DEFS[u.type].id}`));
-        setText(chipCost, '');
-        const k = u.type === UnitType.ArmoredDivision ? 'hud.order.deploy' : u.type === UnitType.Warship ? 'hud.order.move' : 'hud.order.strike';
-        setText(chipWhy, valid ? t(k) : t('msg.invalidTarget'));
-        toggleClass(chip, 'is-bad', !valid);
+    // v2 (§7.3, §7.4): with own units selected, the chip previews what a right click orders (or the card's order mode
+    // what the left click orders), with distance, ETA, road or rail and the exact reason when a unit cannot comply.
+    const ids = m.kind === 'order' || m.kind === 'none' ? selectedUnitIds(hs) : [];
+    if (ids.length && tile >= 0) {
+      const hv = hs.hover;
+      const forced = m.kind === 'order' ? m.order : undefined;
+      const pk = `o${ids.join(',')}:${tile}:${hv.unitId}:${hv.structureId}:${hv.shift}:${forced ?? ''}:${view.tick}`;
+      if (pk !== orderKey) {
+        orderKey = pk;
+        const pv = previewOrders(hs, ids, tile, hv.unitId, hv.structureId, hv.shift, forced);
+        orderPv = pv;
+        if (pv) {
+          const txt = chipText(hs, pv);
+          const key = `o${txt.title}|${txt.line}|${txt.bad}`;
+          if (key !== chipKey) {
+            chipKey = key;
+            markDirty(chip);
+            const lead = view.units.get(ids[0]);
+            chipIco.replaceChildren(icon(forced ? 'target' : lead ? UNIT_DEFS[lead.type].id : 'target'));
+            setText(chipName, txt.title);
+            setText(chipCost, m.kind === 'order' ? t('chip.leftClick') : t('chip.rightClick'));
+            setText(chipWhy, txt.line);
+            toggleClass(chip, 'is-bad', txt.bad);
+            toggleClass(chip, 'is-warn', !txt.bad && pv.n < pv.m);
+          }
+          const leadPlan = pv.plans.find((p) => !p.issue || p.issue.confirm) ?? pv.plans[0];
+          const pvKey = `o${leadPlan?.unitId}:${tile}:${!txt.bad}:${pv.plans.length}`;
+          if (pvKey !== lastPreview) {
+            lastPreview = pvKey;
+            ctx.bus.emit('orderPreview', { unitId: leadPlan?.unitId ?? -1, unit: view.units.get(leadPlan?.unitId ?? -1)?.type ?? -1, tile, valid: !txt.bad, unitIds: pv.plans.map((p) => p.unitId), valids: pv.plans.map((p) => !p.issue || !!p.issue.confirm), rail: !!leadPlan?.rail });
+          }
+        }
       }
-      const pk = `o${u.id}:${tile}:${valid}`;
-      if (pk !== lastPreview) {
-        lastPreview = pk;
-        ctx.bus.emit('orderPreview', { unitId: u.id, unit: u.type, tile, valid });
+      if (orderPv) return true;
+    } else if (orderKey) {
+      orderKey = '';
+      orderPv = null;
+      if (lastPreview.startsWith('o')) {
+        lastPreview = '';
+        ctx.bus.emit('orderPreview', { unitId: -1, unit: -1, tile: -1, valid: false });
       }
-      return true;
     }
     chip.classList.remove('is-weapon');
     chipKey = '';
@@ -269,6 +346,7 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
       const moding = paintChip();
       toggleClass(chip, 'fu-hidden', !moding);
       if (moding) {
+        clearOffensive();
         tooltip.classList.add('fu-hidden');
         place(chip, hv.clientX, hv.clientY, 22, 18);
         return;

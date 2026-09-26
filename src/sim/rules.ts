@@ -32,7 +32,7 @@ export function createSimRules(g: Game): SimRules {
     hasTreaty(a, b, kind: TreatyKind) {
       if (a === b) return false;
       if (kind === 'alliance' && g.isAllied(a, b)) return true;
-      // W3's DiplomacySystem answers the other treaties once it lands (open borders, trade agreements, NAPs).
+      // W3's DiplomacySystem answers the other treaties (open borders, trade agreements, NAPs).
       const d = g.diplomacy as unknown as { hasTreaty?: (a: number, b: number, k: TreatyKind) => boolean };
       return typeof d.hasTreaty === 'function' ? d.hasTreaty(a, b, kind) : false;
     },

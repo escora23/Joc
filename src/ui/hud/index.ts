@@ -12,9 +12,11 @@ import { createAlertCenter } from './alerts';
 import { createCrisis } from './crisis';
 import { createTicker } from './feed';
 import { createNations } from './nations';
+import { createForces } from './forces';
 import { createLeaderboard } from './leaderboard';
 import { createMinimap } from './minimap';
 import { wireNews } from './news';
+import { wireForcesNews } from './forcesNews';
 import { createRadial } from './radial';
 import { createSelectionPanel } from './selection';
 import { HudShared } from './shared';
@@ -62,15 +64,36 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
 
   const alerts = createAlertCenter(hs);
   const nations = createNations(hs, alerts);
-  hs.openNations = (id) => nations.open(id);
-  hs.openInbox = (pid) => nations.openInbox(pid);
+  // v2 (W4): the Fuerzas panel (U). One drawer at a time on the right (§7.5): opening one closes the other.
+  const forces = createForces(hs);
+  hs.openNations = (id) => {
+    forces.close();
+    nations.open(id);
+  };
+  hs.openInbox = (pid) => {
+    forces.close();
+    nations.openInbox(pid);
+  };
+  hs.toggleForces = (open) => {
+    if (open === false || (open === undefined && forces.isOpen)) {
+      forces.close();
+      return;
+    }
+    if (nations.isOpen) nations.close();
+    forces.open();
+  };
+  const boxEl = h('div', { class: 'fu-selbox fu-hidden' });
   const top = createTopBar(hs, {
     pause: openPause,
     settings: () => openSettings(ctx, sound),
     help: () => openHelp(ctx, sound),
-    nations: () => nations.toggle(),
+    nations: () => {
+      if (!nations.isOpen) forces.close();
+      nations.toggle();
+    },
     log: () => alerts.openLog(),
     pending: () => nations.pendingCount(),
+    forces: () => hs.toggleForces(),
   });
   const lb = createLeaderboard(hs);
   const mm = createMinimap(hs);
@@ -86,6 +109,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
   const modeBanner = h('div', { class: 'fu-modebar fu-hidden' });
 
   wireNews(hs, ticker, alerts);
+  wireForcesNews(hs, alerts);
   alerts.onPing = (lat, lon, sev) => mm.ping(lat, lon, sev);
   ctx.bus.on('languageChanged', () => {
     tut.relabel();
@@ -101,7 +125,24 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     toggleLeaderboard: () => lb.toggle(),
     toggleMinimap: () => mm.toggle(),
     openHelp: () => openHelp(ctx, sound),
-    toggleNations: () => nations.toggle(),
+    toggleNations: () => {
+      if (!nations.isOpen) forces.close();
+      nations.toggle();
+    },
+    toggleForces: () => hs.toggleForces(),
+    closeForces: () => {
+      if (!forces.isOpen) return false;
+      forces.close();
+      return true;
+    },
+    showBox: (r) => {
+      toggleClass(boxEl, 'fu-hidden', !r);
+      if (!r) return;
+      const x = Math.min(r.x0, r.x1), y = Math.min(r.y0, r.y1);
+      boxEl.style.transform = `translate(${x}px, ${y}px)`;
+      boxEl.style.width = `${Math.abs(r.x1 - r.x0)}px`;
+      boxEl.style.height = `${Math.abs(r.y1 - r.y0)}px`;
+    },
     openLog: () => alerts.openLog(),
     closeNations: () => {
       if (!nations.isOpen) return false;
@@ -146,7 +187,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     spawn.el,
     crisis.edge,
   );
-  const el = h('div', { class: 'fu-hud-root' }, alerts.markersEl, layout, nations.el, cursor.el, ripples, radial.el);
+  const el = h('div', { class: 'fu-hud-root' }, alerts.markersEl, layout, nations.el, forces.el, cursor.el, ripples, radial.el, boxEl);
 
   let state: AppState = 'boot';
   let acc10 = 0, acc4 = 0;
@@ -196,6 +237,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
       alerts.clear();
       crisis.clear();
       nations.close();
+      forces.close();
       if (pauseMenu) pauseMenu.close();
       ripples.replaceChildren();
     },
@@ -213,6 +255,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
         acc10 = 0;
         crisis.update();
         nations.update();
+        forces.update();
         if (state === 'spawn') spawn.refresh();
         else {
           top.refresh();

@@ -103,6 +103,9 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
 
   function activate(a: Alert): void {
     hs.sound('click');
+    // v2 (W4): an entry about one of our units selects it too (unitReady «Ver», strike results).
+    const uid = a.input.unitId;
+    if (uid !== undefined && ctx.sim.view.units.get(uid)?.owner === HUMAN_ID) hs.select({ kind: 'unit', id: uid });
     if (a.input.proposalId && center.onOpenProposal) center.onOpenProposal(a.input.proposalId);
     else fly(a);
     acknowledge(a);

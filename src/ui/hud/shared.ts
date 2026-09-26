@@ -12,15 +12,18 @@ export type Mode =
   | { kind: 'none' }
   | { kind: 'build'; structure: StructureType }
   | { kind: 'target'; weapon: WeaponType }
-  | { kind: 'order'; unitId: number };
+  /** Order mode from a card button (touchpads, §7.2): the next left click orders the selection (`order` forced). */
+  | { kind: 'order'; unitId: number; order?: import('../../shared/types').UnitOrderKind };
 
 export type Selection =
   | { kind: 'none' }
   | { kind: 'unit'; id: number }
+  /** v2 (W4): several own units (Shift+click, Shift+drag, double click, the Fuerzas panel). */
+  | { kind: 'units'; ids: number[] }
   | { kind: 'structure'; id: number }
   | { kind: 'nation'; id: number };
 
-export type HudSignal = 'mode' | 'selection' | 'ratio' | 'radial' | 'layout';
+export type HudSignal = 'mode' | 'selection' | 'ratio' | 'radial' | 'layout' | 'forces';
 
 export interface HoverInfo {
   tile: number;
@@ -45,6 +48,9 @@ export class HudShared {
   /** v2 (W3): open the nations drawer (on a nation's detail) / the inbox; set by the HUD assembly. */
   openNations: (id?: number) => void = () => undefined;
   openInbox: (proposalId?: number) => void = () => undefined;
+  /** v2 (W4): the Fuerzas panel (U); set by the HUD assembly. */
+  toggleForces: (open?: boolean) => void = () => undefined;
+  forcesOpen = false;
 
   constructor(readonly ctx: GameContext, readonly sound: (k: UiSoundKind) => void) {}
 
@@ -82,9 +88,14 @@ export class HudShared {
   }
 
   select(sel: Selection): void {
+    // A multi-selection of one unit is a single selection; of none, nothing.
+    if (sel.kind === 'units') {
+      const ids = [...new Set(sel.ids)];
+      sel = ids.length === 0 ? { kind: 'none' } : ids.length === 1 ? { kind: 'unit', id: ids[0] } : { kind: 'units', ids };
+    }
     this.selection = sel;
     this.ctx.bus.emit('selectionChanged', {
-      unitIds: sel.kind === 'unit' ? [sel.id] : [],
+      unitIds: sel.kind === 'unit' ? [sel.id] : sel.kind === 'units' ? sel.ids.slice() : [],
       structureId: sel.kind === 'structure' ? sel.id : -1,
     });
     this.emit('selection');

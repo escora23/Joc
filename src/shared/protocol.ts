@@ -161,7 +161,7 @@ export type SimEvent =
    */
   | { type: 'airRaid'; tick: number; owner: number; target: number; unitId: number; unit: UnitType; fromTile: number; toTile: number; etaTicks: number; by: 'takeoff' | 'radar' | 'observers' }
   /** The sim's answer to a unitOrder of `owner`: how many units took it, the i18n reason when none did. */
-  | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null }
+  | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null; errorParams?: Record<string, string | number> }
   /** A strike landed (bomber, drone): damage done, for the alert and the result line. */
   | { type: 'strikeResult'; tick: number; unitId: number; unit: UnitType; owner: number; victim: number; kind: 'structure' | 'division' | 'front' | 'ship' | 'none'; targetId: number; structure: number; damage: number; destroyed: boolean; x: number; y: number }
   /** A blockading warship captured a trade ship: the payout goes to the captor. */
@@ -350,6 +350,8 @@ export type SimDebugAction =
   | { type: 'war'; a: number; b: number; goal?: WarGoal; mobilizeTicks?: number; peace?: boolean; /** i18n key of the stated motive (default war.reason.debug). */ reasonKey?: string }
   /** v2: remove a unit silently (probes and staging clean up after themselves). */
   | { type: 'removeUnit'; unitId: number }
+  /** v2 (W4, staging): raise `by`'s escalation level in its war with `against` (§5.10). */
+  | { type: 'escalate'; by: number; against: number; level: number }
   // --- v2 (W3): diplomacy staging (shots, playtests, the diplomacy audit) ---
   /** Sign a treaty between two players now. */
   | { type: 'treaty'; a: number; b: number; kind: TreatyKind }

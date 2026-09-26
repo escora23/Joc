@@ -128,6 +128,8 @@ export interface AppEvents {
   worldClick: WorldPointerEvent;
   /** Input router (app): pointer moved over the world (throttled to once per frame). */
   worldHover: WorldPointerEvent;
+  /** v2 (W4): Shift + left drag on the world, a selection rectangle in client px (§7.1). */
+  worldBox: { x0: number; y0: number; x1: number; y1: number; phase: 'drag' | 'end' | 'cancel' };
 
   /** UI: selection changed (renderers draw rings/highlights). */
   selectionChanged: { unitIds: number[]; structureId: number };
@@ -136,8 +138,14 @@ export interface AppEvents {
   /** UI: weapon targeting preview (blast radius circle on the globe). weapon = null ends targeting. */
   targetPreview: { weapon: WeaponType | null; tile: number; innerRadius: number; outerRadius: number; valid: boolean };
   /** Unit-order preview (move / deploy / strike path). unitId = -1 ends it. */
-  orderPreview: { unitId: number; unit: UnitType | -1; tile: number; valid: boolean };
+  orderPreview: {
+    unitId: number; unit: UnitType | -1; tile: number; valid: boolean;
+    /** v2 (W4): every selected unit that gets the order, whether each can comply, and the lead unit goes by rail. */
+    unitIds?: number[]; valids?: boolean[]; rail?: boolean;
+  };
 
+  /** v2 (W4): the offensive a left click would launch (§7.7): its corridor is drawn on the map. tile = -1 ends it. */
+  offensivePreview: { tile: number; frontageTiles: number; ratio: number; valid: boolean };
   /** Anyone -> camera: fly to a place (news item click, "go to capital", alerts). */
   focusRequest: { lat: number; lon: number; altitudeKm?: number; durationMs?: number };
   /** Camera: emitted when the camera state changed this frame (at most once per frame). */
@@ -209,6 +217,8 @@ export interface AlertInput {
   proposalId?: number;
   /** Tiles to outline on the globe while the alert is live (unrest region, a demanded band). */
   tiles?: number[];
+  /** v2 (W4): a unit the entry selects when clicked («Ver»: unitReady, strike results). */
+  unitId?: number;
 }
 
 /** The complete main-thread vocabulary: app events + every sim event (keyed by SimEvent.type). */

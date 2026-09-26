@@ -27,6 +27,8 @@ export interface TopBarActions {
   nations?(): void;
   log?(): void;
   pending?(): number;
+  /** v2 (W4): the Fuerzas panel (U). */
+  forces?(): void;
 }
 
 export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
@@ -138,7 +140,7 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
     chip,
     // Row 3: the panel tools (nations, alerts, help, settings, menu), on their own row.
     h('div', { class: 'fu-time-tools' },
-      nationsBtn, iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
+      nationsBtn, iconBtn('armoredDivision', 'forces.title', () => actions.forces?.(), 'tb.forces.tip', 'U'), iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
       iconBtn('help', 'hud.help', actions.help, 'tb.help.tip', 'F1'), iconBtn('settings', 'menu.settings', actions.settings, 'tb.settings.tip'), iconBtn('menu', 'hud.menu', actions.pause, 'tb.menu.tip', 'Esc')),
     hegChip,
     doom,

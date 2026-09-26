@@ -5,6 +5,8 @@
 import { h, setText, toggleClass } from '../dom';
 import { icon, STRUCTURE_ICON, UNIT_ICON } from '../icons';
 import { tx } from '../tx';
+import { tip as sharedTip, type TipData } from '../tooltip';
+import { etaText, levelEffects, reachLine, speedLine, structurePurpose } from './forcesInfo';
 import type { HudShared } from './shared';
 import { BUILDABLE_UNITS, NUKE_DEFS, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS } from '../../shared/constants';
 import { formatCompact, formatNumber, hasKey, inSentence, t } from '../../shared/i18n';
@@ -21,6 +23,7 @@ interface Slot {
   el: HTMLButtonElement;
   cost: HTMLElement;
   count?: HTMLElement;
+  time?: HTMLElement;
   kind: 'structure' | 'weapon' | 'unit';
   type: number;
 }
@@ -72,7 +75,6 @@ export function createBuildBar(hs: HudShared): BuildBar {
 
   // ---- slots --------------------------------------------------------------------------------------
   const slots: Slot[] = [];
-  const tip = h('div', { class: 'fu-bb-tip fu-glass' });
   const makeSlot = (kind: Slot['kind'], type: number, ico: string, key: string | null): Slot => {
     const cost = h('span', { class: 'fu-bb-cost fu-mono' }, '');
     const el = h('button', { class: `fu-bb-slot is-${kind}` },
@@ -86,12 +88,14 @@ export function createBuildBar(hs: HudShared): BuildBar {
       slot.count = h('span', { class: 'fu-bb-count fu-mono' }, '');
       el.append(slot.count);
     }
+    if (kind === 'unit') {
+      slot.time = h('span', { class: 'fu-bb-time fu-mono' }, etaText(hs, UNIT_DEFS[type as BuildableUnit].productionTicks, false));
+      el.append(slot.time);
+    }
     el.addEventListener('click', () => activate(slot));
-    el.addEventListener('mouseenter', () => {
-      hs.sound('hover');
-      showTip(slot);
-    });
-    el.addEventListener('mouseleave', () => tip.classList.remove('is-on'));
+    el.addEventListener('mouseenter', () => hs.sound('hover'));
+    // v2 (W4): the shared tooltip (§12.1) with live numbers: purpose, level-1 effects, price, time, why not.
+    sharedTip(el, () => slotTip(slot));
     slots.push(slot);
     return slot;
   };
@@ -110,7 +114,6 @@ export function createBuildBar(hs: HudShared): BuildBar {
     toggleClass(tabArsenal, 'is-on', tb === 'arsenal');
     toggleClass(buildRow, 'fu-hidden', tb !== 'build');
     toggleClass(arsenalRow, 'fu-hidden', tb !== 'arsenal');
-    tip.classList.remove('is-on');
   };
   tabBuild.addEventListener('click', () => { hs.sound('click'); setTab('build'); });
   tabArsenal.addEventListener('click', () => { hs.sound('click'); setTab('arsenal'); });
@@ -119,7 +122,6 @@ export function createBuildBar(hs: HudShared): BuildBar {
   const el = h('div', { class: 'fu-bb fu-glass fu-brackets fu-interactive' },
     h('div', { class: 'fu-bb-tabs' }, tabBuild, tabArsenal),
     h('div', { class: 'fu-bb-rows' }, buildRow, arsenalRow),
-    tip,
   );
 
   // ---- behaviour ----------------------------------------------------------------------------------
@@ -147,7 +149,6 @@ export function createBuildBar(hs: HudShared): BuildBar {
     const why = reason(slot);
     if (why && why !== 'msg.notEnoughGold') {
       hs.sound('error');
-      showTip(slot);
       return;
     }
     if (slot.kind === 'structure') {
@@ -173,49 +174,42 @@ export function createBuildBar(hs: HudShared): BuildBar {
     }
   }
 
-  function showTip(slot: Slot): void {
+  function slotTip(slot: Slot): TipData {
     const view = ctx.sim.view;
-    let name = '', desc = '', cost = 0, extra = '';
-    if (slot.kind === 'structure') {
-      const d = STRUCTURE_DEFS[slot.type as StructureType];
-      name = t(`structure.${d.id}`);
-      desc = t(`structure.${d.id}.desc`);
-      cost = view.structureCost(slot.type as StructureType);
-      extra = `${t('hud.hotkey')} ${d.hotkey}${d.coastal ? ` · ${t('hud.coastal')}` : ''}`;
-    } else if (slot.kind === 'weapon') {
-      const d = UNIT_DEFS[slot.type as WeaponType];
-      name = t(`unit.${d.id}`);
-      desc = t(`unit.${d.id}.desc`);
-      cost = view.unitCost(slot.type as WeaponType);
-      const nd = NUKE_DEFS[slot.type as WeaponType];
-      extra = `${t('hud.hotkey')} ${WEAPON_KEYS[slot.type as WeaponType]}${nd.outerRadius > 0 ? ` · ${t('hud.blast', { r: Math.round(nd.outerRadius * 25) })}` : ''}`;
-    } else {
-      const d = UNIT_DEFS[slot.type as BuildableUnit];
-      name = t(`unit.${d.id}`);
-      desc = t(`unit.${d.id}.desc`);
-      cost = view.unitCost(slot.type as BuildableUnit);
-      if (d.producedBy !== -1) extra = t('hud.producedAt', { s: t(`structure.${STRUCTURE_DEFS[d.producedBy].id}`) });
-      if (d.command) extra += ` · ${t('hud.controllable')}`;
-    }
     const why = reason(slot);
-    let whyText = '';
+    let whyNot: string | null = null;
     if (why === 'hud.needs' && slot.kind === 'unit') {
       const d = UNIT_DEFS[slot.type as BuildableUnit];
       const sd = STRUCTURE_DEFS[d.producedBy as StructureType];
-      whyText = hasKey(`msg.noProducer.${sd.id}`)
-        ? t(`msg.noProducer.${sd.id}`)
-        : t('msg.noProducer', { structureName: inSentence(t(`structure.${sd.id}`)), g: t(`structure.${sd.id}.g`) === 'f' ? 'f' : 'm' });
-    } else if (why) whyText = t(why);
-    tip.replaceChildren(
-      h('div', { class: 'fu-bb-tip-head' }, h('b', null, name), h('span', { class: `fu-mono ${why === 'msg.notEnoughGold' ? 'fu-neg' : 'fu-warn'}` }, icon('gold'), ` ${formatNumber(cost)}`)),
-      h('p', null, desc),
-      h('div', { class: 'fu-bb-tip-foot' }, extra),
-      ...(whyText ? [h('div', { class: 'fu-bb-tip-why' }, icon('warning'), ` ${whyText}`)] : []),
-    );
-    const r = slot.el.getBoundingClientRect();
-    const host = el.getBoundingClientRect();
-    tip.style.left = `${r.left + r.width / 2 - host.left}px`;
-    tip.classList.add('is-on');
+      whyNot = hasKey(`msg.noProducer.${sd.id}`) ? t(`msg.noProducer.${sd.id}`) : t('msg.noProducer', { structureName: inSentence(t(`structure.${sd.id}`)), g: t(`structure.${sd.id}.g`) === 'f' ? 'f' : 'm' });
+    } else if (why === 'msg.notEnoughGold') {
+      const cost = slot.kind === 'structure' ? view.structureCost(slot.type as StructureType) : view.unitCost(slot.type as BuildableUnit);
+      whyNot = t('card.missingGold', { n: formatNumber(Math.ceil(cost - (view.human?.gold ?? 0))) });
+    } else if (why) whyNot = t(why);
+    if (slot.kind === 'structure') {
+      const st = slot.type as StructureType;
+      const d = STRUCTURE_DEFS[st];
+      return {
+        title: t(`structure.${d.id}`), text: structurePurpose(st), now: levelEffects(st, 1),
+        lines: [t('bb.buildTime', { h: etaText(hs, d.buildTicks) }), d.coastal ? t('hud.coastal') : ''].filter(Boolean),
+        cost: formatNumber(view.structureCost(st)), hotkey: d.hotkey, whyNot,
+      };
+    }
+    const d = UNIT_DEFS[slot.type as BuildableUnit | WeaponType];
+    if (slot.kind === 'weapon') {
+      const nd = NUKE_DEFS[slot.type as WeaponType];
+      return {
+        title: t(`unit.${d.id}`), text: t(d.roleKey), lines: [t(`unit.${d.id}.desc`), nd.outerRadius > 0 ? t('hud.blast', { r: Math.round(nd.outerRadius * 25) }) : ''].filter(Boolean),
+        cost: formatNumber(view.unitCost(slot.type as WeaponType)), hotkey: WEAPON_KEYS[slot.type as WeaponType], whyNot,
+      };
+    }
+    const ud = d as (typeof UNIT_DEFS)[BuildableUnit];
+    return {
+      title: t(`unit.${ud.id}`), text: t(ud.roleKey),
+      now: [[t('card.prodTime'), etaText(hs, ud.productionTicks)], [t('card.speed'), speedLine(slot.type as BuildableUnit)], [t('card.reach'), reachLine(slot.type as BuildableUnit)]],
+      lines: [t('hud.producedAt', { s: t(`structure.${STRUCTURE_DEFS[ud.producedBy as StructureType].id}`) }), t('bb.unit.after')],
+      cost: formatNumber(view.unitCost(slot.type as BuildableUnit)), whyNot,
+    };
   }
 
   function refresh(): void {

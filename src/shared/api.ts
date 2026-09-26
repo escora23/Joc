@@ -278,6 +278,8 @@ export interface UnitsApi extends Subsystem {
   /** Spread a cluster's members around it so each can be clicked (closes on the next click elsewhere or after 8 s). */
   openIconFan?(hit: IconPick): void;
   closeIconFan?(): void;
+  /** v2 (W4): ids of the units drawn (icon or model) inside a client-px rectangle (box selection, double click). */
+  unitsInRect?(x0: number, y0: number, x1: number, y1: number): number[];
 }
 
 export interface IconPick {

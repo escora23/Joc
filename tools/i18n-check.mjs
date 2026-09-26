@@ -9,10 +9,11 @@ import { en } from '../src/ui/i18n/en.ts';
 import { esW1, enW1 } from '../src/ui/i18n/w1.ts';
 import { esW2, enW2 } from '../src/ui/i18n/w2.ts';
 import { esW3, enW3 } from '../src/ui/i18n/w3.ts';
+import { esW4, enW4 } from '../src/ui/i18n/w4.ts';
 import { SIM_STRINGS, FALLBACK_NAMES_ES, FALLBACK_NAMES_EN } from '../src/sim/strings.ts';
 
-const ES = { ...FALLBACK_NAMES_ES, ...SIM_STRINGS.es, ...es, ...esW1, ...esW2, ...esW3 };
-const EN = { ...FALLBACK_NAMES_EN, ...SIM_STRINGS.en, ...en, ...enW1, ...enW2, ...enW3 };
+const ES = { ...FALLBACK_NAMES_ES, ...SIM_STRINGS.es, ...es, ...esW1, ...esW2, ...esW3, ...esW4 };
+const EN = { ...FALLBACK_NAMES_EN, ...SIM_STRINGS.en, ...en, ...enW1, ...enW2, ...enW3, ...enW4 };
 const files = [];
 const walk = (d) => {
   for (const f of fs.readdirSync(d)) {
