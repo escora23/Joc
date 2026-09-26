@@ -347,7 +347,7 @@ export type SimDebugAction =
    * v2: put two players at war now (a declares on b; mobilization 0 unless given) — staging and pace-audit only.
    * peace: true ends their war with a white peace instead.
    */
-  | { type: 'war'; a: number; b: number; goal?: WarGoal; mobilizeTicks?: number; peace?: boolean }
+  | { type: 'war'; a: number; b: number; goal?: WarGoal; mobilizeTicks?: number; peace?: boolean; /** i18n key of the stated motive (default war.reason.debug). */ reasonKey?: string }
   /** v2: remove a unit silently (probes and staging clean up after themselves). */
   | { type: 'removeUnit'; unitId: number }
   // --- v2 (W3): diplomacy staging (shots, playtests, the diplomacy audit) ---

@@ -1172,7 +1172,7 @@ export class Game implements SimGame {
           this.war.makePeace(a.a, a.b, { kind: 'white' }, 'peace.reason.treaty');
           break;
         }
-        this.war.declare(a.a, a.b, a.goal ?? 'conquest', 'war.reason.debug', { mobilizeTicks: a.mobilizeTicks ?? 0, force: true });
+        this.war.declare(a.a, a.b, a.goal ?? 'conquest', a.reasonKey ?? 'war.reason.debug', { mobilizeTicks: a.mobilizeTicks ?? 0, force: true });
         break;
       }
       case 'removeUnit': {
@@ -1337,6 +1337,11 @@ export class Game implements SimGame {
       }
     }
     p.gold = 0;
+    // Home troops and land offensives vanish with the nation: they are losses (the end screen's «tropas perdidas»
+    // equals this counter). Convoys at sea are counted when their boats are removed below.
+    let inAttacks = 0;
+    for (const a of this.attackList) if (!a.ended && a.attacker === p.id && a.boatId === 0) inAttacks += a.troops;
+    p.stats.troopsLost += p.troops + inAttacks;
     p.troops = 0;
     this.attacks.cancelAllOf(p.id);
     this.war.dropPlayer(p.id);

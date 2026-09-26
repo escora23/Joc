@@ -82,7 +82,10 @@ export function answerProposal(ctx: AiContext, b: Brain, p: SimPlayer, prop: Sim
   const no = (first: ReasonView, extra?: ReasonView, counter?: ProposalAnswer['counter']): ProposalAnswer => ({
     accept: false, reasons: [first, ...(extra ? [extra] : [])], counter,
   });
-  const low = (need: number) => r('answer.lowOpinion', { score: Math.round(oe), need });
+  // With a sweetener the sentence shows the sum, so the published opinion and the answer never seem to disagree.
+  const low = (need: number) => (gift > 0
+    ? r('answer.lowOpinionGold', { base: Math.round(o), value: Math.round(gift), score: Math.round(oe), need })
+    : r('answer.lowOpinion', { score: Math.round(oe), need }));
 
   switch (prop.kind) {
     case 'alliance': {
