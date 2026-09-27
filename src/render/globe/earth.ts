@@ -40,7 +40,7 @@ export interface PlanetUniforms {
   uBorderNoise: { value: number };
   uShoreK: { value: number };
   uCloseK: { value: number };
-  /** 1 below ~45 km: the occupied stipple turns into a sparse, irregular, ground-anchored speckle (§10.11). */
+  /** 1 below ~90 km (fading out by 250 km): the occupied speckle thins to a sparse, low-contrast one (§10.11). */
   uOccNearK: { value: number };
   /** Cloud thinning factors (human land, other land, ocean, fronts) for the current mode and altitude (§10.5). */
   uCloudK: { value: THREE.Vector4 };
@@ -679,54 +679,38 @@ void main() {
         albedo = mix(albedo, natO * 0.35, st * 0.55 * terr * landK);
       }
       if (occ > 0.01) {
-        // From orbit and at operational zooms: dots ~9 px apart at every zoom, the lattice doubles its density per
-        // octave of zoom and crossfades between two octaves (no giant blobs, no moire from orbit).
-        float octv = log2(max(1.0, (1.0 / pxT) / (9.0 * 2.5)));
+        // Occupied land: an irregular speckle in the owner's colour, anchored to the ground. One chance per cell with a
+        // random place and size; the cell size follows the zoom by octaves (two scales crossfaded), so the speckle keeps
+        // a steady density on screen yet never forms a screen-regular lattice (no moire, no fabric texture up close).
+        // From orbit and at operational zooms it is dense (cells ~14 px, most carry a dot); below ~90 km it thins to a
+        // sparse, low-contrast speckle (cells ~40 px, a third carry a dot) so the ground reads through it.
+        float cellPx = mix(14.0, 40.0, uOccNearK);
+        float pres = mix(0.62, 0.34, uOccNearK);
+        float octN = log2(max(1.0, (1.0 / pxT) / cellPx));
+        float n0 = floor(octN), nfr = fract(octN);
+        float wn = smoothstep(0.2, 0.8, nfr);
         float dotm = 0.0;
-        if (uOccNearK < 0.999) {
-          float o0 = floor(octv), ofr = fract(octv);
-          float w1 = smoothstep(0.3, 0.7, ofr);
-          for (int k = 0; k < 2; k++) {
-            vec2 g = tp0 * 2.5 * exp2(o0 + float(k));
-            g.x += 0.5 * mod(floor(g.y), 2.0);
-            vec2 f = fract(g) - 0.5;
-            float aa = max(fwidth(g.x), 1e-4) * 0.8;
-            float dm = smoothstep(0.24 + aa, 0.24 - aa, length(f));
-            dotm += dm * (k == 0 ? 1.0 - w1 : w1);
+        for (int k = 0; k < 2; k++) {
+          float sc = exp2(n0 + float(k));
+          vec2 g = tp0 * sc;
+          vec2 ci = floor(g);
+          float aa = max(fwidth(g.x), 1e-4) * 0.9;
+          float best = 0.0;
+          // The dots of the 2x2 block of cells nearest this pixel (a displaced dot may reach over its cell's edge).
+          for (int j = 0; j < 4; j++) {
+            float fj = float(j);
+            float jy = floor(fj * 0.5);
+            vec2 c = ci + vec2(fj - 2.0 * jy, jy) - step(fract(g), vec2(0.5));
+            vec2 hs = c + vec2(sc * 7.13, sc * 3.71);
+            float present = step(hash12(hs), pres);
+            vec2 ctr = c + 0.5 + (vec2(hash12(hs + 19.17), hash12(hs + 47.31)) - 0.5) * 0.6;
+            float rad = mix(0.12, 0.07, uOccNearK) + mix(0.08, 0.09, uOccNearK) * hash12(hs + 83.9);
+            float dm = smoothstep(rad + aa, rad - aa, length(g - ctr)) * present;
+            best = max(best, dm * (0.6 + 0.4 * hash12(hs + 5.3)));
           }
-          dotm *= mix(1.0, 0.55, smoothstep(0.5, 3.0, octv));
+          dotm += best * (k == 0 ? 1.0 - wn : wn);
         }
-        float near = 0.0;
-        if (uOccNearK > 0.001) {
-          // Up close (below ~50 km) a screen-regular lattice turns into a fabric that hides the ground. Instead: a
-          // sparse speckle anchored to the ground, one chance per cell with a random place and size (about a third of
-          // the cells carry a dot), cells ~40 px wide and two scales crossfaded, so nothing repeats on screen.
-          float octN = log2(max(1.0, (1.0 / pxT) / 40.0));
-          float n0 = floor(octN), nfr = fract(octN);
-          float wn = smoothstep(0.2, 0.8, nfr);
-          for (int k = 0; k < 2; k++) {
-            float sc = exp2(n0 + float(k));
-            vec2 g = tp0 * sc;
-            vec2 ci = floor(g);
-            float aa = max(fwidth(g.x), 1e-4) * 0.9;
-            float best = 0.0;
-            // The dot of this cell and of its neighbours (a displaced dot may reach over the cell edge).
-            for (int j = 0; j < 4; j++) {
-              float fj = float(j);
-              float jy = floor(fj * 0.5);
-              // The 2x2 block of cells nearest this pixel.
-              vec2 c = ci + vec2(fj - 2.0 * jy, jy) - step(fract(g), vec2(0.5));
-              vec2 hs = c + vec2(sc * 7.13, sc * 3.71);
-              float present = step(hash12(hs), 0.34);
-              vec2 ctr = c + 0.5 + (vec2(hash12(hs + 19.17), hash12(hs + 47.31)) - 0.5) * 0.7;
-              float rad = 0.07 + 0.09 * hash12(hs + 83.9);
-              float dm = smoothstep(rad + aa, rad - aa, length(g - ctr)) * present;
-              best = max(best, dm * (0.6 + 0.4 * hash12(hs + 5.3)));
-            }
-            near += best * (k == 0 ? 1.0 - wn : wn);
-          }
-        }
-        dotm = mix(dotm, near * 0.75, uOccNearK);
+        dotm *= mix(1.0, 0.65, uOccNearK);
         float vis = smoothstep(3.0, 6.0, 0.4 / pxT);
         albedo = mix(albedo, natO * 1.15, mix(0.3, dotm, vis) * occ * 0.9 * terr * landK);
       }
