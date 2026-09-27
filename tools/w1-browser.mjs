@@ -18,6 +18,12 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, arr) =>
   return acc;
 }, []));
 const base = args.url || 'http://127.0.0.1:5311/';
+// Screenshots are illustrations, not assertions: SwiftShader can take very long to render close zooms, so a slow
+// capture is logged and skipped instead of aborting the run.
+let page; // assigned below
+async function snap(opts) {
+  try { await page.screenshot({ timeout: 90000, ...opts }); } catch (e) { console.log(`(screenshot skipped: ${opts.path}: ${String(e.message).split('\n')[0]})`); }
+}
 const out = args.out || 'shots/W1-sim-pacing-warfare';
 const only = args.only ? new Set(String(args.only).split(',')) : null;
 fs.mkdirSync(out, { recursive: true });
@@ -26,7 +32,7 @@ const browser = await chromium.launch({
   executablePath: fs.existsSync('/opt/pw-browsers/chromium-1194/chrome-linux/chrome') ? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' : undefined,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'],
 });
-const page = await browser.newPage({ viewport: { width: Number(args.w || 1280), height: Number(args.h || 720) } });
+page = await browser.newPage({ viewport: { width: Number(args.w || 1280), height: Number(args.h || 720) } });
 const logs = [];
 page.on('console', (m) => {
   const t = m.text();
@@ -116,7 +122,7 @@ if (want('topbar')) {
     row('§2.7', `speed buttons hit-testable at ${w}x${hgt}`, hits.map((x) => `${x.label}:${x.hit ? 'hit' : 'COVERED'}(${x.w}px)`).join(' ') + ` seg ${seg.w}px`, '5 of 5 hit, segment at natural width', hits.length === 5 && hits.every((x) => x.hit && x.w >= 20) && seg.w + 1 >= seg.want);
     if (w === 1600) {
       const r = await ev(() => { const b = document.querySelector('.fu-time')?.getBoundingClientRect(); return b ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; });
-      if (r) await page.screenshot({ path: path.join(out, 'topbar-1x.png'), clip: { x: Math.max(0, r.x - 8), y: Math.max(0, r.y - 8), width: Math.min(r.width + 16, w - Math.max(0, r.x - 8)), height: r.height + 16 } });
+      if (r) await snap({ path: path.join(out, 'topbar-1x.png'), clip: { x: Math.max(0, r.x - 8), y: Math.max(0, r.y - 8), width: Math.min(r.width + 16, w - Math.max(0, r.x - 8)), height: r.height + 16 } });
       // Tutorial step 7 highlights '.fu-time-seg' (class fu-tut-hl): the highlighted box must frame all five buttons.
       const frame = await ev(() => {
         const seg = document.querySelector('.fu-time-seg');
@@ -132,7 +138,7 @@ if (want('topbar')) {
       if (frame) {
         await sleep(600);
         const cx = Math.max(0, frame.x - 16);
-        await page.screenshot({ path: path.join(out, 'tutorial-clock-hl.png'), clip: { x: cx, y: Math.max(0, frame.y - 16), width: Math.min(frame.width + 32, w - cx), height: frame.height + 32 } });
+        await snap({ path: path.join(out, 'tutorial-clock-hl.png'), clip: { x: cx, y: Math.max(0, frame.y - 16), width: Math.min(frame.width + 32, w - cx), height: frame.height + 32 } });
         await ev(() => document.querySelector('.fu-time-seg')?.classList.remove('fu-tut-hl'));
       }
       row('§2.7', 'tutorial step 7 highlight frames the whole speed control', `${frame?.inside ?? 0}/5 buttons inside the highlighted box`, '5/5', frame?.inside === 5);
@@ -183,7 +189,7 @@ if (want('obs')) {
     chip = await ev(() => document.querySelector('.fu-clockchip')?.textContent ?? '');
   }
   row('§2.7', 'scale chip in observation', chip, 'OBSERVACIÓN · 1 s = 1 min', chip === 'OBSERVACIÓN · 1 s = 1 min');
-  await page.screenshot({ path: path.join(out, 'topbar-observation.png'), clip: { x: 1100, y: 0, width: 500, height: 140 } });
+  await snap({ path: path.join(out, 'topbar-observation.png'), clip: { x: 1100, y: 0, width: 500, height: 140 } });
   await look(40.4, -3.7, 70);
   await sleep(1500);
   c = await clock();
@@ -380,7 +386,7 @@ if (want('declare')) {
   await ev((a) => window.__front.ctx.bus.emit('worldClick', { button: 0, tile: a.target, lat: 43.2, lon: -0.5, unitId: -1, structureId: -1, clientX: 640, clientY: 360, shift: false, ctrl: false, alt: false }), st);
   await sleep(1200);
   const modal = await ev(() => ({ open: !!document.querySelector('.fu-declare-modal'), title: document.querySelector('.fu-declare-modal h2')?.textContent ?? '', lines: [...document.querySelectorAll('.fu-declare-line')].map((l) => l.textContent) }));
-  await page.screenshot({ path: path.join(out, 'declare-modal.png') });
+  await snap({ path: path.join(out, 'declare-modal.png') });
   row('A15', 'left click on a nation at peace opens the declaration', modal.open ? `«${modal.title}»` : 'no modal', 'modal', modal.open && /Declarar la guerra|Declare war/.test(modal.title));
   if (modal.open) {
     await page.click('.fu-declare-modal .fu-btn--danger');
