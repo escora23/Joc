@@ -847,7 +847,7 @@ export class DiplomacySystem {
       return ex >= 35 ? { accept: true, reasons: [{ key: 'answer.exhausted', params: { ex: Math.round(ex) } }] } : { accept: false, reasons: [{ key: 'answer.notTired', params: { ex: Math.round(ex) } }] };
     }
     const ok = o >= need[r.kind];
-    return { accept: ok, reasons: [{ key: ok ? 'answer.goodRelations' : 'answer.lowOpinion', params: { score: Math.round(o), need: need[r.kind] } }] };
+    return { accept: ok, reasons: [{ key: !ok ? 'answer.lowOpinion' : o >= 20 ? 'answer.goodRelations' : 'answer.noQuarrel', params: { score: Math.round(o), need: need[r.kind] } }] };
   }
 
   /** Worker: unpaused real time for the human's pending items (§5.3). */

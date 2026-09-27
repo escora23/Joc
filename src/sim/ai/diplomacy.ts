@@ -106,7 +106,7 @@ export function answerProposal(ctx: AiContext, b: Brain, p: SimPlayer, prop: Sim
       const need = 0 + bar;
       const enemies = g.war.enemiesOf(p.id).filter((e) => e !== from.id);
       const threat = enemies[0] ?? threatOf(ctx, p, from.id);
-      if (oe >= need) return yes(threat ? r('answer.threatened', { player: threat }) : r('answer.goodRelations', { score: Math.round(oe) }), best);
+      if (oe >= need) return yes(threat ? r('answer.threatened', { player: threat }) : r(oe >= 20 ? 'answer.goodRelations' : 'answer.noQuarrel', { score: Math.round(oe) }), best);
       if (threat && oe >= -20 + bar) return yes(r('answer.threatened', { player: threat }));
       return no(low(need), worst);
     }

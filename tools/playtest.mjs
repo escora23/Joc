@@ -660,11 +660,12 @@ try {
     await sleep(800);
     await shot('15b-peace-dialog');
     const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
+    // Counted before sending: at 4x the answer can arrive before the next UI reset finishes.
+    const bad0 = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeBad ?? 0);
     await page.locator('.fu-modal .fu-btn--primary', { hasText: /Proponer la paz|Propose peace/ }).last().click({ force: true });
     const sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0 && p.kind === 'peace') ?? null, p0, 10000, 200);
     check(sent, 'the peace proposal was not sent');
     await resetUi();
-    const bad0 = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeBad ?? 0);
     const ans = await until((id) => {
       const p = window.__front.ctx.sim.view.proposals.get(id);
       if (!p || p.status === 'considering' || p.status === 'pending') return null;

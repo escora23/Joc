@@ -46,7 +46,13 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
     const c = tileToLatLon(cap);
     const cp = nearestPlace(c.lat, c.lon, 120);
     const from = cp ? placeName(cp) : t('place.yourCapital');
-    const km = Math.round(placeKm(c.lat, c.lon, lat, lon) / 10) * 10;
+    const rawKm = placeKm(c.lat, c.lon, lat, lon);
+    // At the capital itself a bearing reads as nonsense («a 0 km al N de tu capital»): name the capital instead.
+    if (rawKm < 25) {
+      const text = t('place.besideCapital', { from });
+      return { text, name: from, named: !!cp };
+    }
+    const km = Math.round(rawKm / 10) * 10;
     const y = Math.sin((lon - c.lon) * Math.PI / 180) * Math.cos(lat * Math.PI / 180);
     const x = Math.cos(c.lat * Math.PI / 180) * Math.sin(lat * Math.PI / 180) - Math.sin(c.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.cos((lon - c.lon) * Math.PI / 180);
     const brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
