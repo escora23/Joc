@@ -204,6 +204,9 @@ for (const lang of langs) {
     await page.evaluate(() => window.__V.resume());
   }
 
+  // A white peace offered at once to the neighbour that just declared on us: nobody is tired yet, so it is refused
+  // later in the session (the chimeBad cue V19 needs; the accepted proposals of the V7 staging give chimeGood).
+  await page.evaluate((n) => window.__front.ctx.sim.send({ type: 'propose', target: n, kind: 'peace', terms: { kind: 'white' } }), S.n);
   // ------------------------------------------------------------------------------------------ V5 offensive grouped per front
   {
     await page.evaluate((a) => {
@@ -302,8 +305,9 @@ for (const lang of langs) {
     const alert = det ? await page.evaluate((id) => window.__fuAlerts.list().find((x) => x.kind === 'invasionDetected' && x.groupKey === `inv:${id}`) ?? null, det.unitId) : null;
     if (!det) log(`  staged convoy not detected; attacker messages: ${JSON.stringify(await page.evaluate((a) => window.__V.msgs.filter((m) => m.playerId === a).slice(-3), inv?.a ?? -1))}`);
     // Judged at the end of the pass over every convoy that was detected and landed (staged or the AI's own).
-    // Air raid: a real enemy airbase (the tile of its land nearest our capital), a bomber docked there, and a strike
-    // ORDER on our capital through the player command path (not a debug-launched bomber with no home base).
+    // Air raid: our neighbour (at war with us since V3, and within bomber reach) gets a real airbase on the tile of its
+    // land nearest our capital, a bomber docked there, and a strike ORDER on our capital through the player command
+    // path (not a debug-launched bomber with no home base).
     const raid = await page.evaluate(({ a }) => {
       const { ctx } = window.__front;
       const v = ctx.sim.view;
@@ -330,9 +334,9 @@ for (const lang of langs) {
       ctx.sim.debug({ type: 'spawnStructure', structure: 6, owner: a, tile: best, level: 1 });
       window.__V.resume();
       return { base: best, cap };
-    }, { a: S.o[0] });
+    }, { a: S.n });
     if (raid) {
-      await until(({ a, base }) => [...window.__front.ctx.sim.view.structures.values()].some((s) => s.owner === a && s.type === 6 && s.tile === base), { a: S.o[0], base: raid.base }, 20000, 400);
+      await until(({ a, base }) => [...window.__front.ctx.sim.view.structures.values()].some((s) => s.owner === a && s.type === 6 && s.tile === base), { a: S.n, base: raid.base }, 20000, 400);
       const staged = await page.evaluate(({ a, base, cap }) => {
         const { ctx } = window.__front;
         const v = ctx.sim.view;
@@ -341,17 +345,20 @@ for (const lang of langs) {
         ctx.sim.debug({ type: 'spawnUnit', unit: 5, owner: a, tile: base, targetTile: -1 });
         window.__V.resume();
         return { airbase: ab.id, cap };
-      }, { ...raid, a: S.o[0] });
-      await until((a) => [...window.__front.ctx.sim.view.units.values()].some((u) => u.owner === a && u.type === 5), S.o[0], 20000, 400);
-      const order = staged.err ? staged : await page.evaluate(({ a, cap }) => {
+      }, { ...raid, a: S.n });
+      await until((a) => [...window.__front.ctx.sim.view.units.values()].some((u) => u.owner === a && u.type === 5), S.n, 20000, 400);
+      const m0 = await page.evaluate(() => window.__V.msgs.length);
+      const order = staged.err ? staged : await page.evaluate(({ a, base, cap }) => {
         const { ctx } = window.__front;
-        const bomber = [...ctx.sim.view.units.values()].filter((u) => u.owner === a && u.type === 5).sort((x, y) => y.id - x.id)[0];
+        const bx = base % 1600, by = Math.floor(base / 1600);
+        const bomber = [...ctx.sim.view.units.values()].filter((u) => u.owner === a && u.type === 5 && Math.hypot(u.x - bx - 0.5, u.y - by - 0.5) < 2).sort((x, y) => y.id - x.id)[0];
         if (!bomber) return { err: 'bomber not docked' };
         ctx.sim.debug({ type: 'command', playerId: a, cmd: { type: 'unitOrder', unitIds: [bomber.id], order: 'strike', tile: cap, targetId: 0 } });
         return { bomber: bomber.id };
-      }, { ...raid, a: S.o[0] });
+      }, { ...raid, a: S.n });
       await page.evaluate(() => window.__V.resume());
-      const e = order.err ? null : await until(() => window.__V.raid(), null, 60000, 500);
+      const e = order.err ? null : await until(() => { if (window.__fuAlerts.banner()) window.__V.resume(); return window.__V.raid(); }, null, 60000, 500);
+      if (!e) log(`  no airRaid; messages to the attacker: ${JSON.stringify(await page.evaluate(({ a, m0 }) => window.__V.msgs.slice(m0).filter((m) => m.playerId === a).map((m) => m.key), { a: S.n, m0 }))}`);
       const al = await page.evaluate(() => window.__fuAlerts.list().filter((x) => x.kind === 'airRaid').pop() ?? null);
       const names = await page.evaluate(({ base, cap }) => ({ base: window.__fuAlerts.place(base), cap: window.__fuAlerts.place(cap) }), raid);
       const ok = !!al && !!e && e.fromBase && e.fromTile === raid.base && al.title.includes(names.base) && al.title.includes(names.cap);
@@ -562,8 +569,8 @@ for (const lang of langs) {
 }
 
 const cues = await page.evaluate(() => window.__fuAudio?.stats?.().cues ?? {}).catch(() => ({}));
-row('V19', 'audio cues heard this session (warHorn, klaxon, navalHorn, capitalSiren, chimes)', Object.entries(cues).map(([k, v]) => `${k}=${v}`).join(' '), 'all > 0',
-  ['warHorn', 'klaxon', 'navalHorn', 'capitalSiren'].every((k) => (cues[k] ?? 0) > 0) && Object.keys(cues).some((k) => /chime/i.test(k) && cues[k] > 0));
+row('V19', 'audio cues heard this session (warHorn, klaxon, navalHorn, capitalSiren, chimeGood, chimeBad)', Object.entries(cues).map(([k, v]) => `${k}=${v}`).join(' '), 'all > 0',
+  ['warHorn', 'klaxon', 'navalHorn', 'capitalSiren', 'chimeGood', 'chimeBad'].every((k) => (cues[k] ?? 0) > 0));
 await browser.close();
 const pass = rows.filter((r) => r.pass).length;
 console.log('\n================ W3 VERIFY ================');

@@ -481,7 +481,10 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       if (a) activate(a);
     },
     /** The place name the alerts use for a tile (verification: «does the airRaid alert name the base?»). */
-    place: (tile: number) => describeTile(view(), tile).name,
+    place: (tile: number) => {
+      const p = describeTile(view(), tile);
+      return p.named ? p.name : p.text;
+    },
   };
   return center;
 }

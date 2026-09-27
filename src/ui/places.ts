@@ -13,8 +13,10 @@ import { countryName, formatNumber, getLanguage, t } from '../shared/i18n';
 export interface PlaceText {
   /** «cerca de Lyon (Francia)» / «a 340 km al NE de Madrid». */
   text: string;
-  /** «Lyon» (or the bearing text when there is no place). */
+  /** «Lyon», or «la zona situada a 340 km al NE de Madrid» when there is no place (a noun phrase either way). */
   name: string;
+  /** True when `name` is a place's name; false when there is no place nearby (then `text` is the bare bearing). */
+  named: boolean;
 }
 
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
@@ -37,7 +39,7 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
     const name = placeName(p);
     const country = countryAt(view, p.lat, p.lon);
     const text = country && country !== name ? t('place.near', { place: name, country }) : t('place.nearSame', { place: name });
-    return { text, name };
+    return { text, name, named: true };
   }
   const cap = view.players[viewer]?.capitalTile ?? -1;
   if (cap >= 0) {
@@ -50,11 +52,11 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
     const brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
     const dir = t(`place.dir.${DIRS[Math.round(brg / 45) % 8]}`);
     const text = t('place.bearing', { km: formatNumber(km), dir, from });
-    return { text, name: text };
+    return { text, name: t('place.area', { where: text }), named: false };
   }
   const country = countryAt(view, lat, lon);
   const text = country ? t('place.inCountry', { country }) : t('place.atSea');
-  return { text, name: text };
+  return { text, name: t('place.area', { where: text }), named: false };
 }
 
 export function describeTile(view: GameView, tile: number, viewer = HUMAN_ID): PlaceText {

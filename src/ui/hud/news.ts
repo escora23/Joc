@@ -317,9 +317,16 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     if (e.target !== HUMAN_ID) return;
     const ll = at(e.toTile)!;
     const drones = e.unit === UnitType.DroneSwarm;
+    // «la base aérea de Zaragoza» / «una base aérea situada a 370 km al NO de Madrid»; «sobre Valencia» when the
+    // aircraft has no home base (then it is where it was spotted, never «despegan de»).
+    const fp = describeTile(view(), e.fromTile), tp = describeTile(view(), e.toTile);
+    const from = e.fromBase
+      ? t(fp.named ? 'alert.airRaid.base.named' : 'alert.airRaid.base.unnamed', { place: fp.name, where: fp.text })
+      : t(fp.named ? 'alert.airRaid.over.named' : 'alert.airRaid.over.unnamed', { place: fp.name, where: fp.text });
+    const to = t('alert.airRaid.to', { place: tp.name });
     alert({
       kind: 'airRaid', severity: 'warning', icon: drones ? 'droneSwarm' : 'bomber', lat: ll.lat, lon: ll.lon, actors: [e.owner], groupKey: `air:${e.unitId}`,
-      title: t(`alert.airRaid.${drones ? 'drones' : 'bombers'}${e.fromBase ? '' : '.seen'}`, { name: name(e.owner), from: describeTile(view(), e.fromTile).name, to: describeTile(view(), e.toTile).name }),
+      title: t(`alert.airRaid.${drones ? 'drones' : 'bombers'}${e.fromBase ? '' : '.seen'}`, { name: name(e.owner), base: from, over: from, to }),
       body: t('alert.airRaid.body', { hours: Math.max(1, Math.round(e.etaTicks / 10)), by: t(`alert.airRaid.by.${e.by}`) }),
     });
   });
