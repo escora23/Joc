@@ -9,7 +9,7 @@ import type { HudShared } from './shared';
 import { unitLabel } from './news';
 import { describeXY } from '../places';
 import {
-  BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
+  ARMOR_RAIL_KMH, BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
   DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HUMAN_ID,
   PORT_TRADE_GOLD_PER_HOUR, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, RAIL_GOLD_PER_HOUR, REARM_TICKS, STRUCTURE_DEFS,
   STRUCTURE_LEVELS, TILE_KM, UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, structureLevel, upgradeCost, upgradeTicks,
@@ -148,14 +148,20 @@ export function structureName(hs: HudShared, s: StructureView): string {
   return t('structure.named', { s: t(`structure.${structId(s.type)}`), place: describeXY(view, x, y).name });
 }
 
-/** Speed line (§7.6): «40 km/h ≈ 40 km por segundo a 1x»; aircraft «misión 400 km/h (crucero 850 km/h)». */
-export function speedLine(type: UnitType): string {
+/**
+ * Speed line (§7.6): «40 km/h ≈ 40 km por segundo a 1x»; aircraft «misión 400 km/h (crucero 850 km/h)». A division
+ * travelling by rail (§2.3) moves at 100 km/h: «100 km/h en tren (40 km/h por carretera)», so the card agrees with the
+ * rail ETA it shows. `rail` is the unit's current mode (UnitMode.Rail); build/catalogue cards pass nothing.
+ */
+export function speedLine(type: UnitType, rail = false): string {
   const d = UNIT_DEFS[type];
   if (d.airborne && d.cruiseKmh !== d.speedKmh) return t('card.speed.air', { m: formatNumber(d.speedKmh), c: formatNumber(d.cruiseKmh) });
+  if (rail && type === UnitType.ArmoredDivision) return t('card.speed.rail', { v: formatNumber(ARMOR_RAIL_KMH), r: formatNumber(d.speedKmh) });
   return t('card.speed.surface', { v: formatNumber(d.speedKmh) });
 }
-export function speedRealLine(type: UnitType): string {
-  return t('card.speed.real', { v: formatNumber(UNIT_DEFS[type].speedKmh) });
+export function speedRealLine(type: UnitType, rail = false): string {
+  const v = rail && type === UnitType.ArmoredDivision ? ARMOR_RAIL_KMH : UNIT_DEFS[type].speedKmh;
+  return t('card.speed.real', { v: formatNumber(v) });
 }
 
 /** Reach (§6.3): aircraft km from their base; divisions own/allied land; ships navigable water. */

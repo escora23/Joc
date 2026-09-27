@@ -193,6 +193,12 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPxScale: 0.5, worldView: false };
   const relations = relationsFor(ctx);
   let structModelsOn = false;
+  /**
+   * Presentation aid for the structures-levels gallery shots only (never set in play): every structure model is drawn
+   * this many times its real footprint so the L1 / L2 / L3 geometry reads side by side (the tiles are 25 km apart,
+   * the real models 2.5-6 km). Set through __units.showcase(k); 1 = real size.
+   */
+  let showcaseScale = 1;
   const routes = new RouteManager();
   // The after-arrival hold and fade of route lines run on real seconds (frozen with &freeze=1), evaluated every frame
   // and also on this timer, so a slow or stalled frame never leaves a line drawn past its hold + fade (§10.8).
@@ -1206,7 +1212,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     }
     for (const st of view.structures.values()) {
       const h = headingFor(st);
-      const S = structKm(st.type, st.level) / EARTH_RADIUS_KM;
+      const S = (structKm(st.type, st.level) * showcaseScale) / EARTH_RADIUS_KM;
       const g = groundOf(st, S, h);
       let anchor = structAnchor.get(st.id);
       if (!anchor) {
@@ -1617,6 +1623,11 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         });
       }
       return out;
+    },
+    /** Gallery shots only: draw structure models k times their real size (1 = real size). */
+    showcase(k: number): void {
+      showcaseScale = Math.max(1, Math.min(8, k || 1));
+      structDirty = true;
     },
     /** Geometry of every structure model key (vertex count): level variants differ (structures-levels, §6.5). */
     modelStats: () => Object.fromEntries(STRUCT_MODELS.map((k) => [k, structMeshes[k]?.mesh.geometry.getAttribute('position').count ?? 0])),

@@ -6,7 +6,9 @@ import * as THREE from 'three';
 import { getHud } from './index';
 import { enemyNear } from '../render/units/shots';
 import type { GameContext } from '../shared/api';
-import { HUMAN_ID } from '../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS } from '../shared/constants';
+import { formatNumber, t } from '../shared/i18n';
+import { isLandTerrain } from '../shared/terrain';
 import { latLonToTile, latLonToVec3, worldTimeForSubsolarLon } from '../shared/geo';
 import { registerShot, type ShotContext } from '../shared/shots';
 import { StructureType as S, UnitType as U, type UnitView } from '../shared/types';
@@ -192,34 +194,143 @@ registerShot('air-raid', 'ui', 'An air raid announced at take-off (our radar cov
   await wait(1200);
 }, 10);
 
-/** Every levelled structure type at L1 / L2 / L3 side by side on flat Castilian land (plus cities 1 / 5 / 10). */
-registerShot('structures-levels', 'units', 'Every structure type at levels 1, 2 and 3 side by side (cities 1, 5, 10): the model grows with the level (§6.5)', async (s) => {
+/**
+ * structures-levels (§6.5): the structure level as the player reads it on the strategic map — every type at L1 / L2 /
+ * L3 (cities 1 / 5 / 10) on Castilian land at an icon zoom where the icons (with their 1-3 level dots) float over the
+ * models, and the Factory L2 card open with its ●●○ pips. The geometry itself is compared up close in the gallery
+ * frames structures-levels-1 … -6 below.
+ */
+registerShot('structures-levels', 'units', 'Every structure type at levels 1, 2 and 3 (cities 1, 5, 10) at icon zoom: level dots under every icon and the Factory L2 card with its pips (§6.5)', async (s) => {
   const { ctx, waitFrames, wait, params } = s;
   await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-30) });
   const sim = ctx.sim;
   sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.2, -3.2), radius: 16 });
   const types = [S.City, S.Port, S.Factory, S.DefensePost, S.SamSite, S.MissileSilo, S.Airbase, S.ArmyBase, S.NavalYard, S.Radar];
-  const only = params.get('type');
-  const rows: S[] = only !== null ? [Number(only) as S] : types;
   // One tile apart (a tile holds one structure): two types per row, L1 / L2 / L3 left to right.
-  const lat0 = 39.9, lon0 = -3.9, TILE = 0.225;
-  rows.forEach((type, i) => {
-    const r = Math.floor(i / 2), c0 = (i % 2) * 3.5;
+  // Two tiles apart (a tile holds one structure; the icons must not touch): two types per row, L1 / L2 / L3 left to right.
+  const lat0 = 40.3, lon0 = -4.9, TILE = 0.225;
+  types.forEach((type, i) => {
+    const r = Math.floor(i / 2), c0 = (i % 2) * 8;
     [1, 2, 3].forEach((L, c) => {
       const level = type === S.City ? [1, 5, 10][c] : L;
-      sim.debug({ type: 'spawnStructure', structure: type, owner: HUMAN_ID, tile: at(lat0 - r * TILE, lon0 + (c0 + c) * TILE), level });
+      sim.debug({ type: 'spawnStructure', structure: type, owner: HUMAN_ID, tile: at(lat0 - r * 2 * TILE, lon0 + (c0 + 2 * c) * TILE), level });
     });
   });
-  await wait(600);
-  const nr = Math.ceil(rows.length / 2);
-  const single = only !== null;
+  // The spawns reach the view on a later sim tick (slow under load): wait for all 30.
+  const findFactory = () => [...ctx.sim.view.structures.values()].find((x) => x.owner === HUMAN_ID && x.type === S.Factory && x.level === 2);
+  await until(s, () => ctx.sim.view.structures.size >= types.length * 3 && !!findFactory(), 60000);
+  let factory = findFactory();
+  getHud()?.shared.select(factory ? { kind: 'structure', id: factory.id } : { kind: 'none' });
   ctx.cameraRig.setState({
-    lat: Number(params.get('lat') ?? lat0 - ((nr - 1) * TILE) / 2 - (single ? 0.1 : 0.05)), lon: Number(params.get('lon') ?? lon0 + (single ? 1 : 3) * TILE),
-    altitudeKm: Number(params.get('alt') ?? (single ? 32 : 150)), tilt: Number(params.get('tilt') ?? (single ? 0.85 : 0.35)), heading: 0,
+    lat: Number(params.get('lat') ?? lat0 - 4 * TILE + 0.06), lon: Number(params.get('lon') ?? lon0 + 6.2 * TILE),
+    altitudeKm: Number(params.get('alt') ?? 385), tilt: Number(params.get('tilt') ?? 0.15), heading: 0,
   });
   await waitFrames(12);
-  await wait(800);
+  // The card slides in on the HUD's own frame loop (slow under software GL), and the HUD's game-start reset can land
+  // after the stager's first select: (re)select until the card has stayed in for 3 s.
+  let held = 0;
+  const t0 = performance.now();
+  while (held < 3000 && performance.now() - t0 < 90000) {
+    const hs = getHud()?.shared;
+    factory ??= findFactory();
+    const ok = !!factory && hs?.selection.kind === 'structure' && hs.selection.id === factory.id && !!document.querySelector('.fu-sel.is-in .fu-sel-head');
+    if (!ok && hs && factory && !(hs.selection.kind === 'structure' && hs.selection.id === factory.id)) hs.select({ kind: 'structure', id: factory.id });
+    held = ok ? held + 250 : 0;
+    await wait(250);
+  }
+  await wait(1500);
 }, 10);
+
+/**
+ * Gallery frames of the structure models by level: the real game models on the real terrain, drawn enlarged
+ * (__units.showcase: the tiles are 25 km apart, the models 2.5-6 km across) so L1 / L2 / L3 read side by side, with
+ * the HUD hidden and a caption under each model. Ports and naval yards stand on the straight Portuguese coast, in a
+ * north-south line seen from the sea.
+ */
+interface LevelFrame { types: S[]; scale: number; coast?: boolean }
+const LEVEL_FRAMES: LevelFrame[] = [
+  { types: [S.DefensePost, S.Radar], scale: 8 },
+  { types: [S.SamSite, S.MissileSilo], scale: 7 },
+  { types: [S.Factory, S.ArmyBase], scale: 6 },
+  { types: [S.City, S.Airbase], scale: 4 },
+  { types: [S.Port], scale: 5, coast: true },
+  { types: [S.NavalYard], scale: 4, coast: true },
+];
+
+/** The westernmost land tile of the row at `lat` whose western neighbour is sea (the Atlantic coast of Portugal). */
+function coastTile(ctx: GameContext, lat: number): number {
+  const w = ctx.world;
+  const t0 = at(lat, -7.6);
+  if (!w) return t0;
+  const y = Math.floor(t0 / MAP_W);
+  for (let x = t0 % MAP_W; x > (t0 % MAP_W) - 20; x--) {
+    const t = y * MAP_W + x;
+    if (isLandTerrain(w.terrain[t]) && !isLandTerrain(w.terrain[t - 1])) return t;
+  }
+  return t0;
+}
+
+LEVEL_FRAMES.forEach((frame, fi) => {
+  const names = frame.types.map((ty) => ['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'][ty]).join(' and ');
+  registerShot(`structures-levels-${fi + 1}`, 'units', `Structure models by level, up close (gallery ${fi + 1}/${LEVEL_FRAMES.length}: ${names}), drawn x${frame.scale} with the HUD hidden (§6.5)`, async (s) => {
+    const { ctx, waitFrames, wait, params } = s;
+    await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-45) });
+    const sim = ctx.sim;
+    const scale = Number(params.get('scale') ?? frame.scale);
+    const placed: { type: S; level: number; tile: number }[] = [];
+    if (frame.coast) {
+      sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(40.1, -8.3), radius: 9 });
+      const lats = [41.0, 40.55, 40.1];
+      lats.forEach((lat, c) => placed.push({ type: frame.types[0], level: c + 1, tile: coastTile(ctx, lat) }));
+    } else {
+      sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.4, -3.2), radius: 12 });
+      // Two tiles apart (50 km), one type per row, L1 / L2 / L3 left to right.
+      frame.types.forEach((type, r) => [1, 2, 3].forEach((L, c) => {
+        placed.push({ type, level: type === S.City ? [1, 5, 10][c] : L, tile: at(39.85 - r * 0.45, -3.65 + c * 0.45) });
+      }));
+    }
+    for (const p of placed) sim.debug({ type: 'spawnStructure', structure: p.type, owner: HUMAN_ID, tile: p.tile, level: p.level });
+    (window as unknown as { __units?: { showcase(k: number): void } }).__units?.showcase(scale);
+    s.setUiVisible(false);
+    await wait(600);
+    if (frame.coast) {
+      // Seen from the sea (looking east): the north-south line of models runs left to right.
+      const mid = placed[1].tile;
+      const mlat = 90 - (Math.floor(mid / MAP_W) + 0.5) * (180 / MAP_H), mlon = ((mid % MAP_W) + 0.5) * (360 / MAP_W) - 180;
+      ctx.cameraRig.setState({ lat: mlat, lon: mlon - 0.05, altitudeKm: Number(params.get('alt') ?? 95), tilt: Number(params.get('tilt') ?? 0.8), heading: Math.PI / 2 });
+    } else {
+      const two = frame.types.length > 1;
+      ctx.cameraRig.setState({
+        lat: Number(params.get('lat') ?? (two ? 39.46 : 39.7)), lon: Number(params.get('lon') ?? -3.2),
+        altitudeKm: Number(params.get('alt') ?? 105), tilt: Number(params.get('tilt') ?? 0.75), heading: 0,
+      });
+    }
+    await waitFrames(14);
+    await wait(800);
+    // Captions: the type, «Nivel n/max» and the pips, under each model (the same wording as the structure card).
+    document.getElementById('fu-levels-captions')?.remove();
+    const box = document.createElement('div');
+    box.id = 'fu-levels-captions';
+    box.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:50;font:600 14px/1.25 "JetBrains Mono",ui-monospace,monospace;color:#f3ead8;';
+    const title = document.createElement('div');
+    title.textContent = t('shot.levels.title', { k: formatNumber(scale) });
+    title.style.cssText = 'position:absolute;left:24px;top:18px;padding:6px 12px;background:rgba(18,16,12,.78);border:1px solid rgba(255,200,120,.35);border-radius:4px;letter-spacing:.04em;';
+    box.append(title);
+    for (const p of placed) {
+      const tx = (p.tile % MAP_W) + 0.5, ty = Math.floor(p.tile / MAP_W) + 0.5;
+      const lat = 90 - ty * (180 / MAP_H), lon = tx * (360 / MAP_W) - 180;
+      const sp = screenOf(ctx, lat, lon);
+      const max = STRUCTURE_DEFS[p.type].maxLevel;
+      const pips = max > 3 ? '' : ' ' + '●'.repeat(p.level) + '○'.repeat(3 - p.level);
+      const cap = document.createElement('div');
+      cap.textContent = `${t(`structure.${['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'][p.type]}`)} · ${t('card.levelN', { n: p.level, max })}${pips}`;
+      cap.style.cssText = `position:absolute;left:${sp.x}px;top:${sp.y + Number(params.get('capdy') ?? 70)}px;transform:translateX(-50%);white-space:nowrap;padding:3px 8px;background:rgba(18,16,12,.72);border-radius:3px;`;
+      box.append(cap);
+    }
+    document.body.append(box);
+    await waitFrames(4);
+  }, 10);
+});
 
 /** Structures on steep relief in the Pyrenees at 40 km (grounding, §10.7). */
 async function stagePyrenees(s: ShotContext, type: S, level: number): Promise<void> {

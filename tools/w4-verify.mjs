@@ -263,7 +263,25 @@ if (want('V5')) {
     ctx.cameraRig.setState({ lat: 41.8, lon: -1.2, altitudeKm: 1300, tilt: 0.1, heading: 0 });
   });
   await sleep(2500);
-  const rect = { x0: 300, y0: 120, x1: 1300, y1: 780 };
+  // The drag must start and end on the canvas: the alerts stack (top left), the panels and the bars would swallow the
+  // pointerdown and no box would be drawn. Pick both corners from pixels where document.elementFromPoint is the canvas,
+  // scanning outwards from a preferred rectangle clear of the HUD.
+  const rect = await view(() => {
+    const canvas = [...document.querySelectorAll('canvas')].sort((p, q) => q.width * q.height - p.width * p.height)[0];
+    const onCanvas = (x, y) => document.elementFromPoint(x, y) === canvas;
+    const pick = (x, y, dx, dy) => {
+      for (let k = 0; k < 40; k++) {
+        for (let j = 0; j <= k; j++) {
+          const px = x + dx * 10 * j, py = y + dy * 10 * (k - j);
+          if (onCanvas(px, py)) return [px, py];
+        }
+      }
+      return null;
+    };
+    const a = pick(420, 160, 1, 1), b = pick(1250, 700, -1, -1);
+    return a && b ? { x0: a[0], y0: a[1], x1: b[0], y1: b[1] } : { x0: 420, y0: 160, x1: 1250, y1: 700 };
+  });
+  log(`   box ${JSON.stringify(rect)}`);
   const expected = await view((r) => {
     const v = window.__front.ctx.sim.view;
     return (window.__front.ctx.units.unitsInRect(r.x0, r.y0, r.x1, r.y1) ?? []).filter((id) => {
@@ -314,6 +332,34 @@ if (want('V7')) {
   row('V7', 'division card: role line, 40 km/h ≈ 40 km/s at 1x, reach, effect, integrity, endurance, no FUERZA', text.replace(/\s+/g, ' ').slice(0, 220),
     'all present', has(/Rompe frentes|Breaks fronts/) && has(/40 km\/h/) && has(/40 km por segundo|40 km per second/i) && has(/Alcance|Reach/i) && has(/Efecto ahora|Effect now/i) && has(/Integridad|Integrity/i) && has(/días de combate|days of combat/i) && !has(/\bfuerza\b|\bstrength\b/i));
   await shot('v7-unit-card');
+  // A division travelling by train (§2.3): the card's speed follows the mode (100 km/h by rail, as its rail ETA).
+  const railDiv = await view(() => {
+    const { ctx } = window.__front;
+    const v = ctx.sim.view;
+    const cities = [...v.structures.values()].filter((x) => x.owner === 1 && x.type === 0).sort((a, b) => b.level - a.level);
+    if (cities.length < 2) return null;
+    ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: cities[0].tile, targetTile: -1 });
+    return { from: cities[0].tile, to: cities[1].tile };
+  });
+  let railText = '';
+  if (railDiv) {
+    const id = await until((f) => {
+      const near = [...window.__front.ctx.sim.view.units.values()].filter((x) => x.owner === 1 && x.type === 3 && Math.abs(x.x - (f % 1600) - 0.5) < 1.5 && Math.abs(x.y - Math.floor(f / 1600) - 0.5) < 1.5);
+      return near.length ? Math.max(...near.map((x) => x.id)) : null;
+    }, railDiv.from, 20000, 300);
+    if (id) {
+      await view(({ id, to }) => {
+        const { ctx } = window.__front;
+        ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: 'move', tile: to, targetId: 0 });
+        ctx.sim.setSpeed(1);
+      }, { id, to: railDiv.to });
+      await until((id) => window.__front.ctx.sim.view.units.get(id)?.mode === 2 || null, id, 60000, 200);
+      await view((id) => { window.__front.ctx.sim.setSpeed(0); window.__fuHud.shared.select({ kind: 'unit', id }); }, id);
+      railText = (await until(() => { const t = window.__fuCard.text(); return /100 km\/h/.test(t) ? t : null; }, null, 20000, 300)) ?? await view(() => window.__fuCard.text());
+    }
+  }
+  row('V7', 'division by rail: the card reads the rail speed with its real-time equivalent', (railText.match(/(velocidad|speed)[^\n]*\n?[^\n]*/i)?.[0] ?? railText.slice(0, 120)).replace(/\s+/g, ' '),
+    '100 km/h en tren ≈ 100 km por segundo a 1x', /100 km\/h/.test(railText) && /100 km por segundo|100 km per second/i.test(railText) && /(en tren|by rail)/i.test(railText));
   const bomber = await view(() => {
     const v = window.__front.ctx.sim.view;
     const u = [...v.units.values()].find((x) => x.owner === 1 && x.type === 5);

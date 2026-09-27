@@ -133,8 +133,13 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     live.state = state;
     children.push(state);
     children.push(meter('hp', 'card.integrity', '', () => integrityHelp(u.type)));
-    const speed = h('div', { class: 'fu-w4-line' }, tx('card.speed', undefined, 'small'), h('span', { class: 'fu-w4-val' }, speedLine(u.type), h('em', null, speedRealLine(u.type))));
-    tip(speed, () => ({ title: t('card.speed'), text: t(def.airborne ? 'card.speed.air.tip' : 'card.speed.tip') }));
+    const onRail = u.mode === UnitMode.Rail;
+    const speedVal = h('span', null, speedLine(u.type, onRail));
+    const speedReal = h('em', null, speedRealLine(u.type, onRail));
+    live.speedVal = speedVal;
+    live.speedReal = speedReal;
+    const speed = h('div', { class: 'fu-w4-line' }, tx('card.speed', undefined, 'small'), h('span', { class: 'fu-w4-val' }, speedVal, speedReal));
+    tip(speed, () => ({ title: t('card.speed'), text: t(def.airborne ? 'card.speed.air.tip' : u.type === UnitType.ArmoredDivision ? 'card.speed.div.tip' : 'card.speed.tip') }));
     children.push(h('div', { class: 'fu-w4-lines' },
       speed,
       h('div', { class: 'fu-w4-line' }, tx('card.reach', undefined, 'small'), h('span', { class: 'fu-w4-val' }, reachLine(u.type))),
@@ -186,6 +191,8 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
   function refreshUnit(u: UnitView): void {
     setText(live.state, stateLine(hs, u));
     setMeter('hp', u.hp, `${Math.round(u.hp * 100)} %`);
+    if (live.speedVal) setText(live.speedVal, speedLine(u.type, u.mode === UnitMode.Rail));
+    if (live.speedReal) setText(live.speedReal, speedRealLine(u.type, u.mode === UnitMode.Rail));
     if (live.effect) setText(live.effect, effectLine(hs, u));
     if (live.endurance) setText(live.endurance, enduranceLine(u));
     if (live.place) setText(live.place, placeOf(hs, u));

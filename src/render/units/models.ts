@@ -430,7 +430,8 @@ function factory(L: number): THREE.BufferGeometry {
 
 function defensePost(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  // L1: earthwork ring, bunker and trenches; L2: + artillery pits; L3: a concrete star fort.
+  // L1: earthwork ring, trenches and a one-gun bunker; L2: twin-gun turret, observation tower and 3 artillery pits;
+  // L3: a concrete star fort and 6 pits.
   const berm = new THREE.TorusGeometry(0.38, 0.06, 4, 18);
   berm.rotateX(Math.PI / 2);
   berm.scale(1, 0.6, 1);
@@ -454,10 +455,20 @@ function defensePost(L: number): THREE.BufferGeometry {
   const top = L >= 3 ? 0.22 : 0.12;
   m.cyl(0.2, 0.24, 0.05, 0, top, 0, C.concreteDark, 6, { team: 0.7, flat: true });
   m.cyl(0.285, 0.285, 0.02, 0, top - 0.06, 0, C.black, 6);
-  // Twin guns.
-  m.cylZ(0.015, 0.018, 0.3, 0.05, top + 0.07, -0.2, C.hullDark, 6);
-  m.cylZ(0.015, 0.018, 0.3, -0.05, top + 0.07, -0.2, C.hullDark, 6);
-  m.block(0.16, 0.05, 0.14, 0, top + 0.05, -0.02, C.oliveDark);
+  // One gun at level 1, a twin turret from level 2.
+  if (L >= 2) {
+    m.cylZ(0.015, 0.018, 0.3, 0.05, top + 0.07, -0.2, C.hullDark, 6);
+    m.cylZ(0.015, 0.018, 0.3, -0.05, top + 0.07, -0.2, C.hullDark, 6);
+    m.block(0.16, 0.05, 0.14, 0, top + 0.05, -0.02, C.oliveDark);
+  } else {
+    m.cylZ(0.014, 0.016, 0.24, 0, top + 0.06, -0.17, C.hullDark, 6);
+    m.block(0.1, 0.04, 0.1, 0, top + 0.04, -0.02, C.oliveDark);
+  }
+  // From level 2 an observation tower beside the bunker.
+  if (L >= 2) {
+    m.cyl(0.035, 0.045, 0.34, -0.3, 0, 0.14, C.concreteDark, 6, { flat: true });
+    m.cyl(0.06, 0.05, 0.05, -0.3, 0.34, 0.14, C.concrete, 6, { team: 0.6, flat: true });
+  }
   // Flag pole and nation flag.
   m.cyl(0.006, 0.006, 0.4, 0.2, 0.0, 0.2, C.steel, 4);
   m.box(0.004, 0.08, 0.13, 0.2, 0.35, 0.265, C.white, { team: 1 });
@@ -470,10 +481,10 @@ function defensePost(L: number): THREE.BufferGeometry {
     for (let i = 0; i < 3 * (L - 1); i++) {
       const a = (i / (3 * (L - 1))) * Math.PI * 2 + 0.9;
       const x = Math.cos(a) * 0.2, z = Math.sin(a) * 0.2 + 0.0;
-      m.push().translate(x * 2.1, 0.005, z * 2.1).rotateY(-a);
-      m.cyl(0.055, 0.065, 0.03, 0, 0, 0, C.sand, 8, { flat: true });
-      m.block(0.04, 0.03, 0.05, 0, 0.03, 0, C.olive, { team: 0.6 });
-      m.cylZ(0.008, 0.01, 0.1, 0, 0.05, -0.06, C.hullDark, 5);
+      m.push().translate(x * 2.15, 0.005, z * 2.15).rotateY(-a);
+      m.cyl(0.075, 0.085, 0.035, 0, 0, 0, C.sand, 8, { flat: true });
+      m.block(0.06, 0.04, 0.07, 0, 0.035, 0, C.olive, { team: 0.6 });
+      m.cylZ(0.011, 0.013, 0.15, 0, 0.06, -0.09, C.hullDark, 5);
       m.pop();
     }
   }
