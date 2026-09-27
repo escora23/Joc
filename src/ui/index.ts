@@ -57,6 +57,8 @@ export function createUi(ctx: GameContext): UiApi {
   const screens = h('div', { class: 'fu-layer fu-screens' });
   const hud = createHud(ctx, sound);
   activeHud = hud;
+  // Verification hook (tools/w4-verify.mjs): the HUD's shared state (selection, hover, panels).
+  (window as unknown as { __fuHud?: Hud }).__fuHud = hud;
   const fps = h('div', { class: 'fu-fps fu-mono fu-hidden' });
   // Screens first in DOM order (keyboard/tab order and automation start with the active screen).
   root.append(screens, hud.el, fps);

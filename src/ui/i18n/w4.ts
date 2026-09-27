@@ -140,7 +140,7 @@ export const esW4: Record<string, string> = {
 
   // ---- effects now (§7.6) ---------------------------------------------------------------------------------------
   'effect.division.attack': '+25 % de potencia y avance ×1,5 en el {front}',
-  'effect.division.defend': '+25 % de defensa y avance enemigo ×1/1,4 en el {front}',
+  'effect.division.defend': '+25 % de defensa en el {front}; el enemigo tarda ×1,4 en avanzar a su alrededor',
   'effect.division.moving': 'Ninguno mientras marcha: se une al frente al llegar',
   'effect.division.idle': 'Ninguno: únela a un frente (se une sola si hay uno a menos de {r} km)',
   'effect.fighter.cap': 'Protege un círculo de {km} km sobre {place}: {p} % de derribo por pasada',
@@ -468,7 +468,7 @@ export const enW4: Record<string, string> = {
   'route.rail': 'by rail ({v} km/h)',
 
   'effect.division.attack': '+25 % power and ×1.5 advance on the {front}',
-  'effect.division.defend': '+25 % defence and enemy advance ×1/1.4 on the {front}',
+  'effect.division.defend': '+25 % defence on the {front}; the enemy takes ×1.4 as long to advance around it',
   'effect.division.moving': 'None while marching: it joins the front on arrival',
   'effect.division.idle': 'None: attach it to a front (it joins one by itself within {r} km)',
   'effect.fighter.cap': 'Protects a {km} km circle over {place}: {p} % kill chance per pass',

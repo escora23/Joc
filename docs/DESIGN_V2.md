@@ -1738,7 +1738,7 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
 * **Models** are no longer inflated to 16–46 px from orbit (CM§12): the `ANCHORED` min-pixel scaling applies only between
   the thresholds above.
 * **Grounded structures** (fixes F15, G01): the up vector is the terrain normal averaged over the footprint (clamped to
-  ≤ 15° from the radial), the anchor is the mean surface height of the footprint, and a foundation pad with a skirt
+  ≤ 30° from the radial; W4 raised it from 15° because the ×4 relief makes valley sides 20–25° steep and acceptance 9 wants the up vector within 3° of the relief normal), the anchor is the mean surface height of the footprint, and a foundation pad with a skirt
   reaches down to the lowest point (skirt depth = relief range under the footprint + 5 %). Footprints are real: 2.5–6 km.
   The near globe patch flattens relief under structure pads (pad mask) when available.
 

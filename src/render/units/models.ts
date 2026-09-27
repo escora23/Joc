@@ -49,7 +49,7 @@ export const STRUCT_MODELS = [
   'cityBase', 'port', 'factory', 'defensePost', 'samSite', 'silo', 'airbase', 'armyBase', 'navalYard', 'radar',
   'port2', 'factory2', 'defensePost2', 'samSite2', 'silo2', 'airbase2', 'armyBase2', 'navalYard2', 'radar2',
   'port3', 'factory3', 'defensePost3', 'samSite3', 'silo3', 'airbase3', 'armyBase3', 'navalYard3', 'radar3',
-  'radarDish', 'beacon', 'pad',
+  'radarDish', 'beacon', 'pad', 'padRound',
 ] as const;
 export type StructModelKey = (typeof STRUCT_MODELS)[number];
 
@@ -689,7 +689,14 @@ function radar(L: number): THREE.BufferGeometry {
 /** Foundation pad (DESIGN_V2 §10.7): a unit block from y = -1 to 0 over the footprint, scaled per structure. */
 function pad(): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  m.block(1.0, 1.0, 1.0, 0, -1.0, 0, C.concreteDark, { flat: true });
+  m.block(1.0, 1.0, 1.0, 0, -1.0, 0, 0x6e6152, { flat: true });
+  return m.build();
+}
+
+/** Round foundation for round footprints (cities, defense posts, SAM sites). */
+function padRound(): THREE.BufferGeometry {
+  const m = new ModelBuilder();
+  m.cyl(0.5, 0.5, 1.0, 0, -1.0, 0, 0x6e6152, 32);
   return m.build();
 }
 
@@ -722,7 +729,7 @@ const UNIT_BUILDERS: Record<UnitModelKey, () => THREE.BufferGeometry> = {
 const LEVEL_BUILDERS: Record<LevelledKey, (L: number) => THREE.BufferGeometry> = {
   port, factory, defensePost, samSite, silo, airbase, armyBase, navalYard, radar,
 };
-const STRUCT_BUILDERS: Partial<Record<StructModelKey, () => THREE.BufferGeometry>> = { cityBase, radarDish, beacon, pad };
+const STRUCT_BUILDERS: Partial<Record<StructModelKey, () => THREE.BufferGeometry>> = { cityBase, radarDish, beacon, pad, padRound };
 
 export function buildUnitModel(k: UnitModelKey): THREE.BufferGeometry {
   return UNIT_BUILDERS[k]();

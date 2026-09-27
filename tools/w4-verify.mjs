@@ -71,7 +71,18 @@ await page.evaluate(() => {
   ctx.bus.on('orderAck', (e) => window.__w4.acks.push(e));
   ctx.bus.on('unitReady', (e) => window.__w4.ready.push(e));
 });
-const view = (fn) => page.evaluate(fn);
+const view = (fn, arg) => page.evaluate(fn, arg);
+/**
+ * A right click on the canvas as one pointerdown/pointerup pair created together: under the software renderer a
+ * CDP mouse release can be dispatched seconds after the press (a long frame), which the input router rightly reads as
+ * a held button (a camera drag), not a click.
+ */
+const rightClick = (x, y) => page.evaluate(({ x, y }) => {
+  const c = window.__front.ctx.canvas;
+  const o = { clientX: x, clientY: y, button: 2, buttons: 2, bubbles: true, pointerId: 1, pointerType: 'mouse' };
+  c.dispatchEvent(new PointerEvent('pointerdown', o));
+  c.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 }));
+}, { x, y });
 
 // ---------------------------------------------------------------------------------------------------------------
 if (want('V1')) {
@@ -95,8 +106,8 @@ if (want('V1')) {
   const id = Number(await el.getAttribute('data-unit'));
   await el.click();
   await sleep(2500);
-  const after = await view(() => ({ sel: window.__front.ctx.sim.view && window.__fuCard?.text?.() ?? '', cam: window.__front.ctx.cameraRig.getState({}) }));
-  const selId = await view(() => window.__front.hud?.shared?.selection ?? null);
+  const after = await view(() => ({ sel: window.__fuCard?.text?.() ?? '', cam: window.__front.ctx.cameraRig.getState({}) }));
+  const selId = await view(() => window.__fuHud?.shared?.selection ?? null);
   const moved = Math.abs(after.cam.lat - cam0.lat) + Math.abs(after.cam.lon - cam0.lon) + Math.abs(after.cam.altitudeKm - cam0.altitudeKm) > 0.1;
   row('V1', 'row click selects the unit and flies there', `unit ${id}, card «${after.sel.split('\n')[0]}», camera ${moved ? 'moved' : 'still'}`, 'card of that unit, camera moved', after.sel.length > 0 && moved);
   void selId;
@@ -122,7 +133,7 @@ if (want('V2')) {
   const log2 = [];
   const tick0 = await view(() => window.__front.ctx.sim.view.tick);
   for (let i = 0; i < 10; i++) {
-    const before = await view(() => ({ gold: window.__front.ctx.sim.view.human.gold, price: window.__front.ctx.sim.view.unitCost(2), n: window.__front.ctx.sim.view.production.length }));
+    const before = await view(() => ({ gold: window.__front.ctx.sim.view.human.gold, price: window.__front.ctx.sim.view.unitCost(3), n: window.__front.ctx.sim.view.production.length }));
     const shown = (await slot.locator('.fu-bb-cost').innerText()).trim();
     await slot.click();
     await until((n) => window.__front.ctx.sim.view.production.length > n, before.n, 10000, 150);
@@ -132,7 +143,7 @@ if (want('V2')) {
     if (Math.abs(charged - before.price) <= 1) ok++;
   }
   row('V2', 'Arsenal: price shown = gold charged, 10 purchases (shown/exact/charged)', `${ok}/10: ${log2.slice(0, 4).join(', ')}…`, '10/10', ok === 10);
-  const prod = await view(() => window.__front.ctx.sim.view.production.filter((q) => q.unit === 2).map((q) => ({ eta: q.readyTick - q.startTick, start: q.startTick })));
+  const prod = await view(() => window.__front.ctx.sim.view.production.filter((q) => q.unit === 3).map((q) => ({ eta: q.readyTick - q.startTick, start: q.startTick })));
   row('V2', 'a bought division is in production with an 80-tick ETA', prod.length ? `${prod.length} queued, first ${prod[0].eta} ticks` : 'none', '80', prod.length >= 10 && prod[0].eta === 80);
   await page.keyboard.press('KeyU');
   await sleep(300);
@@ -143,7 +154,7 @@ if (want('V2')) {
   row('V2', 'En producción rows in the panel', prodRows2, '>= 10', prodRows2 >= 10);
   await shot('v2-production');
   await view(() => window.__front.ctx.app.setSpeed(4));
-  const ready = await until(() => window.__w4.ready.find((e) => e.owner === 1 && e.unit === 2), null, 90000, 500);
+  const ready = await until(() => window.__w4.ready.find((e) => e.owner === 1 && e.unit === 3), null, 90000, 500);
   await sleep(1000);
   const alert = await view(() => [...document.querySelectorAll('.fu-alert')].map((e) => e.innerText).find((x) => /lista|listo|ready/i.test(x)) ?? '');
   row('V2', 'unitReady alert naming its base', ready ? `«${alert.split('\n')[0]}»` : 'no unitReady', '«… lista en la base de …»', !!ready && /base/i.test(alert));
@@ -173,19 +184,24 @@ if (want('V3')) {
     const id = pool[i % pool.length];
     const exists = await view((id) => window.__front.ctx.sim.view.units.has(id), id);
     if (!exists) continue;
-    await view((id) => window.__front.hud.shared.select({ kind: 'unit', id }), id);
+    await view((id) => window.__fuHud.shared.select({ kind: 'unit', id }), id);
     const x = 250 + rnd() * 1000, y = 150 + rnd() * 550;
     await page.mouse.move(x, y);
     await sleep(250);
     const pv = await until(({ x, y }) => {
       const p = window.__fuOrderPreview;
-      const hv = window.__front.hud.shared.hover;
+      const hv = window.__fuHud.shared.hover;
       return p && Math.abs(hv.clientX - x) < 1 && Math.abs(hv.clientY - y) < 1 && p.tile === hv.tile ? p : null;
     }, { x, y }, 4000, 100);
     if (!pv) continue;
     const n0 = await view(() => window.__w4.acks.length);
-    await page.mouse.click(x, y, { button: 'right' });
-    const ack = await until((n) => window.__w4.acks.length > n ? window.__w4.acks.slice(n) : null, n0, 6000, 100);
+    const plan = pv.plans.find((p) => p.unitId === id);
+    if (plan && plan.ok) await rightClick(x, y);
+    else if (plan) {
+      // The UI does not send an order its preview refuses: send the same order anyway, the sim must refuse it too.
+      await view(({ id, plan, tile }) => window.__front.ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: plan.order, tile, targetId: plan.targetId }), { id, plan, tile: pv.tile });
+    }
+    const ack = await until((n) => window.__w4.acks.length > n ? window.__w4.acks.slice(n) : null, n0, 20000, 150);
     const cancel = await view(() => !!document.querySelector('.fu-modal'));
     if (cancel) {
       // A first strategic strike asks for confirmation: close it (the order was not sent).
@@ -216,7 +232,7 @@ if (want('V4')) {
     const { ctx } = window.__front;
     const s = [...ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === 6);
     if (!s) return null;
-    window.__front.hud.shared.select({ kind: 'structure', id: s.id });
+    window.__fuHud.shared.select({ kind: 'structure', id: s.id });
     ctx.cameraRig.setState({ lat: 40.45, lon: -3.3, altitudeKm: 60, tilt: 0.9, heading: 0 });
     return s.id;
   });
@@ -237,7 +253,7 @@ if (want('V4')) {
 if (want('V5')) {
   await view(() => {
     const { ctx } = window.__front;
-    window.__front.hud.shared.select({ kind: 'none' });
+    window.__fuHud.shared.select({ kind: 'none' });
     ctx.cameraRig.setState({ lat: 41.8, lon: -1.2, altitudeKm: 1300, tilt: 0.1, heading: 0 });
   });
   await sleep(2500);
@@ -258,16 +274,18 @@ if (want('V5')) {
   await page.keyboard.up('Shift');
   await sleep(800);
   const sel = await view(() => {
-    const s = window.__front.hud.shared.selection;
+    const s = window.__fuHud.shared.selection;
     return (s.kind === 'units' ? s.ids : s.kind === 'unit' ? [s.id] : []).slice().sort((a, b) => a - b);
   });
   row('V5', 'Shift+drag selects every own unit in the rectangle', `${sel.length} selected, ${expected.length} in the box`, 'the same set', sel.length === expected.length && sel.every((id, i) => id === expected[i]) && sel.length >= 3);
   // Hover enemy land: the chip reports «n de m»; one right click orders all of them.
   await page.mouse.move(820, 330);
-  await sleep(900);
-  const chip = await view(() => document.querySelector('.fu-chip:not(.fu-hidden)')?.innerText ?? '');
+  const chip = (await until(() => {
+    const c = document.querySelector('.fu-chip:not(.fu-hidden)');
+    return c && /\d/.test(c.innerText) ? c.innerText : null;
+  }, null, 30000, 300)) ?? '';
   const n0 = await view(() => window.__w4.acks.length);
-  await page.mouse.click(820, 330, { button: 'right' });
+  await rightClick(820, 330);
   const acks = await until((n) => window.__w4.acks.length > n ? window.__w4.acks.slice(n) : null, n0, 6000, 100);
   await sleep(600);
   const orderedIds = new Set((acks ?? []).flatMap((a) => a.unitIds));
@@ -280,11 +298,11 @@ if (want('V5')) {
 if (want('V7')) {
   const div = await view(() => {
     const v = window.__front.ctx.sim.view;
-    const u = [...v.units.values()].find((x) => x.owner === 1 && x.type === 2);
-    if (u) window.__front.hud.shared.select({ kind: 'unit', id: u.id });
+    const u = [...v.units.values()].find((x) => x.owner === 1 && x.type === 3);
+    if (u) window.__fuHud.shared.select({ kind: 'unit', id: u.id });
     return u?.id;
   });
-  await sleep(900);
+  await until(() => /Rompe frentes|Breaks fronts/.test(window.__fuCard.text()), null, 30000, 300);
   const text = await view(() => window.__fuCard.text());
   const has = (re) => re.test(text);
   row('V7', 'division card: role line, 40 km/h ≈ 40 km/s at 1x, reach, effect, integrity, endurance, no FUERZA', text.replace(/\s+/g, ' ').slice(0, 220),
@@ -293,10 +311,10 @@ if (want('V7')) {
   const bomber = await view(() => {
     const v = window.__front.ctx.sim.view;
     const u = [...v.units.values()].find((x) => x.owner === 1 && x.type === 5);
-    if (u) window.__front.hud.shared.select({ kind: 'unit', id: u.id });
+    if (u) window.__fuHud.shared.select({ kind: 'unit', id: u.id });
     return u?.id;
   });
-  await sleep(900);
+  await until(() => /Ataques profundos|Deep strikes/.test(window.__fuCard.text()), null, 30000, 300);
   const bt = await view(() => window.__fuCard.text());
   row('V7', 'bomber card: mission and cruise speeds', bt.match(/misión[^\n]*|mission[^\n]*/i)?.[0] ?? bt.slice(0, 80), 'misión 400 km/h (crucero 850 km/h)', /400 km\/h/.test(bt) && /850 km\/h/.test(bt));
   const st = await view(() => {
@@ -304,10 +322,10 @@ if (want('V7')) {
     const v = ctx.sim.view;
     const s = [...v.structures.values()].find((x) => x.owner === 1 && x.type === 2); // factory L2
     ctx.sim.debug({ type: 'addGold', playerId: 1, amount: -(v.human.gold - 100_000) });
-    if (s) window.__front.hud.shared.select({ kind: 'structure', id: s.id });
+    if (s) window.__fuHud.shared.select({ kind: 'structure', id: s.id });
     return s ? { id: s.id, level: s.level } : null;
   });
-  await sleep(1800);
+  await until(() => /Te faltan|You need/.test(window.__fuCard.text()), null, 30000, 300);
   const stext = await view(() => window.__fuCard.text());
   const cost = await view(() => {
     const s = [...window.__front.ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === 2);
@@ -355,7 +373,7 @@ if (want('V14')) {
     const rings = await view((type) => {
       const s = [...window.__front.ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === type);
       if (!s) return -1;
-      window.__front.hud.shared.select({ kind: 'structure', id: s.id });
+      window.__fuHud.shared.select({ kind: 'structure', id: s.id });
       return 0;
     }, type);
     await sleep(900);
@@ -364,10 +382,10 @@ if (want('V14')) {
     void n; void rings;
   }
   const unitsRings = [];
-  for (const [type, name] of [[2, 'division'], [3, 'fighter CAP'], [0, 'warship']]) {
+  for (const [type, name] of [[3, 'division'], [4, 'fighter CAP'], [2, 'warship']]) {
     await view((type) => {
-      const u = [...window.__front.ctx.sim.view.units.values()].find((x) => x.owner === 1 && x.type === type && (type !== 3 || x.mode === 8));
-      window.__front.hud.shared.select(u ? { kind: 'unit', id: u.id } : { kind: 'none' });
+      const u = [...window.__front.ctx.sim.view.units.values()].find((x) => x.owner === 1 && x.type === type && (type !== 4 || x.mode === 8));
+      window.__fuHud.shared.select(u ? { kind: 'unit', id: u.id } : { kind: 'none' });
     }, type);
     await sleep(900);
     const drawn = await view(() => window.__units.stats().rings.filter((r) => r.style !== 0));
@@ -383,7 +401,7 @@ if (want('V17')) {
     ctx.cameraRig.setState({ lat: 40.8, lon: -2.8, altitudeKm: 1500, tilt: 0.2, heading: 0 });
     const s = [...ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === 7);
     ctx.sim.debug({ type: 'addGold', playerId: 1, amount: 5_000_000 });
-    if (s) ctx.sim.send({ type: 'buildUnit', unit: 2, structureId: -1 });
+    if (s) ctx.sim.send({ type: 'buildUnit', unit: 3, structureId: -1 });
   });
   await sleep(2500);
   const hg = await view(() => ({ n: window.__units.stats().hourglasses, producing: [...window.__front.ctx.sim.view.structures.values()].filter((s) => (s.producing ?? 0) > 0 || s.built < 1 || (s.upgrade ?? 0) > 0).length }));

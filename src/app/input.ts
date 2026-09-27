@@ -69,7 +69,9 @@ export function createInputRouter(ctx: GameContext): InputRouter {
     down = null;
     if (!enabled || !d || d.button !== e.button) return;
     const moved = Math.hypot(e.clientX - d.x, e.clientY - d.y);
-    if (moved > CLICK_SLOP || (e.timeStamp - d.t > CLICK_MS && !(e.shiftKey && e.button === 0))) return;
+    // A long left press is a pan hold; a right press that did not move is a click whatever its length (the order the
+    // chip previewed), even when a long frame delayed the release.
+    if (moved > CLICK_SLOP || (e.button === 0 && e.timeStamp - d.t > CLICK_MS && !e.shiftKey)) return;
     if (e.button === 0) {
       // A cluster of icons (DESIGN_V2 §10.7): the first click fans its members out so each can be picked.
       const hit = ctx.units.pickIcon?.(e.clientX, e.clientY);

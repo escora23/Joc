@@ -201,18 +201,21 @@ registerShot('structures-levels', 'units', 'Every structure type at levels 1, 2 
   const types = [S.City, S.Port, S.Factory, S.DefensePost, S.SamSite, S.MissileSilo, S.Airbase, S.ArmyBase, S.NavalYard, S.Radar];
   const only = params.get('type');
   const rows: S[] = only !== null ? [Number(only) as S] : types;
-  const lat0 = 39.9, lon0 = -3.6;
-  rows.forEach((type, r) => {
+  // One tile apart (a tile holds one structure): two types per row, L1 / L2 / L3 left to right.
+  const lat0 = 39.9, lon0 = -3.9, TILE = 0.225;
+  rows.forEach((type, i) => {
+    const r = Math.floor(i / 2), c0 = (i % 2) * 3.5;
     [1, 2, 3].forEach((L, c) => {
       const level = type === S.City ? [1, 5, 10][c] : L;
-      sim.debug({ type: 'spawnStructure', structure: type, owner: HUMAN_ID, tile: at(lat0 - r * 0.16, lon0 + c * 0.24), level });
+      sim.debug({ type: 'spawnStructure', structure: type, owner: HUMAN_ID, tile: at(lat0 - r * TILE, lon0 + (c0 + c) * TILE), level });
     });
   });
   await wait(600);
-  const n = rows.length;
+  const nr = Math.ceil(rows.length / 2);
+  const single = only !== null;
   ctx.cameraRig.setState({
-    lat: Number(params.get('lat') ?? lat0 - ((n - 1) * 0.16) / 2 - 0.25), lon: Number(params.get('lon') ?? lon0 + 0.24),
-    altitudeKm: Number(params.get('alt') ?? (only !== null ? 45 : 175)), tilt: Number(params.get('tilt') ?? 0.95), heading: 0,
+    lat: Number(params.get('lat') ?? lat0 - ((nr - 1) * TILE) / 2 - (single ? 0.1 : 0.05)), lon: Number(params.get('lon') ?? lon0 + (single ? 1 : 3) * TILE),
+    altitudeKm: Number(params.get('alt') ?? (single ? 32 : 150)), tilt: Number(params.get('tilt') ?? (single ? 0.85 : 0.35)), heading: 0,
   });
   await waitFrames(12);
   await wait(800);

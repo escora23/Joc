@@ -22,7 +22,7 @@ import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY,
 import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
 import { hash3 } from '../../shared/rng';
 import { isWaterTerrain } from '../../shared/terrain';
-import { StructureType, UnitMode, UnitState, UnitType, type LatLon, type StructureView, type UnitView } from '../../shared/types';
+import { StructureType, UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type LatLon, type StructureView, type UnitView } from '../../shared/types';
 import { EFFECT_TILES, radarCovers, reachKm, tileCx, tileCy } from '../../shared/orders';
 import { viewRules } from '../../sim/rulesView';
 import { fxInternal, type FxInternal } from '../fx';
@@ -53,7 +53,7 @@ const UNIT_CAP: Record<UnitModelKey, number> = {
 const STRUCT_CAP = ((): Record<StructModelKey, number> => {
   const base: Record<string, number> = {
     cityBase: 1536, port: 1024, factory: 1024, defensePost: 1536, samSite: 768, silo: 768, airbase: 768, armyBase: 768,
-    navalYard: 768, radar: 768, radarDish: 768, beacon: 6144, pad: 8192,
+    navalYard: 768, radar: 768, radarDish: 768, beacon: 6144, pad: 8192, padRound: 4096,
   };
   const out = {} as Record<StructModelKey, number>;
   for (const k of STRUCT_MODELS) out[k] = base[k.replace(/[23]$/, '')] ?? 512;
@@ -87,7 +87,7 @@ function structKm(type: StructureType, level: number): number {
 const STRUCT_MIN_PX = ((): Record<StructModelKey, number> => {
   const base: Record<string, number> = {
     cityBase: 30, port: 26, factory: 24, defensePost: 18, samSite: 22, silo: 22, airbase: 30, armyBase: 24,
-    navalYard: 26, radar: 20, radarDish: 20, beacon: 9, pad: 24,
+    navalYard: 26, radar: 20, radarDish: 20, beacon: 9, pad: 24, padRound: 24,
   };
   const out = {} as Record<StructModelKey, number>;
   for (const k of STRUCT_MODELS) out[k] = base[k.replace(/[23]$/, '')] ?? 22;
@@ -867,7 +867,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         t.hasPos = true;
         t.size = g ? g.S * 0.07 * EARTH_RADIUS_KM : 0.4;
         if (key && g && structModelsOn && lod.structModelFade > 0) {
-          const s = g.S * (u.type === UnitType.Bomber ? 0.1 : 0.075);
+          const s = g.S * (u.type === UnitType.Bomber ? 0.13 : 0.1);
           F.copy(g.back).negate();
           const sel = selectedUnits.has(u.id) ? 1 : 0;
           const col = ownerColor(u.owner);
@@ -1128,7 +1128,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   }
   const grounds = new Map<number, Ground>();
   const GRID = 5;
-  const MAX_TILT = (15 * Math.PI) / 180;
+  // §10.7 clamps the up vector to 15° from the radial; relief is drawn ×4 exaggerated, so steep valley sides reach 20–25°:
+  // 30° keeps every model on its slope (deviation from the relief normal < 3°) without ever lying on its side.
+  const MAX_TILT = (30 * Math.PI) / 180;
   const gP = new THREE.Vector3(), gN = new THREE.Vector3(), gC = new THREE.Vector3();
   const gll: LatLon = { lat: 0, lon: 0 };
   function groundOf(st: StructureView, S: number, heading: number): Ground {
@@ -1181,7 +1183,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     const lift = Math.max(0, maxE);
     const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U)));
     const range = Math.max(0, maxE - minE);
-    const pad = range * 1.05 + 0.04 * S;
+    const pad = range * 1.05 + 0.012 * S;
     g = { key, anchor, up, right, back, pad, S, maxE, minE, devDeg: (Math.acos(Math.min(1, up.dot(gN))) * 180) / Math.PI, tiltDeg: (tilt * 180) / Math.PI };
     grounds.set(st.id, g);
     return g;
@@ -1224,8 +1226,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       }
       // Foundation pad under the land part of the footprint (ports and yards keep their piers over the water).
       const coastal = st.type === StructureType.Port || st.type === StructureType.NavalYard;
-      tmpColor.setHex(0x55534e);
-      if (coastal) {
+      const round = st.type === StructureType.City || st.type === StructureType.DefensePost || st.type === StructureType.SamSite;
+      tmpColor.setHex(0xffffff);
+      if (round) put(structMeshes.padRound, anchor, g.right, g.up, g.back, S * 1.0, g.pad, S * 1.0, tmpColor, st.built, sel, st.hp, seed, anchor, S);
+      else if (coastal) {
         Q.copy(anchor).addScaledVector(g.back, 0.2 * S);
         put(structMeshes.pad, Q, g.right, g.up, g.back, S * 1.02, g.pad, S * 0.62, tmpColor, st.built, sel, st.hp, seed, anchor, S);
       } else put(structMeshes.pad, anchor, g.right, g.up, g.back, S * 1.03, g.pad, S * 1.03, tmpColor, st.built, sel, st.hp, seed, anchor, S);
@@ -1428,7 +1432,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           zone(ll.lat, ll.lon, EFFECT_TILES.attach * TILE_KM, oc, 0.55, 3);
           break;
         case UnitType.Warship:
-          if (u.mode === UnitMode.Blockade) {
+          if (u.mode === UnitMode.Blockade || (u.order >= 0 && UNIT_ORDER_KINDS[u.order] === 'blockade')) {
             tileXYToLatLon(u.targetX, u.targetY, ll2);
             zone(ll2.lat, ll2.lon, EFFECT_TILES.engage * TILE_KM, 0xff4a3a, 0.75, 3);
             zone(ll2.lat, ll2.lon, EFFECT_TILES.engage * TILE_KM, 0xff4a3a, 0.9, 2, 48);
