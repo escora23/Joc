@@ -360,7 +360,8 @@ for (const lang of langs) {
       const e = order.err ? null : await until(() => { if (window.__fuAlerts.banner()) window.__V.resume(); return window.__V.raid(); }, null, 60000, 500);
       if (!e) log(`  no airRaid; messages to the attacker: ${JSON.stringify(await page.evaluate(({ a, m0 }) => window.__V.msgs.slice(m0).filter((m) => m.playerId === a).map((m) => m.key), { a: S.n, m0 }))}`);
       const al = await page.evaluate(() => window.__fuAlerts.list().filter((x) => x.kind === 'airRaid').pop() ?? null);
-      const names = await page.evaluate(({ base, cap }) => ({ base: window.__fuAlerts.place(base), cap: window.__fuAlerts.place(cap) }), raid);
+      // The target named is where the strike resolves (the structure or front sector nearest the ordered tile).
+      const names = await page.evaluate(({ base, to }) => ({ base: window.__fuAlerts.place(base), cap: window.__fuAlerts.place(to) }), { base: raid.base, to: e?.toTile ?? raid.cap });
       const ok = !!al && !!e && e.fromBase && e.fromTile === raid.base && al.title.includes(names.base) && al.title.includes(names.cap);
       row('V6b', 'airRaid from a real airbase names the base and the target', al ? `${al.title} — ${al.body} (base «${names.base}», target «${names.cap}», fromBase ${e?.fromBase})` : `${order.err ?? staged.err ?? ''} event ${!!e}`, 'base and target named', ok);
     } else row('V6b', 'airRaid from a real airbase names the base and the target', 'no land of the attacker to place an airbase', 'alert', false);
