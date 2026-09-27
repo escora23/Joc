@@ -757,9 +757,50 @@ async function checkHistorical() {
   await page.close();
 }
 
+// -------------------------------------------------------------------------------------------------
+// 3b. Clouds at mid zoom: no cloud washes the human's land at 1500 km and 300 km (FEEDBACK #5)
+// -------------------------------------------------------------------------------------------------
+async function checkClouds() {
+  const { execFileSync } = await import('node:child_process');
+  const results = [];
+  const run = (shot, params, tag) => {
+    const dir = path.join(out, `clouds-${tag}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+    execFileSync('node', ['tools/readability.mjs', '--url', base, '--shot', shot, '--params', params, '--variants', 'base,territory,mask,hidden,cloudmask', '--out', dir], { stdio: 'ignore', timeout: 1200000 });
+    const f = fs.readdirSync(dir).find((n) => n.endsWith('.json'));
+    const rep = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    const c = rep.clouds;
+    const r = { shot, params, humanPx: c.human.pixels, humanCloudyPx: c.human.cloudyPixels, humanDE: c.human.deltaEvsHidden, humanFactor: c.human.cloudFactor };
+    results.push(r);
+    console.log('  clouds', JSON.stringify(r));
+    return { rep, dir, stem: f.replace(/\.json$/, '') };
+  };
+  run('clouds-strategic', '&freeze=1&alt=1500', 'strategic-1500');
+  const wide = run('borders-close', '&freeze=1&alt=1500', 'border-1500');
+  // 300 km over the human's cloudiest land seen at 1500 km: the centroid of cloudy human pixels (owner mask id 1,
+  // cloud cover G > 120) converted to lat/lon from the 1500 km camera (tilt 0, fov 45 degrees).
+  const M = PNG.sync.read(fs.readFileSync(path.join(wide.dir, `${wide.stem}-mask.png`)));
+  const C = PNG.sync.read(fs.readFileSync(path.join(wide.dir, `${wide.stem}-cloudmask.png`)));
+  let sx = 0, sy = 0, n = 0;
+  for (let y = 0; y < M.height; y += 2) for (let x = 0; x < M.width; x += 2) {
+    const o = (y * M.width + x) * 4;
+    if (M.data[o] === 1 && M.data[o + 1] === 0 && (M.data[o + 2] === 160 || M.data[o + 2] === 180) && C.data[o + 1] > 120) { sx += x; sy += y; n++; }
+  }
+  const cam = wide.rep.camera, kmPx = (2 * cam.altitudeKm * Math.tan((22.5 * Math.PI) / 180)) / M.height;
+  const lat = n ? cam.lat - ((sy / n - M.height / 2) * kmPx) / 111.2 : cam.lat;
+  const lon = n ? cam.lon + ((sx / n - M.width / 2) * kmPx) / (111.2 * Math.cos((lat * Math.PI) / 180)) : cam.lon;
+  run('borders-close', `&freeze=1&alt=300&lat=${lat.toFixed(2)}&lon=${lon.toFixed(2)}`, 'border-300-cloudy');
+  run('borders-close', '&freeze=1&alt=300', 'border-300');
+  save('clouds', results);
+  // Real cloud over the human's land must be in view at both altitudes, or the measure proves nothing.
+  const covered = ['alt=1500', 'alt=300'].every((a) => results.some((r) => r.params.includes(a) && r.humanCloudyPx > 5000));
+  verdict('3b clouds at 1500 and 300 km: dE <= 3 over the human\'s land against &clouds=hidden (with cloud over it in view)',
+    covered && results.every((r) => r.humanPx < 10000 || r.humanDE <= 3), results);
+}
+
 const t0 = Date.now();
 for (const c of checks) {
-  const fn = { labels: checkLabels, icons: checkIcons, click: checkClick, islands: checkIslands, routes: checkRoutes, routepix: checkRoutePixels, flash: checkFlash, zoom: checkZoom, models: checkModels, historical: checkHistorical }[c];
+  const fn = { labels: checkLabels, icons: checkIcons, click: checkClick, islands: checkIslands, routes: checkRoutes, routepix: checkRoutePixels, flash: checkFlash, clouds: checkClouds, zoom: checkZoom, models: checkModels, historical: checkHistorical }[c];
   if (!fn) { console.log('unknown check', c); continue; }
   try { await fn(); } catch (e) { verdict(`${c}: error`, false, String(e).slice(0, 400)); }
 }
