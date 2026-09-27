@@ -117,6 +117,25 @@ if (want('topbar')) {
     if (w === 1600) {
       const r = await ev(() => { const b = document.querySelector('.fu-time')?.getBoundingClientRect(); return b ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; });
       if (r) await page.screenshot({ path: path.join(out, 'topbar-1x.png'), clip: { x: Math.max(0, r.x - 8), y: Math.max(0, r.y - 8), width: Math.min(r.width + 16, w - Math.max(0, r.x - 8)), height: r.height + 16 } });
+      // Tutorial step 7 highlights '.fu-time-seg' (class fu-tut-hl): the highlighted box must frame all five buttons.
+      const frame = await ev(() => {
+        const seg = document.querySelector('.fu-time-seg');
+        if (!seg) return null;
+        seg.classList.add('fu-tut-hl');
+        const s = seg.getBoundingClientRect();
+        const inside = [...seg.querySelectorAll(':scope > button')].filter((b) => {
+          const r = b.getBoundingClientRect();
+          return r.left >= s.left - 0.5 && r.right <= s.right + 0.5 && r.top >= s.top - 0.5 && r.bottom <= s.bottom + 0.5;
+        }).length;
+        return { inside, x: s.x, y: s.y, width: s.width, height: s.height };
+      });
+      if (frame) {
+        await sleep(600);
+        const cx = Math.max(0, frame.x - 16);
+        await page.screenshot({ path: path.join(out, 'tutorial-clock-hl.png'), clip: { x: cx, y: Math.max(0, frame.y - 16), width: Math.min(frame.width + 32, w - cx), height: frame.height + 32 } });
+        await ev(() => document.querySelector('.fu-time-seg')?.classList.remove('fu-tut-hl'));
+      }
+      row('§2.7', 'tutorial step 7 highlight frames the whole speed control', `${frame?.inside ?? 0}/5 buttons inside the highlighted box`, '5/5', frame?.inside === 5);
     }
   }
   if (vp) await page.setViewportSize(vp);
