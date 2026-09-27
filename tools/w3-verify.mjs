@@ -302,24 +302,61 @@ for (const lang of langs) {
     const alert = det ? await page.evaluate((id) => window.__fuAlerts.list().find((x) => x.kind === 'invasionDetected' && x.groupKey === `inv:${id}`) ?? null, det.unitId) : null;
     if (!det) log(`  staged convoy not detected; attacker messages: ${JSON.stringify(await page.evaluate((a) => window.__V.msgs.filter((m) => m.playerId === a).slice(-3), inv?.a ?? -1))}`);
     // Judged at the end of the pass over every convoy that was detected and landed (staged or the AI's own).
-    // Air raid: a bomber of a nation at war with us, sent at our capital.
-    const raid = await page.evaluate(async ({ a, cap }) => {
+    // Air raid: a real enemy airbase (the tile of its land nearest our capital), a bomber docked there, and a strike
+    // ORDER on our capital through the player command path (not a debug-launched bomber with no home base).
+    const raid = await page.evaluate(({ a }) => {
       const { ctx } = window.__front;
       const v = ctx.sim.view;
-      const p = v.players[a];
+      const W = 1600;
+      const cap = v.players[1].capitalTile;
+      const cx = cap % W, cy = Math.floor(cap / W);
+      const land = (t) => { const c = v.world.terrain[t] & 0x0f; return c >= 2 && c <= 4; };
+      let best = -1, bd = Infinity;
+      for (let t = 0; t < v.owner.length; t++) {
+        if (v.owner[t] !== a || !land(t)) continue;
+        let dx = Math.abs((t % W) - cx);
+        if (dx > W / 2) dx = W - dx;
+        const d = dx * dx + (Math.floor(t / W) - cy) ** 2;
+        if (d > 64 && d < bd) { bd = d; best = t; }
+      }
       let got = null;
       ctx.bus.on('airRaid', (e) => { if (!got && e.target === 1) got = e; });
       window.__V.raid = () => got;
-      return { from: p.capitalTile };
-    }, { a: S.o[0], cap: S.cap });
-    const bomberType = 5; // UnitType.Bomber
-    if (bomberType >= 0) {
-      await page.evaluate(({ a, from, cap, ut }) => window.__front.ctx.sim.debug({ type: 'spawnUnit', unit: ut, owner: a, tile: from, targetTile: cap }), { a: S.o[0], from: raid.from, cap: S.cap, ut: bomberType });
+      if (best < 0) return null;
+      // At war with us (a no-op when it already is) and escalated to strategic strikes: the order must pass the same
+      // validation the AI's own strikes do.
+      ctx.sim.debug({ type: 'war', a, b: 1, mobilizeTicks: 0, reasonKey: 'war.reason.opportunity' });
+      ctx.sim.debug({ type: 'escalate', by: a, against: 1, level: 2 });
+      ctx.sim.debug({ type: 'spawnStructure', structure: 6, owner: a, tile: best, level: 1 });
+      window.__V.resume();
+      return { base: best, cap };
+    }, { a: S.o[0] });
+    if (raid) {
+      await until(({ a, base }) => [...window.__front.ctx.sim.view.structures.values()].some((s) => s.owner === a && s.type === 6 && s.tile === base), { a: S.o[0], base: raid.base }, 20000, 400);
+      const staged = await page.evaluate(({ a, base, cap }) => {
+        const { ctx } = window.__front;
+        const v = ctx.sim.view;
+        const ab = [...v.structures.values()].find((s) => s.owner === a && s.type === 6 && s.tile === base);
+        if (!ab) return { err: 'airbase not placed' };
+        ctx.sim.debug({ type: 'spawnUnit', unit: 5, owner: a, tile: base, targetTile: -1 });
+        window.__V.resume();
+        return { airbase: ab.id, cap };
+      }, { ...raid, a: S.o[0] });
+      await until((a) => [...window.__front.ctx.sim.view.units.values()].some((u) => u.owner === a && u.type === 5), S.o[0], 20000, 400);
+      const order = staged.err ? staged : await page.evaluate(({ a, cap }) => {
+        const { ctx } = window.__front;
+        const bomber = [...ctx.sim.view.units.values()].filter((u) => u.owner === a && u.type === 5).sort((x, y) => y.id - x.id)[0];
+        if (!bomber) return { err: 'bomber not docked' };
+        ctx.sim.debug({ type: 'command', playerId: a, cmd: { type: 'unitOrder', unitIds: [bomber.id], order: 'strike', tile: cap, targetId: 0 } });
+        return { bomber: bomber.id };
+      }, { ...raid, a: S.o[0] });
       await page.evaluate(() => window.__V.resume());
-      const e = await until(() => window.__V.raid(), null, 60000, 500);
+      const e = order.err ? null : await until(() => window.__V.raid(), null, 60000, 500);
       const al = await page.evaluate(() => window.__fuAlerts.list().filter((x) => x.kind === 'airRaid').pop() ?? null);
-      row('V6b', 'airRaid alert names the base and the target', al ? `${al.title} — ${al.body}` : `event ${!!e}`, 'alert', !!al);
-    } else row('V6b', 'airRaid alert names the base and the target', 'bomber type unknown (pass --bomber <UnitType>)', 'alert', false);
+      const names = await page.evaluate(({ base, cap }) => ({ base: window.__fuAlerts.place(base), cap: window.__fuAlerts.place(cap) }), raid);
+      const ok = !!al && !!e && e.fromBase && e.fromTile === raid.base && al.title.includes(names.base) && al.title.includes(names.cap);
+      row('V6b', 'airRaid from a real airbase names the base and the target', al ? `${al.title} — ${al.body} (base «${names.base}», target «${names.cap}», fromBase ${e?.fromBase})` : `${order.err ?? staged.err ?? ''} event ${!!e}`, 'base and target named', ok);
+    } else row('V6b', 'airRaid from a real airbase names the base and the target', 'no land of the attacker to place an airbase', 'alert', false);
     await shot(`${lang}-V6-invasion`);
     await page.evaluate(() => window.__V.resume());
   }

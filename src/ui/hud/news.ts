@@ -319,7 +319,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     const drones = e.unit === UnitType.DroneSwarm;
     alert({
       kind: 'airRaid', severity: 'warning', icon: drones ? 'droneSwarm' : 'bomber', lat: ll.lat, lon: ll.lon, actors: [e.owner], groupKey: `air:${e.unitId}`,
-      title: t(drones ? 'alert.airRaid.drones' : 'alert.airRaid.bombers', { name: name(e.owner), from: describeTile(view(), e.fromTile).name, to: describeTile(view(), e.toTile).name }),
+      title: t(`alert.airRaid.${drones ? 'drones' : 'bombers'}${e.fromBase ? '' : '.seen'}`, { name: name(e.owner), from: describeTile(view(), e.fromTile).name, to: describeTile(view(), e.toTile).name }),
       body: t('alert.airRaid.body', { hours: Math.max(1, Math.round(e.etaTicks / 10)), by: t(`alert.airRaid.by.${e.by}`) }),
     });
   });

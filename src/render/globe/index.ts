@@ -226,6 +226,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       planet.uBorderNoise.value = 0.16 * (1 - smoothstep(600, 1500, zoomKm));
       planet.uShoreK.value = smoothstep(1200, 1500, zoomKm);
       planet.uCloseK.value = 1 - smoothstep(150, 300, zoomKm);
+      planet.uOccNearK.value = 1 - smoothstep(45, 90, zoomKm);
       planet.uMaskMode.value = shotView.mask === 'owner' ? 1 : shotView.mask === 'cloud' ? 2 : 0;
       planet.uSpawn.value = damp(planet.uSpawn.value, ctx.sim.view.phase === 'spawn' ? 1 : 0, 3, dt);
       cam.layers.set(shotView.mask ? MASK_LAYER : 0);

@@ -19,6 +19,11 @@ export function isHumanFacingProposal(p: ProposalView): boolean {
   return p.from === HUMAN_ID || p.to === HUMAN_ID;
 }
 
+/** A fractional value (a force ratio 1.4) with one decimal, as the dialogs show it («1,4»). */
+function oneDecimal(v: number): string {
+  return (Math.round(v * 10) / 10).toString().replace('.', t('num.dec'));
+}
+
 /** A reason as a readable clause, its parameters resolved («Compartimos un enemigo: Alemania»). */
 export function reasonText(hs: HudShared, r: ReasonView): string {
   const params: Record<string, string | number> = {};
@@ -28,7 +33,7 @@ export function reasonText(hs: HudShared, r: ReasonView): string {
     else if (k === 'troops' && typeof v === 'number') params[k] = formatCompact(v);
     else if (k === 'treaty' && typeof v === 'string') params[k] = t(`treaty.kind.${v}`);
     else if (k === 'goal' && typeof v === 'string') params[k] = t(`war.goal.${v}`);
-    else if (typeof v === 'number') params[k] = formatNumber(v);
+    else if (typeof v === 'number') params[k] = k === 'ratio' || !Number.isInteger(v) ? oneDecimal(v) : formatNumber(v);
     else params[k] = v;
   }
   return t(r.key, params);

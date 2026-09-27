@@ -19,6 +19,7 @@ import { h, leave, setText, toggleClass } from '../dom';
 import { flag } from '../flag';
 import { icon } from '../icons';
 import { openModal, type ModalHandle } from '../modal';
+import { describeTile } from '../places';
 import { tip } from '../tooltip';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
@@ -126,8 +127,9 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     refreshCount();
   }
 
+  /** Age since the entry last changed: a grouped entry updated in place (an answer to a proposal, a front's new numbers) reads as new. */
   function ageText(a: Alert): string {
-    const h = Math.max(0, Math.round((view().tick - a.createdTick) / 10));
+    const h = Math.max(0, Math.round((view().tick - a.updatedTick) / 10));
     return h <= 0 ? t('alerts.age.now') : t('alerts.age.hours', { h: formatNumber(h) });
   }
 
@@ -173,6 +175,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     if (body) setText(body, i.body ?? '');
     else if (i.body) a.el.querySelector('.fu-alert-main')!.insertBefore(h('div', { class: 'fu-alert-body' }, i.body), a.el.querySelector('.fu-alert-meta'));
     setText(a.el.querySelector('.fu-alert-count') as HTMLElement, a.count > 1 ? `×${a.count}` : '');
+    setText(a.el.querySelector('.fu-alert-age') as HTMLElement, ageText(a));
   }
 
   function raise(input: AlertInput): Alert {
@@ -414,13 +417,13 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     const seg = h('div', { class: 'fu-seg fu-log-filter' });
     const paint = () => {
       rows.replaceChildren();
-      const items = all.filter((a) => filter === 'all' || (filter === 'danger' ? SEV_ORDER[a.input.severity] >= 2 : a.input.severity === filter)).slice().reverse();
+      const items = all.filter((a) => filter === 'all' || (filter === 'danger' ? SEV_ORDER[a.input.severity] >= 2 : a.input.severity === filter)).slice().reverse().sort((x, y) => y.updatedTick - x.updatedTick);
       if (!items.length) rows.append(tx('alerts.log.empty', undefined, 'p'));
       for (const a of items) {
         const r = h('div', { class: `fu-log-row is-${a.input.severity}` },
           h('span', { class: 'fu-log-ico' }, icon(a.input.icon ?? SEV_ICON[a.input.severity])),
           h('div', { class: 'fu-log-main' }, h('b', null, a.input.title), a.input.body ? h('span', null, a.input.body) : null),
-          h('span', { class: 'fu-log-age fu-mono' }, t('alerts.log.day', { day: Math.floor(a.createdTick / 240) + 1, hour: Math.floor((a.createdTick % 240) / 10) })),
+          h('span', { class: 'fu-log-age fu-mono' }, t('alerts.log.day', { day: Math.floor(a.updatedTick / 240) + 1, hour: Math.floor((a.updatedTick % 240) / 10) })),
         );
         if (a.input.lat !== undefined || a.input.proposalId) {
           r.classList.add('is-go');
@@ -469,7 +472,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   refreshCount();
 
   (window as unknown as { __fuAlerts?: unknown }).__fuAlerts = {
-    list: () => all.map((a) => ({ id: a.id, kind: a.input.kind, severity: a.input.severity, title: a.input.title, body: a.input.body ?? '', groupKey: a.input.groupKey ?? '', lat: a.input.lat, lon: a.input.lon, count: a.count, inFeed: !!a.el, marker: !!a.marker, edge: !!a.marker?.classList.contains('is-edge'), tick: a.createdTick })),
+    list: () => all.map((a) => ({ id: a.id, kind: a.input.kind, severity: a.input.severity, title: a.input.title, body: a.input.body ?? '', groupKey: a.input.groupKey ?? '', lat: a.input.lat, lon: a.input.lon, count: a.count, inFeed: !!a.el, marker: !!a.marker, edge: !!a.marker?.classList.contains('is-edge'), tick: a.createdTick, updatedTick: a.updatedTick, age: ageText(a) })),
     feed: () => [...list.querySelectorAll('.fu-alert')].map((e) => (e as HTMLElement).innerText),
     pings: () => pings,
     banner: () => (bannerEl.classList.contains('fu-hidden') ? '' : bannerEl.innerText),
@@ -477,6 +480,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       const a = all.find((x) => x.id === id);
       if (a) activate(a);
     },
+    /** The place name the alerts use for a tile (verification: «does the airRaid alert name the base?»). */
+    place: (tile: number) => describeTile(view(), tile).name,
   };
   return center;
 }

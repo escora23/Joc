@@ -128,6 +128,25 @@ function humanBorderTile(s: ShotContext, peaceful: boolean): [number, number] {
   const rel = relationsFor(s.ctx);
   rel.refresh(Number.POSITIVE_INFINITY);
   const fronts = view.fronts.map((f) => tileIndex(Math.floor(f.x), Math.floor(f.y)));
+  // Occupied land (the sim's occupied set) by 8x8-tile blocks: a peaceful spot keeps every occupied tile >= 2 blocks
+  // (16-24 tiles, far outside a 40 km frame) away, so no stipple or war-held land shows in the shot.
+  const BW = MAP_W / 8, BH = MAP_H / 8;
+  const occBlock = new Uint8Array(BW * BH);
+  if (peaceful) {
+    for (let t = 0; t < view.owner.length; t++) {
+      if (view.owner[t] === 0 || view.isOccupied?.(t) !== true) continue;
+      occBlock[Math.floor(Math.floor(t / MAP_W) / 8) * BW + Math.floor((t % MAP_W) / 8)] = 1;
+    }
+  }
+  const nearOccupied = (t: number): boolean => {
+    const bx = Math.floor((t % MAP_W) / 8), by = Math.floor(Math.floor(t / MAP_W) / 8);
+    for (let dy = -2; dy <= 2; dy++) {
+      const y = by + dy;
+      if (y < 0 || y >= BH) continue;
+      for (let dx = -2; dx <= 2; dx++) if (occBlock[y * BW + ((bx + dx + BW) % BW)]) return true;
+    }
+    return false;
+  };
   const nb = new Int32Array(4);
   const best = [cap, cap, cap], bestN = [cap, cap, cap], bestD = [Infinity, Infinity, Infinity];
   for (let t = 0; t < view.owner.length; t++) {
@@ -139,7 +158,7 @@ function humanBorderTile(s: ShotContext, peaceful: boolean): [number, number] {
     for (let i = 0; i < n; i++) {
       const o = view.owner[nb[i]];
       if (o === 0 || o === a || !isPlayableTerrain(w.terrain[nb[i]])) continue;
-      if (peaceful && (rel.atWar(a, o) || fronts.some((f) => tileDistance(t, f) < 40))) continue;
+      if (peaceful && (rel.atWar(a, o) || nearOccupied(t) || fronts.some((f) => tileDistance(t, f) < 40))) continue;
       const cls = a === HUMAN_ID ? (view.players[o]?.kind === 'nation' ? 0 : 1) : o === HUMAN_ID ? 3 : 2;
       if (cls > 2 || d >= bestD[cls]) continue;
       bestD[cls] = d;

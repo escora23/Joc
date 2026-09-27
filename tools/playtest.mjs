@@ -541,6 +541,51 @@ try {
     return `${sent.kind} to ${sent.to} (gold ${sent.gold}): ${ans.status} after ${ans.delay} ticks — «${ans.title}» ${ans.body}`;
   });
 
+  // A pact to the nation that likes us most, with a sweetener: on Easy a pact needs an opinion of -5, so it is accepted
+  // (the chimeGood cue; the alliance above is usually refused with a pact counter-offer, chimeBad).
+  await step('a non-aggression pact to the friendliest nation is accepted (chimeGood)', async () => {
+    await resetUi();
+    const cand = await page.evaluate(() => {
+      const v = window.__front.ctx.sim.view;
+      const busy = (id) => [...v.proposals.values()].some((q) => q.from === 1 && q.to === id && (q.status === 'considering' || q.status === 'pending'));
+      const op = (id) => v.opinions.get(id)?.score ?? 0;
+      const c = v.playerList.filter((p) => p.alive && p.kind === 'nation' && p.id !== 1 && v.pairState(1, p.id) !== 'war' && !v.human.allies.includes(p.id) && !v.hasTreaty(1, p.id, 'nap') && !busy(p.id));
+      c.sort((a, b) => op(b.id) - op(a.id));
+      return c[0] ? { id: c[0].id, op: op(c[0].id) } : null;
+    });
+    check(cand, 'no nation to offer a pact to');
+    await page.keyboard.press('n');
+    await page.waitForSelector('.fu-nations:not(.fu-hidden)', { timeout: 20000 });
+    await page.evaluate((id) => window.__fuNations.open(id), cand.id);
+    await sleep(900);
+    await page.locator('.fu-goldfield button').nth(1).click().catch(() => {});
+    await sleep(300);
+    const btn = page.locator('.fu-nd-actions button:not(.fu-hidden)', { hasText: /Pacto de no agresión|Non-aggression pact/ }).first();
+    check(await btn.count(), 'no pact button in the nation panel');
+    const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
+    await btn.click();
+    const sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0 && p.kind === 'nap') ?? null, p0, 10000, 200);
+    check(sent, 'the pact was not sent');
+    const good0 = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeGood ?? 0);
+    const ans = await until((id) => {
+      const p = window.__front.ctx.sim.view.proposals.get(id);
+      if (!p || p.status === 'considering' || p.status === 'pending') return null;
+      const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
+      return a ? { status: p.status, title: a.title, body: a.body, age: a.age, updated: a.updatedTick, created: p.createdTick, resolved: p.resolvedTick, now: window.__front.ctx.sim.view.tick } : null;
+    }, sent.id, 200000, 1000);
+    check(ans, 'no answer to the pact');
+    await sleep(500);
+    const good = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeGood ?? 0);
+    await shot('14d-pact-answer');
+    await resetUi();
+    check(ans.status === 'accepted', `the pact was ${ans.status} (opinion ${cand.op}): ${ans.title} — ${ans.body}`);
+    check(good > good0, 'no chimeGood cue for the accepted pact');
+    // The answer updates the «estudiando» entry: its age is counted from the answer, not from the proposal.
+    const ageH = /(\d+)/.test(ans.age) ? Number(ans.age.match(/(\d+)/)[1]) : 0;
+    check(ans.updated >= ans.resolved && ageH <= Math.round((ans.now - ans.resolved) / 10) + 1, `the answered entry reads «${ans.age}» (sent ${ans.created}, answered ${ans.resolved}, now ${ans.now})`);
+    return `pact to ${cand.id} (opinion ${cand.op}): ${ans.status} — «${ans.title}» ${ans.body} (${ans.age})`;
+  });
+
   // ---------------------------------------------------------------------------------------------- war via the dialog
   let warTarget = -1;
   await step('declare war through the §4.2 dialog (left click on a neighbour)', async () => {
@@ -599,6 +644,40 @@ try {
     warTarget = ev.target;
     const mob = await page.evaluate(() => window.__front.ctx.sim.view.tick);
     return `war on ${ev.target} (clicked ${defender}); offensive after tick ${ev.mobilizeUntilTick} (now ${mob}); dialog: «${text.split('\n').find((l) => /empezar|start/.test(l))?.trim()}»`;
+  });
+
+  // A white peace offered at once to the nation we just attacked: nobody is tired yet, so it is refused with a reason
+  // (the chimeBad cue), through the nation panel and the §4.2 peace dialog.
+  await step('white peace to the nation we attacked is refused with a reason (chimeBad)', async () => {
+    await resetUi();
+    check(warTarget > 0, 'no war of ours (previous step failed)');
+    await page.keyboard.press('n');
+    await page.waitForSelector('.fu-nations:not(.fu-hidden)', { timeout: 20000 });
+    await page.evaluate((id) => window.__fuNations.open(id), warTarget);
+    await sleep(900);
+    await page.locator('.fu-nd-actions button:not(.fu-hidden)', { hasText: /Proponer paz|Propose peace/ }).first().click();
+    await page.waitForSelector('.fu-peace', { timeout: 15000 });
+    await sleep(800);
+    await shot('15b-peace-dialog');
+    const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
+    await page.locator('.fu-modal .fu-btn--primary', { hasText: /Proponer la paz|Propose peace/ }).last().click({ force: true });
+    const sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0 && p.kind === 'peace') ?? null, p0, 10000, 200);
+    check(sent, 'the peace proposal was not sent');
+    await resetUi();
+    const bad0 = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeBad ?? 0);
+    const ans = await until((id) => {
+      const p = window.__front.ctx.sim.view.proposals.get(id);
+      if (!p || p.status === 'considering' || p.status === 'pending') return null;
+      const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
+      return a ? { status: p.status, reasons: p.reasons?.length ?? 0, title: a.title, body: a.body } : null;
+    }, sent.id, 220000, 1000);
+    check(ans, 'no answer to the peace proposal');
+    await sleep(500);
+    const bad = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeBad ?? 0);
+    check(ans.status === 'rejected' || ans.status === 'countered', `white peace was ${ans.status}: ${ans.title} — ${ans.body}`);
+    check(ans.reasons >= 1 && ans.body.length > 3 && !BAD_TEXT.test(`${ans.title} ${ans.body}`), `refusal without a readable reason: ${ans.title} / ${ans.body}`);
+    check(bad > bad0, 'no chimeBad cue for the refusal');
+    return `«${ans.title}» ${ans.body}`;
   });
 
   // ---------------------------------------------------------------------------------------------- AI declares on us
@@ -734,6 +813,93 @@ try {
     check(Math.abs(after.tiles - before.tiles) <= Math.max(30, before.tiles * 0.1), `tiles ${before.tiles} -> ${after.tiles}`);
     check(after.wars === before.wars && after.treaties === before.treaties, `wars/treaties ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     return `«${toast.text}»; before ${JSON.stringify(before)} after ${JSON.stringify(after)}`;
+  });
+
+  // ---------------------------------------------------------------------------------------------- threats: siren, klaxon, naval horn
+  // An enemy at war with us (staged like the declaration above: a foothold 14 tiles from our capital and an offensive
+  // aimed at it, plus a convoy to our coast) so the capital siren, the offensive klaxon and the naval horn sound.
+  await step('an offensive on our capital and a convoy to our coast: capitalSiren, klaxon, navalHorn', async () => {
+    await resetUi();
+    const plan = await page.evaluate(() => {
+      const s = window.__front.ctx.sim, v = s.view, pt = window.__pt;
+      const cap = v.human.capitalTile;
+      const enemies = v.playerList.filter((p) => p.alive && p.kind === 'nation' && p.id !== 1 && v.pairState(1, p.id) === 'war').sort((a, b) => b.tiles - a.tiles);
+      const a = enemies[0]?.id ?? 0;
+      if (!a) return null;
+      // A foothold of the enemy on our land 14 tiles from the capital (the first playable direction).
+      let foot = -1;
+      for (const [dx, dy] of [[14, 0], [-14, 0], [0, 14], [0, -14], [10, 10], [-10, -10], [10, -10], [-10, 10]]) {
+        const t = cap + dy * 1600 + dx;
+        if (v.owner[t] === 1 && pt.playable(t)) { foot = t; break; }
+      }
+      if (foot < 0) return null;
+      s.debug({ type: 'conquer', playerId: a, centerTile: foot, radius: 3 });
+      s.debug({ type: 'addTroops', playerId: a, amount: 600_000 });
+      // Convoy candidates: for each enemy at war, its coastal tile nearest to one of our coasts (open sea, same rule as
+      // the sim), nearest first; the step tries them until one launches.
+      const ours = pt.humanTiles().filter((t) => pt.coastal(t));
+      const conv = [];
+      if (ours.length) {
+        const best = new Map();
+        for (let t = 1600; t < v.owner.length - 1600; t += 1) {
+          const o = v.owner[t];
+          if (!o || o === 1 || v.pairState(1, o) !== 'war' || !pt.coastal(t)) continue;
+          for (let k = 0; k < ours.length; k += 3) {
+            const d = pt.dist(t, ours[k]);
+            if (d > 6 && (!best.has(o) || d < best.get(o).d)) best.set(o, { a: o, from: t, coast: ours[k], d });
+          }
+        }
+        conv.push(...[...best.values()].sort((x, y) => x.d - y.d));
+      }
+      return { a, foot, cap, conv };
+    });
+    check(plan, 'no enemy at war with us, or no room for the staged foothold');
+    await until(({ a, foot }) => window.__front.ctx.sim.view.owner[foot] === a, plan, 15000, 300);
+    await page.evaluate(({ a, cap, conv }) => {
+      const s = window.__front.ctx.sim;
+      s.debug({ type: 'command', playerId: a, cmd: { type: 'attack', target: 1, ratio: 0.8, tile: cap } });
+      if (s.view.speed === 0) window.__front.app.setSpeed(1);
+    }, plan);
+    let convoy = null;
+    const convoyWhy = [];
+    if ((await page.evaluate(() => window.__fuAudio?.stats?.().cues?.navalHorn ?? 0)) === 0) {
+      for (const c of plan.conv.slice(0, 4)) {
+        const n0 = await countEvents('boatLaunched', `e.owner === ${c.a}`);
+        const m0 = await page.evaluate(() => window.__pt.events.length);
+        await page.evaluate((c) => {
+          const s = window.__front.ctx.sim;
+          s.debug({ type: 'addTroops', playerId: c.a, amount: 300_000 });
+          s.debug({ type: 'command', playerId: c.a, cmd: { type: 'boatAttack', targetTile: c.coast, ratio: 0.2 } });
+          if (s.view.speed === 0) window.__front.app.setSpeed(1);
+        }, c);
+        convoy = await lastEvent('boatLaunched', `e.owner === ${c.a}`, n0, 12000);
+        if (convoy) break;
+        convoyWhy.push(`${c.a}: ${JSON.stringify(await page.evaluate(({ a, m0 }) => window.__pt.events.slice(m0).filter((e) => e.type === 'message' && e.playerId === a).map((e) => e.key), { a: c.a, m0 }))}`);
+      }
+    }
+    const need = ['capitalSiren', 'klaxon', 'navalHorn'];
+    const heard = await until((need) => {
+      // Auto-pause (capital threat, invasion) stops the game: answer the banner and keep playing.
+      document.querySelector('.fu-autopause:not(.fu-hidden) .fu-btn--primary')?.click();
+      if (window.__front.ctx.sim.view.speed === 0) window.__front.app.setSpeed(1);
+      const c = window.__fuAudio?.stats?.().cues ?? {};
+      return need.every((k) => (c[k] ?? 0) > 0) ? c : null;
+    }, need, 200000, 1000);
+    const cues = await page.evaluate(() => window.__fuAudio?.stats?.().cues ?? {});
+    const siren = await page.evaluate(() => window.__fuAlerts.list().filter((a) => a.kind === 'capitalThreat').pop() ?? null);
+    await shot('18-capital-threat');
+    // Cleanup: peace with the stager so the capital does not fall under the rest of the tour.
+    await page.evaluate(({ a }) => window.__front.ctx.sim.debug({ type: 'war', a, b: 1, peace: true }), plan);
+    check(heard, `cues missing: ${need.filter((k) => !(cues[k] > 0)).join(', ')} (convoy ${convoy ? `launched to ${convoy.toTile}` : `not launched: ${plan.conv.length} candidates; ${convoyWhy.join(' | ')}`})`);
+    return `«${siren?.title ?? '-'}»; ${need.map((k) => `${k}=${cues[k]}`).join(' ')}`;
+  });
+
+  await step('audio: warHorn, klaxon, navalHorn, capitalSiren, chimeGood and chimeBad all heard in this run', async () => {
+    const cues = await page.evaluate(() => window.__fuAudio?.stats?.().cues ?? {});
+    const need = ['warHorn', 'klaxon', 'navalHorn', 'capitalSiren', 'chimeGood', 'chimeBad'];
+    const missing = need.filter((k) => !((cues[k] ?? 0) > 0));
+    check(!missing.length, `missing cues: ${missing.join(', ')} (heard ${Object.entries(cues).map(([k, v]) => `${k}=${v}`).join(' ')})`);
+    return need.map((k) => `${k}=${cues[k]}`).join(' ');
   });
 
   // ============================================================================================== extended (v1 tour)

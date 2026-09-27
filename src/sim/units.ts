@@ -2216,7 +2216,7 @@ export class UnitSystem {
     u.raidAnnounced = true;
     const base = g.structureMap.get(u.home);
     g.emit({
-      type: 'airRaid', tick: g.tick, owner: u.owner, target, unitId: u.id, unit: u.type, fromTile: base ? base.tile : tileOf(u.x, u.y),
+      type: 'airRaid', tick: g.tick, owner: u.owner, target, unitId: u.id, unit: u.type, fromTile: base ? base.tile : tileOf(u.x, u.y), fromBase: !!base,
       toTile: u.targetTile, etaTicks: Math.ceil(tileKm(u.x, u.y, u.toX, u.toY) / KM_PER_TICK[u.type]), by,
     });
   }

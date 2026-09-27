@@ -42,7 +42,7 @@ export const esW2: Dictionary = {
   'legend.route.title': 'Rutas',
   'legend.route.text': 'Línea continua en el color del dueño: el camino ya recorrido desde la salida. Discontinua: el camino que le queda.',
   'legend.historical.title': 'Fronteras históricas',
-  'legend.historical.text': 'Línea gris punteada con las fronteras de los países reales, por debajo de 1.000 km. Desactivada por defecto: actívala en Ajustes › Gráficos.',
+  'legend.historical.text': 'Línea gris punteada con las fronteras de los países reales, por debajo de 1.000 km. Desactivada por defecto: actívala en Ajustes › Juego.',
 };
 
 export const enW2: Dictionary = {
@@ -81,5 +81,5 @@ export const enW2: Dictionary = {
   'legend.route.title': 'Routes',
   'legend.route.text': 'Solid line in the owner\'s colour: the path already travelled since departure. Dashed: the way still ahead.',
   'legend.historical.title': 'Historical borders',
-  'legend.historical.text': 'Dotted grey line along real countries\' borders, below 1,000 km. Off by default: turn it on in Settings › Graphics.',
+  'legend.historical.text': 'Dotted grey line along real countries\' borders, below 1,000 km. Off by default: turn it on in Settings › Game.',
 };

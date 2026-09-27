@@ -159,7 +159,7 @@ export type SimEvent =
    * A bomber or drone sortie toward `target`'s land, announced to it (§8.2): at take-off when the airbase lies inside
    * its radar coverage, else when the sortie enters the coverage, else 250 km from the target.
    */
-  | { type: 'airRaid'; tick: number; owner: number; target: number; unitId: number; unit: UnitType; fromTile: number; toTile: number; etaTicks: number; by: 'takeoff' | 'radar' | 'observers' }
+  | { type: 'airRaid'; tick: number; owner: number; target: number; unitId: number; unit: UnitType; /** The home airbase's tile when the aircraft has one (fromBase), else where it was when detected. */ fromTile: number; fromBase: boolean; toTile: number; etaTicks: number; by: 'takeoff' | 'radar' | 'observers' }
   /** The sim's answer to a unitOrder of `owner`: how many units took it, the i18n reason when none did. */
   | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null; errorParams?: Record<string, string | number> }
   /** A strike landed (bomber, drone): damage done, for the alert and the result line. */
