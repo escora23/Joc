@@ -182,12 +182,12 @@ export function effectLine(hs: HudShared, u: UnitView): string {
       if (u.mode === UnitMode.Offensive) return t('effect.division.attack', { front: front || t('front.this') });
       if (u.mode === UnitMode.Front) return t('effect.division.defend', { front: front || t('front.this') });
       if (u.mode === UnitMode.Moving || u.mode === UnitMode.Rail) return t('effect.division.moving');
-      return t('effect.division.idle', { r: DIVISION_ATTACH_TILES * TILE_KM });
+      return t('effect.division.idle', { r: Math.round(DIVISION_ATTACH_TILES * TILE_KM) });
     case UnitType.FighterSquadron:
-      if (u.mode === UnitMode.Patrol) return t('effect.fighter.cap', { km: CAP_RADIUS_TILES * TILE_KM, place: place(), p: Math.round(CAP_HIT_AIRCRAFT * 100) });
+      if (u.mode === UnitMode.Patrol) return t('effect.fighter.cap', { km: Math.round(CAP_RADIUS_TILES * TILE_KM), place: place(), p: Math.round(CAP_HIT_AIRCRAFT * 100) });
       if (u.mode === UnitMode.Intercept) return t('effect.fighter.intercept');
       if (u.mode === UnitMode.Escort) return t('effect.fighter.escort');
-      if (u.mode === UnitMode.Docked) return t('effect.fighter.docked', { km: 16 * TILE_KM, radar: RADAR_SCRAMBLE_MUL });
+      if (u.mode === UnitMode.Docked) return t('effect.fighter.docked', { km: Math.round(16 * TILE_KM), radar: RADAR_SCRAMBLE_MUL });
       return t('effect.none.returning');
     case UnitType.Bomber:
       if (u.mode === UnitMode.Strike) return t('effect.bomber.strike', { place: place(), s: BOMBER_DIRECT_DMG, d: Math.round(BOMBER_DIVISION_DMG * 100) });
@@ -197,13 +197,13 @@ export function effectLine(hs: HudShared, u: UnitView): string {
       if (u.mode === UnitMode.Support) return t('effect.drone.support', { front: front || place(), mul: DRONE_ADVANCE_MUL.toFixed(2).replace('.', t('num.dec')) });
       if (u.mode === UnitMode.Strike) return t('effect.drone.strike', { place: place(), s: DRONE_DIRECT_DMG });
       if (u.mode === UnitMode.Rearming) return t('effect.rearming');
-      return t('effect.drone.ready', { km: formatNumber(reachKm(u.type)), r: DRONE_SUPPORT_TILES * TILE_KM });
+      return t('effect.drone.ready', { km: formatNumber(reachKm(u.type)), r: Math.round(DRONE_SUPPORT_TILES * TILE_KM) });
     case UnitType.Warship:
-      if (u.mode === UnitMode.Blockade) return t('effect.warship.blockade', { km: WARSHIP_ENGAGE_TILES * TILE_KM });
-      if (u.mode === UnitMode.Bombard) return t('effect.warship.bombard', { pct: Math.round((BOMBARD_ATTACK_MUL - 1) * 100), km: WARSHIP_BOMBARD_TILES * TILE_KM });
+      if (u.mode === UnitMode.Blockade) return t('effect.warship.blockade', { km: Math.round(WARSHIP_ENGAGE_TILES * TILE_KM) });
+      if (u.mode === UnitMode.Bombard) return t('effect.warship.bombard', { pct: Math.round((BOMBARD_ATTACK_MUL - 1) * 100), km: Math.round(WARSHIP_BOMBARD_TILES * TILE_KM) });
       if (u.mode === UnitMode.Escort) return t('effect.warship.escort');
       if (u.mode === UnitMode.Engaged) return t('effect.warship.engaged');
-      return t('effect.warship.patrol', { km: WARSHIP_ENGAGE_TILES * TILE_KM });
+      return t('effect.warship.patrol', { km: Math.round(WARSHIP_ENGAGE_TILES * TILE_KM) });
     case UnitType.TransportShip:
       return t('effect.convoy', { n: formatNumber(Math.round(u.troops)) });
     default:
@@ -245,7 +245,7 @@ export function levelEffects(type: StructureType, level: number, live?: { tradeS
       out.push([t('eff.trade'), g(PORT_TRADE_GOLD_PER_HOUR[Math.min(3, level)] ?? 0)],
         [t('eff.tradeShips'), live?.tradeShips !== undefined ? t('eff.ofShips', { n: live.tradeShips, of: L.tradeShips ?? 0 }) : String(L.tradeShips ?? 0)],
         [t('eff.embark'), t('eta.hours', { n: Math.round((L.embarkTicks ?? 60) / 10) })],
-        [t('eff.shipRepair'), t('eff.repairIn', { p: pct(L.repairPerHour ?? 0), r: L.repairTiles ?? 3 })]);
+        [t('eff.shipRepair'), t('eff.repairIn', { p: pct(L.repairPerHour ?? 0), r: Math.round((L.repairTiles ?? 3) * TILE_KM) })]);
       break;
     case StructureType.Factory:
       out.push([t('eff.production'), g(L.goldPerHour ?? 0)], [t('eff.railFreight'), g(RAIL_GOLD_PER_HOUR[Math.min(3, level)] ?? 0)],
@@ -268,10 +268,10 @@ export function levelEffects(type: StructureType, level: number, live?: { tradeS
       out.push([t('eff.capacity'), t('eff.squadrons', { n: L.capacity ?? 0 })], [t('eff.scramble'), `${tiles((L.scrambleTiles ?? 16) * (live?.radar ? RADAR_SCRAMBLE_MUL : 1))}`], [t('eff.repair'), t('eff.perHour', { p: pct(L.repairPerHour ?? 0) })]);
       break;
     case StructureType.ArmyBase:
-      out.push([t('eff.capacity'), t('eff.divisions', { n: L.capacity ?? 0 })], [t('eff.troopCap'), `+${formatNumber(L.troopCap ?? 0)}`], [t('eff.divRepair'), t('eff.repairIn', { p: pct(L.repairPerHour ?? 0), r: L.repairTiles ?? 5 })]);
+      out.push([t('eff.capacity'), t('eff.divisions', { n: L.capacity ?? 0 })], [t('eff.troopCap'), `+${formatNumber(L.troopCap ?? 0)}`], [t('eff.divRepair'), t('eff.repairIn', { p: pct(L.repairPerHour ?? 0), r: Math.round((L.repairTiles ?? 5) * TILE_KM) })]);
       break;
     case StructureType.NavalYard:
-      out.push([t('eff.capacity'), t('eff.warships', { n: L.capacity ?? 0 })], [t('eff.shipRepair'), t('eff.repairIn', { p: pct(L.repairPerHour ?? 0), r: L.repairTiles ?? 3 })]);
+      out.push([t('eff.capacity'), t('eff.warships', { n: L.capacity ?? 0 })], [t('eff.shipRepair'), t('eff.repairIn', { p: pct(L.repairPerHour ?? 0), r: Math.round((L.repairTiles ?? 3) * TILE_KM) })]);
       break;
     case StructureType.Radar:
       out.push([t('eff.coverage'), tiles(L.coverageTiles ?? 20)], [t('eff.radarDoes'), t('eff.radarDoes.v', { sam: RADAR_SAM_RANGE_MUL, sc: RADAR_SCRAMBLE_MUL })]);

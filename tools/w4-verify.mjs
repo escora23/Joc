@@ -105,7 +105,12 @@ if (want('V1')) {
   const el = page.locator('.fu-fo-row').nth(1);
   const id = Number(await el.getAttribute('data-unit'));
   await el.click();
-  await sleep(2500);
+  // Under load (software GL, other agents' browsers) the card and the flight can take several frames: poll.
+  await until((c0) => {
+    const c = window.__front.ctx.cameraRig.getState({});
+    const moved = Math.abs(c.lat - c0.lat) + Math.abs(c.lon - c0.lon) + Math.abs(c.altitudeKm - c0.altitudeKm) > 0.1;
+    return (window.__fuCard?.text?.() ?? '').length > 0 && moved ? true : null;
+  }, cam0, 15000, 250);
   const after = await view(() => ({ sel: window.__fuCard?.text?.() ?? '', cam: window.__front.ctx.cameraRig.getState({}) }));
   const selId = await view(() => window.__fuHud?.shared?.selection ?? null);
   const moved = Math.abs(after.cam.lat - cam0.lat) + Math.abs(after.cam.lon - cam0.lon) + Math.abs(after.cam.altitudeKm - cam0.altitudeKm) > 0.1;
@@ -180,7 +185,7 @@ if (want('V3')) {
   const bad = [];
   let seed = 7;
   const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
-  for (let i = 0; i < 60 && pool.length; i++) {
+  for (let i = 0; i < 120 && total < 56 && pool.length; i++) {
     const id = pool[i % pool.length];
     const exists = await view((id) => window.__front.ctx.sim.view.units.has(id), id);
     if (!exists) continue;
@@ -236,15 +241,16 @@ if (want('V4')) {
     ctx.cameraRig.setState({ lat: 40.45, lon: -3.3, altitudeKm: 60, tilt: 0.9, heading: 0 });
     return s.id;
   });
-  await sleep(2500);
-  const hosted = await view(() => window.__fuCard.hosted());
+  // The hosted rows appear once the card has rendered (slow frames under software GL): poll.
+  const hosted = (await until(() => { const h = window.__fuCard.hosted(); return h.length ? h : null; }, null, 20000, 300)) ?? [];
   const kinds = await view((ids) => ids.map((id) => window.__front.ctx.sim.view.units.get(id)?.type), hosted);
   row('V4', 'airbase card lists its docked aircraft (bombers and drones included)', `${hosted.length} rows, types ${kinds.join(',')}`, 'bomber (5) and drone (6) present', kinds.includes(5) && kinds.includes(6));
   const bomber = hosted[kinds.indexOf(5)];
-  await view((id) => window.__fuCard.clickHosted(id), bomber);
-  await sleep(1200);
+  const clicked = await view((id) => !!document.querySelector(`.fu-w4-hrow[data-unit="${id}"]`) && (window.__fuCard.clickHosted(id), true), bomber);
+  if (!clicked) log(`   hosted row of unit ${bomber} not found`);
+  await until(() => /bombardero|bomber/i.test(window.__fuCard.text().split('\n')[0]) || null, null, 15000, 300);
   const card = await view(() => window.__fuCard.text());
-  row('V4', 'clicking a hosted bomber selects it (its card)', card.split('\n')[0], 'the bomber card', /bomb/i.test(card));
+  row('V4', 'clicking a hosted bomber selects it (its card)', card.split('\n')[0], 'the bomber card', /bombardero|bomber/i.test(card.split('\n')[0]));
   await shot('v4-docked');
   void base;
 }
@@ -289,7 +295,7 @@ if (want('V5')) {
   const acks = await until((n) => window.__w4.acks.length > n ? window.__w4.acks.slice(n) : null, n0, 6000, 100);
   await sleep(600);
   const orderedIds = new Set((acks ?? []).flatMap((a) => a.unitIds));
-  row('V5', 'the chip reports «n de m»', chip.replace(/\s+/g, ' ').slice(0, 140), '«n de m unidades»', / de \d+ unidades| of \d+ units/.test(chip));
+  row('V5', 'the chip reports «n de m»', chip.replace(/\s+/g, ' ').slice(0, 140), '«n de m unidades»', / de \d+ unidades| of \d+ units/i.test(chip));
   row('V5', 'one right click orders every selected unit', `${orderedIds.size} of ${sel.length} in unitOrder commands`, 'all', orderedIds.size === sel.length);
   await shot('v5-box-order');
 }
@@ -306,7 +312,7 @@ if (want('V7')) {
   const text = await view(() => window.__fuCard.text());
   const has = (re) => re.test(text);
   row('V7', 'division card: role line, 40 km/h ≈ 40 km/s at 1x, reach, effect, integrity, endurance, no FUERZA', text.replace(/\s+/g, ' ').slice(0, 220),
-    'all present', has(/Rompe frentes|Breaks fronts/) && has(/40 km\/h/) && has(/40 km por segundo|40 km per second/) && has(/Alcance|Reach/) && has(/Efecto ahora|Effect now/) && has(/Integridad|Integrity/) && has(/días de combate|days of combat/) && !has(/FUERZA|STRENGTH/));
+    'all present', has(/Rompe frentes|Breaks fronts/) && has(/40 km\/h/) && has(/40 km por segundo|40 km per second/i) && has(/Alcance|Reach/i) && has(/Efecto ahora|Effect now/i) && has(/Integridad|Integrity/i) && has(/días de combate|days of combat/i) && !has(/\bfuerza\b|\bstrength\b/i));
   await shot('v7-unit-card');
   const bomber = await view(() => {
     const v = window.__front.ctx.sim.view;
@@ -334,7 +340,7 @@ if (want('V7')) {
   });
   void cost;
   row('V7', 'factory card: now / next-level effects with gold per hour, upgrade cost and «Te faltan»', stext.replace(/\s+/g, ' ').slice(0, 260),
-    'Ahora, Nivel 3, oro/h, Mejorar a nivel 3 · cost, Te faltan', /Ahora|Now/.test(stext) && /Nivel 3|Level 3/.test(stext) && /oro\/h|gold\/h/.test(stext) && /Te faltan|You need/.test(stext));
+    'Ahora, Nivel 3, oro/h, Mejorar a nivel 3 · cost, Te faltan', /Ahora|Now/i.test(stext) && /Nivel 3|Level 3/i.test(stext) && /oro\/h|gold\/h/.test(stext) && /Mejorar a nivel 3|Upgrade to level 3/i.test(stext) && /Te faltan|You need/.test(stext));
   await shot('v7-structure-card');
   void div; void bomber; void st;
 }
