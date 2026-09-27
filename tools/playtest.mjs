@@ -309,9 +309,10 @@ try {
   });
 
   await step('setup: Easy difficulty -> START -> spawn phase', async () => {
-    await page.locator('.fu-diff--easy').click();
+    // noWaitAfter: under heavy CPU load Playwright can hang «waiting for scheduled navigations» after a plain click.
+    await page.locator('.fu-diff--easy').click({ noWaitAfter: true, timeout: 90000 });
     await sleep(300);
-    await page.locator('.fu-setup-start').click();
+    await page.locator('.fu-setup-start').click({ noWaitAfter: true, timeout: 90000 });
     await waitState('spawn', 120000);
     await sleep(2000);
     const n = await page.evaluate(() => window.__front.ctx.sim.view.playerList.filter((p) => p.spawned).length);
@@ -692,7 +693,8 @@ try {
       const v = window.__front.ctx.sim.view, pt = window.__pt;
       const cap = v.human.capitalTile;
       const at = (p) => Math.floor(p.labelY) * 1600 + Math.floor(p.labelX);
-      const c = v.playerList.filter((p) => p.alive && p.kind === 'nation' && p.id !== 1 && p.id !== warTarget && v.pairState(1, p.id) !== 'war' && !v.human.allies.includes(p.id) && p.tiles > 60);
+      const c = v.playerList.filter((p) => p.alive && p.kind === 'nation' && p.id !== 1 && p.id !== warTarget && v.pairState(1, p.id) !== 'war' && !v.human.allies.includes(p.id) && v.treatiesBetween(1, p.id).length === 0 && p.tiles > 60);
+      // (a nation bound to us by a treaty would declare a betrayal, a different alert kind)
       c.sort((a, b) => pt.dist(at(a), cap) - pt.dist(at(b), cap));
       return c[0]?.id ?? -1;
     }, warTarget);
@@ -743,7 +745,11 @@ try {
     const edge = await page.evaluate((id) => window.__fuAlerts.list().find((a) => a.id === id)?.edge ?? false, aiWar.alertId);
     const entry = page.locator('.fu-alerts-list .fu-alert[data-kind="warDeclared"]').first();
     check(await entry.count(), 'the critical alert is not in the feed');
-    await entry.click();
+    // Like a player: the pointer reaches the feed first, which holds its entries still, then clicks the entry.
+    const lb = await page.locator('.fu-alerts-list').boundingBox();
+    if (lb) await page.mouse.move(lb.x + lb.width / 2, lb.y + 12, { steps: 3 });
+    await sleep(400);
+    await entry.click({ timeout: 60000, noWaitAfter: true });
     // Flown there: the alert's place is on the visible side of the globe, near the middle of the screen (the camera may
     // tilt, so the camera's own lat/lon is not the point it looks at).
     const ok = await until(({ lat, lon }) => {

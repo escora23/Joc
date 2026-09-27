@@ -95,6 +95,34 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
 
   const inGame = () => ctx.app.state === 'playing' || ctx.app.state === 'command' || ctx.app.state === 'spawn';
 
+  // While the pointer is over the feed the entries hold still: new or escalated entries wait (at most HOLD_MAX_MS) and
+  // timers stop, so the entry the player is aiming at never slides away under the cursor.
+  const HOLD_MAX_MS = 10_000;
+  let holdSince = -1;
+  const held: Alert[] = [];
+  const holding = () => holdSince >= 0 && performance.now() - holdSince < HOLD_MAX_MS;
+  function place(a: Alert): void {
+    if (!a.el) return;
+    if (holding()) {
+      if (!held.includes(a)) held.push(a);
+      return;
+    }
+    list.prepend(a.el);
+    trimFeed();
+  }
+  function flushHeld(): void {
+    const q = held.splice(0);
+    for (const a of q) if (a.el && !a.acknowledged) list.prepend(a.el);
+    if (q.length) trimFeed();
+  }
+  list.addEventListener('pointerenter', () => {
+    holdSince = performance.now();
+  });
+  list.addEventListener('pointerleave', () => {
+    holdSince = -1;
+    flushHeld();
+  });
+
   function fly(a: Alert): void {
     const i = a.input;
     if (i.lat === undefined || i.lon === undefined) return;
@@ -194,7 +222,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       if (sameKind) a.count++;
       a.leftMs = ttl;
       refreshEntry(a);
-      if (escalated) list.prepend(a.el);
+      if (escalated) place(a);
     } else {
       fresh = true;
       a = { id: nextId++, input, createdTick: tick, updatedTick: tick, leftMs: ttl, acknowledged: false, count: 1, el: null, marker: null };
@@ -207,8 +235,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       if (input.groupKey) byGroup.set(input.groupKey, a);
       if (inGame()) {
         a.el = build(a);
-        list.prepend(a.el);
-        trimFeed();
+        place(a);
       }
     }
     if (input.tiles && input.tiles.length) ctx.globe.setTileMarks?.(`alert:${a.id}`, input.tiles, input.severity === 'info' ? 0x3fd0ff : input.severity === 'warning' ? 0xffb53d : 0xff4a4a, true);
@@ -378,7 +405,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     const now = performance.now();
     const dMs = Math.min(1000, now - lastMs);
     lastMs = now;
-    const paused = view().speed === 0 && ctx.app.state === 'playing';
+    const paused = (view().speed === 0 && ctx.app.state === 'playing') || holding();
+    if (held.length && !holding()) flushHeld();
     for (const a of all) {
       if (!a.el || a.acknowledged) continue;
       if (!paused && Number.isFinite(a.leftMs)) {
@@ -462,6 +490,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     }
     all.length = 0;
     byGroup.clear();
+    held.length = 0;
+    holdSince = -1;
     list.replaceChildren();
     markersEl.replaceChildren();
     hideBanner();
