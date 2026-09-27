@@ -9,7 +9,7 @@
 
 import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
-import { HUMAN_ID, MAP_W, DEFAULT_START_WORLD_TIME, STRUCTURE_DEFS } from '../../shared/constants.ts';
+import { HUMAN_ID, MAP_W, DEFAULT_START_WORLD_TIME, STRUCTURE_DEFS, upgradeTicks } from '../../shared/constants.ts';
 import { latLonToTile } from '../../shared/geo.ts';
 import { StructureType as S, UnitType as U, UnitState } from '../../shared/types.ts';
 
@@ -107,6 +107,9 @@ await scenario('build-costs-and-upgrade', (note) => {
   run(g, STRUCTURE_DEFS[S.City].buildTicks + 2);
   expect(s.built >= 1, 'construction finishes');
   expect(g.issue(HUMAN_ID, { type: 'upgrade', structureId: s.id }), 'upgrade');
+  // v2 (§7.6): an upgrade takes upgradeTicks; the level changes when it finishes.
+  expect(s.level === 1, 'still level 1 while upgrading');
+  run(g, upgradeTicks(S.City) + 2);
   expect(s.level === 2, 'level 2');
   note(`city cost ${c1} -> ${c2}; level ${s.level}`);
 });
@@ -173,6 +176,9 @@ await scenario('warship-sinks-transport', (note) => {
   g.applyDebug({ type: 'spawnUnit', unit: U.Warship, owner: a.id, tile: T(39.0, 1.5), targetTile: -1 });
   a.troops = 200_000;
   expect(g.issue(a.id, { type: 'boatAttack', targetTile: T(39.47, -0.38), ratio: 0.2 }) || true, 'boat');
+  // v2 (§7.5): a warship engages on patrol or blockade; it patrols the channel between the coast and Mallorca.
+  const ws = [...g.unitMap.values()].find((u) => u.type === U.Warship && u.owner === a.id);
+  expect(ws && g.issue(a.id, { type: 'unitOrder', unitIds: [ws.id], order: 'patrol', tile: T(39.4, 1.5), targetId: 0 }), 'warship patrol');
   h.troops = 300_000;
   expect(g.issue(HUMAN_ID, { type: 'boatAttack', targetTile: T(39.6, 3.0), ratio: 0.2 }), 'human invasion');
   let sunk = false;
@@ -221,16 +227,19 @@ await scenario('armored-division', (note) => {
   claim(g, HUMAN_ID, MADRID, 30);
   claim(g, a.id, T(40.4, 3.5), 30);
   g.addGold(HUMAN_ID, 3_000_000);
-  g.applyDebug({ type: 'spawnStructure', structure: S.ArmyBase, owner: HUMAN_ID, tile: T(40.4, -1.5), level: 1 });
+  // The second claim overlaps the first: the border ends up near 3.4 W, so the base goes on the human side of it.
+  g.applyDebug({ type: 'spawnStructure', structure: S.ArmyBase, owner: HUMAN_ID, tile: T(40.4, -4.5), level: 1 });
   expect(g.issue(HUMAN_ID, { type: 'buildUnit', unit: U.ArmoredDivision, structureId: -1 }), 'build tank division');
-  run(g, 60);
+  run(g, 110); // v2: production takes time at the base (§7.6)
   const tank = [...g.unitMap.values()].find((u) => u.type === U.ArmoredDivision);
   expect(tank, 'division exists');
   h.troops = 300_000;
   a.troops = 150_000;
   war(g, HUMAN_ID, a.id);
-  expect(g.issue(HUMAN_ID, { type: 'deployArmor', unitId: tank.id, targetTile: T(40.4, 2) }), 'deploy');
-  g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.5, tile: T(40.4, 1) });
+  // v2 (§7.4): the division attaches to the front sector it is sent to (≤ 150 km past the border).
+  const front = T(40.4, -3.0);
+  expect(g.issue(HUMAN_ID, { type: 'unitOrder', unitIds: [tank.id], order: 'attach', tile: front, targetId: 0 }), 'attach to the front');
+  g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.5, tile: front });
   const before = a.tiles;
   run(g, 250);
   note(`tank at (${tank.x.toFixed(1)}, ${tank.y.toFixed(1)}) hp ${tank.hp.toFixed(0)}; defender tiles ${before} -> ${a.tiles}`);
@@ -252,12 +261,19 @@ await scenario('air-war', (note) => {
   expect(g.issue(HUMAN_ID, { type: 'buildUnit', unit: U.Bomber, structureId: -1 }), 'bomber');
   expect(g.issue(HUMAN_ID, { type: 'buildUnit', unit: U.DroneSwarm, structureId: -1 }), 'drones');
   expect(g.issue(a.id, { type: 'buildUnit', unit: U.FighterSquadron, structureId: -1 }), 'enemy fighters');
-  run(g, 80);
+  run(g, 150); // v2: production takes time at the airbase and the queue is serial (bomber 100 + drones 40 ticks, §7.6)
   const bomber = [...g.unitMap.values()].find((u) => u.type === U.Bomber && u.owner === HUMAN_ID);
   const drones = [...g.unitMap.values()].find((u) => u.type === U.DroneSwarm && u.owner === HUMAN_ID);
   expect(bomber && drones, 'aircraft built');
-  expect(g.issue(HUMAN_ID, { type: 'airStrike', unitId: bomber.id, targetTile: target }), 'bomber strike');
-  expect(g.issue(HUMAN_ID, { type: 'airStrike', unitId: drones.id, targetTile: T(47.5, 1.0) }), 'drone strike');
+  // v2 (§7.5): the defender flies a combat air patrol over its factory.
+  const fighters = [...g.unitMap.values()].find((u) => u.type === U.FighterSquadron && u.owner === a.id);
+  expect(fighters && g.issue(a.id, { type: 'unitOrder', unitIds: [fighters.id], order: 'cap', tile: target, targetId: 0 }), 'enemy CAP');
+  // v2 (§7.5): strikes are unit orders; the first strike on a nation raises escalation to L2 and needs confirm.
+  // Drones only strike structures, so they go for a defense post on the way.
+  const post = T(47.5, 1.0);
+  g.applyDebug({ type: 'spawnStructure', structure: S.DefensePost, owner: a.id, tile: post, level: 1 });
+  expect(g.issue(HUMAN_ID, { type: 'unitOrder', unitIds: [bomber.id], order: 'strike', tile: target, targetId: g.structAt[target], confirm: true }), 'bomber strike');
+  expect(g.issue(HUMAN_ID, { type: 'unitOrder', unitIds: [drones.id], order: 'strike', tile: post, targetId: g.structAt[post], confirm: true }), 'drone strike');
   const ev = run(g, 500);
   const combats = eventsOf(ev, 'combat');
   note(`combat: ${[...new Set(combats.map((c) => c.kind))].join(',')}; destroyed units ${eventsOf(ev, 'unitDestroyed').map((e) => e.unit).join(',')}; structures destroyed ${eventsOf(ev, 'structureDestroyed').length}`);
@@ -277,13 +293,15 @@ await scenario('bomber-and-drone-strike', (note) => {
   g.applyDebug({ type: 'spawnStructure', structure: S.Factory, owner: a.id, tile: target, level: 1 });
   expect(g.issue(HUMAN_ID, { type: 'buildUnit', unit: U.Bomber, structureId: -1 }), 'bomber');
   expect(g.issue(HUMAN_ID, { type: 'buildUnit', unit: U.DroneSwarm, structureId: -1 }), 'drones');
-  run(g, 80);
+  run(g, 150); // v2: production takes time at the airbase and the queue is serial (bomber 100 + drones 40 ticks, §7.6)
   const bomber = [...g.unitMap.values()].find((u) => u.type === U.Bomber);
   const drones = [...g.unitMap.values()].find((u) => u.type === U.DroneSwarm);
   a.troops = 500_000;
   const t0 = a.troops;
-  g.issue(HUMAN_ID, { type: 'airStrike', unitId: bomber.id, targetTile: target });
-  g.issue(HUMAN_ID, { type: 'airStrike', unitId: drones.id, targetTile: T(47.0, 1.0) });
+  const post = T(47.0, 1.0);
+  g.applyDebug({ type: 'spawnStructure', structure: S.DefensePost, owner: a.id, tile: post, level: 1 });
+  expect(g.issue(HUMAN_ID, { type: 'unitOrder', unitIds: [bomber.id], order: 'strike', tile: target, targetId: g.structAt[target], confirm: true }), 'bomber strike');
+  expect(g.issue(HUMAN_ID, { type: 'unitOrder', unitIds: [drones.id], order: 'strike', tile: post, targetId: g.structAt[post], confirm: true }), 'drone strike');
   let ev = [];
   let destroyed = false;
   for (let i = 0; i < 700 && !destroyed; i += 10) {
