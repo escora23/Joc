@@ -634,7 +634,7 @@ try {
     await sleep(500);
     const text = await page.locator('.fu-declare-modal').innerText();
     await shot('15a-declare-dialog');
-    check(/podrá empezar en \d+ h|can start in \d+ h/.test(text), `no mobilization line in the dialog: ${text.slice(0, 300)}`);
+    check(/podrá (?:empezar|zarpar) en \d+ h|can (?:start|sail) in \d+ h/.test(text), `no mobilization line in the dialog: ${text.slice(0, 300)}`);
     check(!BAD_TEXT.test(text.replace(/\s+/g, ' ')), 'raw text in the declaration dialog');
     const defender = await page.evaluate((t) => window.__front.ctx.sim.view.owner[t], target);
     const n0 = await countEvents('warDeclared', 'e.aggressor === 1');
@@ -643,7 +643,7 @@ try {
     check(ev, 'no warDeclared after confirming');
     warTarget = ev.target;
     const mob = await page.evaluate(() => window.__front.ctx.sim.view.tick);
-    return `war on ${ev.target} (clicked ${defender}); offensive after tick ${ev.mobilizeUntilTick} (now ${mob}); dialog: «${text.split('\n').find((l) => /empezar|start/.test(l))?.trim()}»`;
+    return `war on ${ev.target} (clicked ${defender}); offensive after tick ${ev.mobilizeUntilTick} (now ${mob}); dialog: «${text.split('\n').find((l) => /empezar|zarpar|start|sail/.test(l))?.trim()}»`;
   });
 
   // A white peace offered at once to the nation we just attacked: nobody is tired yet, so it is refused with a reason
