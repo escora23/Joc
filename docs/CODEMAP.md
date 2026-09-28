@@ -426,6 +426,38 @@ tiles per second, makes wars whiplash.
 * The battle layer should show real units that are there (armor divisions, aircraft over the front) and a pace matching
   the new sim pace.
 
+**Shared local forces** (`src/shared/localForces.ts`, landed for W6/W5, DESIGN_V2 §9.6, §11.5, §14.11)
+* The ONE derivation of "what is really here" for every close view. Pure, deterministic, worker-safe; reads a
+  structural subset of `GameView` (`LocalForcesView`), so `ctx.sim.view` passes as is. No worker protocol change: the
+  client view already mirrors owners, fronts (garrisons, polylines, per-vertex progress near the observation focus),
+  offensives, units, structures, pair states and treaties.
+* `deriveLocalForces(view, x, y, radiusKm, viewer, {alpha?})` (tile coords) and `deriveLocalForcesAt(view, lat, lon,
+  ...)` return `LocalForces`:
+  * `point`: tile, owner, water / navigable, `coastOwner` (territorial waters), `occupied`, `relation` to the viewer
+    (`own|allied|peace|truce|war|unclaimed`), `kind` (`land|territorial|sea`), `incursion` (§9.7);
+  * `owners` (land share per owner) and `waterShare`; `pairs` (state, alliance, open borders among everyone involved);
+    `peaceful`;
+  * `fronts` (nearest first, `frontKey` = nearest): sides a/b, the contact line at sub-tile precision (`lineKm`, local
+    km), nearest point, `advanceBearing` (a → b) and `lineBearing`, `anchorSide`, `windowKm` / `lengthKm`, garrisons
+    and troops per km, momentum, measured km/h;
+  * `sides` (viewer first): `infantry` in soldiers (1 = 25 troops) = `pools.front` (Gf × window / front length / 25,
+    window = line inside radius + 8 km) + `pools.offensive` (offensive troops × window inside its corridor / corridor
+    width / 25) + `pools.rear` (0.15 × troops / tiles × viewed tiles / 25) + `pools.posts` (6 per built defense post
+    within 25 km, plus `atTeams`); `troops`, `troopsPerKm2`, `landShare`; `divisions` (1 tank per 25 % integrity +
+    2 IFVs, real position and heading), `aircraft` (airborne within the radius, fighters whose CAP covers the anchor,
+    drones supporting a local front; 1 jet per third), `ships`, `sams`, `posts`; `source` (i18n key, text via
+    `localSideText()` in `src/shared/localForcesText.ts`);
+  * `units` and `structures`: every real division, ship, train, aircraft, and every structure in view (plus SAMs,
+    radars, airbases and posts whose reach covers the anchor) with lat/lon, east/north km, distance, integrity, owner,
+    level, `rangeKm`, `coversAnchor`.
+* `visibleSplit(forces, budget)`: soldiers per side ∝ infantry, clamped 0.2–0.8 when two sides have troops, never more
+  than the pools hold.
+* Cost ~0.5 ms per call in the browser (iterates units and structures once); call it every 2 real s, not per frame.
+* Test: `npx tsx src/shared/test/localForces.test.ts`. Debug: `__localForces(lat, lon, radiusKm = 30, viewer = 1)`,
+  `__localForces.at(x, y, ...)`, `__localForces.split(f, budget)`, `__localForces.text(side)`.
+* Sub-tile line: `progress` is published only for fronts near the observation focus; elsewhere the line sits on the
+  tile edge (`subTile: false`). Command mode should keep the clock focus on the controlled unit to get it.
+
 **Risks**
 * Front ids flicker today.
 * Fronts are only computed while an attack is running, so there is nothing for "at war but quiet" borders.

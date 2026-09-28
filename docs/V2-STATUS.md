@@ -147,6 +147,11 @@ Stage 3, beside W6, after both W3 and W4. Read DESIGN_V2 §9 (all), §2.2 (sub-t
 
 ## W6-battle-clarity: brief
 
+**Landed (shared local forces):** `src/shared/localForces.ts` with `deriveLocalForces()` / `deriveLocalForcesAt()` /
+`visibleSplit()` per §14.11, its unit test (`npx tsx src/shared/test/localForces.test.ts`), `window.__localForces` and
+the texts in `src/shared/localForcesText.ts`; API in docs/CODEMAP.md §6. W6's first commit is done; W5 imports it at
+its step 6 and must not write a second derivation.
+
 Stage 3, beside W5, after both W3 and W4. Read DESIGN_V2 §11 (all), §10.12, §2.2 (observation time), §4.3-4.5 (corridors, measured km/h, sub-tile progress), §14.2, §14.5, §14.11 and §16.7. Rows F11, E01, E03.
 
 **FIRST commit:** src/shared/localForces.ts with deriveLocalForces(view, x, y, radiusKm, viewer) and visibleSplit(forces, budget), per §14.11:
