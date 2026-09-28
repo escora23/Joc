@@ -1,6 +1,7 @@
 // FRONT ULTRA — W3 browser verification (diplomacy, alerts, crisis, auto-pause, texts). Test tooling only.
 //
 //   node tools/w3-verify.mjs [--url http://127.0.0.1:5313/] [--out shots/W3-diplomacy-alerts-ux/verify] [--lang es|en|both]
+//   (serve with tools/vite.nowatch.config.mjs so no HMR reload hits the page mid-run)
 //
 // Drives the real game in Chromium on a staged mid-game (Madrid, Normal, 24 nations; the AI's actions are staged with
 // the sim's debug actions — the same code paths the AI uses — so each case happens on demand) and measures what the

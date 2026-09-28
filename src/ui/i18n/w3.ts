@@ -829,7 +829,7 @@ export const enW3: Record<string, string> = {
   'place.yourCapital': 'your capital',
   'place.besideCapital': 'next to {from}',
   'place.capitalIs': 'your capital, {place}',
-  'place.capitalNear': 'your capital near {place}',
+  'place.capitalNear': 'your capital, near {place}',
   'front.nameAt': 'Front {where}',
   'place.inCountry': 'in {country}',
   'place.atSea': 'at sea',

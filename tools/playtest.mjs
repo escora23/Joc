@@ -17,6 +17,8 @@
 //
 // Usage: node tools/playtest.mjs [--url http://127.0.0.1:5190/] [--out shots/playtest] [--stage2]
 // Exit code 0 when every step passed and the console had no errors.
+// Serve the game with tools/vite.nowatch.config.mjs: a normal dev server reloads the page (HMR) whenever another agent
+// or editor saves a file, which destroys the page mid-step and fails the remaining steps.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
