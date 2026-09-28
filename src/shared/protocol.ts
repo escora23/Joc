@@ -306,6 +306,8 @@ export interface TickUpdate {
   winner?: number;
   /** Worker-side cost of the ticks in this update (ms), for the debug overlay. */
   tickMs?: number;
+  /** Debug: wall ms of the worker's previous loop (all work in it) and the longest since the last update. */
+  loopMs?: number;
   // --- v2 (W1) ---
   /** The clock driving the world (always present). */
   clock: ClockView;

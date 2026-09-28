@@ -30,6 +30,8 @@ export function esc(s: string): string {
 
 const CSS = /* css */ `
 .fu-cmd-obj, .fu-cmd-mission, .fu-cmd-help, .fu-cmd-intro { display: none !important; }
+/* In command mode the strategic alert feed is replaced by the command strip (top centre). */
+body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important; }
 .fu-cmdx-labels { position: absolute; inset: 0; width: 100%; height: 100%; }
 .fu-cmdx-info { top: 1rem; left: 1rem; padding: 0.6rem 0.9rem 0.65rem; min-width: 17rem; max-width: 27rem; }
 .fu-cmdx-info .u { font: 700 1.02rem/1.2 var(--fu-font-display, sans-serif); letter-spacing: 0.06em; text-transform: uppercase; }
@@ -189,6 +191,7 @@ export class CommandOverlay {
 
   show(kind: CommandKind): void {
     this.root.classList.remove('fu-cmd-hidden');
+    document.body.classList.add('fu-cmd-on');
     this.alerts.innerHTML = '';
     this.alertList = [];
     this.debrief.classList.remove('show');
@@ -202,6 +205,7 @@ export class CommandOverlay {
 
   hide(): void {
     this.root.classList.add('fu-cmd-hidden');
+    document.body.classList.remove('fu-cmd-on');
     this.closeDialog(-1);
   }
 

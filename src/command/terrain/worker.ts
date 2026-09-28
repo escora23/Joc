@@ -7,6 +7,7 @@
 import { buildLocalHeightfield } from '../../data/heightfield';
 import type { LocalHeightfieldOptions, WorldAux } from '../../data/types';
 import type { WorldData } from '../../shared/types';
+import { buildChunkMesh, type ChunkMesh } from './mesh';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -21,6 +22,8 @@ export interface ChunkRequest {
   sizeKm: number;
   res: number;
   opts: LocalHeightfieldOptions;
+  /** Also build the render mesh arrays for the inner grid (res − 2·pad samples of `size` m) with a skirt. */
+  mesh?: { pad: number; size: number; skirt: number };
 }
 
 export interface ChunkReply {
@@ -34,6 +37,7 @@ export interface ChunkReply {
   tint: Uint8Array;
   minHeight: number;
   maxHeight: number;
+  mesh?: ChunkMesh;
 }
 
 self.onmessage = (ev: MessageEvent) => {
@@ -49,11 +53,14 @@ self.onmessage = (ev: MessageEvent) => {
     const t0 = performance.now();
     try {
       const hf = buildLocalHeightfield(world, aux, r.lat, r.lon, r.sizeKm, r.res, r.opts);
+      const mesh = r.mesh ? buildChunkMesh(hf, r.res, r.mesh.pad, r.mesh.size, r.mesh.skirt) : undefined;
       const reply: ChunkReply = {
         type: 'chunk', id: r.id, ms: performance.now() - t0, heights: hf.heights, water: hf.water, splatA: hf.splatA,
-        splatB: hf.splatB, tint: hf.tint, minHeight: hf.minHeight, maxHeight: hf.maxHeight,
+        splatB: hf.splatB, tint: hf.tint, minHeight: hf.minHeight, maxHeight: hf.maxHeight, mesh,
       };
-      self.postMessage(reply, [reply.heights.buffer, reply.water.buffer, reply.splatA.buffer, reply.splatB.buffer, reply.tint.buffer]);
+      const tr: Transferable[] = [reply.heights.buffer, reply.water.buffer, reply.splatA.buffer, reply.splatB.buffer, reply.tint.buffer];
+      if (mesh) tr.push(mesh.position.buffer, mesh.normal.buffer, mesh.splatA.buffer, mesh.splatB.buffer, mesh.tint.buffer);
+      self.postMessage(reply, tr);
     } catch (err) {
       self.postMessage({ type: 'error', id: r.id, message: String(err) });
     }

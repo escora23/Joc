@@ -64,6 +64,8 @@ const BORDER_WARN_M = 2000;
 
 /** Internals exposed to shots and the verifier (window.__cmd in every session; not part of the shared contract). */
 export interface CommandInternals {
+  /** The game context (tools: verifier and shots read the sim view through it). */
+  readonly ctx: GameContext;
   readonly world: World;
   readonly fx: Effects;
   readonly hud: CommandHud;
@@ -1354,7 +1356,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       wireIncursionAlerts(ctx);
       const w = world, f = fx, hh = hud, ov = overlay;
       internals = {
-        world: w, fx: f, hud: hh, overlay: ov, scatter, input, ground, civil, forces, frame, controller: null, brain: null, camera,
+        ctx, world: w, fx: f, hud: hh, overlay: ov, scatter, input, ground, civil, forces, frame, controller: null, brain: null, camera,
         atmos: () => atmos,
         get freeze() {
           return freeze;
@@ -1467,7 +1469,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const place = describePlace(ctx.sim.view, ll.lat, ll.lon).text;
         const landText = overlay.infoText ? (overlay.root.querySelector('.fu-cmdx-info .l span:nth-child(2)')?.textContent ?? '') : '';
         overlay.titleCard(unitLabel(p.unitType, unitView()?.serial ?? 0), t('command.title.line', { place, land: landText }));
-        const peaceful = (forces?.log.hostiles ?? 0) === 0 && landOwner === HUMAN_ID && !(forces?.last?.fronts.length);
+        const view = ctx.sim.view;
+        const atWar = view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID);
+        const peaceful = !atWar && (forces?.log.hostiles ?? 0) === 0 && landOwner === HUMAN_ID && !(forces?.last?.fronts.length);
         if (peaceful) setTimeout(() => overlay?.showNotice(t('command.peace.notice'), 7, true), 3600);
       }
       if (controller) {

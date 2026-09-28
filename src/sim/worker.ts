@@ -67,10 +67,13 @@ function postError(message: string, stack?: string): void {
   post({ kind: 'error', message, stack });
 }
 
+let maxLoopMs = 0;
 function postUpdate(ticks: number, tickMs: number, full = false): void {
   if (!game) return;
   const u = game.buildUpdate(ticks, full);
   u.tickMs = tickMs;
+  u.loopMs = maxLoopMs;
+  maxLoopMs = 0;
   u.clock = { ...clock, wallMs: Date.now() };
   post({ kind: 'update', u }, tickUpdateTransferables(u));
 }
@@ -161,6 +164,15 @@ function runTick(g: Game): number {
 }
 
 function loop(): void {
+  const l0 = performance.now();
+  try {
+    loopInner();
+  } finally {
+    maxLoopMs = Math.max(maxLoopMs, performance.now() - l0);
+  }
+}
+
+function loopInner(): void {
   if (!game) return;
   const g = game;
   const now = performance.now();

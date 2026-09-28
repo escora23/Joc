@@ -265,6 +265,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
     // The clock is metadata: expose it as soon as it arrives (a stalled frame must not delay "what clock runs now").
     const at = performance.now();
     if (msg.kind === 'update' && msg.u.clock) view.clock = msg.u.clock;
+    if (msg.kind === 'update' && msg.u.loopMs !== undefined) (view as unknown as { loopMs: number }).loopMs = msg.u.loopMs;
     if (msg.kind === 'update' && api.onArrival) api.onArrival(msg.u, at);
     queue.push({ msg, at });
   }

@@ -4,6 +4,7 @@
 // only keeps a few in flight). Without Worker support the chunks are built on the main thread, one per call.
 
 import { buildLocalHeightfield, getLoadedWorld, getWorldAux } from '../../data';
+import { buildChunkMesh, type ChunkMesh } from './mesh';
 import type { LocalHeightfieldOptions } from '../../data/types';
 import type { ChunkReply } from './worker';
 
@@ -18,6 +19,8 @@ export interface ChunkData {
   /** Worker build time (ms), or main-thread build time without workers. */
   ms: number;
   mainThread: boolean;
+  /** Render arrays when requested (built with the heights, off the main thread). */
+  mesh?: ChunkMesh;
 }
 
 type Pending = { resolve: (d: ChunkData | null) => void };
@@ -90,17 +93,18 @@ export class TerrainClient {
     this.lastMs = m.ms;
     p.resolve({
       heights: m.heights, water: m.water, splatA: m.splatA, splatB: m.splatB, tint: m.tint, minHeight: m.minHeight,
-      maxHeight: m.maxHeight, ms: m.ms, mainThread: false,
+      maxHeight: m.maxHeight, ms: m.ms, mainThread: false, mesh: m.mesh,
     });
   }
 
-  request(lat: number, lon: number, sizeKm: number, res: number, opts: LocalHeightfieldOptions): Promise<ChunkData | null> {
+  request(lat: number, lon: number, sizeKm: number, res: number, opts: LocalHeightfieldOptions, mesh?: { pad: number; size: number; skirt: number }): Promise<ChunkData | null> {
     if (!this.usingWorkers) {
       const t0 = performance.now();
       const hf = buildLocalHeightfield(getLoadedWorld()!, getWorldAux(), lat, lon, sizeKm, res, opts);
       return Promise.resolve({
         heights: hf.heights, water: hf.water, splatA: hf.splatA, splatB: hf.splatB, tint: hf.tint, minHeight: hf.minHeight,
         maxHeight: hf.maxHeight, ms: performance.now() - t0, mainThread: true,
+        mesh: mesh ? buildChunkMesh(hf, res, mesh.pad, mesh.size, mesh.skirt) : undefined,
       });
     }
     const id = this.nextId++;
@@ -109,7 +113,7 @@ export class TerrainClient {
     this.load[wi]++;
     return new Promise((resolve) => {
       this.inFlight.set(id, { resolve });
-      this.workers[wi].postMessage({ type: 'chunk', id, lat, lon, sizeKm, res, opts });
+      this.workers[wi].postMessage({ type: 'chunk', id, lat, lon, sizeKm, res, opts, mesh });
     });
   }
 

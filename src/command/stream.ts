@@ -20,6 +20,7 @@ import type { CommandKind } from '../shared/types';
 import { createTerrainMaterial } from './env/ground';
 import type { LocalFrame } from './frame';
 import { TerrainClient, type ChunkData } from './terrain/client';
+import { buildChunkMesh } from './terrain/mesh';
 
 /** Samples of border around every chunk: keeps the 4× noise lattice aligned between neighbours (see file header). */
 const PAD = 4;
@@ -48,7 +49,7 @@ interface StreamSpec {
 }
 
 export function streamSpec(kind: CommandKind, detail: number): StreamSpec {
-  const nres = detail >= 0.8 ? 129 : detail >= 0.45 ? 97 : 65;
+  const nres = detail >= 0.95 ? 129 : detail >= 0.45 ? 97 : 65;
   if (kind === 'jet') {
     return {
       near: { size: 8000, res: nres, r: 2, skirt: 260 }, mid: { size: 32000, res: 65, r: 3, skirt: 900 },
@@ -82,6 +83,8 @@ interface Chunk {
   maxH: number;
   /** Generation (requests of an old session are dropped). */
   gen: number;
+  /** Inside the drawn ring of its level (it hides the coarser level there). */
+  inRing: boolean;
 }
 
 interface Horizon {
@@ -316,7 +319,9 @@ export class Ground {
       if (performance.now() - t0 > FRAME_BUDGET_MS) break;
     }
     if (this.horizon.data && performance.now() - t0 < FRAME_BUDGET_MS - 2) this.buildHorizon();
-    // 5. Masks.
+    // 5. Masks, and what is drawn: the ring (+1 of margin) of each level; a mid chunk whose whole area is covered by
+    //    built near chunks is not drawn at all (its fragments would all be discarded).
+    this.updateVisibility(ax, az);
     for (const lod of [0, 1] as const) this.updateMask(lod, ax, az);
     // 6. Water depth maps (time-sliced).
     this.updateDepth(ax, az, t0);
@@ -346,7 +351,7 @@ export class Ground {
   private want(lod: 0 | 1, ix: number, iz: number): void {
     const k = `${ix},${iz}`;
     if (this.chunks[lod].has(k)) return;
-    this.chunks[lod].set(k, { lod, ix, iz, state: 'queued', data: null, mesh: null, h: null, minH: 0, maxH: 0, gen: this.gen });
+    this.chunks[lod].set(k, { lod, ix, iz, state: 'queued', data: null, mesh: null, h: null, minH: 0, maxH: 0, gen: this.gen, inRing: false });
   }
 
   private request(c: Chunk): void {
@@ -359,7 +364,7 @@ export class Ground {
     const ll = f.latLonOfAbs((c.ix + 0.5) * L.size, (c.iz + 0.5) * L.size, { lat: 0, lon: 0 });
     const gen = this.gen;
     this.stats.requested++;
-    void this.client.request(ll.lat, ll.lon, sizeKm, padded, { seed: 0, refLat: this.refLat, seamless: true }).then((d) => {
+    void this.client.request(ll.lat, ll.lon, sizeKm, padded, { seed: 0, refLat: this.refLat, seamless: true }, { pad: PAD, size: L.size, skirt: L.skirt }).then((d) => {
       if (gen !== this.gen || !this.chunks[c.lod].has(`${c.ix},${c.iz}`)) return;
       if (!d) {
         c.state = 'queued';
@@ -378,7 +383,7 @@ export class Ground {
     const ll = f.latLonOfAbs(ax, az, { lat: 0, lon: 0 });
     const gen = this.gen;
     this.horizon.loading = true;
-    void this.client.request(ll.lat, ll.lon, H.size / 1000, H.res, { seed: 0, refLat: this.refLat, seamless: true, detail: 0.6 }).then((d) => {
+    void this.client.request(ll.lat, ll.lon, H.size / 1000, H.res, { seed: 0, refLat: this.refLat, seamless: true, detail: 0.6 }, { pad: 0, size: H.size, skirt: 1200 }).then((d) => {
       if (gen !== this.gen) return;
       this.horizon.loading = false;
       if (!d) return;
@@ -412,58 +417,19 @@ export class Ground {
     return a;
   }
 
-  /**
-   * Geometry for an inner res² grid of `size` meters taken from padded data (pad samples of border): positions local
-   * to the chunk centre, normals from the padded heights (continuous across chunks), splat and tint, skirt ring.
-   */
+  /** Geometry from the worker's mesh arrays (positions local to the chunk centre, skirt ring included). */
   private makeGeometry(d: ChunkData, res: number, pad: number, size: number, skirt: number): THREE.BufferGeometry {
-    const P = res + 2 * pad;
-    const R = res + 2;
-    const n = R * R;
-    const pos = new Float32Array(n * 3);
-    const nrm = new Float32Array(n * 3);
-    const sa = new Uint8Array(n * 4), sb = new Uint8Array(n * 4), tn = new Uint8Array(n * 3);
-    const cell = size / (res - 1);
-    const H = d.heights;
-    const inv2 = 1 / (2 * cell);
-    for (let gi = 0; gi < R; gi++) {
-      const i = Math.min(res - 1, Math.max(0, gi - 1));
-      const skirtRow = gi === 0 || gi === R - 1;
-      for (let gj = 0; gj < R; gj++) {
-        const j = Math.min(res - 1, Math.max(0, gj - 1));
-        const skirtV = skirtRow || gj === 0 || gj === R - 1;
-        const pi = i + pad, pj = j + pad;
-        const k = pi * P + pj;
-        let h = H[k];
-        if (h < -60) h = -60;
-        const v = gi * R + gj;
-        pos[v * 3] = -size / 2 + j * cell;
-        pos[v * 3 + 1] = skirtV ? h - skirt : h;
-        pos[v * 3 + 2] = -size / 2 + i * cell;
-        const hl = Math.max(-60, H[k - 1]), hr = Math.max(-60, H[k + 1]), hu = Math.max(-60, H[k - P]), hd = Math.max(-60, H[k + P]);
-        const nx = -(hr - hl) * inv2, nz = -(hd - hu) * inv2;
-        const il = 1 / Math.sqrt(nx * nx + 1 + nz * nz);
-        nrm[v * 3] = nx * il;
-        nrm[v * 3 + 1] = il;
-        nrm[v * 3 + 2] = nz * il;
-        for (let c = 0; c < 4; c++) {
-          sa[v * 4 + c] = d.splatA[k * 4 + c];
-          sb[v * 4 + c] = d.splatB[k * 4 + c];
-        }
-        tn[v * 3] = d.tint[k * 3];
-        tn[v * 3 + 1] = d.tint[k * 3 + 1];
-        tn[v * 3 + 2] = d.tint[k * 3 + 2];
-      }
-    }
+    const m = d.mesh ?? buildChunkMesh(d, res + 2 * pad, pad, size, skirt);
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-    g.setAttribute('splatA', new THREE.BufferAttribute(sa, 4, true));
-    g.setAttribute('splatB', new THREE.BufferAttribute(sb, 4, true));
-    g.setAttribute('tint', new THREE.BufferAttribute(tn, 3, true));
+    g.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
+    g.setAttribute('splatA', new THREE.BufferAttribute(m.splatA, 4, true));
+    g.setAttribute('splatB', new THREE.BufferAttribute(m.splatB, 4, true));
+    g.setAttribute('tint', new THREE.BufferAttribute(m.tint, 3, true));
     g.setIndex(this.indexFor(res));
     g.boundingBox = new THREE.Box3(new THREE.Vector3(-size / 2, d.minHeight - skirt, -size / 2), new THREE.Vector3(size / 2, d.maxHeight + 5, size / 2));
     g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());
+    d.mesh = undefined;
     return g;
   }
 
@@ -511,6 +477,40 @@ export class Ground {
     this.depthDirty[1] = true;
   }
 
+  private updateVisibility(ax: number, az: number): void {
+    const N = this.spec.near, M = this.spec.mid;
+    const ncx = Math.floor(ax / N.size), ncz = Math.floor(az / N.size);
+    for (const c of this.chunks[0].values()) {
+      const inRing = Math.abs(c.ix - ncx) <= N.r + 1 && Math.abs(c.iz - ncz) <= N.r + 1;
+      if (inRing !== c.inRing) this.maskDirty[0] = true;
+      c.inRing = inRing;
+      if (c.mesh) c.mesh.visible = inRing;
+    }
+    const mcx = Math.floor(ax / M.size), mcz = Math.floor(az / M.size);
+    const k = Math.round(M.size / N.size);
+    for (const c of this.chunks[1].values()) {
+      if (!c.mesh) continue;
+      const inRing = Math.abs(c.ix - mcx) <= M.r + 1 && Math.abs(c.iz - mcz) <= M.r + 1;
+      if (inRing !== c.inRing) this.maskDirty[1] = true;
+      c.inRing = inRing;
+      let vis = inRing;
+      if (vis) {
+        let covered = true;
+        for (let dz = 0; dz < k && covered; dz++) {
+          for (let dx = 0; dx < k; dx++) {
+            const n = this.chunks[0].get(`${c.ix * k + dx},${c.iz * k + dz}`);
+            if (!n || n.state !== 'built' || !n.mesh?.visible) {
+              covered = false;
+              break;
+            }
+          }
+        }
+        if (covered) vis = false;
+      }
+      c.mesh.visible = vis;
+    }
+  }
+
   private updateMask(lod: 0 | 1, ax: number, az: number): void {
     const L = lod === 0 ? this.spec.near : this.spec.mid;
     const cx = Math.floor(ax / L.size) - MASK_N / 2, cz = Math.floor(az / L.size) - MASK_N / 2;
@@ -528,7 +528,7 @@ export class Ground {
     const a = t.image.data as Uint8Array;
     a.fill(0);
     for (const c of this.chunks[lod].values()) {
-      if (c.state !== 'built') continue;
+      if (c.state !== 'built' || !c.inRing) continue;
       const i = c.ix - cx, k = c.iz - cz;
       if (i < 0 || k < 0 || i >= MASK_N || k >= MASK_N) continue;
       a[k * MASK_N + i] = 255;
@@ -542,7 +542,8 @@ export class Ground {
   private chunkAt(lod: 0 | 1, ax: number, az: number): Chunk | null {
     const L = lod === 0 ? this.spec.near : this.spec.mid;
     const c = this.chunks[lod].get(`${Math.floor(ax / L.size)},${Math.floor(az / L.size)}`);
-    return c && c.state === 'built' ? c : null;
+    // Only what is drawn: a built chunk outside the ring is hidden and the coarser level shows there.
+    return c && c.state === 'built' && c.inRing ? c : null;
   }
 
   /** Terrain height (m ASL, may be < 0 under water) at scene x (east), z (south): the finest built level. */
