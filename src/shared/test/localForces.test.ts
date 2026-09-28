@@ -207,6 +207,10 @@ near(f3.sides.find((s) => s.owner === 2)!.infantry, sA.infantry, 1e-9, 'pools do
   near(fl.line!.bearing, (3 * Math.PI) / 2, 1e-6, 'axis bearing (west)');
   near(fl.line!.kmh, 2, 1e-9, 'line speed');
   ok(fl.lineKm.every((v, i) => i % 2 === 1 || Math.abs(v - lineE) < 1e-6), 'the vertices inside the window lie on the line');
+  // A reading 2 ticks old on the offensive's axis is carried to the view's tick at its own speed (2 km/h = 0.2 km/tick).
+  const older: LocalForcesFront = { ...withLine, line: { ...withLine.line!, tick: 1232, focus: false } };
+  const fo = deriveLocalForces({ ...view, fronts: [older] }, AX, AY, R, 1).fronts[0];
+  near(fo.line!.offsetKm, -lineE + 0.4, 1e-6, 'an older reading carried to the view tick');
   // Beyond its window (along the line) the published line does not apply.
   const beyond = deriveLocalForces({ ...view, fronts: [withLine] }, AX, 200 - (75 + 12) / TILE_KM - 1, R, 1).fronts[0];
   ok(!!beyond && !beyond.line, 'no published line beyond its window');

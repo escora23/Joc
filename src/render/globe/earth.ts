@@ -48,6 +48,11 @@ export interface PlanetUniforms {
   uMaskMode: { value: number };
   /** 1 during the spawn phase: free land glows with a slow pulse (§10.13). */
   uSpawn: { value: number };
+  /**
+   * W6: where the ground battle's terrain patch lies (unit direction of its centre, cos of its angular radius; w > 1 =
+   * none): the globe is not drawn there, so its smoother relief never pokes through the battlefield at grazing views.
+   */
+  uBattleHole: { value: THREE.Vector4 };
 }
 
 export function createPlanetUniforms(): PlanetUniforms {
@@ -71,6 +76,7 @@ export function createPlanetUniforms(): PlanetUniforms {
     uCloudK: { value: new THREE.Vector4(1, 1, 1, 1) },
     uMaskMode: { value: 0 },
     uSpawn: { value: 0 },
+    uBattleHole: { value: new THREE.Vector4(0, 1, 0, 2) },
   };
 }
 
@@ -241,6 +247,7 @@ vec3 flashUntone(vec3 d) {
   return max(FL_INV_IN * vec3(flashInvRrt(u.r), flashInvRrt(u.g), flashInvRrt(u.b)) * 0.6, 0.0);
 }
 uniform float uSpawn;
+uniform vec4 uBattleHole;
 uniform vec4 uScars[MAX_SCARS];
 uniform int uScarCount;
 uniform vec4 uPatchCut;
@@ -336,6 +343,8 @@ void main() {
     if (abs(lat - uPatchCut.x) < uPatchCut.z && abs(dl) < uPatchCut.w) discard;
   }
 #endif
+  // The ground battle's own terrain covers this disc (W6).
+  if (dot(up, uBattleHole.xyz) > uBattleHole.w) discard;
 
   vec2 uv = vUv;
   vec2 uvT = vec2(uv.x, 1.0 - uv.y);

@@ -74,6 +74,8 @@ export interface BattleUniforms {
   uFieldRot: THREE.IUniform<THREE.Vector2>;
   /** 0..1 strength of the outer rim dissolve (0 while the camera is so low that the rim is beyond the horizon). */
   uRimK: THREE.IUniform<number>;
+  /** Territory fill on the battlefield (0 with the camera low over it: the banners say whose land it is; 1 from ~5 km up). */
+  uTerrK: THREE.IUniform<number>;
 }
 
 export function createBattleUniforms(): BattleUniforms {
@@ -123,6 +125,7 @@ export function createBattleUniforms(): BattleUniforms {
     uGroundSoft: { value: 1 },
     uFieldRot: { value: new THREE.Vector2(1, 0) },
     uRimK: { value: 1 },
+    uTerrK: { value: 1 },
   };
 }
 

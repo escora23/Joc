@@ -151,6 +151,13 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
     doom,
   );
   let lastDay = -1, lastHour = -1, lastChip = '', lastMode = '';
+  // A language change repaints the day label, the hour tip and the clock chip at once (even paused, when nothing ticks).
+  ctx.bus.on('languageChanged', () => {
+    lastDay = -1;
+    lastHour = -1;
+    lastChip = '';
+    lastMode = '';
+  });
   let dayTip = '', chipTip = '';
   tip(clock, () => ({ title: t('tb.day.title'), text: dayTip }));
   tip(chip, () => ({ title: t('tb.clock.title'), text: chipTip, lines: [t('tb.clock.air'), t('tb.clock.crisis')] }));

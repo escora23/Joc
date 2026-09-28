@@ -136,6 +136,24 @@ Leópolis|Lviv|49.84|24.03|UKR|2
 Dnipró|Dnipro|48.46|35.05|UKR|2
 Donetsk||48.02|37.80|UKR|3
 Sebastopol|Sevastopol|44.62|33.52|UKR|3
+Zaporiyia|Zaporizhzhia|47.84|35.14|UKR|2
+Poltava||49.59|34.55|UKR|3
+Sumy||50.91|34.80|UKR|3
+Chernígov|Chernihiv|51.49|31.29|UKR|3
+Cherkasy||49.44|32.06|UKR|3
+Kremenchuk||49.07|33.42|UKR|3
+Krivói Rog|Kryvyi Rih|47.91|33.39|UKR|3
+Mykolaiv||46.97|31.99|UKR|3
+Jersón|Kherson|46.64|32.62|UKR|3
+Vínnytsia|Vinnytsia|49.23|28.47|UKR|3
+Zhitómir|Zhytomyr|50.25|28.66|UKR|3
+Kropivnitski|Kropyvnytskyi|48.51|32.26|UKR|3
+Lugansk|Luhansk|48.57|39.31|UKR|3
+Mariúpol|Mariupol|47.10|37.55|UKR|3
+Kursk||51.73|36.19|RUS|3
+Bélgorod|Belgorod|50.60|36.59|RUS|3
+Briansk|Bryansk|53.24|34.36|RUS|3
+Oriol|Oryol|52.97|36.07|RUS|3
 Brest||52.10|23.69|BLR|3
 Gómel|Gomel|52.44|30.98|BLR|3
 Estambul|Istanbul|41.01|28.98|TUR|2

@@ -212,6 +212,21 @@ float territoryMinFill(vec3 ground, vec3 owner, float t) {
 `;
 
 /**
+ * Aerial perspective strength by the camera's altitude above sea level (km), shared by the globe and the ground battle
+ * so their haze always matches: full from space; thinned to 0.3 over land views from ~80 km (the ground reads through
+ * the short column of air under the camera); and full again from inside the lower atmosphere (below ~2 km, W6), where
+ * the view runs along the ground through tens of km of air and far land fades into haze as it does to the eye (without
+ * it the land 20-60 km away reads as a flat, over-bright plane).
+ */
+export function aerialHazeK(altKm: number, lowAir = true): number {
+  const t = (a: number, b: number, x: number) => {
+    const u = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return u * u * (3 - 2 * u);
+  };
+  return Math.min(1, 0.3 + 0.7 * t(80, 3000, altKm) + (lowAir ? 0.7 * (1 - t(2, 8, altKm)) : 0));
+}
+
+/**
  * Base fill strength by camera altitude (DESIGN_V2 §10.1), log-interpolated: ≥ 6,000 km 0.55; 1,500 km 0.45;
  * 300 km 0.35; then lighter below 100 km so the ground detail reads through (§10.11): 100 km 0.27, 40 km 0.19,
  * ≤ 10 km 0.13 (owned land stays ≥ 8 ΔE from the bare ground). Add 0.05 for the human's land and 0.08 under the hover.

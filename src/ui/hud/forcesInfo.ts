@@ -7,7 +7,7 @@
 
 import type { HudShared } from './shared';
 import { unitLabel } from './news';
-import { describeXY } from '../places';
+import { describeXY, frontPlace } from '../places';
 import {
   ARMOR_RAIL_KMH, BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
   DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HUMAN_ID,
@@ -86,6 +86,10 @@ export function frontName(hs: HudShared, key: number): string {
   if (!f) return '';
   const p = describeXY(hs.ctx.sim.view, f.x, f.y);
   if (p.named && p.name !== t('place.yourCapital')) return t('front.name', { place: p.name });
+  // W6: a front is hundreds of km long — name it by the place nearest to any point of its line, or by the direction
+  // from the nearest city, before falling back to a bearing from the capital.
+  const fp = frontPlace(f);
+  if (fp) return fp.dir ? t('front.nameDir', { place: fp.name, dir: fp.dir }) : t('front.name', { place: fp.name });
   return t('front.nameAt', { name: p.name, where: p.text });
 }
 

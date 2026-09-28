@@ -84,3 +84,9 @@
   background: rgba(6, 11, 18, 0.78); border-left: 0.45rem solid var(--c); font: 700 0.78rem var(--fu-font-cond); letter-spacing: 0.08em; text-transform: uppercase; color: #fff;
   box-shadow: 0 0.2rem 0.8rem rgba(0, 0, 0, 0.5); will-change: transform; }
 .fu-bbanner::after { content: ''; position: absolute; left: -0.45rem; top: 100%; width: 2px; height: 1.6rem; background: var(--c); }
+/* A real division on the battlefield: its name over its tanks, in its nation's colour (W6). */
+.fu-bdiv { --c: #888; position: absolute; left: 0; top: 0; padding: 0.08rem 0.4rem; background: rgba(6, 11, 18, 0.72); border-bottom: 2px solid var(--c);
+  font: 600 0.68rem var(--fu-font-cond); letter-spacing: 0.04em; color: #e8eef5; white-space: nowrap; will-change: transform; }
+.fu-bdiv::after { content: ''; position: absolute; left: 50%; top: 100%; width: 1px; height: 0.4rem; background: var(--c); }
+.fu-bdiv.is-edge { background: rgba(6, 11, 18, 0.86); color: #cfd8e3; }
+.fu-bdiv.is-edge::after { display: none; }

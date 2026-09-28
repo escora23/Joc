@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import type { CameraState, FrameInfo, GameContext, GlobeApi } from '../../shared/api';
 import { EARTH_RADIUS_KM, RELIEF_EXAGGERATION, TOPO_MAX_METERS } from '../../shared/constants';
-import { latLonToTile, sunDirection, surfaceRadius, vec3ToLatLon } from '../../shared/geo';
+import { latLonToTile, latLonToVec3, sunDirection, surfaceRadius, vec3ToLatLon } from '../../shared/geo';
 import type { QualityProfile } from '../../shared/quality';
 import type { LatLon } from '../../shared/types';
 import { clamp, damp, lerp, smoothstep } from '../../shared/math';
@@ -18,7 +18,7 @@ import { buildSdfFont, type SdfFont } from './font';
 import { createIslandMarkers, type IslandMarkers } from './islands';
 import { createNationLabels, type NationLabels } from './labels';
 import { createAtmosphereLayers, type AtmosphereLayers } from './layers';
-import { territoryFillAmount } from './glsl';
+import { aerialHazeK, territoryFillAmount } from './glsl';
 import { createSpaceBackdrop } from './sky';
 import { createTerritoryLayer } from './territory';
 import { createTileMarks, type TileMarks } from './marks';
@@ -218,7 +218,8 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       // Zoom level for the readability tables: the rig's distance to its target (what the player dials in).
       const zoomKm = ctx.cameraRig.getState(camState).altitudeKm;
       planet.uNormalBoost.value = 0.65 + 0.45 * smoothstep(150, 7000, altKm);
-      planet.uHaze.value = 0.3 + 0.7 * smoothstep(80, 3000, altKm);
+      // (Command mode draws its own ground and air: the low-air haze is for the strategic camera near the ground.)
+      planet.uHaze.value = aerialHazeK(altKm, ctx.app.state !== 'command');
       planet.uFill.value = territoryFillAmount(zoomKm);
       planet.uNeutralK.value = smoothstep(600, 1000, zoomKm);
       planet.uNightFloor.value = lerp(0.1, 0.22, smoothstep(600, 1000, zoomKm));
@@ -305,6 +306,15 @@ export function createGlobe(ctx: GameContext): GlobeApi {
     },
     pickIsland(clientX, clientY) {
       return islands && islands.mesh.visible ? islands.pick(clientX, clientY) : null;
+    },
+    setBattleHole(lat, lon, radiusKm) {
+      const h = planet.uBattleHole.value;
+      if (!(radiusKm > 0)) {
+        h.w = 2;
+        return;
+      }
+      latLonToVec3(lat, lon, 1, h);
+      h.w = Math.cos(radiusKm / EARTH_RADIUS_KM);
     },
     setTerritoryOpacity(v) {
       territoryTarget = clamp(v, 0, 1);

@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { EARTH_RADIUS_KM } from '../../shared/constants';
 import { smoothstep } from '../../shared/math';
 import type { BattleUniforms } from './common';
+import { aerialHazeK } from '../globe/glsl';
 
 const TOP = 1 + 95 / EARTH_RADIUS_KM;
 const HR = 9.0 / EARTH_RADIUS_KM;
@@ -112,7 +113,7 @@ export interface AirState {
 export function updateAir(
   u: BattleUniforms,
   anchorUp: THREE.Vector3, anchorEast: THREE.Vector3, anchorNorth: THREE.Vector3,
-  sunW: THREE.Vector3, camW: THREE.Vector3, altKm: number, out: AirState,
+  sunW: THREE.Vector3, camW: THREE.Vector3, _altKm: number, out: AirState,
 ): void {
   up.copy(anchorUp);
   east.copy(anchorEast);
@@ -141,8 +142,9 @@ export function updateAir(
   const bounce = Math.max(muS, 0) * 0.07 * SUN_E * geo;
   g.set(sky.x * 0.35 + st[0] * bounce * 0.9, sky.y * 0.35 + st[1] * bounce * 0.75, sky.z * 0.35 + st[2] * bounce * 0.5);
 
-  // Aerial perspective at a reference distance toward / away from the sun.
-  const haze = 0.3 + 0.7 * smoothstep(80, 3000, altKm);
+  // Aerial perspective at a reference distance toward / away from the sun, as strong as the globe's around it (the
+  // same function of the camera's real altitude, so the patch never looks clearer or hazier than the globe beyond it).
+  const haze = aerialHazeK((camW.length() - 1) * EARTH_RADIUS_KM);
   // Reference points 8 km from the anchor toward / away from the sun; uFogRef becomes the camera's distance to them,
   // so shaders scale the reference transmittance by (distance / uFogRef) along the real viewing path (from orbit the
   // path to the ground is short in air mass, not 30x an 8 km ground-level path).

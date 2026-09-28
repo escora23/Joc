@@ -21,7 +21,7 @@ import { icon } from '../icons';
 import { openModal, type ModalHandle } from '../modal';
 import { describePlace, describeTile } from '../places';
 import { tip, type TipData } from '../tooltip';
-import { tx } from '../tx';
+import { retranslate, tx } from '../tx';
 import type { HudShared } from './shared';
 import type { AlertInput, AlertSeverity, AutoPauseKind } from '../../shared/events';
 import { FRONT_PRIORITY_WEIGHT, HUMAN_ID, MAP_W } from '../../shared/constants';
@@ -277,7 +277,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
         h('div', { class: 'fu-alert-title' }, h('span', { class: 'fu-alert-t' }, i.title), flags),
         i.body ? h('div', { class: 'fu-alert-body' }, i.body) : null,
         h('div', { class: 'fu-alert-meta fu-mono' }, h('span', { class: 'fu-alert-age' }, ageText(a)), h('span', { class: 'fu-alert-count' }),
-          i.lat !== undefined ? h('span', { class: 'fu-alert-go' }, icon('eye'), t(i.proposalId ? 'alerts.open' : 'alerts.fly')) : i.proposalId ? h('span', { class: 'fu-alert-go' }, icon('inbox'), t('alerts.open')) : null,
+          i.lat !== undefined ? h('span', { class: 'fu-alert-go' }, icon('eye'), tx(i.proposalId ? 'alerts.open' : 'alerts.fly')) : i.proposalId ? h('span', { class: 'fu-alert-go' }, icon('inbox'), tx('alerts.open')) : null,
           prio),
       ),
       close,
@@ -615,6 +615,22 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   }
 
   ctx.bus.on('alert', (e) => raise(e.input));
+  // A language change repaints the entries' buttons, ages and «Prioridad alta» labels (their titles keep the language
+  // they were reported in, like a news feed) and the auto-pause banner's buttons.
+  ctx.bus.on('languageChanged', () => {
+    retranslate(feedEl);
+    retranslate(bannerEl);
+    for (const a of all) {
+      if (!a.el) continue;
+      setText(a.el.querySelector('.fu-alert-age') as HTMLElement, ageText(a));
+      const prio = a.el.querySelector('.fu-alert-prio') as HTMLElement | null;
+      if (prio && (a.input.frontKey || a.input.frontEnemy)) paintPriority(prio, alertFront(a.input));
+    }
+    if (pausedBy) {
+      const key = alertFront(pausedBy.alert.input);
+      if (key) paintPriority(bannerPrio, key);
+    }
+  });
   refreshCount();
 
   (window as unknown as { __fuAlerts?: unknown }).__fuAlerts = {

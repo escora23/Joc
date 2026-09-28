@@ -247,6 +247,11 @@ export interface GlobeApi extends Subsystem {
   setHoverTile(tile: number): void;
   /** Territory overlay opacity 0..1 (0 on the menu). */
   setTerritoryOpacity(v: number): void;
+  /**
+   * W6: leave out the globe's ground within radiusKm of lat/lon, where the ground battle draws its own terrain (so the
+   * globe's smoother relief never shows through it); radiusKm <= 0 restores it.
+   */
+  setBattleHole?(lat: number, lon: number, radiusKm: number): void;
   /** Small-island marker under a screen point (DESIGN_V2 §10.6): the island's tile and its hover line, or null. */
   pickIsland?(clientX: number, clientY: number): { tile: number; label: string } | null;
   /**
@@ -335,10 +340,19 @@ export interface BattleView {
   b: number;
   /** 0..1 visibility of the battle layer. */
   fade: number;
-  /** Banner anchors above each side's line (world coordinates of the strategic scene). */
-  banners: { owner: number; x: number; y: number; z: number }[];
+  /**
+   * Banner anchors above each side's line (world coordinates of the strategic scene): the preferred one (where the
+   * camera looks) and `spots`, alternatives along and behind the line, in order of preference, so the HUD can stand
+   * each banner where it is on screen and clear of every panel.
+   */
+  banners: { owner: number; x: number; y: number; z: number; spots: { x: number; y: number; z: number }[] }[];
   /** True while the line moves continuously (observation time with the sub-tile progress), false when it waits for tiles. */
   lineLive: boolean;
+  /**
+   * The real divisions drawn on the battlefield: unit id, owner, a point above their formation (world) and its
+   * distance from the battle's anchor on the line (km).
+   */
+  divisions: { unitId: number; owner: number; x: number; y: number; z: number; km: number }[];
 }
 
 // =================================================================================================

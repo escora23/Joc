@@ -26,7 +26,7 @@ import { territoryFillAmount } from '../globe/glsl';
 import type { QualityProfile } from '../../shared/quality';
 import { hashString } from '../../shared/rng';
 import { UnitMode, UnitType, type FrontView, type LatLon } from '../../shared/types';
-import { deriveLocalForcesAt, visibleSplit, type LocalForces, type LocalFront } from '../../shared/localForces';
+import { deriveLocalForcesAt, publishedLineOffset, visibleSplit, type LocalForces, type LocalFront } from '../../shared/localForces';
 import { Biome, getWorldAux } from '../../data';
 import { updateAir, type AirState } from './atmo';
 import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, separateTeamColors } from './common';
@@ -56,8 +56,10 @@ const FORCES_RADIUS_KM = 6;
 const DIVISIONS_RADIUS_KM = 50;
 /** Radius (km) of the window the moving line is read in. */
 const LINE_RADIUS_KM = 30;
-/** Time constant (real s) of the displayed line following the sim line (extrapolated at the measured km/h). */
-const LINE_FOLLOW_S = 1.2;
+/** Time constant (real s) over which the drawn line absorbs a small correction (a change of source, a re-read tile line). */
+const LINE_FOLLOW_S = 0.5;
+/** Farther than this from the sim's line (m), the drawn line snaps onto it instead of gliding. */
+const LINE_SNAP_M = 2000;
 
 interface Anchor {
   lat: number;
@@ -89,7 +91,14 @@ export interface BattleShown {
   lineSpeed: number;
   expectedSpeed: number;
   advanceKmh: number;
+  /** The line follows the sim's published line (FrontView.line, T41); else the tile-level contact line. */
   subTile: boolean;
+  /** Times the drawn line snapped onto the sim line (> 2 km apart) since the battle was built. */
+  lineSnaps: number;
+  /** The anchor in continuous tile coords and the battle's advance normal as a compass bearing (verifiers). */
+  anchorX: number;
+  anchorY: number;
+  normalBearing: number;
   clockMode: string;
   /** Line samples taken / with the front found. */
   samples: [number, number];
@@ -155,14 +164,18 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   let pendingAnchor: Anchor | null = null;
   const pendingDir = { x: 0, z: 1 };
   let forced: { lat: number; lon: number; a: number; b: number; dirX: number; dirY: number; key: number } | null = null;
-  // ---- the line from the sim (§11.5): displayed offset along the advance normal, following the sub-tile line ----
-  /** Sim line offset (m along N from the anchor) at the last sample, the game hour of that sample, the extrapolation. */
-  let simShift = 0, simHours = 0, simSpeedMs = 0, simDir = 0, simKmh = 0, simSub = false;
+  // ---- the line from the sim (§11.5, T41): displayed offset along the advance normal N from the anchor ----
   /**
-   * The displayed line glides from where it was to the sim's newest sub-tile line over one tick period (6 real s in
-   * observation time): continuous motion at the real local speed of the front, one tick behind the sim, never ahead.
+   * The sim publishes the front's line near the observation focus as one smoothed depth that moves every tick by exactly
+   * its published speed (FrontView.line). Its readings, in this battle's frame (offset along N in m, speed in m per
+   * tick), are interpolated at the client's drawn tick — the same timeline every unit is drawn on — so the line glides
+   * continuously at the speed the badge and the strip show. Without a published line here, the line stands on the
+   * tile-level contact line where it crosses N through the anchor.
    */
-  let lineFrom = 0, lineTo = 0, lineTick = -1, lineElapsedMs = 0;
+  const lineHist: { tick: number; shift: number; v: number; focus: boolean }[] = [];
+  let simShift = 0, simKmh = 0, simSub = false, tileShift = 0, tileSeen = false;
+  let lineErr = 0, lineInit = false, lineLive = false, lastTarget = 0, lineSnaps = 0;
+  let anchorTX = 0, anchorTY = 0;
   let sampleAcc = 0, divAcc = 0, lastWallMs = 0, samplesTaken = 0, samplesFound = 0, builds = 0;
   let reanchorWhy = '';
   let lineSpeed = 0;
@@ -367,8 +380,15 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     infantry?.clear();
     vehicles?.clear();
     effects?.clear();
+    setHole(0);
     anchor = null;
     front.drift = 0;
+    lineHist.length = 0;
+    lineInit = false;
+    lineLive = false;
+    tileSeen = false;
+    lineErr = 0;
+    lineSnaps = 0;
     shownDivs.length = 0;
     lastLF = null;
     if (battleOwned.size) {
@@ -417,26 +437,76 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     return f ?? null;
   }
   /**
-   * Signed offset (m) of the local front's sub-tile line from the anchor along the battle's advance normal: the MEDIAN
-   * of the offsets of the line's vertices within 45 km (the sim's line is a polyline of 1.5-tile bins; when one tile
-   * falls, one vertex jumps while the front as a whole moves on steadily, and the median follows the front, not the
-   * jump). The nearest point's offset when too few vertices are near.
+   * Tile-level line (no published line here): signed offset (m along N) where the local contact line crosses the
+   * battle's normal through the anchor (the crossing nearest the anchor; the nearest point's projection without one).
    */
-  const offs: number[] = [];
-  function lineOffsetM(f: LocalFront): number {
-    const ne = front.nx, nn = -front.nz;
+  function crossingShiftM(f: LocalFront): number {
     const L = f.lineKm;
-    offs.length = 0;
-    for (let i = 0; i + 1 < L.length; i += 2) {
-      if (Math.hypot(L[i], L[i + 1]) > 45) continue;
-      offs.push((L[i] * ne + L[i + 1] * nn) * 1000);
+    let best = Infinity, bestS = 0;
+    for (let i = 0; i + 3 < L.length; i += 2) {
+      const x0 = L[i] * 1000, z0 = -L[i + 1] * 1000, x1 = L[i + 2] * 1000, z1 = -L[i + 3] * 1000;
+      if (Math.hypot(x1 - x0, z1 - z0) > 60000) continue;
+      const a0 = x0 * front.tx + z0 * front.tz, a1 = x1 * front.tx + z1 * front.tz;
+      if (a0 * a1 > 0) continue;
+      const t = a0 === a1 ? 0 : a0 / (a0 - a1);
+      const s0 = x0 * front.nx + z0 * front.nz, s1 = x1 * front.nx + z1 * front.nz;
+      const sv = s0 + (s1 - s0) * t;
+      if (Math.abs(sv) < best) {
+        best = Math.abs(sv);
+        bestS = sv;
+      }
     }
+    if (best < 45000) return bestS;
     const px = f.nearest.eastKm * 1000, pz = -f.nearest.northKm * 1000;
-    const proj = px * front.nx + pz * front.nz;
-    if (offs.length < 3) return proj;
-    offs.sort((a, b) => a - b);
-    const m = offs.length >> 1;
-    return offs.length % 2 ? offs[m] : (offs[m - 1] + offs[m]) / 2;
+    return px * front.nx + pz * front.nz;
+  }
+  /** Compass bearing of the battle's normal N (local x east, z south). */
+  const normalBearing = (): number => {
+    const b = Math.atan2(front.nx, -front.nz);
+    return b < 0 ? b + 2 * Math.PI : b;
+  };
+  /**
+   * Read the sim's published line for the anchor's front (FrontView.line) into the history, when its window covers the
+   * anchor. A reading that does not continue the previous ones (a new reference, a reload) restarts the history.
+   */
+  function readPublishedLine(): boolean {
+    if (!anchor || !anchor.frontKey) return false;
+    const L = ctx.sim.view.frontByKey.get(anchor.frontKey)?.line;
+    if (!L) return false;
+    const o = publishedLineOffset(L, anchorTX, anchorTY);
+    if (Math.abs(o.alongKm) > L.halfKm + 10) return false;
+    const cosA = Math.max(0.5, Math.cos(o.bearing - normalBearing()));
+    const shift = (o.offsetKm * 1000) / cosA;
+    const v = (L.kmh * 1000) / TICKS_PER_GAME_HOUR / cosA;
+    const last = lineHist[lineHist.length - 1];
+    if (last && last.tick === L.tick) {
+      last.shift = shift;
+      last.v = v;
+      last.focus = L.focus;
+    } else {
+      if (last && (L.tick < last.tick || Math.abs(shift - (last.shift + last.v * (L.tick - last.tick))) > LINE_SNAP_M)) lineHist.length = 0;
+      lineHist.push({ tick: L.tick, shift, v, focus: L.focus });
+      if (lineHist.length > 12) lineHist.shift();
+    }
+    simKmh = L.kmh / cosA;
+    return true;
+  }
+  /**
+   * The published line at drawn tick t: through the readings, extrapolated by a reading's own speed at the ends (past
+   * the newest by at most the interval between readings: every tick at the focus, every 5 on the offensive's axis).
+   */
+  function lineAt(t: number): number {
+    const h = lineHist;
+    const n = h.length;
+    if (t <= h[0].tick) return h[0].shift + h[0].v * Math.max(-2, t - h[0].tick);
+    for (let i = 1; i < n; i++) {
+      if (t <= h[i].tick) {
+        const a = h[i - 1], b = h[i];
+        return a.shift + (b.shift - a.shift) * ((t - a.tick) / Math.max(1e-6, b.tick - a.tick));
+      }
+    }
+    const l = h[n - 1];
+    return l.shift + l.v * Math.min(l.focus ? 1.5 : 6, t - l.tick);
   }
   /** Soldiers per team (0 = side a) from visibleSplit() of the two sides' pools. */
   function splitFor(lf: LocalForces, a: number, b: number): [number, number] {
@@ -461,7 +531,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       front.pushB = 0.3;
     }
   }
-  /** Re-read the sim line (every 0.25 real s): its sub-tile offset, the measured speed and which way it moves. */
+  /** Re-read the local front (every 0.25 real s): the tile-level line, who is pushing, how hot the fighting is. */
   function sampleLine(): void {
     if (!anchor) return;
     const view = ctx.sim.view;
@@ -470,52 +540,43 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     lastLF = lf;
     const f = pickLocalFront(lf, anchor);
     samplesTaken++;
-    if (f) samplesFound++;
-    if (!f) {
-      simSpeedMs = 0;
-      simDir = 0;
-      return;
-    }
-    simShift = lineOffsetM(f);
-    simHours = view.tick / TICKS_PER_GAME_HOUR;
-    if (view.tick !== lineTick) {
-      // A new tick: glide from where the line is drawn now to the new position over the next tick period.
-      lineFrom = front.drift;
-      lineTick = view.tick;
-      lineElapsedMs = 0;
-    }
-    lineTo = simShift;
-    simKmh = f.advanceKmh;
-    simSub = f.subTile;
-    simDir = f.momentum > 0.1 ? 1 : f.momentum < -0.1 ? -1 : 0;
-    // The line moves continuously only when the sim publishes the sub-tile progress (observation time near the focus):
-    // then it is extrapolated between ticks at the measured advance. Otherwise it waits for the next tile.
-    simSpeedMs = simSub && simDir !== 0 ? (f.advanceKmh * 1000) / 3600 : 0;
+    if (!f) return;
+    samplesFound++;
+    tileShift = crossingShiftM(f);
+    tileSeen = true;
     frontIntensity += (f.intensity - frontIntensity) * 0.3;
     activity = Math.min(1, 0.45 + frontIntensity * 0.7);
     setPush(f.momentum);
   }
-  /** Move the displayed line toward the sim line (extrapolated), and the armies with it. */
-  function followLine(realDt: number): void {
+  /**
+   * Put the drawn line on the sim's line (and the armies with it): exactly on the published line when there is one,
+   * gliding off a small correction over half a second, snapping when it is more than 2 km off (also while paused).
+   */
+  function followLine(realDt: number, wallDt: number): void {
     const view = ctx.sim.view;
+    const live = readPublishedLine();
     let target: number;
-    if (simSub) {
-      lineElapsedMs += realDt * 1000;
-      const frac = Math.min(1, lineElapsedMs / Math.max(100, view.clock.tickPeriodMs || 6000));
-      target = lineFrom + (lineTo - lineFrom) * frac;
-    } else {
-      // No sub-tile progress (observation time off or far from the focus): the line waits for the next tile.
-      target = lineTo;
-    }
+    if (live) target = lineAt(view.simTime * TICKS_PER_GAME_HOUR);
+    else if (tileSeen) target = tileShift;
+    else return;
+    simSub = live;
+    simShift = target;
     const prev = front.drift;
-    const k = simSub ? 1 : realDt > 0 ? 1 - Math.exp(-realDt / LINE_FOLLOW_S) : 0;
-    let next = prev + (target - prev) * k;
-    if (simSub) {
-      // Never faster than 1.5x the measured advance (at least 15 m/s): a sudden re-binning of the sim's polyline is
-      // caught up at a believable pace instead of a slide.
-      const vMax = Math.max(15, (1.5 * simKmh * view.clock.rate) / 3.6) * realDt;
-      next = prev + Math.max(-vMax, Math.min(vMax, next - prev));
+    if (!lineInit) {
+      lineInit = true;
+      lineErr = 0;
+    } else if (live !== lineLive || (!live && target !== lastTarget)) {
+      // A change of source, or a re-read tile line: glide from where the line is drawn.
+      lineErr = prev - target;
     }
+    lineLive = live;
+    lastTarget = target;
+    lineErr *= Math.exp(-Math.max(0, wallDt) / LINE_FOLLOW_S);
+    if (Math.abs(prev - target) > LINE_SNAP_M) {
+      lineErr = 0;
+      lineSnaps++;
+    }
+    const next = target + lineErr;
     const d = next - prev;
     lineSpeed = realDt > 0 ? lineSpeed * 0.8 + 0.2 * (d / realDt) : lineSpeed;
     if (Math.abs(d) < 1e-4) return;
@@ -617,6 +678,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       }
     }
     anchor = an;
+    anchorTX = ((an.lon + 180) / 360) * MAP_W;
+    anchorTY = ((90 - an.lat) / 180) * MAP_H;
     setAnchorFrame(an.lat, an.lon);
     const aux = getWorldAux(world);
     const ty = Math.min(MAP_H - 1, Math.max(0, Math.floor(((90 - an.lat) / 180) * MAP_H)));
@@ -642,16 +705,21 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const lfFront = pickLocalFront(lf, an);
     let nX = dirLocalX, nZ = dirLocalZ;
     if (lfFront) {
-      nX = Math.sin(lfFront.advanceBearing);
-      nZ = -Math.cos(lfFront.advanceBearing);
+      // Across the sim's published line where there is one (its axis), else across the front's advance.
+      const b = lfFront.line ? lfFront.line.bearing : lfFront.advanceBearing;
+      nX = Math.sin(b);
+      nZ = -Math.cos(b);
     }
     front.setup(nX, nZ, an.seed % 1000, 6000);
-    simShift = lfFront ? lineOffsetM(lfFront) : 0;
-    simHours = view.tick / TICKS_PER_GAME_HOUR;
-    lineFrom = lineTo = simShift;
-    lineTick = view.tick;
-    lineElapsedMs = 0;
-    front.drift = simShift;
+    // The line starts ON the sim's line: the published one, else the tile-level crossing through the anchor.
+    lineHist.length = 0;
+    lineInit = false;
+    tileSeen = false;
+    if (lfFront) {
+      tileShift = crossingShiftM(lfFront);
+      tileSeen = true;
+    }
+    followLine(0, 0);
     front.rebuild();
     front.apply(uniforms);
     const pa = view.players[an.frontA], pb = view.players[an.frontB];
@@ -871,7 +939,16 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     }
   }
 
+  /** The globe leaves out its ground under the patch while the battlefield is fully shown (radius km, 0 = none). */
+  let holeKm = 0;
+  function setHole(km: number): void {
+    if (km === holeKm && km === 0) return;
+    holeKm = km;
+    if (anchor && km > 0) ctx.globe.setBattleHole?.(anchor.lat, anchor.lon, km);
+    else ctx.globe.setBattleHole?.(0, 0, 0);
+  }
   function deactivate(): void {
+    setHole(0);
     if (battleOwned.size) {
       battleOwned.clear();
       ctx.units.setBattleOwned?.(null);
@@ -889,8 +966,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       frontKey: anchor.frontKey, a: anchor.frontA, b: anchor.frontB,
       infantry: [infantry?.deployed(0) ?? 0, infantry?.deployed(1) ?? 0], split: [splitWanted[0], splitWanted[1]],
       divisions: shownDivs.map((d) => ({ ...d })),
-      lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simDir * simKmh * view.clock.rate) / 3.6 : 0,
-      advanceKmh: simKmh, subTile: simSub, clockMode: view.clock.mode, samples: [samplesTaken, samplesFound], builds, reanchorWhy,
+      lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simKmh * view.clock.rate) / 3.6 : 0,
+      advanceKmh: simKmh, subTile: simSub, lineSnaps, anchorX: anchorTX, anchorY: anchorTY, normalBearing: normalBearing(),
+      clockMode: view.clock.mode, samples: [samplesTaken, samplesFound], builds, reanchorWhy,
     };
   }
 
@@ -934,7 +1012,15 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   }
 
   const bannerL = new THREE.Vector3();
-  const battleView: BattleView = { frontKey: 0, a: 0, b: 0, fade: 0, banners: [{ owner: 0, x: 0, y: 0, z: 0 }, { owner: 0, x: 0, y: 0, z: 0 }], lineLive: false };
+  /** Banner spots per side: along the line around where the camera looks (m) × behind the line (m), in preference order. */
+  const BANNER_ALONG = [0, -1400, 1400, -2800, 2800, -4200, 4200];
+  const BANNER_BACK = [1100, 2300];
+  const nSpots = BANNER_ALONG.length * BANNER_BACK.length;
+  const mkSpots = () => Array.from({ length: nSpots }, () => ({ x: 0, y: 0, z: 0 }));
+  const battleView: BattleView = {
+    frontKey: 0, a: 0, b: 0, fade: 0, lineLive: false, divisions: [],
+    banners: [{ owner: 0, x: 0, y: 0, z: 0, spots: mkSpots() }, { owner: 0, x: 0, y: 0, z: 0, spots: mkSpots() }],
+  };
   const api: BattleApi = {
     get active() {
       return active;
@@ -953,17 +1039,42 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       battleView.a = anchor.frontA;
       battleView.b = anchor.frontB;
       battleView.fade = nearFade;
-      battleView.lineLive = simSub && simDir !== 0;
-      // Each side's banner stands 1.1 km behind its own line where the camera looks, 180 m above the ground.
+      battleView.lineLive = simSub && Math.abs(simKmh) > 0.05;
+      // Each side's banner stands behind its own line, 180 m above the ground: by preference 1.1 km behind it where the
+      // camera looks, else further along or further back (the HUD takes the first spot on screen and clear of panels).
       for (let t = 0; t < 2; t++) {
-        front.toXZ(focusU, t === 0 ? -1100 : 1100, bannerL);
-        bannerL.y = heightAt(bannerL.x, bannerL.z) + 180;
-        bannerL.applyMatrix4(near.matrixWorld);
         const bn = battleView.banners[t];
         bn.owner = t === 0 ? anchor.frontA : anchor.frontB;
-        bn.x = bannerL.x;
-        bn.y = bannerL.y;
-        bn.z = bannerL.z;
+        let k = 0;
+        for (const back of BANNER_BACK) {
+          for (const along of BANNER_ALONG) {
+            const u = Math.max(-front.halfLen * 0.85, Math.min(front.halfLen * 0.85, focusU + along));
+            front.toXZ(u, t === 0 ? -back : back, bannerL);
+            bannerL.y = heightAt(bannerL.x, bannerL.z) + 180;
+            bannerL.applyMatrix4(near.matrixWorld);
+            const sp = bn.spots[k++];
+            sp.x = bannerL.x;
+            sp.y = bannerL.y;
+            sp.z = bannerL.z;
+          }
+        }
+        bn.x = bn.spots[0].x;
+        bn.y = bn.spots[0].y;
+        bn.z = bn.spots[0].z;
+      }
+      // A marker 140 m above each real division's formation (its name reads where its tanks are).
+      const dv = battleView.divisions;
+      dv.length = shownDivs.length;
+      for (let k = 0; k < shownDivs.length; k++) {
+        const sd = shownDivs[k];
+        bannerL.set(sd.drawnX, heightAt(sd.drawnX, sd.drawnZ) + 140, sd.drawnZ).applyMatrix4(near.matrixWorld);
+        const o = dv[k] ?? (dv[k] = { unitId: 0, owner: 0, x: 0, y: 0, z: 0, km: 0 });
+        o.km = Math.hypot(sd.realX, sd.realZ) / 1000;
+        o.unitId = sd.unitId;
+        o.owner = sd.owner;
+        o.x = bannerL.x;
+        o.y = bannerL.y;
+        o.z = bannerL.z;
       }
       return battleView;
     },
@@ -1126,6 +1237,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       active = near.visible;
       uniforms.uFade.value = smoothstep(0, 1, nearFade);
       if (!near.visible) {
+        setHole(0);
         intensity = 0;
         return;
       }
@@ -1135,7 +1247,13 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       // A camera this low sees its horizon well inside the patch: the rim (past the horizon) stays solid.
       // (The coarsest globe mesh sags well below the true sphere between its vertices: there the rim stays solid so no
       // sky shows through its dissolve at grazing angles.)
-      uniforms.uRimK.value = quality.globeDetail <= 0 ? 0 : smoothstep(250, 900, camL.y - heightAt(camL.x, camL.z));
+      const camH = camL.y - heightAt(camL.x, camL.z);
+      uniforms.uRimK.value = quality.globeDetail <= 0 ? 0 : smoothstep(250, 900, camH);
+      uniforms.uTerrK.value = smoothstep(1500, 5000, camH);
+      // Fully shown, the battlefield is the ground: the globe's coarser relief (a smoothed valley floor sits tens of
+      // metres above the real one) must not poke through it at grazing views. Inside the part of the patch that never
+      // dissolves (the rim melts into the globe from 47 km when the camera is high; it stays solid when low).
+      setHole(nearFade > 0.97 && ctx.app.state !== 'command' ? (uniforms.uRimK.value > 0.001 ? 45 : 54) : 0);
       latLonToVec3(camState.lat, camState.lon, 1, focusW);
       focusL.copy(focusW).applyMatrix4(invNear);
       front.coords(focusL.x, focusL.z, focusUV);
@@ -1156,7 +1274,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         divAcc = 0;
         updateDivisions(frame.simAlpha);
       }
-      followLine(wallLive);
+      followLine(wallLive, wall);
       if (bdt > 0) {
         supportFire(bdt);
         battleStep(bdt);

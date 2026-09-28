@@ -9,8 +9,9 @@
 import * as THREE from 'three';
 import { h, setText, toggleClass } from '../dom';
 import { hexToCss } from '../../shared/color';
-import { t } from '../../shared/i18n';
+import { formatNumber, t } from '../../shared/i18n';
 import { frontName } from './forcesInfo';
+import { unitLabel } from './news';
 import { advanceText, combatDayText, isoOf, sidesOf, troopsText } from './frontsInfo';
 import type { HudShared } from './shared';
 
@@ -34,7 +35,10 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
     sub,
   );
   const bannerEls = [h('div', { class: 'fu-bbanner' }), h('div', { class: 'fu-bbanner' })];
-  const banners = h('div', { class: 'fu-bbanners fu-hidden' }, ...bannerEls);
+  // Markers over the real divisions on the battlefield (up to 6): «▣ 1.ª División acorazada · Suiza».
+  const divEls = Array.from({ length: 6 }, () => h('div', { class: 'fu-bdiv' }));
+  const divIds = divEls.map(() => 0);
+  const banners = h('div', { class: 'fu-bbanners fu-hidden' }, ...divEls, ...bannerEls);
   const v = new THREE.Vector3(), vc = new THREE.Vector3();
   let acc = 1;
   // A language change repaints at once (the strip otherwise refreshes 4 times a second).
@@ -89,34 +93,104 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
           setText(bannerEls[k], t(att === b.owner && f && !f.quiet ? 'fr.banner.attacks' : 'fr.banner.defends', { name: hs.name(b.owner) || '—' }));
         }
       }
-      // Banners follow the camera every frame.
+      // Banners follow the camera every frame. Each stands at the first of its spots (behind its side's line) that is
+      // on screen, clear of every HUD panel and of the strip, and not on the other banner.
       const cam = ctx.camera;
       const W = window.innerWidth, H = window.innerHeight;
+      const rects = ctx.ui.getOccludedRects();
+      const sr = el.getBoundingClientRect();
+      let taken: { l: number; r: number; t: number; b: number } | null = null;
       for (let k = 0; k < 2; k++) {
         const b = bv.banners[k];
-        v.set(b.x, b.y, b.z);
-        vc.copy(v).project(cam);
-        const ok = vc.z < 1 && Math.abs(vc.x) < 1.05 && Math.abs(vc.y) < 1.05;
         const e = bannerEls[k];
-        if (!ok) {
-          e.style.display = 'none';
-          continue;
+        const bw = e.offsetWidth || 170, bh = e.offsetHeight || 26;
+        let px = 0, py = 0, found = false;
+        for (const sp of b.spots.length ? b.spots : [b]) {
+          v.set(sp.x, sp.y, sp.z);
+          vc.copy(v).project(cam);
+          if (!(vc.z < 1 && Math.abs(vc.x) < 1.05 && Math.abs(vc.y) < 1.05)) continue;
+          const x = ((vc.x + 1) / 2) * W, y = ((1 - vc.y) / 2) * H;
+          const box = { l: x + 2, r: x + 14 + bw, t: y - 46, b: y - 34 + bh };
+          if (box.l < 4 || box.r > W - 4 || box.t < 4 || box.b > H - 4) continue;
+          const hit = (r: { left: number; right: number; top: number; bottom: number }) =>
+            box.l < r.right && box.r > r.left && box.t < r.bottom && box.b > r.top;
+          if (rects.some(hit) || (sr.width > 0 && hit(sr))) continue;
+          if (taken && box.l < taken.r && box.r > taken.l && box.t < taken.b && box.b > taken.t) continue;
+          px = x;
+          py = y;
+          taken = box;
+          found = true;
+          break;
         }
-        const x = ((vc.x + 1) / 2) * W, y = ((1 - vc.y) / 2) * H;
-        // Never under a HUD panel (alerts, leaderboard, build bar): a banner there would be unreadable.
-        let hidden = false;
-        for (const r of ctx.ui.getOccludedRects()) {
-          if (x + 8 < r.right && x + 170 > r.left && y - 40 < r.bottom && y - 14 > r.top) {
-            hidden = true;
-            break;
-          }
-        }
-        if (hidden) {
+        if (!found) {
           e.style.display = 'none';
           continue;
         }
         e.style.display = '';
-        e.style.transform = `translate(${(x + 8).toFixed(1)}px, ${(y - 40).toFixed(1)}px)`;
+        e.style.transform = `translate(${(px + 8).toFixed(1)}px, ${(py - 40).toFixed(1)}px)`;
+      }
+      // Division markers: where the formation is, when it is on screen and clear of the panels and the banners.
+      const view = ctx.sim.view;
+      const markBoxes: { l: number; r: number; t: number; b: number }[] = [];
+      for (let k = 0; k < divEls.length; k++) {
+        const e = divEls[k];
+        const d = bv.divisions[k];
+        const u = d ? view.units.get(d.unitId) : undefined;
+        if (!d || !u) {
+          e.style.display = 'none';
+          divIds[k] = 0;
+          continue;
+        }
+        if (divIds[k] !== d.unitId) {
+          divIds[k] = d.unitId;
+          e.style.setProperty('--c', hexToCss(view.players[d.owner]?.color ?? 0x888888));
+        }
+        v.set(d.x, d.y, d.z);
+        vc.copy(v).project(cam);
+        const bw = e.offsetWidth || 150, bh = e.offsetHeight || 18;
+        let x = ((vc.x + 1) / 2) * W, y = ((1 - vc.y) / 2) * H;
+        // Off screen (or behind the camera): the marker waits at the edge of the view, on the division's side, with its
+        // bearing and distance, so the player knows where the armour is.
+        const behind = !(vc.z < 1);
+        const inView = !behind && x - bw / 2 > 8 && x + bw / 2 < W - 8 && y - bh - 6 > 8 && y < H - 8;
+        let edge = '';
+        if (!inView) {
+          let dx = vc.x, dy = -vc.y;
+          if (behind) {
+            dx = -dx;
+            dy = Math.abs(dy) + 1;
+          }
+          const m = Math.max(Math.abs(dx) / 0.62, Math.abs(dy) / 0.62, 1e-6);
+          x = W / 2 + (dx / m) * (W / 2);
+          y = H / 2 + (dy / m) * (H / 2);
+          edge = Math.abs(dx) * H > Math.abs(dy) * W * 0.9 ? (dx < 0 ? '◀ ' : '▶ ') : dy < 0 ? '▲ ' : '▼ ';
+        }
+        const text = `${edge}▣ ${unitLabel(u.type, u.serial)} · ${hs.name(d.owner) || '—'}${edge ? ` · ${formatNumber(d.km, 0)} km` : ''}`;
+        if (e.dataset.t !== text) {
+          e.dataset.t = text;
+          setText(e, text);
+        }
+        toggleClass(e, 'is-edge', !!edge);
+        // Above its formation, else a little lower or higher, clear of the panels, the strip, the banners and the other
+        // markers.
+        let placedBox: { l: number; r: number; t: number; b: number } | null = null;
+        for (const dy of [0, 26, -26, 52]) {
+          const box = { l: x - bw / 2, r: x + bw / 2, t: y - bh - 6 + dy, b: y - 6 + dy };
+          const hit = (r: { left: number; right: number; top: number; bottom: number }) =>
+            box.l < r.right && box.r > r.left && box.t < r.bottom && box.b > r.top;
+          if (box.t < 4 || box.b > H - 4) continue;
+          if (rects.some(hit) || (sr.width > 0 && hit(sr)) || bannerEls.some((b) => b.style.display !== 'none' && hit(b.getBoundingClientRect()))) continue;
+          if (markBoxes.some((q) => box.l < q.r && box.r > q.l && box.t < q.b && box.b > q.t)) continue;
+          placedBox = box;
+          break;
+        }
+        if (!placedBox) {
+          e.style.display = 'none';
+          continue;
+        }
+        markBoxes.push(placedBox);
+        e.style.display = '';
+        e.style.transform = `translate(${placedBox.l.toFixed(1)}px, ${placedBox.t.toFixed(1)}px)`;
       }
     },
   };

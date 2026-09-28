@@ -68,6 +68,32 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
 }
 
 /**
+ * A place to name a front by (W6): the nearest place to its middle within 150 km, else the nearest to any point of its
+ * contact line within 150 km, else the nearest place within 450 km of its middle with the compass direction from it
+ * («al NE de Poltava»). Null when nothing is within 450 km (open steppe, desert, ice).
+ */
+export function frontPlace(f: { x: number; y: number; samples: ArrayLike<number> }): { name: string; dir: string | null } | null {
+  const mid = tileXYToLatLon(f.x, f.y);
+  let p = nearestPlace(mid.lat, mid.lon, 150);
+  if (!p) {
+    let best: ReturnType<typeof nearestPlace> = null;
+    for (let i = 0; i + 1 < f.samples.length; i += 2) {
+      const ll = tileXYToLatLon(f.samples[i], f.samples[i + 1]);
+      const q = nearestPlace(ll.lat, ll.lon, 150);
+      if (q && (!best || q.km < best.km)) best = q;
+    }
+    p = best;
+  }
+  if (p) return { name: placeName(p), dir: null };
+  const q = nearestPlace(mid.lat, mid.lon, 450);
+  if (!q) return null;
+  const y = Math.sin((mid.lon - q.lon) * Math.PI / 180) * Math.cos(mid.lat * Math.PI / 180);
+  const x = Math.cos(q.lat * Math.PI / 180) * Math.sin(mid.lat * Math.PI / 180) - Math.sin(q.lat * Math.PI / 180) * Math.cos(mid.lat * Math.PI / 180) * Math.cos((mid.lon - q.lon) * Math.PI / 180);
+  const brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  return { name: placeName(q), dir: t(`place.dir.${DIRS[Math.round(brg / 45) % 8]}`) };
+}
+
+/**
  * The viewer's capital as a noun phrase for the capital alerts: «tu capital, Madrid» (a place within 25 km), «tu
  * capital, cerca de Esmirna» (within 150 km) or «tu capital» — never a nearby town standing in for the capital.
  */

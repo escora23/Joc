@@ -75,6 +75,7 @@ uniform vec4 uSplatInfo2;
 uniform float uHalf;
 uniform float uDebugSplat;
 uniform float uRimK;
+uniform float uTerrK;
 varying vec3 vPos;
 varying vec3 vNrm;
 varying float vRim;
@@ -293,6 +294,10 @@ void main() {
   // Territory: the globe's own fill function (DESIGN_V2 §10.1 / §10.11), so the rim meets the globe without a seam.
   if (vTerr.a > 0.001) {
     float fa = max(vTerr.a, territoryMinFill(alb, vTerr.rgb, 0.07) * min(1.0, vTerr.a * 4.0));
+    // With the camera low over the battlefield the land keeps its own colours (a nation's colour on the fields reads as
+    // paint at eye level; the banners and the strip name the sides); it comes back toward the rim, where the globe's
+    // territory colour takes over.
+    fa *= max(uTerrK, smoothstep(30000.0, 47000.0, length(vPos.xz)));
     alb = territoryFill(alb, vTerr.rgb, fa);
   }
 

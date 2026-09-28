@@ -34,6 +34,72 @@ async function open(shot, params = '') {
   return page;
 }
 const shot = (page, name) => page.screenshot({ path: path.join(out, `${name}.png`), timeout: 300000 });
+
+// Banners and strip as the player sees them: each banner 'clear' only when displayed, inside the viewport and not
+// overlapping any HUD panel (the rects the HUD itself reports) or the strip.
+function bannerState() {
+  const d = window.__battleDebug.shown();
+  const strip = document.querySelector('.fu-bstrip');
+  const sr = strip && !strip.classList.contains('fu-hidden') ? strip.getBoundingClientRect() : null;
+  const rects = [...__front.ctx.ui.getOccludedRects()];
+  if (sr) rects.push(sr);
+  const W = window.innerWidth, H = window.innerHeight;
+  const banners = [...document.querySelectorAll('.fu-bbanner')].map((e) => {
+    const r = e.getBoundingClientRect();
+    let state = 'clear';
+    if (e.style.display === 'none' || e.closest('.fu-hidden')) state = 'hidden';
+    else if (r.left < 0 || r.right > W || r.top < 0 || r.bottom > H) state = 'off-screen';
+    else if (rects.some((q) => r.left < q.right && r.right > q.left && r.top < q.bottom && r.bottom > q.top)) state = 'under a HUD panel';
+    return { text: e.textContent, state };
+  });
+  return { d, strip: strip?.textContent ?? '', stripOn: !!sr, banners };
+}
+
+// The sim's line at the battle's anchor, read from the FrontView alone (the verifier's own geometry).
+function simLineAtAnchor() {
+  const d = window.__battleDebug.shown();
+  const v = __front.ctx.sim.view;
+  if (!d) return null;
+  const f = v.frontByKey.get(d.frontKey);
+  if (!f) return null;
+  const TILE = (2 * Math.PI * 6371) / 1600;
+  const lat = 90 - (d.anchorY / 800) * 180;
+  const kmX = TILE * Math.cos((lat * Math.PI) / 180);
+  const wdx = (a, b) => { let x = b - a; if (x > 800) x -= 1600; if (x < -800) x += 1600; return x; };
+  const nE = Math.sin(d.normalBearing), nN = Math.cos(d.normalBearing);
+  const L = f.line;
+  if (L) {
+    const rE = wdx(d.anchorX, L.x) * kmX, rN = (d.anchorY - L.y) * TILE;
+    const along = rE * L.n - rN * L.e;
+    if (Math.abs(along) <= L.halfKm + 10) {
+      // The published line moves by exactly kmh / 10 km per tick: carried from its reading's tick to the tick the client
+      // draws (the readings come every tick at the observation focus, every 5 on the offensive's axis).
+      const dt = Math.max(-2, Math.min(L.focus ? 1.5 : 6, v.simTime * 10 - L.tick));
+      const off = rE * L.e + rN * L.n + L.depthKm + (L.kmh / 10) * dt;
+      const cos = nE * L.e + nN * L.n;
+      return { source: `line (tick ${L.tick}, ${L.focus ? 'observation focus' : 'offensive axis'}, ${L.kmh.toFixed(2)} km/h)`, shiftM: (off * 1000) / Math.max(0.5, cos), note: `carried ${dt.toFixed(2)} ticks to the drawn tick` };
+    }
+  }
+  // Tile-level (or per-vertex progress) contact line crossing the battle's normal through the anchor.
+  const n = f.samples.length >> 1;
+  const aPush = f.offensiveA !== 0, bPush = !aPush && f.offensiveB !== 0;
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    const p = f.progress ? f.progress[k] / 255 : 0;
+    const o = aPush ? 0.5 + p : bPush ? 0.5 - p : 0.5;
+    const e = wdx(d.anchorX, f.samples[k * 2] + f.dirX * o) * kmX, nn = (d.anchorY - (f.samples[k * 2 + 1] + f.dirY * o)) * TILE;
+    pts.push([e * nN - nn * nE, e * nE + nn * nN]); // (along the line, along the normal)
+  }
+  let best = Infinity, shift = NaN;
+  for (let k = 0; k + 1 < n; k++) {
+    const [a0, s0] = pts[k], [a1, s1] = pts[k + 1];
+    if (a0 * a1 > 0) continue;
+    const t = a0 === a1 ? 0 : a0 / (a0 - a1);
+    const sv = s0 + (s1 - s0) * t;
+    if (Math.abs(sv) < best) { best = Math.abs(sv); shift = sv; }
+  }
+  return Number.isFinite(shift) ? { source: f.progress ? 'per-vertex progress' : 'tile-level line', shiftM: shift * 1000, note: '' } : null;
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -234,12 +300,7 @@ if (!only || only.has('plume')) {
 if (!only || only.has('ground')) {
   const page = await open('front-ground-real', '&quality=medium');
   await shot(page, 'front-ground-real');
-  const g = await page.evaluate(() => {
-    const d = window.__battleDebug.shown();
-    const v = __front.ctx.sim.view;
-    const units = d ? d.divisions : [];
-    return { d, units, strip: document.querySelector('.fu-bstrip')?.textContent ?? '', stripOn: !!document.querySelector('.fu-bstrip:not(.fu-hidden)'), banners: [...document.querySelectorAll('.fu-bbanner')].map((e) => `${e.textContent}${e.style.display === 'none' ? ' (behind a HUD panel)' : ''}`), divReal: [...v.units.values()].filter((u) => u.type === 3).length };
-  });
+  const g = await page.evaluate(bannerState);
   const d = g.d;
   if (d) {
     const errA = d.split[0] ? Math.abs(d.infantry[0] / d.split[0] - 1) : (d.infantry[0] === 0 ? 0 : 1);
@@ -261,13 +322,19 @@ if (!only || only.has('ground')) {
     });
     const allShown = real.every((r) => d.divisions.some((x) => x.unitId === r.id && x.tanks === r.tanks && x.ifvs === 2));
     row('V8b', 'every real division within 50 km: 1 tank per 25 % integrity + 2 IFVs at its real position', `${d.divisions.length} drawn / ${real.length} in the sim within 49 km (${d.divisions.map((x) => `#${x.unitId} ${x.tanks}T+${x.ifvs}`).join(', ')}), max centroid offset ${Math.round(posErr)} m`, allShown && d.divisions.every((x) => x.ifvs === 2 && x.tanks >= 1 && x.tanks <= 4) && posErr < 300);
-    row('V8c', 'the local line lies within 2 km of the sub-tile front position', `shown ${Math.round(d.lineShift)} m vs sim ${Math.round(d.simShift)} m (sub-tile ${d.subTile})`, Math.abs(d.lineShift - d.simShift) <= 2000);
+    // Independent reading of the sim's line at the battle's anchor, straight from the FrontView (not the battle's own
+    // numbers): the published sub-tile line (FrontView.line, T41) offset along the battle's normal, else the tile-level
+    // contact line (samples, half a tile along dir, moved by the per-vertex progress) where it crosses that normal.
+    const ind = await page.evaluate(simLineAtAnchor);
+    const lineErr = ind ? Math.abs(d.lineShift - ind.shiftM) : Infinity;
+    row('V8c', 'the local line lies within 2 km of the sub-tile front position (independent reading of FrontView at the anchor)', ind ? `drawn ${Math.round(d.lineShift)} m vs FrontView ${ind.source} ${Math.round(ind.shiftM)} m (Δ ${Math.round(lineErr)} m; battle's own sim reading ${Math.round(d.simShift)} m, snaps ${d.lineSnaps}); ${ind.note}` : 'no FrontView reading', !!ind && lineErr <= 2000);
   } else row('V8', 'ground battle built', 'no battle', false);
-  row('V11a', 'nation banners above each side and the HUD strip (es): name, sides, troops, advance, days', `${g.banners.join(' | ')} || ${g.strip}`, g.banners.some((b) => /ataca/.test(b)) && g.banners.some((b) => /defiende/.test(b)) && g.stripOn && /ataca/.test(g.strip) && /día de combate/.test(g.strip) && /avance/.test(g.strip));
+  row('V11a', 'nation banners above each side (both on screen, clear of every HUD panel) and the HUD strip (es): name, sides, troops, advance, days', `${g.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')} || ${g.strip}`, g.banners.length === 2 && g.banners.every((b) => b.state === 'clear') && g.banners.some((b) => /ataca/.test(b.text)) && g.banners.some((b) => /defiende/.test(b.text)) && g.stripOn && /ataca/.test(g.strip) && /día de combate/.test(g.strip) && /avance/.test(g.strip));
   await page.evaluate(() => __front.ctx.settings.set({ language: 'en' }));
   await sleep(20000);
-  const en = await page.evaluate(() => ({ strip: document.querySelector('.fu-bstrip')?.textContent ?? '', banners: [...document.querySelectorAll('.fu-bbanner')].map((e) => e.textContent) }));
-  row('V11b', 'the strip and banners in English', `${en.banners.join(' | ')} || ${en.strip}`, /attacking/.test(en.strip) && /day of fighting/.test(en.strip) && /advance/.test(en.strip));
+  const en = await page.evaluate(bannerState);
+  const clock = await page.evaluate(() => document.querySelector('.fu-day-label')?.textContent ?? '');
+  row('V11b', 'the strip, banners and the clock in English after the language switch', `${en.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')} || ${en.strip} || clock «${clock}»`, /attacking/.test(en.strip) && /day of fighting/.test(en.strip) && /advance/.test(en.strip) && en.banners.every((b) => /attacking|defending/.test(b.text) && b.state === 'clear') && /day/i.test(clock) && !/día/i.test(clock));
   await shot(page, 'front-ground-real-en');
   await page.close();
 }
@@ -276,33 +343,58 @@ if (!only || only.has('ground')) {
 // V9 / V10: observation time moves the line continuously at advanceKmh × rate / 3600; animation clock on real time
 // ---------------------------------------------------------------------------------------------------------------
 if (!only || only.has('obs')) {
-  const page = await open('front-observation', '&quality=low&observe=4000');
-  const samples = [];
-  for (let i = 0; i < 40; i++) {
-    const s = await page.evaluate(() => ({ t: performance.now() / 1000, d: window.__battleDebug.shown(), mode: __front.ctx.sim.view.clock.mode, rate: __front.ctx.sim.view.clock.rate }));
-    samples.push(s);
-    await sleep(1000);
+  const obsRuns = Math.max(1, Number(args.obsRuns ?? 1));
+  let page = null;
+  for (let run = 1; run <= obsRuns; run++) {
+    if (page) await page.close();
+    page = await open('front-observation', '&quality=low&observe=4000');
+    const samples = [];
+    for (let i = 0; i < 44; i++) {
+      // The drawn line (battle debug) and, independently, what the sim publishes for that front (FrontView).
+      const s = await page.evaluate(() => {
+        const d = window.__battleDebug.shown();
+        const v = __front.ctx.sim.view;
+        const f = d ? v.frontByKey.get(d.frontKey) : null;
+        return { t: performance.now() / 1000, d, mode: v.clock.mode, rate: v.clock.rate, tick: v.tick, kmh: f ? f.advanceKmh : 0, sign: f && f.line ? Math.sign(f.line.kmh) : 0, focus: !!(f && f.line && f.line.focus) };
+      });
+      samples.push(s);
+      await sleep(1000);
+    }
+    await shot(page, run === 1 ? 'front-observation' : `front-observation-${run}`);
+    console.log('   V9 series', JSON.stringify(samples.map((s) => s.d && [+s.t.toFixed(1), Math.round(s.d.lineShift), s.tick, +s.kmh.toFixed(2), s.focus ? 1 : 0, s.d.builds])), JSON.stringify(samples[samples.length - 1]?.d?.reanchorWhy));
+    // Least-squares slope of the drawn line over real time (m per real s), per battle build (a re-anchor re-centres the
+    // battle on the line: offsets restart there), combined by the time each build covers.
+    const slope = (pts) => {
+      const n = pts.length;
+      const mt = pts.reduce((a, p) => a + p[0], 0) / n, mv = pts.reduce((a, p) => a + p[1], 0) / n;
+      let num = 0, den = 0;
+      for (const [t, v] of pts) { num += (t - mt) * (v - mv); den += (t - mt) ** 2; }
+      return den > 0 ? num / den : 0;
+    };
+    const ok = samples.filter((s) => s.d && s.d.subTile);
+    const segs = new Map();
+    for (const s of ok) {
+      const k = s.d.builds;
+      if (!segs.has(k)) segs.set(k, []);
+      segs.get(k).push(s);
+    }
+    let wsum = 0, msum = 0, jumps = 0;
+    for (const seg of segs.values()) {
+      for (let i = 1; i < seg.length; i++) if (Math.abs(seg[i].d.lineShift - seg[i - 1].d.lineShift) > 5000) jumps++;
+      if (seg.length < 8) continue;
+      const dur = seg[seg.length - 1].t - seg[0].t;
+      msum += slope(seg.map((s) => [s.t, s.d.lineShift])) * dur;
+      wsum += dur;
+    }
+    const measured = wsum > 0 ? msum / wsum : 0;
+    // Expected: the front's measured advance as the badge, panel and strip show it (FrontView.advanceKmh), in the
+    // direction the published line moves, at the clock's rate: km/h × rate / 3.6 = m per real second.
+    const used = ok.filter((s) => s.sign !== 0);
+    const expected = used.length ? used.reduce((a, s) => a + (s.sign * s.kmh * s.rate) / 3.6, 0) / used.length : 0;
+    const last = samples[samples.length - 1];
+    const dTick = last.tick - samples[0].tick, dT = last.t - samples[0].t;
+    row(obsRuns > 1 ? `V9.${run}` : 'V9', 'observation: clock observation, line speed = advanceKmh × rate / 3600 (±15 %), no 25 km jumps', `mode ${last?.mode} rate ${last?.rate}; drawn ${measured.toFixed(1)} m/s vs FrontView advanceKmh×rate/3.6 ${expected.toFixed(1)} m/s (${((measured / (expected || 1) - 1) * 100).toFixed(1)} %) over ${ok.length} samples in ${segs.size} build(s), ${used.filter((s) => s.focus).length} at the focus; sim ${dTick} ticks in ${dT.toFixed(0)} s (${((dTick * 360) / Math.max(1, dT)).toFixed(0)} game s per s); jumps ${jumps}`, last?.mode === 'observation' && expected !== 0 && wsum >= 20 && Math.abs(measured / expected - 1) <= 0.15 && jumps === 0);
   }
-  await shot(page, 'front-observation');
-  const ok = samples.filter((s) => s.d && s.d.subTile);
-  console.log('   V9 series', JSON.stringify(samples.map((s) => s.d && [+s.t.toFixed(1), Math.round(s.d.lineShift), Math.round(s.d.simShift), +s.d.expectedSpeed.toFixed(1), s.d.subTile ? 1 : 0, s.d.frontKey, s.d.builds, s.d.samples])), JSON.stringify(samples[samples.length - 1]?.d?.reanchorWhy));
-  let jumps = 0;
-  for (let i = 1; i < ok.length; i++) if (Math.abs(ok[i].d.lineShift - ok[i - 1].d.lineShift) > 5000) jumps++;
-  // Least-squares slope of the displayed line offset over real time (m per real second).
-  const slope = (pts) => {
-    const n = pts.length;
-    if (n < 2) return 0;
-    const mt = pts.reduce((a, p) => a + p[0], 0) / n, mv = pts.reduce((a, p) => a + p[1], 0) / n;
-    let num = 0, den = 0;
-    for (const [t, v] of pts) { num += (t - mt) * (v - mv); den += (t - mt) ** 2; }
-    return den > 0 ? num / den : 0;
-  };
-  const measured = slope(ok.map((s) => [s.t, s.d.lineShift]));
-  const simSpeed = slope(ok.map((s) => [s.t, s.d.simShift]));
-  const exp = ok.filter((s) => s.d.expectedSpeed !== 0);
-  const expected = exp.length ? exp.reduce((a, s) => a + s.d.expectedSpeed, 0) / exp.length : 0;
-  const last = samples[samples.length - 1];
-  row('V9', 'observation: clock observation, line speed = advanceKmh × rate / 3600 (±15 %), no 25 km jumps', `mode ${last?.mode} rate ${last?.rate}; shown ${measured.toFixed(1)} m/s vs advanceKmh×rate/3.6 ${expected.toFixed(1)} m/s (sim sub-tile line ${simSpeed.toFixed(1)} m/s) over ${ok.length} samples; jumps ${jumps}`, last?.mode === 'observation' && expected !== 0 && Math.abs(measured / expected - 1) <= 0.15 && jumps === 0);
   // V10: battle animation clock per real second at 0.5x and 4x and paused.
   // A rebuild (the moving line left the patch) pre-ages the new battlefield by 12 s of battle time: measure a window
   // without one.

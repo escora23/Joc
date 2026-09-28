@@ -57,7 +57,7 @@ export function pairFront(s: ShotContext, a: number, b: number, active = true): 
  * land; 'human': the human attacks north; 'none': declared, both sides quiet. mobilize > 0: the war is declared with
  * that mobilization and the offensive is queued for its end (the shot freezes during the mobilization).
  */
-export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' | 'human' | 'none'; mobilize?: number; run?: number; minKmh?: number; theatre?: 'iberia' | 'plains' } = {}): Promise<StagedWar> {
+export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' | 'human' | 'none'; mobilize?: number; run?: number; minKmh?: number; theatre?: 'iberia' | 'plains'; div?: number; attachAtAxis?: boolean } = {}): Promise<StagedWar> {
   const { ctx, params } = s;
   await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 300), speed: 0, headStart: 10, autopilot: false });
   const view = ctx.sim.view;
@@ -81,7 +81,7 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   const defender = who === 'human' ? enemy : HUMAN_ID;
   const mob = opts.mobilize ?? 0;
   // Armored divisions of both sides near the border: they attach to the front and show in every view.
-  const nDiv = Number(params.get('div') ?? 2);
+  const nDiv = Number(params.get('div') ?? opts.div ?? 2);
   for (let k = 0; k < nDiv; k++) {
     ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: enemy, tile: latLonToTile(TH.eDiv[0], TH.eDiv[1] + k * 1.2), targetTile: -1 });
     ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: HUMAN_ID, tile: latLonToTile(TH.hDiv[0], TH.hDiv[1] + k * 1.2), targetTile: -1 });
@@ -95,8 +95,7 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   } else {
     ctx.sim.debug({ type: 'war', a: attacker, b: defender, mobilizeTicks: 0 });
   }
-  ctx.sim.setSpeed(4);
-  await s.waitFrames(2);
+  // Staged in exact ticks (fastForward), never on wall-clock time: the same seed stages the same front every run.
   if (who !== 'none' && mob <= 0) ctx.sim.debug({ type: 'command', playerId: attacker, cmd: { type: 'attack', target: defender, ratio: 0.6, tile: aim } });
   // Both sides attach their divisions to the front as soon as it exists (a real order: they drive there).
   let attached = false;
@@ -105,33 +104,35 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
     if (!f || attached) return;
     attached = true;
     const n = f.samples.length >> 1;
+    // Spread along the front, or (ground shots) where the offensive's axis crosses it, where the battle is watched.
+    const m = axisVertex(s, f);
     for (const side of [enemy, HUMAN_ID]) {
       const other = side === enemy ? HUMAN_ID : enemy;
       const into = other === f.b ? 1 : -1;
       const ids = [...view.units.values()].filter((u) => u.owner === side && u.type === UnitType.ArmoredDivision).map((u) => u.id);
       ids.forEach((id, k) => {
-        const v = Math.min(n - 1, Math.floor(((k + 1) / (ids.length + 1)) * n));
+        const v = opts.attachAtAxis ? Math.max(0, Math.min(n - 1, m + (k % 2 ? 1 : -1) * Math.ceil(k / 2)))
+          : Math.min(n - 1, Math.floor(((k + 1) / (ids.length + 1)) * n));
         const x = f.samples[v * 2] + f.dirX * (0.5 + into * 1.2), y = f.samples[v * 2 + 1] + f.dirY * (0.5 + into * 1.2);
         const tile = Math.floor(y) * MAP_W + ((Math.floor(x) % MAP_W) + MAP_W) % MAP_W;
         ctx.sim.debug({ type: 'command', playerId: side, cmd: { type: 'unitOrder', unitIds: [id], order: 'attach', tile, targetId: 0 } });
       });
     }
   };
-  // Run real ticks until the front has an offensive with a measured advance (or the requested ticks passed).
-  const t0 = performance.now();
+  // Run real ticks (10 at a time) until the front has an offensive with a measured advance (or the requested ticks ran).
   const tick0 = view.tick;
   const runTicks = Number(params.get('run') ?? opts.run ?? (mob > 0 ? 20 : 160));
   const minKmh = opts.minKmh ?? (who === 'none' || mob > 0 ? 0 : 1);
-  while (performance.now() - t0 < 90_000) {
+  for (let guard = 0; guard < 150; guard++) {
     attach();
     const f = pairFront(s, attacker, defender, who !== 'none' && mob <= 0);
     const ran = view.tick - tick0;
     if (f && ran >= runTicks && f.advanceKmh >= minKmh) break;
     if (mob > 0 && view.wars.some((w) => w.aggressor === attacker && view.tick >= w.mobilizeUntilTick - 25) && f) break;
-    await s.wait(150);
+    await ctx.sim.fastForward(10);
   }
   ctx.sim.setSpeed(0);
-  await s.wait(400);
+  await s.waitFrames(2);
   const front = pairFront(s, attacker, defender, who !== 'none' && mob <= 0) ?? pairFront(s, attacker, defender, false);
   console.info(`[w6] staged war ${attacker}->${defender} ticks=${view.tick - tick0} front=${front ? `${front.key} q=${front.quiet} kmh=${front.advanceKmh.toFixed(2)} mom=${front.momentum.toFixed(2)}` : 'none'}`);
   return { enemy, attacker, defender, front };
@@ -177,13 +178,12 @@ registerShot('fronts-panel', 'battle', 'W6: the Guerra y frentes panel (G) on a 
   await s.waitFrames(30);
 }, 10);
 
-/** Camera down on the front's contact line (the ground battle streams in by itself: nothing is staged in the layer). */
-async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number): Promise<void> {
-  const f = st.front;
-  if (!f) return;
+/**
+ * The front vertex where the offensive's axis crosses the line (the corridor's core advances at the full §4.5 speed;
+ * its flanks at 0.8 of it), else the middle of the front.
+ */
+function axisVertex(s: ShotContext, f: FrontView): number {
   const n = f.samples.length >> 1;
-  // On the offensive's axis where it crosses the line (the corridor's core advances at the full §4.5 speed; its flanks
-  // at 0.8 of it), else the middle of the front.
   let m = Math.floor(n / 2);
   const a = s.ctx.sim.view.attacks.find((q) => q.frontKey === f.key && q.defender > 0);
   if (a && a.originX >= 0) {
@@ -202,6 +202,14 @@ async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number)
       }
     }
   }
+  return m;
+}
+
+/** Camera down on the front's contact line (the ground battle streams in by itself: nothing is staged in the layer). */
+async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number): Promise<void> {
+  const f = st.front;
+  if (!f) return;
+  const m = axisVertex(s, f);
   const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
   // Over the real (sub-tile) contact line, where the ground battle stands.
   const lf = deriveLocalForces(s.ctx.sim.view, x, y, 40, HUMAN_ID);
@@ -221,17 +229,156 @@ async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number)
   await s.waitFrames(8);
 }
 
+/**
+ * A camera that frames every point (local km east / north of the target on the contact line) inside the part of the
+ * screen no HUD panel covers, from as close as possible: headings every 15°, a few tilts, the distance growing by 8 %
+ * steps (flat ground; at these distances the Earth's curvature is a few tens of metres).
+ */
+function framePoints(points: { e: number; n: number }[], tilts: number[], aspect: number, maxD = 30): { d: number; tilt: number; heading: number } | null {
+  const half = Math.tan((45 / 2) * (Math.PI / 180));
+  // Screen box clear of the HUD at 1600x900 (alerts left, leaderboard right, top bar, news ticker and strip on top,
+  // build bar below), with room above each point for its banner.
+  const X0 = -0.52, X1 = 0.52, Y0 = -0.58, Y1 = 0.42;
+  let best = { d: maxD, tilt: tilts[0], heading: 0 };
+  let found = false;
+  for (let hk = 0; hk < 24; hk++) {
+    const h = (hk / 24) * Math.PI * 2;
+    const fe = Math.sin(h), fn = Math.cos(h);
+    for (const t of tilts) {
+      for (let d = 1.5; d < best.d; d *= 1.08) {
+        // Camera at target + d·(cos t · up − sin t · fwd), looking at the target; camera up = fwd·cos t + up·sin t.
+        const ce = -Math.sin(t) * d * fe, cn = -Math.sin(t) * d * fn, cu = Math.cos(t) * d;
+        let ok = true;
+        for (const p of points) {
+          const ve = p.e - ce, vn = p.n - cn, vu = -cu;
+          // Camera axes: z = (C − T)/d, x = right = (fn, −fe, 0)·… (heading rotated 90° clockwise), y = z × x.
+          const zc = -(ve * (-Math.sin(t) * fe) + vn * (-Math.sin(t) * fn) + vu * Math.cos(t));
+          const xc = ve * fn - vn * fe;
+          const yc = ve * fe * Math.cos(t) + vn * fn * Math.cos(t) + vu * Math.sin(t);
+          if (zc <= 0.1) {
+            ok = false;
+            break;
+          }
+          const nx = xc / zc / (half * aspect), ny = yc / zc / half;
+          if (nx < X0 || nx > X1 || ny < Y0 || ny > Y1) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) {
+          best = { d, tilt: t, heading: h };
+          found = true;
+          break;
+        }
+      }
+    }
+  }
+  return found ? best : null;
+}
+
+/**
+ * One real division per side where the offensive's axis crosses the front: spawned on its own tile touching the enemy
+ * and attached there (a real order), so the ground battle has armour on both sides, as a front under attack would.
+ */
+async function divisionsAtAxis(s: ShotContext, st: StagedWar): Promise<void> {
+  const f = st.front;
+  if (!f) return;
+  const { ctx } = s;
+  const view = ctx.sim.view;
+  const m = axisVertex(s, f);
+  const px = f.samples[m * 2] + f.dirX * 0.5, py = f.samples[m * 2 + 1] + f.dirY * 0.5;
+  const tileOf = (x: number, y: number) => Math.floor(y) * MAP_W + (((Math.floor(x) % MAP_W) + MAP_W) % MAP_W);
+  const before = new Set(view.units.keys());
+  const orders: { side: number; enemyTile: number }[] = [];
+  for (const side of [f.a, f.b]) {
+    const other = side === f.a ? f.b : f.a;
+    let best = -1, enemyTile = -1, bd = Infinity;
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const tx = Math.floor(px) + dx, ty = Math.floor(py) + dy;
+        const t = tileOf(tx, ty);
+        if (view.owner[t] !== side) continue;
+        const nb = [tileOf(tx - 1, ty), tileOf(tx + 1, ty), tileOf(tx, ty - 1), tileOf(tx, ty + 1)].find((q) => view.owner[q] === other);
+        if (nb === undefined) continue;
+        const d = (tx + 0.5 - px) ** 2 + (ty + 0.5 - py) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = t;
+          enemyTile = nb;
+        }
+      }
+    }
+    if (best < 0) continue;
+    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: side, tile: best, targetTile: -1 });
+    orders.push({ side, enemyTile });
+  }
+  await ctx.sim.fastForward(1);
+  for (const o of orders) {
+    const ids = [...view.units.values()].filter((u) => !before.has(u.id) && u.owner === o.side && u.type === UnitType.ArmoredDivision).map((u) => u.id);
+    if (ids.length) ctx.sim.debug({ type: 'command', playerId: o.side, cmd: { type: 'unitOrder', unitIds: ids, order: 'attach', tile: o.enemyTile, targetId: 0 } });
+  }
+  await ctx.sim.fastForward(5);
+  ctx.sim.setSpeed(0);
+  await s.waitFrames(2);
+}
+
+/**
+ * The ground battle framed from the sim alone, before it is built: close on the contact line where the offensive's
+ * axis crosses it (the soldiers must read), with the nearest real division in view too when it fits within 4.5 km of
+ * camera distance, all inside the screen area clear of the HUD; divisions out of view wait at the screen's edge with
+ * their bearing and distance (HUD). The camera target stays on the line (the battle anchors on the line nearest to it).
+ */
+async function frameGround(s: ShotContext, st: StagedWar): Promise<void> {
+  const f = st.front;
+  if (!f) return;
+  const view = s.ctx.sim.view;
+  const m = axisVertex(s, f);
+  const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
+  const lf0 = deriveLocalForces(view, x, y, 40, HUMAN_ID);
+  const fr0 = lf0.fronts.find((q) => q.key === f.key);
+  if (!fr0) {
+    await descend(s, st, 3, 1.2);
+    return;
+  }
+  const L0 = fr0.nearest;
+  const te = Math.sin(fr0.lineBearing), tn = Math.cos(fr0.lineBearing);
+  const lf = deriveLocalForces(view, L0.x, L0.y, 40, HUMAN_ID);
+  const divs = lf.units.filter((u) => u.type === UnitType.ArmoredDivision && (u.owner === f.a || u.owner === f.b))
+    .sort((p, q) => p.distKm - q.distKm);
+  // Target: on the line, abreast of the nearest division (within ±4 km along the line).
+  const along = divs.length ? Math.max(-4, Math.min(4, divs[0].eastKm * te + divs[0].northKm * tn)) : 0;
+  const tLatLon = tileXYToLatLon(L0.x + (along * te) / (25.02 * Math.cos((L0.lat * Math.PI) / 180)), L0.y - (along * tn) / 25.02);
+  const line = [{ e: -2 * te, n: -2 * tn }, { e: 2 * te, n: 2 * tn }];
+  const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+  const near = divs[0] ? [{ e: divs[0].eastKm - along * te, n: divs[0].northKm - along * tn }] : [];
+  // The soldiers read up to ~3 km of camera distance: the nearest division joins the frame only if it fits by then;
+  // else a close diagonal view along the line (the divisions' markers wait at the screen's edge).
+  const withDiv = near.length ? framePoints([...line, ...near], [1.25, 1.2, 1.15], aspect, 3.1) : null;
+  const fr = withDiv ?? { d: 2.2, tilt: 1.22, heading: Math.atan2(te, tn) + 1.1 };
+  console.info(`[w6] frame ground: ${divs.length} divisions (nearest ${divs[0] ? divs[0].distKm.toFixed(1) : '-'} km, ${withDiv ? 'in view' : 'marked at the edge'}) -> d ${fr.d.toFixed(1)} km tilt ${fr.tilt} hdg ${fr.heading.toFixed(2)}`);
+  s.ctx.cameraRig.setState({
+    lat: tLatLon.lat, lon: tLatLon.lon, altitudeKm: Number(s.params.get('alt') ?? fr.d), tilt: Number(s.params.get('tilt') ?? fr.tilt),
+    heading: Number(s.params.get('hdg') ?? fr.heading),
+  });
+  for (let i = 0; i < 240 && !battleDebug()?.built; i++) await s.waitFrames(1);
+  await s.waitFrames(8);
+}
+
 registerShot('front-ground-real', 'battle', 'W6: the ground battle composed from the real front: infantry per side from the local forces, the real divisions as 1 tank per 25 % integrity + 2 IFVs at their positions, the sub-tile line, banners and the HUD strip', async (s) => {
-  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220 });
-  await descend(s, st, 3, 1.2);
+  // One division per side, attached where the offensive's axis crosses the front: the battle the camera frames.
+  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, div: 0 });
+  await divisionsAtAxis(s, st);
+  await frameGround(s, st);
   battleDebug()?.prewarm(Number(s.params.get('warm') ?? 10));
   await s.waitFrames(6);
   console.info(`[w6] ground ${JSON.stringify(battleDebug()?.shown() ?? null)}`);
 }, 10);
 
 registerShot('front-observation', 'battle', 'W6: the ground battle under observation time (1 s = 1 min): the line and the armies move with the sim, continuously', async (s) => {
-  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, theatre: 'plains' });
-  await descend(s, st, 9, 0.95);
+  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, theatre: 'plains', div: 0 });
+  await divisionsAtAxis(s, st);
+  // Close enough to see the soldiers on both sides of the line (1 km up, looking 2.4 km ahead along the line).
+  await descend(s, st, 2.6, 1.2);
   // Let the world run: below 60 km the app switches the clock to observation time (60 game s per real s).
   s.ctx.sim.setSpeed(1);
   await s.wait(Number(s.params.get('observe') ?? 20000));

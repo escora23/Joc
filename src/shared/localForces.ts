@@ -33,7 +33,7 @@ import { tileXYToLatLon, latLonToTileXY } from './geo';
 import { isNavigableTerrain, isWaterTerrain } from './terrain';
 import {
   StructureType, UnitMode, UnitState, UnitType,
-  type AttackView, type FrontView, type PairState, type PlayerView, type StructureView, type TreatyKind, type UnitView,
+  type AttackView, type FrontLine, type FrontView, type PairState, type PlayerView, type StructureView, type TreatyKind, type UnitView,
 } from './types';
 
 // =================================================================================================
@@ -296,6 +296,30 @@ function bearing(e: number, n: number): number {
   return b < 0 ? b + 2 * Math.PI : b;
 }
 
+/**
+ * Depth (km) of a published line at a tick: the line moves by exactly kmh / 10 km per tick, so a reading carries to the
+ * ticks after it (at most the interval between readings: 1 tick at the observation focus, 5 on the offensive's axis).
+ */
+export function publishedDepthAt(line: FrontLine, tick: number): number {
+  const dt = Math.max(-2, Math.min(line.focus ? 1.5 : 6, tick - line.tick));
+  return line.depthKm + (line.kmh / 10) * dt;
+}
+
+/**
+ * Where a front's published line (FrontView.line, T41) lies seen from the point (x, y) (continuous tile coords): its
+ * signed offset along the line's axis (km, + = ahead of the point in side a's advance), the point's distance along the
+ * line from the line's reference point (km; the line applies within ±halfKm), and the axis bearing.
+ */
+export function publishedLineOffset(line: FrontLine, x: number, y: number, atTick = line.tick): { offsetKm: number; alongKm: number; bearing: number } {
+  const kmX = TILE_KM * Math.max(0.05, Math.cos(tileXYToLatLon(wrapXf(x), y).lat * DEG));
+  const rE = wdx(x, line.x) * kmX, rN = (y - line.y) * TILE_KM;
+  return {
+    offsetKm: rE * line.e + rN * line.n + publishedDepthAt(line, atTick),
+    alongKm: rE * line.n - rN * line.e,
+    bearing: bearing(line.e, line.n),
+  };
+}
+
 /** Parameter interval [t0, t1] ⊂ [0, 1] of segment p0 + t·d inside the circle of radius r at the origin, or null. */
 function clipCircle(px: number, py: number, dx: number, dy: number, r: number): [number, number] | null {
   const a = dx * dx + dy * dy;
@@ -462,10 +486,12 @@ export function deriveLocalForces(
     const fl = f.line;
     if (fl) {
       const rE = wdx(x, fl.x) * kmX, rN = (y - fl.y) * kmY;
-      const u0 = rE * fl.n - rN * fl.e;
-      if (Math.abs(u0) <= fl.halfKm + 10) {
-        const pE = rE + fl.depthKm * fl.e, pN = rN + fl.depthKm * fl.n;
-        lineRec = { offsetKm: pE * fl.e + pN * fl.n, bearing: bearing(fl.e, fl.n), kmh: fl.kmh, focus: fl.focus, tick: fl.tick };
+      // The line as it is at the view's tick (readings come every tick at the focus, every 5 off it).
+      const po = publishedLineOffset(fl, x, y, view.tick);
+      if (Math.abs(po.alongKm) <= fl.halfKm + 10) {
+        const dNow = publishedDepthAt(fl, view.tick);
+        const pE = rE + dNow * fl.e, pN = rN + dNow * fl.n;
+        lineRec = { offsetKm: po.offsetKm, bearing: po.bearing, kmh: fl.kmh, focus: fl.focus, tick: fl.tick };
         for (let v = 0; v < n; v++) {
           const u = (line[v * 2] - rE) * -fl.n + (line[v * 2 + 1] - rN) * fl.e;
           if (Math.abs(u) > fl.halfKm) continue;
