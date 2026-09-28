@@ -474,7 +474,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       overlay?.showNotice(t('command.travel.needWaypoint'), 4);
       r = 60;
     }
-    if (r > 60) autopilot = true;
+    // A waypoint already set: compressing time starts the autopilot toward it.
+    if (r > 60 || (waypoint && requested <= 1)) autopilot = true;
     const was = requested;
     requested = r;
     if (was <= 1) {
@@ -1601,6 +1602,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       let dtGame = paused ? 0 : realDt * (phase === 'play' ? effRate : 1);
       if (phase === 'play' && view.command && !freeze) {
         const allowed = simSecNow() + 2.5 - localSec;
+        // Travel is kinematic: on a slow frame (dt clamped to 0.1 s) the march catches up with the sim's clock, up to
+        // one real second of travel per frame, so the rate shown is the rate travelled.
+        if (effRate > 1 && !paused) dtGame = Math.max(dtGame, Math.min(view.command.sec - localSec, effRate));
         dtGame = Math.max(0, Math.min(dtGame, allowed));
       }
       localSec += dtGame;

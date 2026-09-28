@@ -4,7 +4,7 @@
 //
 // Stages a human division next to a foreign border and checks, without a browser:
 //   M1  controlledMove within the speed limit is applied at once (between ticks) and the unit really moves;
-//   M2  a move beyond maxKmh × elapsed × 1.1 is snapped to the limit (logged), a 6 km jump is rejected;
+//   M2  a move beyond maxKmh × elapsed × 1.1 is snapped to the limit (logged), a jump (> 5 km and > 2× the allowed distance) is rejected;
 //   M3  travel time checks against the strategic speed (40 km/h), tactical time against the tank's 65 km/h;
 //   I1  crossing into a nation at peace emits borderIncursion 'entered'; the victim decides 30–90 game s later via
 //       sub-steps; an interception's quick-reaction force arrives 5–15 game minutes after dispatch;
@@ -104,9 +104,9 @@ function spawnDivision(g, x, y) {
   const moved = Math.abs(u.x - x1) * kx;
   ok(Math.abs(moved - 65 * 60 / 3600 * 1.1) < 0.02 && g.command.stats.snapped === 1, `M2 a 3 km move in 60 game s is snapped to ${moved.toFixed(3)} km (65 km/h × 1.1 = 1.192)`);
   const before = u.x;
-  g.subStep(3600);
+  g.subStep(60);
   g.issue(HUMAN_ID, { type: 'controlledMove', unitId: u.id, x: u.x + spot.dir * (6 / kx), y: u.y, heading: 0 });
-  ok(u.x === before && g.command.stats.rejected === 1, 'M2 a 6 km jump is rejected even with time to spare');
+  ok(u.x === before && g.command.stats.rejected === 1, 'M2 a 6 km jump 60 game s after the last move is rejected (> 5 km and > 2× the allowed 1.19 km)');
   // A legal move resets the clock of the check.
   g.subStep(60);
   g.issue(HUMAN_ID, { type: 'controlledMove', unitId: u.id, x: u.x - spot.dir * (0.5 / kx), y: u.y, heading: 0 });

@@ -5,7 +5,8 @@
 // speed check of §9.8: the displacement since the last accepted move may not exceed
 // `maxKmh × elapsed game time × 1.1`, where maxKmh is the unit's strategic speed in travel time and its vehicle's
 // tactical top speed at ×1. Beyond that the move is snapped to the limit along the same line; a jump of more than 5 km
-// is rejected outright.
+// that is also more than twice the allowed distance is rejected outright (travel at ×900 legitimately covers several km
+// between two messages).
 //
 // Incursions (§9.7): the first accepted move onto a foreign tile of a nation the owner is at peace (or truce) with,
 // without an alliance or open borders, starts an incursion (`borderIncursion` entered, both sides hear of it). The
@@ -273,15 +274,17 @@ export class CommandSystem {
     if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.y)) return false;
     const tx = wrapX(cmd.x), ty = Math.max(0, Math.min(MAP_H - 1e-3, cmd.y));
     const dist = tileDistKm(c.x, c.y, tx, ty);
-    if (dist > MOVE_REJECT_KM) {
-      this.stats.rejected++;
-      this.stats.lastRejectKm = dist;
-      this.log(`[command] controlledMove rejected: jump of ${dist.toFixed(2)} km (> ${MOVE_REJECT_KM} km)`);
-      return false;
-    }
     const elapsed = Math.max(0, this.sec - c.sec);
     const maxKmh = g.commandTravel ? UNIT_DEFS[u.type].speedKmh : TACTICAL_KMH[c.kind];
     const allow = (maxKmh * elapsed / 3600) * MOVE_TOLERANCE + 0.002;
+    // A jump: beyond 5 km and beyond twice what the speed allows in the elapsed game time (travel at ×900 covers
+    // several km between two messages legitimately).
+    if (dist > Math.max(MOVE_REJECT_KM, allow * 2)) {
+      this.stats.rejected++;
+      this.stats.lastRejectKm = dist;
+      this.log(`[command] controlledMove rejected: jump of ${dist.toFixed(2)} km (> ${Math.max(MOVE_REJECT_KM, allow * 2).toFixed(2)} km)`);
+      return false;
+    }
     let nx = tx, ny = ty;
     if (dist > allow) {
       const f = allow / dist;

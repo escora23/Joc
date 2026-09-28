@@ -229,6 +229,8 @@ export class Ground {
     }
     c.h = null;
     c.data = null;
+    // A disposed chunk may still sit in the build queue: it is skipped there.
+    if (c.state === 'data') c.state = 'queued';
   }
 
   /** Floating origin moved: shift every mesh (the grid is anchored in absolute map meters). */
@@ -314,7 +316,7 @@ export class Ground {
       const critical = c.lod === 0 && Math.abs(c.ix - Math.floor(ax / this.spec.near.size)) <= 1 && Math.abs(c.iz - Math.floor(az / this.spec.near.size)) <= 1;
       if (performance.now() - t0 > FRAME_BUDGET_MS - 1.8 && !critical) break;
       this.buildQueue.shift();
-      if (c.state !== 'data' || c.gen !== this.gen) continue;
+      if (c.state !== 'data' || c.gen !== this.gen || !c.data) continue;
       this.buildChunk(c);
       if (performance.now() - t0 > FRAME_BUDGET_MS) break;
     }
