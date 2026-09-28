@@ -54,6 +54,8 @@ const LINE_LEAVE_M = 4500;
 /** Radius (km) of the local forces the infantry is composed from (the battle patch), and of the real divisions shown. */
 const FORCES_RADIUS_KM = 6;
 const DIVISIONS_RADIUS_KM = 50;
+/** Radius (km) of the window the moving line is read in. */
+const LINE_RADIUS_KM = 30;
 /** Time constant (real s) of the displayed line following the sim line (extrapolated at the measured km/h). */
 const LINE_FOLLOW_S = 1.2;
 
@@ -463,7 +465,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   function sampleLine(): void {
     if (!anchor) return;
     const view = ctx.sim.view;
-    const lf = deriveLocalForcesAt(view, anchor.lat, anchor.lon, FORCES_RADIUS_KM, HUMAN_ID);
+    // A wide window: the line may be anything up to a tile away from the patch centre before the battle re-anchors.
+    const lf = deriveLocalForcesAt(view, anchor.lat, anchor.lon, LINE_RADIUS_KM, HUMAN_ID);
     lastLF = lf;
     const f = pickLocalFront(lf, anchor);
     samplesTaken++;

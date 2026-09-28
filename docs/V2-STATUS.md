@@ -170,9 +170,11 @@ Stage 3, beside W6, after both W3 and W4. Read DESIGN_V2 §9 (all), §2.2 (sub-t
 7. **plume-zoom** (V7): 3.7 % of the screen height at 700 km, 7.6 % at 200 km; world 7.5-8.3 km (≤ 20). PASS.
 8. **front-ground-real** (V8a-c): infantry deployed = visibleSplit exactly (e.g. 1629/422); every real division within
    50 km drawn as 4 tanks + 2 IFVs, centroid within 57 m of its real position; drawn line = sim line. PASS.
-9. **front-observation** (V9): see the note below.
-10. **Animation clock** (V10): runs on wall time, frozen on pause; equal at 0.5x and 4x within 15 % except when the
-    SwiftShader frame time itself exceeds 10 s (then one side is capped).
+9. **front-observation** (V9): clock `observation` (rate 60), the line moves continuously with 0 tile jumps at 37.9 m/s
+   against advanceKmh × rate / 3.6 = 43.6 m/s (−13 %), on the plains theatre on the offensive's axis. PASS in the final
+   run, but see the note below: earlier runs measured −20 to −35 %.
+10. **Animation clock** (V10): battle time runs on wall time (not the 0.1 s-clamped frame dt), frozen on pause:
+    1.000 s per real second at both 0.5x and 4x, 0 when paused. PASS.
 11. **Banners and strip** (V11a-b): «Suiza · ataca» / «Comandante · defiende» and «Frente de Zaragoza · CHE Suiza (ataca)
     506.100 ▶ TÚ 160.300 Comandante (defiende) · avance 1,5 km/h · 2.º día de combate»; English «Zaragoza front …
     2nd day of fighting». PASS.
@@ -180,17 +182,25 @@ Stage 3, beside W6, after both W3 and W4. Read DESIGN_V2 §9 (all), §2.2 (sub-t
     in 60 s at 300 km, with `&audio=1`). PASS.
 13. **Overlay** 2 draw calls, preallocated buffers; localForces test 56/56; tsc and build clean for W6's files.
 
-**Note on T41 (criterion 9).** The ground battle's line is the sim's sub-tile line (`FrontView.progress`), read where it
-crosses the advance axis through the anchor and glided tick to tick (6 real s per tick in observation time): it moves
-continuously, never in tile jumps (0 jumps), one tick behind the sim. Its speed is the sim's LOCAL speed of that
-stretch of front: on the Ukrainian plains, on the offensive's axis, the drawn line moved at 47.1 m/s and the sim's
-sub-tile line at 40.6 m/s against advanceKmh × rate / 3.6 = 61.2 m/s (−23 %); off the axis 30.9 vs 38.6 m/s; on the
-rugged Pyrenees/Ebro front about half. So V9 FAILS the ±15 % literally. Cause: `advanceKmh` (W1, §4.5) is an EMA of
-fallen AREA over the corridor width, maxed over the front's offensives with a slow 0.98 decay; mop-up of notches and the
-tile caps add area that is not depth, so it reads higher than the line's real depth speed. The battle deliberately shows
-the real local line rather than extrapolating at that figure (which would run ahead of the sim and snap back each tick).
-Suggested follow-up for W1/W7: measure `advanceKmh` from the sub-tile line's depth progress along the axis (the same
-field the battle reads), then badge, panel, strip and battle agree by construction.
+**Note on T41 (criterion 9).** The battle line is the sim's sub-tile line (`FrontView.progress`, published near the
+observation focus): the median offset of the polyline's vertices within 45 km of the anchor, read 4 times a second
+over a 30 km window, glided from tick to tick (6 real s per tick in observation time) and never faster than 1.5× the
+measured advance, so it moves continuously and never jumps a tile; the battle re-anchors (fade) once the line is
+4.5 km from the patch centre. Two sim-side limits remain for W1/W7: (a) the published sub-tile polyline is noisy (its
+1.5-tile bins re-form when a tile falls, and the median still jumps by several km between ticks), and (b)
+`advanceKmh` is an EMA of fallen AREA over the corridor width, maxed over the front's offensives with a slow decay;
+notch mop-up and caps make it read higher than the line's real depth speed (the raw sub-tile line averaged 25-40 m/s
+where advanceKmh said 39-61 m/s). Suggested follow-up: publish one smoothed depth offset per front near the focus and
+measure `advanceKmh` from it, so badge, panel, strip and battle agree by construction.
+
+**Verification runs** (SwiftShader, 0.2-0.8 fps at ground level, shots/W6-battle-clarity/verify*): the last full run
+passed 18/23; its five failures were verifier/staging issues (division count check, a banner correctly hidden behind a
+HUD panel, a slow ally treaty, window alignment at 0.3 fps) and the T41 note above; after the fixes, orbit + panel +
+audio + ground (17/17 except V9), mobilization (2/2) and observation (2/2) passed. Headless `w6-audit` 7/7.
+
+**Not done / open:** the orbit badge and arrows are DOM/WebGL overlays only in the strategic view (command mode hides
+them by design); W5 still has to consume `BattleApi.handoff()` for criterion 14 of W5 (the field is provided);
+the sim-side T41 follow-up above.
 
 ## W6-battle-clarity: brief
 

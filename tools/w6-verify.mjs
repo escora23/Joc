@@ -311,9 +311,10 @@ if (!only || only.has('obs')) {
     await sleep(1500);
     let r = null;
     for (let k = 0; k < 4; k++) {
-      const a = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: performance.now() / 1000, f: __front.ctx.frame.frame, b: window.__battleDebug.shown()?.builds ?? -1 }));
-      await sleep(6000);
-      const b = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: performance.now() / 1000, f: __front.ctx.frame.frame, b: window.__battleDebug.shown()?.builds ?? -1 }));
+      // Clock and frame time read together (both set by the same frame), over a 20 s window.
+      const a = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: __front.ctx.frame.now / 1000, f: __front.ctx.frame.frame, b: window.__battleDebug.shown()?.builds ?? -1 }));
+      await sleep(20000);
+      const b = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: __front.ctx.frame.now / 1000, f: __front.ctx.frame.frame, b: window.__battleDebug.shown()?.builds ?? -1 }));
       r = { perS: (b.c - a.c) / (b.t - a.t), fps: (b.f - a.f) / (b.t - a.t) };
       if (a.b === b.b && a.b >= 0) break;
     }
