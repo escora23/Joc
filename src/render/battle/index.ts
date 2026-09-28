@@ -19,7 +19,7 @@
 
 import * as THREE from 'three';
 import type { BattleApi, BattleView, CameraState, FrameInfo, GameContext } from '../../shared/api';
-import { BATTLE_LAYER_ALT_KM, HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../../shared/constants';
+import { BATTLE_LAYER_ALT_KM, HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_HOUR, TILE_KM } from '../../shared/constants';
 import { latLonToTile, latLonToVec3, tangentFrame, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { smoothstep } from '../../shared/math';
 import { territoryFillAmount } from '../globe/glsl';
@@ -89,6 +89,8 @@ export interface BattleShown {
   advanceKmh: number;
   subTile: boolean;
   clockMode: string;
+  /** Line samples taken / with the front found. */
+  samples: [number, number];
 }
 
 export interface BattleDebug {
@@ -152,7 +154,12 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   // ---- the line from the sim (§11.5): displayed offset along the advance normal, following the sub-tile line ----
   /** Sim line offset (m along N from the anchor) at the last sample, the game hour of that sample, the extrapolation. */
   let simShift = 0, simHours = 0, simSpeedMs = 0, simDir = 0, simKmh = 0, simSub = false;
-  let sampleAcc = 0, divAcc = 0, lastWallMs = 0;
+  /**
+   * The displayed line glides from where it was to the sim's newest sub-tile line over one tick period (6 real s in
+   * observation time): continuous motion at the real local speed of the front, one tick behind the sim, never ahead.
+   */
+  let lineFrom = 0, lineTo = 0, lineTick = -1, lineElapsedMs = 0;
+  let sampleAcc = 0, divAcc = 0, lastWallMs = 0, samplesTaken = 0, samplesFound = 0;
   let lineSpeed = 0;
   let splitWanted: [number, number] = [0, 0];
   const shownDivs: BattleShown['divisions'] = [];
@@ -356,6 +363,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     vehicles?.clear();
     effects?.clear();
     anchor = null;
+    front.drift = 0;
     shownDivs.length = 0;
     lastLF = null;
     if (battleOwned.size) {
@@ -403,9 +411,27 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     if (!f) f = lf.fronts.find((q) => (q.a === an.frontA && q.b === an.frontB) || (q.a === an.frontB && q.b === an.frontA));
     return f ?? null;
   }
-  /** Signed offset (m) of the local front's sub-tile line from the anchor, along the battle's advance normal. */
+  /**
+   * Signed offset (m) of the local front's sub-tile line from the anchor along the battle's advance normal: where the
+   * line crosses the advance axis through the anchor (so an advance of d metres moves it by d, whatever the line's
+   * local slant); the nearest point's projection when the axis misses the local polyline.
+   */
   function lineOffsetM(f: LocalFront): number {
-    // Local frame: x = east, z = south; the line passes through its nearest point.
+    // Local km: east, north. The advance normal in (east, north): (nx, -nz).
+    const ne = front.nx, nn = -front.nz;
+    const L = f.lineKm;
+    let best = Infinity;
+    for (let i = 0; i + 3 < L.length; i += 2) {
+      const e0 = L[i], n0 = L[i + 1], de = L[i + 2] - e0, dn = L[i + 3] - n0;
+      // Solve t·N = p0 + u·d  →  2x2 system.
+      const det = ne * -dn - nn * -de;
+      if (Math.abs(det) < 1e-9) continue;
+      const t = (e0 * -dn - n0 * -de) / det;
+      const u = (ne * n0 - nn * e0) / det;
+      if (u < -1e-6 || u > 1 + 1e-6) continue;
+      if (Math.abs(t) < Math.abs(best)) best = t;
+    }
+    if (Number.isFinite(best)) return best * 1000;
     const px = f.nearest.eastKm * 1000, pz = -f.nearest.northKm * 1000;
     return px * front.nx + pz * front.nz;
   }
@@ -439,13 +465,22 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const lf = deriveLocalForcesAt(view, anchor.lat, anchor.lon, FORCES_RADIUS_KM, HUMAN_ID);
     lastLF = lf;
     const f = pickLocalFront(lf, anchor);
+    samplesTaken++;
+    if (f) samplesFound++;
     if (!f) {
       simSpeedMs = 0;
       simDir = 0;
       return;
     }
     simShift = lineOffsetM(f);
-    simHours = view.gameHours;
+    simHours = view.tick / TICKS_PER_GAME_HOUR;
+    if (view.tick !== lineTick) {
+      // A new tick: glide from where the line is drawn now to the new position over the next tick period.
+      lineFrom = front.drift;
+      lineTick = view.tick;
+      lineElapsedMs = 0;
+    }
+    lineTo = simShift;
     simKmh = f.advanceKmh;
     simSub = f.subTile;
     simDir = f.momentum > 0.1 ? 1 : f.momentum < -0.1 ? -1 : 0;
@@ -459,13 +494,20 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   /** Move the displayed line toward the sim line (extrapolated), and the armies with it. */
   function followLine(realDt: number): void {
     const view = ctx.sim.view;
-    const gameSec = Math.max(0, Math.min(3600, (view.gameHours - simHours) * 3600));
-    const target = simShift + simDir * simSpeedMs * gameSec;
+    let target: number;
+    if (simSub) {
+      lineElapsedMs += realDt * 1000;
+      const frac = Math.min(1, lineElapsedMs / Math.max(100, view.clock.tickPeriodMs || 6000));
+      target = lineFrom + (lineTo - lineFrom) * frac;
+    } else {
+      // No sub-tile progress (observation time off or far from the focus): the line waits for the next tile.
+      target = lineTo;
+    }
     const prev = front.drift;
-    const k = realDt > 0 ? 1 - Math.exp(-realDt / LINE_FOLLOW_S) : 0;
+    const k = simSub ? 1 : realDt > 0 ? 1 - Math.exp(-realDt / LINE_FOLLOW_S) : 0;
     const next = prev + (target - prev) * k;
     const d = next - prev;
-    lineSpeed = realDt > 0 ? lineSpeed * 0.9 + 0.1 * (d / realDt) : lineSpeed;
+    lineSpeed = realDt > 0 ? lineSpeed * 0.8 + 0.2 * (d / realDt) : lineSpeed;
     if (Math.abs(d) < 1e-4) return;
     front.drift = next;
     front.rebuild();
@@ -595,7 +637,10 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     }
     front.setup(nX, nZ, an.seed % 1000, 6000);
     simShift = lfFront ? lineOffsetM(lfFront) : 0;
-    simHours = view.gameHours;
+    simHours = view.tick / TICKS_PER_GAME_HOUR;
+    lineFrom = lineTo = simShift;
+    lineTick = view.tick;
+    lineElapsedMs = 0;
     front.drift = simShift;
     front.rebuild();
     front.apply(uniforms);
@@ -835,7 +880,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       infantry: [infantry?.deployed(0) ?? 0, infantry?.deployed(1) ?? 0], split: [splitWanted[0], splitWanted[1]],
       divisions: shownDivs.map((d) => ({ ...d })),
       lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simDir * simKmh * view.clock.rate) / 3.6 : 0,
-      advanceKmh: simKmh, subTile: simSub, clockMode: view.clock.mode,
+      advanceKmh: simKmh, subTile: simSub, clockMode: view.clock.mode, samples: [samplesTaken, samplesFound],
     };
   }
 
@@ -978,7 +1023,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       // Battle animation runs on real time (§11.6): the same at every speed, frozen on pause. The line and the real
       // units move with the sim clock instead (followLine, updateDivisions).
       // Wall time (frame.dt is clamped to 0.1 s): at any frame rate the battle runs at real speed; paused, it freezes.
-      const wall = lastWallMs > 0 ? Math.min(5, Math.max(0, (frame.now - lastWallMs) / 1000)) : 0;
+      const wall = lastWallMs > 0 ? Math.min(10, Math.max(0, (frame.now - lastWallMs) / 1000)) : 0;
       lastWallMs = frame.now;
       const wallLive = frame.visualDt > 0 ? wall : 0;
       const bdt = Math.min(wallLive, 0.25);
@@ -992,7 +1037,11 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       let want: Anchor | null = null;
       let dirX = 0, dirZ = 1;
       let same = false;
-      if (forced) {
+      if (job && anchor && !forced) {
+        // A battlefield is streaming in: let it finish before judging whether it is still the right one.
+        want = anchor;
+        same = true;
+      } else if (forced) {
         want = {
           lat: forced.lat, lon: forced.lon, frontA: forced.a, frontB: forced.b, seed: hashString(`${forced.lat.toFixed(3)},${forced.lon.toFixed(3)}`),
           frontKey: forced.key, camLat: forced.lat, camLon: forced.lon,
@@ -1053,7 +1102,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         const rate = frame.dt * (visTarget > nearFade ? 1.6 : 3);
         nearFade += Math.max(-rate, Math.min(rate, visTarget - nearFade));
       }
-      if (ctx.app.isShot && anchor && visTarget >= 0.999) nearFade = 1;
+      if (ctx.app.isShot && anchor && visTarget >= 0.999 && !pendingAnchor) nearFade = 1;
       if (!anchor) {
         deactivate();
         intensity = farIntensity;

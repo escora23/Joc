@@ -57,7 +57,7 @@ export function pairFront(s: ShotContext, a: number, b: number, active = true): 
  * land; 'human': the human attacks north; 'none': declared, both sides quiet. mobilize > 0: the war is declared with
  * that mobilization and the offensive is queued for its end (the shot freezes during the mobilization).
  */
-export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' | 'human' | 'none'; mobilize?: number; run?: number; minKmh?: number } = {}): Promise<StagedWar> {
+export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' | 'human' | 'none'; mobilize?: number; run?: number; minKmh?: number; theatre?: 'iberia' | 'plains' } = {}): Promise<StagedWar> {
   const { ctx, params } = s;
   await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 300), speed: 0, headStart: 10, autopilot: false });
   const view = ctx.sim.view;
@@ -65,10 +65,16 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   const ap = { ...ctx.settings.get().autoPause };
   for (const k of AUTO_PAUSE_KINDS) ap[k] = false;
   ctx.settings.set({ autoPause: ap });
-  const enemy = nearestNation(s, 45.8, 1.5);
+  // Theatres: 'iberia' (default: northern Spain against south-western France, across the Pyrenees and the Ebro) or
+  // 'plains' (the Ukrainian steppe: flat ground, the speed of the front is the plains speed of §4.5).
+  const plains = (params.get('theatre') ?? opts.theatre) === 'plains';
+  const TH = plains
+    ? { near: [52.5, 36.0], human: [48.9, 33.0], enemy: [52.4, 35.8], hDiv: [49.7, 32.4], eDiv: [51.6, 34.6], aimH: [47.8, 32.2], aimE: [53.0, 36.3] }
+    : { near: [45.8, 1.5], human: [41.6, -2.6], enemy: [45.9, 1.2], hDiv: [41.9, -1.6], eDiv: [45.0, -0.4], aimH: [40.9, -2.2], aimE: [46.2, 1.0] };
+  const enemy = nearestNation(s, TH.near[0], TH.near[1]);
   const who = (params.get('attacker') as 'enemy' | 'human' | 'none' | null) ?? opts.attacker ?? 'enemy';
-  ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: latLonToTile(41.6, -2.6), radius: 17 });
-  ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: latLonToTile(45.9, 1.2), radius: 17 });
+  ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: latLonToTile(TH.human[0], TH.human[1]), radius: 17 });
+  ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: latLonToTile(TH.enemy[0], TH.enemy[1]), radius: 17 });
   ctx.sim.debug({ type: 'addTroops', playerId: HUMAN_ID, amount: Number(params.get('humanTroops') ?? (who === 'human' ? 1_400_000 : 500_000)) });
   ctx.sim.debug({ type: 'addTroops', playerId: enemy, amount: Number(params.get('enemyTroops') ?? (who === 'enemy' ? 1_400_000 : 500_000)) });
   const attacker = who === 'human' ? HUMAN_ID : enemy;
@@ -77,10 +83,10 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   // Armored divisions of both sides near the border: they attach to the front and show in every view.
   const nDiv = Number(params.get('div') ?? 2);
   for (let k = 0; k < nDiv; k++) {
-    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: enemy, tile: latLonToTile(45.0, -0.4 + k * 1.2), targetTile: -1 });
-    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: HUMAN_ID, tile: latLonToTile(41.9, -1.6 + k * 1.2), targetTile: -1 });
+    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: enemy, tile: latLonToTile(TH.eDiv[0], TH.eDiv[1] + k * 1.2), targetTile: -1 });
+    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: HUMAN_ID, tile: latLonToTile(TH.hDiv[0], TH.hDiv[1] + k * 1.2), targetTile: -1 });
   }
-  const aim = attacker === enemy ? latLonToTile(40.9, -2.2) : latLonToTile(46.2, 1.0);
+  const aim = attacker === enemy ? latLonToTile(TH.aimH[0], TH.aimH[1]) : latLonToTile(TH.aimE[0], TH.aimE[1]);
   if (who === 'none') {
     ctx.sim.debug({ type: 'war', a: enemy, b: HUMAN_ID, mobilizeTicks: mob });
   } else if (mob > 0) {
@@ -176,7 +182,26 @@ async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number)
   const f = st.front;
   if (!f) return;
   const n = f.samples.length >> 1;
-  const m = Math.floor(n / 2);
+  // On the offensive's axis where it crosses the line (the corridor's core advances at the full §4.5 speed; its flanks
+  // at 0.8 of it), else the middle of the front.
+  let m = Math.floor(n / 2);
+  const a = s.ctx.sim.view.attacks.find((q) => q.frontKey === f.key && q.defender > 0);
+  if (a && a.originX >= 0) {
+    const cl = Math.cos((tileXYToLatLon(a.x, a.y).lat * Math.PI) / 180);
+    let ux = (a.x - a.originX) * cl, uy = a.y - a.originY;
+    const ul = Math.hypot(ux, uy) || 1;
+    ux /= ul;
+    uy /= ul;
+    let best = Infinity;
+    for (let v = 0; v < n; v++) {
+      const rx = (f.samples[v * 2] - a.originX) * cl, ry = f.samples[v * 2 + 1] - a.originY;
+      const perp = Math.abs(rx * uy - ry * ux);
+      if (perp < best) {
+        best = perp;
+        m = v;
+      }
+    }
+  }
   const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
   // Over the real (sub-tile) contact line, where the ground battle stands.
   const lf = deriveLocalForces(s.ctx.sim.view, x, y, 40, HUMAN_ID);
@@ -205,7 +230,7 @@ registerShot('front-ground-real', 'battle', 'W6: the ground battle composed from
 }, 10);
 
 registerShot('front-observation', 'battle', 'W6: the ground battle under observation time (1 s = 1 min): the line and the armies move with the sim, continuously', async (s) => {
-  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220 });
+  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, theatre: 'plains' });
   await descend(s, st, 9, 0.95);
   // Let the world run: below 60 km the app switches the clock to observation time (60 game s per real s).
   s.ctx.sim.setSpeed(1);
