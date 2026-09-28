@@ -36,6 +36,9 @@ export interface ControllerHooks {
   openLog?(): void;
   closeNations?(): boolean;
   closeForces?(): boolean;
+  /** v2 (W6): the Guerra y frentes panel (G). closeFronts returns true when it was open. */
+  toggleFronts?(): void;
+  closeFronts?(): boolean;
 }
 
 const WEAPON_HOTKEYS: Record<string, WeaponType> = {
@@ -255,6 +258,7 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       } else if (hooks.radialOpen()) hooks.closeRadial();
       else if (hooks.closeNations?.()) return;
       else if (hooks.closeForces?.()) return;
+      else if (hooks.closeFronts?.()) return;
       else if (hs.selection.kind !== 'none') {
         hs.select({ kind: 'none' });
         hs.sound('close');
@@ -340,6 +344,9 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         return;
       case 'u':
         hooks.toggleForces?.();
+        return;
+      case 'g':
+        hooks.toggleFronts?.();
         return;
       case 'i': {
         // The next idle own unit: select it and fly there (§7.1).

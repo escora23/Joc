@@ -180,6 +180,8 @@ export interface AppEvents {
   saved: { key: string; day: number };
   /** UI: a side panel opened or closed (nations, log, help). */
   panelToggled: { panel: string; open: boolean };
+  /** v2 (W6): a front was picked (its badge on the globe, a Guerra panel row): the panel shows it, the camera goes there. */
+  frontSelected: { key: number; fly?: boolean };
 }
 
 // ---------------------------------------------------------------------------------------------

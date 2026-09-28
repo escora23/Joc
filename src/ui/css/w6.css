@@ -1,0 +1,86 @@
+/* FRONT ULTRA — W6: front badges, the Guerra y frentes panel, the ground battle's strip and banners (DESIGN_V2 §11). */
+
+/* ---------------------------------------------------------------------------------------------
+   Front badges on the globe
+   --------------------------------------------------------------------------------------------- */
+.fu-fbadges { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+.fu-fb { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; min-width: 6.4rem; padding: 0.28rem 0.4rem 0.3rem;
+  background: rgba(6, 11, 18, 0.86); border: 1px solid rgba(132, 196, 255, 0.35); border-radius: 3px; box-shadow: 0 0.3rem 1rem rgba(0, 0, 0, 0.5);
+  font: 600 0.72rem var(--fu-font-cond); color: var(--fu-text); letter-spacing: 0.04em; will-change: transform; }
+.fu-fb-lead { position: absolute; left: 0; top: 0; height: 1px; background: rgba(232, 242, 255, 0.8); box-shadow: 0 0 2px #000; transform-origin: 0 0; pointer-events: none; }
+.fu-fb:hover { border-color: var(--fu-accent); }
+.fu-fb.is-human { border-color: rgba(255, 181, 61, 0.7); }
+.fu-fb.is-losing { border-color: var(--fu-danger); box-shadow: 0 0 0.9rem rgba(255, 74, 74, 0.45); }
+.fu-fb.is-quiet { opacity: 0.86; }
+.fu-fb-row { display: flex; align-items: center; justify-content: center; gap: 0.3rem; }
+.fu-fb-chip { --c: #888; display: inline-block; min-width: 2.2rem; padding: 0.06rem 0.3rem; text-align: center; border-radius: 2px; background: var(--c);
+  color: #fff; text-shadow: 0 0 2px #000, 0 0 3px #000; font: 700 0.74rem var(--fu-font-cond); letter-spacing: 0.08em; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45); }
+.fu-fb-chip.is-you { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 181, 61, 0.9); }
+.fu-fb-dir { font-size: 0.8rem; color: var(--fu-text); min-width: 0.8rem; text-align: center; }
+.fu-fb-bar { display: flex; height: 0.34rem; margin: 0.22rem 0 0.16rem; background: #000; border: 1px solid rgba(0, 0, 0, 0.8); overflow: hidden; }
+.fu-fb-bar > i { display: block; height: 100%; }
+.fu-fb-bar > i.fu-fb-a { box-shadow: inset -1px 0 0 #fff; }
+.fu-fb-adv { text-align: center; font-size: 0.66rem; color: var(--fu-text-2); white-space: nowrap; }
+.fu-fb-divs { display: flex; justify-content: space-between; font-size: 0.62rem; color: var(--fu-text-dim); line-height: 1; }
+.fu-fb-divs:empty, .fu-fb-divs > span:empty { display: none; }
+
+/* ---------------------------------------------------------------------------------------------
+   Guerra y frentes panel (G)
+   --------------------------------------------------------------------------------------------- */
+.fu-warpanel { position: absolute; top: 11.5rem; right: 0.9rem; bottom: 8.5rem; width: 26rem; z-index: 25; display: flex; flex-direction: column; animation: fu-slide-right 0.3s var(--fu-ease) both; }
+.fu-war-intro { padding: 0.45rem 0.8rem; font-size: 0.72rem; color: var(--fu-text-dim); border-bottom: 1px solid var(--fu-line); }
+.fu-war-body { display: flex; flex-direction: column; gap: 0.6rem; }
+.fu-war-empty { display: flex; flex-direction: column; gap: 0.3rem; padding: 1rem 0.2rem; color: var(--fu-text-2); font-size: 0.8rem; }
+.fu-war-empty b { font: 700 0.9rem var(--fu-font-cond); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fu-text); }
+.fu-war-card { border: 1px solid var(--fu-line-strong); background: rgba(10, 18, 28, 0.6); padding: 0.5rem 0.55rem; display: flex; flex-direction: column; gap: 0.26rem; }
+.fu-war-head { display: flex; align-items: center; gap: 0.45rem; font: 700 0.95rem var(--fu-font-cond); letter-spacing: 0.06em; text-transform: uppercase; }
+.fu-war-head b { flex: 1; }
+.fu-war-swatch { width: 0.8rem; height: 0.8rem; border-radius: 2px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.fu-war-day { font-size: 0.7rem; color: var(--fu-accent-2); letter-spacing: 0.04em; text-transform: none; }
+.fu-war-line { font-size: 0.74rem; color: var(--fu-text-2); display: flex; gap: 0.6rem; justify-content: space-between; }
+.fu-war-line.is-dim { color: var(--fu-text-dim); }
+.fu-war-line.is-redeploy { color: var(--fu-accent); }
+.fu-war-esc { cursor: help; }
+.fu-war-score { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--fu-text-dim); }
+.fu-war-scorebar { position: relative; flex: 1; height: 0.4rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--fu-line); }
+.fu-war-scorebar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--fu-text-dim); }
+.fu-war-scorebar > i { position: absolute; top: 0; bottom: 0; background: var(--fu-success); }
+.fu-war-scorebar > i.is-neg { background: var(--fu-danger); }
+.fu-war-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.15rem; }
+.fu-war-actions .fu-btn--sm { padding: 0.32rem 0.5rem; font-size: 0.68rem; }
+.fu-war-actions .fu-btn .fu-ico { width: 0.85rem; height: 0.85rem; }
+.fu-war-fronts { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.3rem; }
+.fu-war-note { font-size: 0.72rem; color: var(--fu-text-dim); padding: 0.3rem 0; }
+.fu-war-front { border-left: 3px solid var(--fu-line-strong); background: rgba(0, 0, 0, 0.22); padding: 0.4rem 0.5rem; display: flex; flex-direction: column; gap: 0.22rem; }
+.fu-war-front.is-losing { border-left-color: var(--fu-danger); }
+.fu-war-front.is-quiet { border-left-style: dashed; }
+.fu-war-front.is-selected { outline: 1px solid var(--fu-accent); background: rgba(63, 208, 255, 0.08); }
+.fu-war-fhead { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.fu-war-fname { font: 700 0.84rem var(--fu-font-cond); letter-spacing: 0.05em; color: var(--fu-text); }
+.fu-war-age { font-size: 0.64rem; color: var(--fu-text-dim); white-space: nowrap; }
+.fu-war-tug { display: grid; grid-template-columns: auto auto auto 1fr; align-items: center; gap: 0.3rem; }
+.fu-war-tug .fu-fb-bar { margin: 0; }
+.fu-war-tug .fu-war-adv { grid-column: 1 / -1; font-size: 0.7rem; color: var(--fu-text); }
+.fu-war-tiles { color: var(--fu-text-dim); }
+.fu-war-prio { font-size: 0.64rem; }
+.fu-war-prio > button { padding: 0.28rem 0.45rem; font-size: 0.64rem; }
+.fu-war-prio > button.is-on { background: var(--fu-accent-dim); color: var(--fu-text); box-shadow: inset 0 -2px 0 var(--fu-accent); }
+.fu-war-sendlist { display: flex; flex-direction: column; gap: 0.25rem; border-top: 1px solid var(--fu-line); padding-top: 0.3rem; }
+.fu-war-send { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.4rem; font-size: 0.72rem; }
+.fu-war-send-name { display: flex; flex-direction: column; min-width: 0; }
+.fu-war-send-name span { color: var(--fu-text-dim); font-size: 0.66rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-war-send-eta { color: var(--fu-accent); font-size: 0.68rem; }
+
+/* ---------------------------------------------------------------------------------------------
+   Ground battle: the top strip and the nation banners (§11.7)
+   --------------------------------------------------------------------------------------------- */
+.fu-bstrip { position: absolute; left: 50%; top: 5.2rem; transform: translateX(-50%); z-index: 4; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
+  padding: 0.35rem 0.9rem; background: rgba(6, 11, 18, 0.82); border: 1px solid rgba(132, 196, 255, 0.35); border-radius: 3px; white-space: nowrap; }
+.fu-bstrip-main { font: 700 0.86rem var(--fu-font-cond); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fu-text); display: flex; gap: 0.5rem; align-items: center; }
+.fu-bstrip-main .fu-fb-chip { font-size: 0.72rem; }
+.fu-bstrip-sub { font: 500 0.72rem var(--fu-font-mono); color: var(--fu-text-2); }
+.fu-bbanners { position: absolute; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+.fu-bbanner { --c: #888; position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.5rem 0.2rem 0.3rem;
+  background: rgba(6, 11, 18, 0.78); border-left: 0.45rem solid var(--c); font: 700 0.78rem var(--fu-font-cond); letter-spacing: 0.08em; text-transform: uppercase; color: #fff;
+  box-shadow: 0 0.2rem 0.8rem rgba(0, 0, 0, 0.5); will-change: transform; }
+.fu-bbanner::after { content: ''; position: absolute; left: -0.45rem; top: 100%; width: 2px; height: 1.6rem; background: var(--c); }

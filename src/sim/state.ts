@@ -323,6 +323,8 @@ export class Attack implements SimAttack {
   readonly recent = new Int32Array(128);
   recentN = 0;
   conqueredThisTick = 0;
+  /** Pressure added over the corridor this tick (Σ of the per-tile increments, in tiles): the sub-tile push (W6 momentum). */
+  pushThisTick = 0;
   /** EMAs (per tick) of conquest and casualties (front intensity for the renderers). */
   conquestEma = 0;
   lossEma = 0;

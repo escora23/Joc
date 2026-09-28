@@ -13,6 +13,8 @@ import { createCrisis } from './crisis';
 import { createTicker } from './feed';
 import { createNations } from './nations';
 import { createForces } from './forces';
+import { createFrontBadges } from './frontBadges';
+import { createFrontsPanel } from './fronts';
 import { createLeaderboard } from './leaderboard';
 import { createMinimap } from './minimap';
 import { wireNews } from './news';
@@ -27,6 +29,8 @@ import type { AppState, FrameInfo, GameContext } from '../../shared/api';
 import type { UiSoundKind } from '../../shared/events';
 import { t } from '../../shared/i18n';
 import type { GameSpeed } from '../../shared/types';
+import { tileXYToLatLon } from '../../shared/geo';
+import { frontAnchor } from './frontsInfo';
 
 export interface Hud {
   el: HTMLElement;
@@ -66,12 +70,17 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
   const nations = createNations(hs, alerts);
   // v2 (W4): the Fuerzas panel (U). One drawer at a time on the right (§7.5): opening one closes the other.
   const forces = createForces(hs);
+  // v2 (W6): the Guerra y frentes panel (G) shares the right-hand drawer slot, and the front badges on the globe.
+  const frontsPanel = createFrontsPanel(hs);
+  const badges = createFrontBadges(hs);
   hs.openNations = (id) => {
     forces.close();
+    frontsPanel.close();
     nations.open(id);
   };
   hs.openInbox = (pid) => {
     forces.close();
+    frontsPanel.close();
     nations.openInbox(pid);
   };
   hs.toggleForces = (open) => {
@@ -80,20 +89,45 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
       return;
     }
     if (nations.isOpen) nations.close();
+    frontsPanel.close();
     forces.open();
   };
+  const toggleFronts = (): void => {
+    if (frontsPanel.isOpen) {
+      frontsPanel.close();
+      return;
+    }
+    if (nations.isOpen) nations.close();
+    forces.close();
+    frontsPanel.open();
+  };
+  ctx.bus.on('frontSelected', (e) => {
+    if (nations.isOpen) nations.close();
+    forces.close();
+    frontsPanel.open(e.key);
+    const f = ctx.sim.view.frontByKey.get(e.key);
+    if (f && e.fly) {
+      const p = frontAnchor(f);
+      const ll = tileXYToLatLon(p.x, p.y);
+      ctx.bus.emit('focusRequest', { lat: ll.lat, lon: ll.lon, altitudeKm: Math.min(1200, Math.max(600, ctx.cameraRig.getState().altitudeKm * 0.5)), durationMs: 1300 });
+    }
+  });
   const boxEl = h('div', { class: 'fu-selbox fu-hidden' });
   const top = createTopBar(hs, {
     pause: openPause,
     settings: () => openSettings(ctx, sound),
     help: () => openHelp(ctx, sound),
     nations: () => {
-      if (!nations.isOpen) forces.close();
+      if (!nations.isOpen) {
+        forces.close();
+        frontsPanel.close();
+      }
       nations.toggle();
     },
     log: () => alerts.openLog(),
     pending: () => nations.pendingCount(),
     forces: () => hs.toggleForces(),
+    fronts: toggleFronts,
   });
   const lb = createLeaderboard(hs);
   const mm = createMinimap(hs);
@@ -126,10 +160,19 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     toggleMinimap: () => mm.toggle(),
     openHelp: () => openHelp(ctx, sound),
     toggleNations: () => {
-      if (!nations.isOpen) forces.close();
+      if (!nations.isOpen) {
+        forces.close();
+        frontsPanel.close();
+      }
       nations.toggle();
     },
     toggleForces: () => hs.toggleForces(),
+    toggleFronts,
+    closeFronts: () => {
+      if (!frontsPanel.isOpen) return false;
+      frontsPanel.close();
+      return true;
+    },
     closeForces: () => {
       if (!forces.isOpen) return false;
       forces.close();
@@ -187,7 +230,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     spawn.el,
     crisis.edge,
   );
-  const el = h('div', { class: 'fu-hud-root' }, alerts.markersEl, layout, nations.el, forces.el, cursor.el, ripples, radial.el, boxEl);
+  const el = h('div', { class: 'fu-hud-root' }, badges.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
 
   let state: AppState = 'boot';
   let acc10 = 0, acc4 = 0;
@@ -238,6 +281,8 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
       crisis.clear();
       nations.close();
       forces.close();
+      frontsPanel.close();
+      badges.clear();
       if (pauseMenu) pauseMenu.close();
       ripples.replaceChildren();
     },
@@ -251,11 +296,13 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
       tut.tick(dt);
       alerts.update(dt);
       mm.frame();
+      badges.update();
       if (acc10 >= 0.1) {
         acc10 = 0;
         crisis.update();
         nations.update();
         forces.update();
+        frontsPanel.update();
         if (state === 'spawn') spawn.refresh();
         else {
           top.refresh();

@@ -563,6 +563,7 @@ export class AttackSystem {
       return;
     }
     a.conqueredThisTick = 0;
+    a.pushThisTick = 0;
     a.lossThisTick = 0;
     a.consolidating = false;
     // Retreat in progress: the column is on its way home.
@@ -699,6 +700,7 @@ export class AttackSystem {
         inc = (Math.min(ADVANCE_MAX_KMH, v * armor) * axis * 0.1) / (extent * terrain);
       }
       const p = p0 + inc;
+      a.pushThisTick += inc;
       a.pressure.set(t, p);
       if (p >= a.theta.get(t)!) ready.push(t);
     }

@@ -31,6 +31,7 @@ import { updateAir, type AirState } from './atmo';
 import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, separateTeamColors } from './common';
 import { createEffects, type Effects } from './effects';
 import { createFarLayer, gcKm, type FarLayer } from './far';
+import { createFrontOverlay, type FrontOverlay } from './overlay';
 import { FrontGeom } from './front';
 import { createInfantry, type Infantry } from './infantry';
 import { VehicleKind } from './models';
@@ -115,6 +116,14 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   let frontIntensity = 0.5;
   let activity = 0.5;
   const air: AirState = { muS: 1, sun: new THREE.Vector3() };
+  // The orbit overlay (§11.2): front bands, operational / naval / mobilization arrows.
+  const overlay: FrontOverlay = createFrontOverlay(ctx);
+  ctx.scene.add(overlay.group);
+  try {
+    (window as unknown as { __frontOverlay?: FrontOverlay }).__frontOverlay = overlay;
+  } catch {
+    /* no window */
+  }
 
   const aUp = new THREE.Vector3(), aEast = new THREE.Vector3(), aNorth = new THREE.Vector3();
   const sunW = new THREE.Vector3();
@@ -636,12 +645,14 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       if (far) far.group.visible = on;
     },
     onGameStart() {
+      overlay.clear();
       job = null;
       teardown();
       far?.clear();
       deactivate();
     },
     onGameEnd() {
+      overlay.clear();
       job = null;
       teardown();
       far?.clear();
@@ -669,6 +680,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     update(frame: FrameInfo) {
       if (!ready) return;
       const view = ctx.sim.view;
+      ctx.cameraRig.getState(camState);
+      overlay.update(frame.visualDt, camState.altitudeKm, ctx.app.state !== 'command' && view.phase !== 'none');
       if (view.phase === 'none' || !ctx.world) {
         if (active || anchor) {
           teardown();

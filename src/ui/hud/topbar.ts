@@ -29,6 +29,8 @@ export interface TopBarActions {
   pending?(): number;
   /** v2 (W4): the Fuerzas panel (U). */
   forces?(): void;
+  /** v2 (W6): the Guerra y frentes panel (G). */
+  fronts?(): void;
 }
 
 export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
@@ -67,7 +69,9 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
   tip(wars, () => warsTip(hs));
   wars.addEventListener('click', () => {
     hs.sound('click');
-    actions.nations?.();
+    // v2 (W6): the wars counter opens the Guerra y frentes panel (the nations drawer while there is no war panel).
+    if (actions.fronts) actions.fronts();
+    else actions.nations?.();
   });
 
   const bar = h('div', { class: 'fu-topbar fu-glass fu-brackets' },
@@ -141,7 +145,7 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
     chip,
     // Row 3: the panel tools (nations, alerts, help, settings, menu), on their own row.
     h('div', { class: 'fu-time-tools' },
-      nationsBtn, iconBtn('armoredDivision', 'forces.title', () => actions.forces?.(), 'tb.forces.tip', 'U'), iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
+      nationsBtn, iconBtn('armoredDivision', 'forces.title', () => actions.forces?.(), 'tb.forces.tip', 'U'), iconBtn('swords', 'fr.title', () => actions.fronts?.(), 'tb.fronts.tip', 'G'), iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
       iconBtn('help', 'hud.help', actions.help, 'tb.help.tip', 'F1'), iconBtn('settings', 'menu.settings', actions.settings, 'tb.settings.tip'), iconBtn('menu', 'hud.menu', actions.pause, 'tb.menu.tip', 'Esc')),
     hegChip,
     doom,

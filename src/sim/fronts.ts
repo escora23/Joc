@@ -58,6 +58,12 @@ export interface Front {
   casualties: [number, number];
   /** EMA of tiles fallen per tick to each side on this front. */
   gain: [number, number];
+  /**
+   * Fast EMA (α 0.2) of the pressure each side's offensive adds per tick over its corridor (tiles per tick, sub-tile):
+   * the front's momentum. It reacts within a few ticks when a side stalls (R ≤ 1: no pressure) or a counter-offensive
+   * starts pushing, long before whole 25 km tiles change hands (W6, §11.2: chevrons follow the battle).
+   */
+  push: [number, number];
   offensive: [number, number];
   advanceKmh: number;
   intensity: number;
@@ -275,7 +281,7 @@ export class FrontTracker {
         startTick: g.tick, mobStart: atDeclaration ? [w.startTick, w.startTick] : [g.tick, g.tick],
         share: [0, 0], target: [0, 0],
         priority: [this.priorities.get(w.a * 1_048_576 + key) ?? 1, this.priorities.get(w.b * 1_048_576 + key) ?? 1],
-        casualties: [0, 0], gain: [0, 0], offensive: [0, 0], advanceKmh: 0, intensity: 0.05, seenTick: g.tick,
+        casualties: [0, 0], gain: [0, 0], push: [0, 0], offensive: [0, 0], advanceKmh: 0, intensity: 0.05, seenTick: g.tick,
       };
       if (parent) {
         f.share = [parent.share[0] * 0.5, parent.share[1] * 0.5];
@@ -427,7 +433,7 @@ export class FrontTracker {
   endTick(): void {
     const g = this.g;
     for (const f of this.fronts.values()) {
-      let ga = 0, gb = 0, heat = 0, hasA = 0, hasB = 0;
+      let ga = 0, gb = 0, pa = 0, pb = 0, heat = 0, hasA = 0, hasB = 0;
       for (const s of [0, 1] as const) {
         const id = f.offensive[s];
         if (!id) continue;
@@ -438,9 +444,11 @@ export class FrontTracker {
         }
         if (s === 0) {
           ga += a.conqueredThisTick;
+          pa += a.pushThisTick;
           hasA = a.id;
         } else {
           gb += a.conqueredThisTick;
+          pb += a.pushThisTick;
           hasB = a.id;
         }
         heat = Math.max(heat, Math.min(1, 0.25 + Math.log10(1 + a.lossEma) / 4.2 + Math.min(0.3, a.conquestEma * 2)));
@@ -448,6 +456,8 @@ export class FrontTracker {
       f.offensive = [hasA, hasB];
       f.gain[0] = f.gain[0] * 0.95 + ga * 0.05;
       f.gain[1] = f.gain[1] * 0.95 + gb * 0.05;
+      f.push[0] = f.push[0] * 0.8 + pa * 0.2;
+      f.push[1] = f.push[1] * 0.8 + pb * 0.2;
       f.intensity = hasA || hasB ? Math.max(0.15, heat) : 0.05;
       if (!hasA && !hasB) f.advanceKmh *= 0.9;
     }
@@ -471,7 +481,7 @@ export class FrontTracker {
         id: f.key, key: f.key, a: f.a, b: f.b, x: f.samples[mid] ?? f.x, y: f.samples[mid + 1] ?? f.y,
         intensity: f.intensity, troopsA: Math.round(ga + (offA?.troops ?? 0)), troopsB: Math.round(gb + (offB?.troops ?? 0)),
         length: f.length, dirX: f.dirX, dirY: f.dirY, samples: Float32Array.from(f.samples),
-        momentum: Math.tanh(5 * (f.gain[0] - f.gain[1])), advanceKmh: +f.advanceKmh.toFixed(2), startTick: f.startTick,
+        momentum: +Math.tanh(5 * (f.push[0] - f.push[1])).toFixed(3), advanceKmh: +f.advanceKmh.toFixed(2), startTick: f.startTick,
         pa: Math.round(lead?.pa ?? 0), pd: Math.round(lead?.pd ?? 0), garrisonA: Math.round(ga), garrisonB: Math.round(gb),
         shareA: +f.share[0].toFixed(3), shareB: +f.share[1].toFixed(3), targetShareA: +f.target[0].toFixed(3),
         targetShareB: +f.target[1].toFixed(3), priorityA: f.priority[0], priorityB: f.priority[1],
