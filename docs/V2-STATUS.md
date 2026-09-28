@@ -269,3 +269,12 @@ Stage 3, beside W5, after both W3 and W4. Read DESIGN_V2 §11 (all), §10.12, §
 12. __fuAudio.stats() over 60 s near a busy front: <= 2 combat cues per real s per front and <= 6 in total
 
 13. localForces.ts has a passing unit test; src/command has no second derivation of local forces; the overlay uses <= 4 draw calls and allocates nothing per frame; tsc and build clean
+
+## Owner feedback #2 (added while W5/W6 were being verified)
+
+See docs/FEEDBACK-1.md, section "Owner feedback #2", items 18–24 (release keeps position; fast, sensible incursion
+response with warning + short grace + real interceptors; sensible escorts, no ramming trucks; command-mode entry
+matches the enemies visible on the strategic/battle view; slimmer attack arrows that don't hide the front; a clear,
+non-click-spam attack flow; small polish). Whoever works on command mode, fronts, integration or gauntlet fixes MUST
+treat these as blockers. Order of work requested by the owner: finish the in-flight task, then fix 18–24 properly,
+without another endless cycle.

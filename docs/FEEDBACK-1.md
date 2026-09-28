@@ -52,3 +52,48 @@ The 3D models must NOT be removed. Item 4 only asks for 2D icons/sprites **when 
 close, every unit and structure must show its proper, well-made 3D model, clearly visible, correctly grounded
 (item 15) and with visible upgrade levels. Critics must check close-up views explicitly: if models are too small,
 invisible or missing at close zoom, that is a blocker.
+
+## Owner feedback #2 (after playing the v2 build with W1–W6 in it) — MANDATORY, items 18–24
+
+Verbatim (Spanish):
+
+> 1. Cuando dejas de controlar el vehiculo, vuelve a la base, eso no tendria que ser asi. 2. Me he estado volando encima de la capital del rival y no me ha pasado nada, ponia que en 6 horas, 6 horas es mucho, tendria que ser rollo que me de tiempo a dar la vuelta y si no la doy y no tengo autorizacion entonces que me los envien. cuando estás atacando, la flecha esa amarilla es demasiado grande y no ves bien la frontera del ataque y eso.. Lo del ataque todavia no se acaba de entender muy bien, es basicamente spamear clicks, por otro lado, lo cuando cruzas la frontera, me ha pasado que despues de un rato han venido dos camiones que se me han puesto a chocar e ir muy rapido y cuando les he disparado me han declarado la guerra, bueno yo a ellos, eso tiene sentido, pero que los escoltas no sean dos camiones que dan vueltas chocandome como locos sabes, que tenga sentido. Por otro lado, lo de los tanques, le he dado a controlarlo estando delante de otros tanques enemigos y cuando he aparecido en el mapa no estaban [...] hay detallitos asi que van fallando pero el juego pinta muy bien.
+> Que acaben lo que estaban haciendo y después que mejoren estos aspectos, bien hechos pero sin tirarse otra eternidad.
+
+What it means (each is a hard requirement; the owner-proxy critic checks them as items 18–24):
+
+18. **Releasing control must NOT send the unit back to its base.** When the player exits command mode, the unit stays
+    exactly where he left it (holding position, same heading), in every case: own land, foreign land, sea, air (a jet
+    keeps flying a holding orbit at that spot until fuel/endurance rules say otherwise, clearly shown). No automatic
+    "walk back" / return-to-base (today src/sim/command.ts `walkBack`/`returning` and the jet return-to-base). If the
+    unit is inside a foreign nation at peace when released, it stays there and the incursion keeps running (the
+    victim keeps reacting); the HUD/alert says so, and the player can order it out.
+19. **Incursion response must be fast and sensible, not "in 6 hours".** Entering another nation's land, waters or
+    airspace without authorization (no open-borders/alliance treaty) triggers at once: an in-world warning (radio/HUD:
+    "Estás violando el espacio aéreo de X. Da la vuelta o serás interceptado", with a visible countdown), a short
+    grace period measured in REAL seconds in command mode (about 20–40 s at 1:1, scaled sensibly in travel mode) to
+    turn back; if the player does not leave, the victim sends real forces from its real nearest bases that arrive in
+    a believable, short time (jets scrambled from the nearest airbase within ~1–3 real minutes; ground QRF from the
+    nearest post/base/city; warships for sea), SAM sites of the victim engage an intruding aircraft only if at war or
+    after the warning is ignored per the victim's personality. Flying over a rival capital must never be ignored.
+    The strategic layer shows the same incursion with the same timings.
+20. **Escorts/interceptors must behave sensibly.** No "two trucks circling and ramming at crazy speed". A ground
+    reaction force is proper military/police vehicles (APCs, patrol vehicles, tanks as appropriate) that approach at
+    realistic speeds, take position, shadow/escort at a sensible distance, block the road, warn, and only fight when
+    fired upon or when war is declared. Air interceptors fly formation on the intruder, waggle/warn, then escort out
+    or engage per rules. Ships shadow and warn. Driving AI must respect physics (no ramming, no spinning in circles,
+    no teleport-speed), and firing on them is correctly treated as an act of war (that part is fine).
+21. **Command-mode entry must match the world the player sees.** If the player takes control of a tank facing enemy
+    tanks (on the strategic/battle view), those enemy units must be there in command mode at the same relative
+    positions (same source: deriveLocalForces + the battle layer's entities). Never an empty field where the battle
+    was. (W5 acceptance "counts per side agree within 10%" must hold in real play, not only in shots.)
+22. **Attack arrows must not hide the front.** The big yellow operational/attack arrow is too large and covers the
+    border being attacked. Make it slimmer, semi-transparent, drawn below borders/front bands, shrinking/fading when
+    zoomed in, so the attacked border and the front line stay clearly readable at every zoom.
+23. **Attacking must be understandable, not click-spamming.** Today launching attacks feels like spamming clicks.
+    Redesign the player-facing attack flow so one deliberate action starts an offensive on a front with a chosen
+    commitment (troops/intensity), shows a clear preview (target, expected speed/cost/odds), and then the offensive
+    persists and is managed (reinforce, change intensity, halt, retreat) from the front badge / Guerra panel —
+    repeated clicks must not be needed to keep an attack going. Explain it in the tutorial and tooltips.
+24. **Polish pass on "detallitos"**: while fixing the above, fix the small inconsistencies you meet in command mode
+    and fronts. Keep scope tight: finish current work first, then do 18–24 well, without an endless loop.
