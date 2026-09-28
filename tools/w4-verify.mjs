@@ -72,7 +72,29 @@ await page.evaluate(() => {
   window.__w4 = { acks: [], ready: [], alerts: () => window.__fuAlerts?.log?.() ?? [] };
   ctx.bus.on('orderAck', (e) => window.__w4.acks.push(e));
   ctx.bus.on('unitReady', (e) => window.__w4.ready.push(e));
+  // Pause the sim on the very tick a condition holds (checked on every sim update, in the page): under software GL a
+  // page.evaluate poll can take seconds, and a 27-tick rail hop ends between two polls.
+  window.__w4.watch = null;
+  window.__w4.hit = null;
+  window.__w4.traceId = -1;
+  window.__w4.trace = [];
+  ctx.bus.on('simTick', () => {
+    const id = window.__w4.traceId;
+    if (id >= 0) {
+      const u = ctx.sim.view.units.get(id);
+      if (u) window.__w4.trace.push({ tick: ctx.sim.view.tick, x: u.x, y: u.y, mode: u.mode });
+    }
+    const w = window.__w4.watch;
+    if (!w) return;
+    const r = w(ctx.sim.view);
+    if (r) { ctx.sim.setSpeed(0); window.__w4.hit = r; window.__w4.watch = null; }
+  });
 });
+/** Arm the in-page watcher with a function source `(view) => result | null`; returns once it fired (or null). */
+async function pauseWhen(src, arg, timeout = 60000) {
+  await page.evaluate(({ src, arg }) => { window.__w4.hit = null; const f = eval(`(${src})`); window.__w4.watch = (v) => f(v, arg); }, { src, arg });
+  return until(() => window.__w4.hit, null, timeout, 200);
+}
 const view = (fn, arg) => page.evaluate(fn, arg);
 /**
  * A right click on the canvas as one pointerdown/pointerup pair created together: under the software renderer a
@@ -85,6 +107,22 @@ const rightClick = (x, y) => page.evaluate(({ x, y }) => {
   c.dispatchEvent(new PointerEvent('pointerdown', o));
   c.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 }));
 }, { x, y });
+
+
+/**
+ * Rail capacity is a real limit (§6.2: a factory carries 1 / 2 / 3 divisions at a time), and by V7 / V11 the
+ * divisions bought in V2 may be riding the trains. Give the rail checks their own capacity: a level-3 factory near
+ * Madrid (3 more slots), placed once.
+ */
+async function extraRailCapacity() {
+  await view(() => {
+    const { ctx } = window.__front;
+    if (window.__w4.extraFactory) return;
+    window.__w4.extraFactory = true;
+    const at = (la, lo) => Math.floor((90 - la) / 180 * 800) * 1600 + Math.floor((lo + 180) / 360 * 1600);
+    ctx.sim.debug({ type: 'spawnStructure', structure: 2, owner: 1, tile: at(40.05, -3.9), level: 3 });
+  });
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 if (want('V1')) {
@@ -335,32 +373,42 @@ if (want('V7')) {
     'all present', has(/Rompe frentes|Breaks fronts/) && has(/40 km\/h/) && has(/40 km por segundo|40 km per second/i) && has(/Alcance|Reach/i) && has(/Efecto ahora|Effect now/i) && has(/Integridad|Integrity/i) && has(/días de combate|days of combat/i) && !has(/\bfuerza\b|\bstrength\b/i));
   await shot('v7-unit-card');
   // A division travelling by train (§2.3): the card's speed follows the mode (100 km/h by rail, as its rail ETA).
+  await extraRailCapacity();
   const railDiv = await view(() => {
     const { ctx } = window.__front;
     const v = ctx.sim.view;
     const cities = [...v.structures.values()].filter((x) => x.owner === 1 && x.type === 0).sort((a, b) => b.level - a.level);
     if (cities.length < 2) return null;
+    const known = Math.max(0, ...[...v.units.keys()]);
     ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: cities[0].tile, targetTile: -1 });
-    return { from: cities[0].tile, to: cities[1].tile };
+    ctx.sim.setSpeed(1);
+    return { from: cities[0].tile, to: cities[1].tile, known };
   });
   let railText = '';
+  let v7diag = 'no division spawned';
   if (railDiv) {
-    const id = await until((f) => {
-      const near = [...window.__front.ctx.sim.view.units.values()].filter((x) => x.owner === 1 && x.type === 3 && Math.abs(x.x - (f % 1600) - 0.5) < 1.5 && Math.abs(x.y - Math.floor(f / 1600) - 0.5) < 1.5);
+    const id = await pauseWhen(((v, { f, known }) => {
+      const near = [...v.units.values()].filter((x) => x.id > known && x.owner === 1 && x.type === 3 && Math.abs(x.x - (f % 1600) - 0.5) < 1.5 && Math.abs(x.y - Math.floor(f / 1600) - 0.5) < 1.5);
       return near.length ? Math.max(...near.map((x) => x.id)) : null;
-    }, railDiv.from, 20000, 300);
+    }).toString(), { f: railDiv.from, known: railDiv.known }, 20000);
     if (id) {
       await view(({ id, to }) => {
         const { ctx } = window.__front;
         ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: 'move', tile: to, targetId: 0 });
-        ctx.sim.setSpeed(1);
+        window.__w4.trace = [];
+        window.__w4.traceId = id;
       }, { id, to: railDiv.to });
-      await until((id) => window.__front.ctx.sim.view.units.get(id)?.mode === 2 || null, id, 60000, 200);
+      // Pause on the tick it boards the train.
+      const armed = pauseWhen(((v, id) => (v.units.get(id)?.mode === 2 ? id : null)).toString(), id, 60000);
+      await sleep(300);
+      await view(() => window.__front.ctx.sim.setSpeed(1));
+      await armed;
+      v7diag = await view((id) => { const v = window.__front.ctx.sim.view; const u = v.units.get(id); const r = v.routes.get(id); const modes = [...new Set(window.__w4.trace.map((p) => p.mode))].join('>'); window.__w4.traceId = -1; return `unit ${id} mode ${u?.mode} route ${r ? r.length : 0} tiles, rail ${v.rail.length / 2} links, modes ${modes}, ${window.__w4.trace.length} updates`; }, id);
       await view((id) => { window.__front.ctx.sim.setSpeed(0); window.__fuHud.shared.select({ kind: 'unit', id }); }, id);
       railText = (await until(() => { const t = window.__fuCard.text(); return /100 km\/h/.test(t) ? t : null; }, null, 20000, 300)) ?? await view(() => window.__fuCard.text());
     }
   }
-  row('V7', 'division by rail: the card reads the rail speed with its real-time equivalent', (railText.match(/(velocidad|speed)[^\n]*\n?[^\n]*/i)?.[0] ?? railText.slice(0, 120)).replace(/\s+/g, ' '),
+  row('V7', 'division by rail: the card reads the rail speed with its real-time equivalent', (railText.match(/(velocidad|speed)[^\n]*\n?[^\n]*/i)?.[0] ?? railText.slice(0, 120)).replace(/\s+/g, ' ') + (/100 km\/h/.test(railText) ? '' : ` [${v7diag}]`),
     '100 km/h en tren ≈ 100 km por segundo a 1x', /100 km\/h/.test(railText) && /100 km por segundo|100 km per second/i.test(railText) && /(en tren|by rail)/i.test(railText));
   const bomber = await view(() => {
     const v = window.__front.ctx.sim.view;
@@ -415,6 +463,7 @@ if (want('V10')) {
 // arrives in km / 100 h ± 10 % of game time, travelling on the train (mode Rail) along the rail line: every sampled
 // sim position during the rail leg lies within 1.5 tiles of the chain of station-to-station links its route follows.
 if (want('V11')) {
+  await extraRailCapacity();
   const setup = await view(() => {
     const { ctx } = window.__front;
     const at = (la, lo) => Math.floor((90 - la) / 180 * 800) * 1600 + Math.floor((lo + 180) / 360 * 1600);
@@ -424,14 +473,22 @@ if (want('V11')) {
     ctx.sim.setSpeed(4);
     return { A: at(37.39, -5.98), B: at(41.65, -0.88), tick: ctx.sim.view.tick };
   });
-  // The rail graph is rebuilt at most every 60 ticks: wait until the Sevilla station is linked.
-  const linked = await until((A) => {
+  // The rail graph is rebuilt at most every 60 ticks: wait until the Sevilla station is connected to Zaragoza's
+  // (a path through the network, not just one link), or the division would rightly go by road.
+  const linked = await until(({ A, B }) => {
     const v = window.__front.ctx.sim.view;
-    const st = [...v.structures.values()].find((s) => s.tile === A);
-    if (!st) return null;
-    for (let i = 0; i + 1 < v.rail.length; i += 2) if (v.rail[i] === st.id || v.rail[i + 1] === st.id) return st.id;
+    const all = [...v.structures.values()];
+    const a = all.find((s) => s.tile === A), b = all.find((s) => s.tile === B);
+    if (!a || !b) return null;
+    const adj = new Map();
+    for (let i = 0; i + 1 < v.rail.length; i += 2) {
+      (adj.get(v.rail[i]) ?? adj.set(v.rail[i], []).get(v.rail[i])).push(v.rail[i + 1]);
+      (adj.get(v.rail[i + 1]) ?? adj.set(v.rail[i + 1], []).get(v.rail[i + 1])).push(v.rail[i]);
+    }
+    const seen = new Set([a.id]), q = [a.id];
+    while (q.length) { const n = q.shift(); if (n === b.id) return a.id; for (const m of adj.get(n) ?? []) if (!seen.has(m)) { seen.add(m); q.push(m); } }
     return null;
-  }, setup.A, 180000, 500);
+  }, { A: setup.A, B: setup.B }, 180000, 500);
   const v11 = { hours: -1, km: 0, railSamples: 0, offLine: 0, worstTiles: 0, mode2: false };
   if (linked) {
     await view((A) => {
@@ -439,15 +496,20 @@ if (want('V11')) {
       ctx.sim.setSpeed(1);
       ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: A, targetTile: -1 });
     }, setup.A);
-    const id = await until((A) => {
-      const near = [...window.__front.ctx.sim.view.units.values()].filter((x) => x.owner === 1 && x.type === 3 && Math.abs(x.x - (A % 1600) - 0.5) < 1.5 && Math.abs(x.y - Math.floor(A / 1600) - 0.5) < 1.5);
+    // Pause in the same page call that finds it: a new division may otherwise leave on its own (it deploys to the
+    // nearest front) before the order, and the trip would be timed from mid-way.
+    const id = await pauseWhen(((v, A) => {
+      const near = [...v.units.values()].filter((x) => x.owner === 1 && x.type === 3 && Math.abs(x.x - (A % 1600) - 0.5) < 0.6 && Math.abs(x.y - Math.floor(A / 1600) - 0.5) < 0.6);
       return near.length ? Math.max(...near.map((x) => x.id)) : null;
-    }, setup.A, 30000, 300);
+    }).toString(), setup.A, 30000);
     if (id) {
       const t0 = await view(({ id, B }) => {
         const { ctx } = window.__front;
         ctx.sim.setSpeed(0);
         ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: 'move', tile: B, targetId: 0 });
+        // Every sim update of this division, recorded in the page (departure and arrival ticks exact to the update).
+        window.__w4.trace = [];
+        window.__w4.traceId = id;
         return ctx.sim.view.tick;
       }, { id, B: setup.B });
       const path = (await until((id) => {
@@ -459,7 +521,9 @@ if (want('V11')) {
         const byTile = new Map([...window.__front.ctx.sim.view.structures.values()].map((s) => [s.tile, s]));
         return path.filter((t) => byTile.has(t)).map((t) => [(t % 1600) + 0.5, Math.floor(t / 1600) + 0.5]);
       }, path);
-      await view(() => window.__front.ctx.sim.setSpeed(4));
+      // 2x, not 4x: at 4x a loaded machine delivers the view in bursts of dozens of ticks and the arrival sample
+      // overshoots. The clock starts when the division leaves Sevilla (the order is sent while paused).
+      await view(() => window.__front.ctx.sim.setSpeed(2));
       const segDist = (px, py) => {
         let best = Infinity;
         for (let i = 0; i + 1 < legs.length; i++) {
@@ -477,28 +541,59 @@ if (want('V11')) {
           const { ctx } = window.__front;
           const u = ctx.sim.view.units.get(id);
           if (!u) return { gone: true };
-          return { x: u.x, y: u.y, mode: u.mode, tick: ctx.sim.view.tick, done: Math.abs(u.x - (B % 1600) - 0.5) < 1.2 && Math.abs(u.y - Math.floor(B / 1600) - 0.5) < 1.2 && u.mode !== 2 && u.etaTicks <= 0 };
+          return { x: u.x, y: u.y, mode: u.mode, state: u.state, eta: u.etaTicks, tick: ctx.sim.view.tick, done: Math.abs(u.x - (B % 1600) - 0.5) < 3 && Math.abs(u.y - Math.floor(B / 1600) - 0.5) < 3 && u.mode !== 2 && u.mode !== 1 };
         }, { id, B: setup.B });
         if (s.gone) break;
+        v11.last = s;
+        if (v11.dep === undefined && (Math.abs(s.x - (setup.A % 1600) - 0.5) > 0.05 || Math.abs(s.y - Math.floor(setup.A / 1600) - 0.5) > 0.05)) v11.dep = s.tick - 1;
         if (s.mode === 2) {
+          v11.railT0 ??= s.tick;
+          v11.railT1 = s.tick;
           v11.mode2 = true;
           v11.railSamples++;
           const d = segDist(s.x, s.y);
           v11.worstTiles = Math.max(v11.worstTiles, d);
           if (d > 1.5) v11.offLine++;
         }
+        // Arrived: off the train and no longer marching, at Zaragoza (a division that detrains next to a front
+        // attaches to it, a tile or two from the city).
         if (s.done) { arrived = s.tick; break; }
-        await sleep(250);
+        await sleep(150);
       }
       await view(() => window.__front.ctx.sim.setSpeed(0));
       const [ax, ay] = [(setup.A % 1600) + 0.5, Math.floor(setup.A / 1600) + 0.5], [bx, by] = [(setup.B % 1600) + 0.5, Math.floor(setup.B / 1600) + 0.5];
       const rad = Math.PI / 180;
       const la1 = (90 - ay * 0.225) * rad, la2 = (90 - by * 0.225) * rad, dl = (bx - ax) * 0.225 * rad;
       v11.km = 6371 * Math.acos(Math.min(1, Math.sin(la1) * Math.sin(la2) + Math.cos(la1) * Math.cos(la2) * Math.cos(dl)));
-      v11.hours = arrived !== null ? (arrived - t0) / 10 : -1;
+      const trace = await view(() => { window.__w4.traceId = -1; return window.__w4.trace; });
+      const ax0 = (setup.A % 1600) + 0.5, ay0 = Math.floor(setup.A / 1600) + 0.5;
+      const bx0 = (setup.B % 1600) + 0.5, by0 = Math.floor(setup.B / 1600) + 0.5;
+      const depI = trace.findIndex((p) => Math.abs(p.x - ax0) > 0.05 || Math.abs(p.y - ay0) > 0.05);
+      const arrI = trace.findIndex((p, i) => i > depI && p.mode !== 1 && p.mode !== 2 && Math.abs(p.x - bx0) < 3 && Math.abs(p.y - by0) < 3);
+      // Rail samples from the per-update trace (positions while in Rail mode, against the station links).
+      v11.railSamples = 0; v11.offLine = 0; v11.worstTiles = 0;
+      for (const p of trace) {
+        if (p.mode !== 2) continue;
+        v11.mode2 = true;
+        v11.railSamples++;
+        const d = segDist(p.x, p.y);
+        v11.worstTiles = Math.max(v11.worstTiles, d);
+        if (d > 1.5) v11.offLine++;
+      }
+      if (depI >= 0 && arrI > 0) { v11.dep = depI > 0 ? trace[depI - 1].tick : t0; arrived = trace[arrI].tick; }
+      v11.hours = arrived !== null ? (arrived - (v11.dep ?? t0)) / 10 : -1;
+      // The rail leg itself: station-to-station km along the links it rode, and the game hours spent in Rail mode.
+      const kmOf = (a, b) => {
+        const la1 = (90 - a[1] * 0.225) * rad, la2 = (90 - b[1] * 0.225) * rad, dl = (b[0] - a[0]) * 0.225 * rad;
+        return 6371 * Math.acos(Math.min(1, Math.sin(la1) * Math.sin(la2) + Math.cos(la1) * Math.cos(la2) * Math.cos(dl)));
+      };
+      v11.pathLen = path.length;
+      v11.stops = legs.length;
+      v11.railKm = legs.slice(1).reduce((acc, p, i) => acc + kmOf(legs[i], p), 0);
+      v11.railHours = v11.railT0 !== undefined ? (v11.railT1 - v11.railT0) / 10 : -1;
     }
   }
-  row('V11', `Sevilla -> Zaragoza by rail (${v11.km.toFixed(0)} km): arrival in game hours`, linked ? `${v11.hours.toFixed(1)} h (${v11.mode2 ? 'on the train' : 'never on the train'})` : 'Sevilla never linked', `${(v11.km / 100).toFixed(1)} h ± 10 %`, !!linked && v11.mode2 && Math.abs(v11.hours / (v11.km / 100) - 1) <= 0.1);
+  row('V11', `Sevilla -> Zaragoza by rail (${v11.km.toFixed(0)} km): arrival in game hours`, linked ? `${v11.hours.toFixed(1)} h (${v11.mode2 ? 'on the train' : 'never on the train'})${v11.hours < 0 && v11.last ? ` last ${JSON.stringify(v11.last)} B ${(setup.B % 1600) + 0.5},${Math.floor(setup.B / 1600) + 0.5}` : ''}` : 'Sevilla never linked', `${(v11.km / 100).toFixed(1)} h ± 10 %`, !!linked && v11.mode2 && Math.abs(v11.hours / (v11.km / 100) - 1) <= 0.1);
   row('V11', 'on the rail line while on the train (sim positions within 1.5 tiles of its station-to-station links)', `${v11.railSamples - v11.offLine}/${v11.railSamples} samples, worst ${v11.worstTiles.toFixed(2)} tiles`, 'all, >= 5 samples', v11.railSamples >= 5 && v11.offLine === 0);
   await shot('v11-rail');
 }
@@ -590,16 +685,21 @@ if (want('V15')) {
 }
 
 if (want('V17')) {
+  // Order a division (the sim applies commands on its ticks: run it at 1x), then frame the human's busy base: its
+  // icon must carry the hourglass. (Busy structures of other nations may be off screen: only the human's count.)
   await view(() => {
     const { ctx } = window.__front;
-    ctx.cameraRig.setState({ lat: 40.8, lon: -2.8, altitudeKm: 1500, tilt: 0.2, heading: 0 });
-    const s = [...ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === 7);
     ctx.sim.debug({ type: 'addGold', playerId: 1, amount: 5_000_000 });
-    if (s) ctx.sim.send({ type: 'buildUnit', unit: 3, structureId: -1 });
+    ctx.sim.send({ type: 'buildUnit', unit: 3, structureId: -1 });
+    ctx.sim.setSpeed(1);
   });
-  await sleep(2500);
-  const hg = await view(() => ({ n: window.__units.stats().hourglasses, producing: [...window.__front.ctx.sim.view.structures.values()].filter((s) => (s.producing ?? 0) > 0 || s.built < 1 || (s.upgrade ?? 0) > 0).length }));
-  row('V17', 'hourglass badges on structures producing or building', `${hg.n} badges, ${hg.producing} busy structures`, '>= 1 when busy', hg.producing === 0 || hg.n >= 1);
+  const busyOwn = () => [...window.__front.ctx.sim.view.structures.values()].find((s) => s.owner === 1 && ((s.producing ?? 0) > 0 || s.built < 1 || (s.upgrade ?? 0) > 0));
+  const busyId = await until((f) => { const s = eval(`(${f})`)(); if (!s) return null; const { ctx } = window.__front; ctx.sim.setSpeed(0);
+    ctx.cameraRig.setState({ lat: 90 - (Math.floor(s.tile / 1600) + 0.5) * 0.225, lon: ((s.tile % 1600) + 0.5) * 0.225 - 180, altitudeKm: 1500, tilt: 0.2, heading: 0 }); return s.id; }, busyOwn.toString(), 30000, 300);
+  const probe = () => ({ n: window.__units.stats().hourglasses, producing: [...window.__front.ctx.sim.view.structures.values()].filter((s) => s.owner === 1 && ((s.producing ?? 0) > 0 || s.built < 1 || (s.upgrade ?? 0) > 0)).length });
+  // Poll (a camera jump to 1,500 km can take several seconds of frames under software GL) until a badge is drawn.
+  const hg = (await until((f) => { const r = eval(`(${f})`)(); return r.n >= 1 ? r : null; }, probe.toString(), 30000, 500)) ?? await view(probe);
+  row('V17', 'hourglass badge on the human\'s base producing a division (framed at 1,500 km)', `${hg.n} badges (busy base ${busyId ?? 'none'})`, '>= 1 badge on a busy base', !!busyId && hg.n >= 1);
   await shot('v17-hourglass');
 }
 
