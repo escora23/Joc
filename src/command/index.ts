@@ -204,7 +204,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   const lastSafe = new THREE.Vector3();
   let landOwner = 0;
   let prevLandOwner = 0;
-  let borderNear: { owner: number; distM: number } | null = null;
+  let borderNear: { owner: number; distM: number; x: number; z: number } | null = null;
   // Stats for the report.
   let distanceM = 0;
   const prevPos = new THREE.Vector3();
@@ -366,10 +366,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   /** Nearest tile of a nation whose land is an incursion, within ~1 tile of the vehicle, with its distance (m). */
-  function nearestBorder(p: THREE.Vector3): { owner: number; distM: number } | null {
+  function nearestBorder(p: THREE.Vector3): { owner: number; distM: number; x: number; z: number } | null {
     const tp = tileOf(p.x, p.z);
     const cx = Math.floor(tp.x), cy = Math.floor(tp.y);
-    let best: { owner: number; distM: number } | null = null;
+    let best: { owner: number; distM: number; x: number; z: number } | null = null;
     const a = { x: 0, z: 0 }, b = { x: 0, z: 0 };
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -382,7 +382,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), z0 = Math.min(a.z, b.z), z1 = Math.max(a.z, b.z);
         const ddx = Math.max(x0 - p.x, 0, p.x - x1), ddz = Math.max(z0 - p.z, 0, p.z - z1);
         const d = Math.hypot(ddx, ddz);
-        if (!best || d < best.distM) best = { owner: o, distM: d };
+        if (!best || d < best.distM) best = { owner: o, distM: d, x: Math.max(x0, Math.min(x1, p.x)), z: Math.max(z0, Math.min(z1, p.z)) };
       }
     }
     return best;
@@ -1472,7 +1472,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const view = ctx.sim.view;
         const atWar = view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID);
         const peaceful = !atWar && (forces?.log.hostiles ?? 0) === 0 && landOwner === HUMAN_ID && !(forces?.last?.fronts.length);
-        if (peaceful) setTimeout(() => overlay?.showNotice(t('command.peace.notice'), 7, true), 3600);
+        if (peaceful) {
+          setTimeout(() => {
+            // Not over a more important notice (a border ahead): the peaceful welcome is only for the quiet case.
+            const nb = player() ? nearestBorder(player()!.pos) : null;
+            if (!overlay?.noticeText && (!nb || nb.distM > 5000)) overlay?.showNotice(t('command.peace.notice'), 7, true);
+          }, 3600);
+        }
       }
       if (controller) {
         controller.updateCamera(0);
@@ -1710,7 +1716,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         updateHover();
       }
       const wpText = waypoint && P ? `${t('command.map.waypoint')} · ${formatNumber(Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z) / 1000, 1)} km` : '';
-      overlay.update(realDt, camera, civil.labels, waypoint, wpText, hover, kind);
+      const labels = borderNear && borderNear.distM < 4000 && P
+        ? [...civil.labels, {
+          x: borderNear.x, y: ground.surfaceAt(borderNear.x, borderNear.z) + 12, z: borderNear.z, text: t('command.label.border', { nation: nationName(borderNear.owner) }),
+          sub: stateWord(borderNear.owner), kind: 'border' as const, color: colorCss(borderNear.owner), owner: borderNear.owner,
+        }]
+        : civil.labels;
+      overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);
       if (tacmap?.isOpen && now - lastMapWall > 500 && P) {
         lastMapWall = now;
         tacmap.draw(view, frame, ground, civil, P.pos, P.yaw, waypoint, params!.unitId);

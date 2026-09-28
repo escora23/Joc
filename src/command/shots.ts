@@ -14,7 +14,8 @@
 
 import * as THREE from 'three';
 import { HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../shared/constants';
-import { latLonToTile, tileToLatLon, worldTimeForSubsolarLon } from '../shared/geo';
+import { latLonToTile, latLonToTileXY, tileToLatLon, worldTimeForSubsolarLon } from '../shared/geo';
+import { deriveLocalForces } from '../shared/localForces';
 import { registerShot, type ShotContext } from '../shared/shots';
 import { StructureType, UnitType } from '../shared/types';
 import { commandInternals, type CommandInternals } from './index';
@@ -120,13 +121,26 @@ async function spawnNearEdge(s: ShotContext, type: UnitType, b: { hx: number; hy
   ctx.sim.debug({ type: 'spawnUnit', unit: type, owner: HUMAN_ID, tile: b.hy * MAP_W + b.hx, targetTile: -1 });
   const ll0 = tileToLatLon(b.hy * MAP_W + b.hx);
   const id = await waitUnit(s, type, HUMAN_ID, ll0);
-  const u = ctx.sim.view.units.get(id)!;
   ctx.sim.send({ type: 'unitControl', unitId: id, controlled: true });
-  await ctx.sim.fastForward(3);
-  const kmX = TILE_KM * Math.cos((ll0.lat * Math.PI) / 180);
-  const ex = (b.hx + b.fx) / 2 + 0.5, ey = (b.hy + b.fy) / 2 + 0.5;
+  await ctx.sim.fastForward(1);
+  await waitView(s, () => !!ctx.sim.view.command?.controlled.some((c) => c.unitId === id), 60_000);
+  await walkToward(s, id, (b.hx + b.fx) / 2 + 0.5, (b.hy + b.fy) / 2 + 0.5, km);
+  return id;
+}
+
+/**
+ * Walk a controlled unit (real controlledMove, legal speed: one tick of game time per ≤ 4.5 km step) toward a point in
+ * tile coords, stopping `km` short of it.
+ */
+async function walkToward(s: ShotContext, id: number, ex: number, ey: number, km: number): Promise<void> {
+  const { ctx } = s;
+  const u = ctx.sim.view.units.get(id);
+  if (!u) return;
+  const lat = 90 - (u.y / MAP_H) * 180;
+  const kmX = TILE_KM * Math.cos((lat * Math.PI) / 180);
   let dxKm = (ex - u.x) * kmX, dyKm = (ey - u.y) * TILE_KM;
   const L = Math.hypot(dxKm, dyKm);
+  if (L < 1e-6) return;
   const go = Math.max(0, L - km);
   dxKm /= L;
   dyKm /= L;
@@ -136,11 +150,25 @@ async function spawnNearEdge(s: ShotContext, type: UnitType, b: { hx: number; hy
     x += (dxKm * st) / kmX;
     y += (dyKm * st) / TILE_KM;
     done += st;
+    // Game time must pass for the move to be legal (the sim checks 65 km/h × elapsed × 1.1): one tick = 6 game min.
+    await ctx.sim.fastForward(1);
     ctx.sim.send({ type: 'controlledMove', unitId: id, x, y, heading: Math.atan2(dxKm, -dyKm) });
-    await s.wait(120);
+    const tx = x, ty = y;
+    await waitView(s, () => {
+      const v = ctx.sim.view.units.get(id);
+      return !!v && Math.abs(v.x - tx) < 0.01 && Math.abs(v.y - ty) < 0.01;
+    }, 60_000);
   }
-  await s.wait(400);
-  return id;
+}
+
+/** Poll the client view until `cond` holds (the software-rendered page applies worker updates once per frame). */
+async function waitView(s: ShotContext, cond: () => boolean, ms: number): Promise<boolean> {
+  const t0 = performance.now();
+  while (!cond()) {
+    if (performance.now() - t0 > ms) return false;
+    await s.wait(100);
+  }
+  return true;
 }
 
 async function waitUnit(s: ShotContext, type: UnitType, owner: number, near: { lat: number; lon: number }): Promise<number> {
@@ -164,7 +192,11 @@ async function stage(s: ShotContext, st: Stage): Promise<number> {
     foe = nearestNation(s, st.neighbour.lat, st.neighbour.lon);
     if (foe) ctx.sim.debug({ type: 'conquer', playerId: foe, centerTile: latLonToTile(st.neighbour.lat, st.neighbour.lon), radius: st.neighbour.radius });
   }
-  if (st.ownRadius) ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: latLonToTile(st.lat, st.lon), radius: st.ownRadius });
+  if (st.ownRadius) {
+    const t = latLonToTile(st.lat, st.lon);
+    ctx.sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: t, radius: st.ownRadius });
+    await waitView(s, () => ctx.sim.view.owner[t] === HUMAN_ID, 60_000);
+  }
   if (foe && st.war) {
     ctx.sim.debug({ type: 'war', a: foe, b: HUMAN_ID, mobilizeTicks: 0 });
     ctx.sim.debug({ type: 'addTroops', playerId: foe, amount: 400_000 });
@@ -183,14 +215,14 @@ async function stage(s: ShotContext, st: Stage): Promise<number> {
  * `war` ticks; the unit is walked to `km` from the border / front line, then taken under control.
  */
 async function stageBorder(s: ShotContext, unit: UnitType, lat: number, lon: number, hour: number, km: number, war = 0,
-  before?: (s: ShotContext, foe: number, b: { hx: number; hy: number; fx: number; fy: number }) => Promise<void> | void): Promise<number> {
+  before?: (s: ShotContext, foe: number, b: { hx: number; hy: number; fx: number; fy: number }) => Promise<void> | void, frontKm = 0): Promise<number> {
   const { ctx } = s;
   await startSession(s, lon, hour);
   // A real neighbour: the nation whose capital is nearest to the north of the point gets a contiguous strip of land
   // from its capital down to ~1 tile north of the point (staging only; the border then is a real sim border).
   const foe0 = nearestNation(s, lat + 2, lon);
   if (foe0) connectNation(s, foe0, lat + 0.55, lon);
-  await s.wait(300);
+  await waitView(s, () => !!humanBorder(s, lat, lon, foe0), 90_000);
   let b = humanBorder(s, lat, lon, foe0);
   if (!b) throw new Error('no border near the staging point');
   const foe = b.foe;
@@ -202,6 +234,18 @@ async function stageBorder(s: ShotContext, unit: UnitType, lat: number, lon: num
   }
   await before?.(s, foe, b);
   const id = await spawnNearEdge(s, unit, b, km);
+  if (frontKm > 0) {
+    // Close in on the real front line (the sub-tile contact line of this war, not the tile edge).
+    const u = ctx.sim.view.units.get(id);
+    if (u) {
+      const lf = deriveLocalForces(ctx.sim.view, u.x, u.y, 40, HUMAN_ID);
+      const fr = lf.fronts[0];
+      if (fr) {
+        const nl = latLonToTileXY(fr.nearest.lat, fr.nearest.lon);
+        await walkToward(s, id, nl.x, nl.y, frontKm);
+      }
+    }
+  }
   await ctx.app.enterCommandMode(id);
   ctx.sim.setSpeed(0);
   return foe;
@@ -270,7 +314,7 @@ registerShot('command-front', 'command', 'At a real front of a staged war: enemy
     // A real enemy division and a defense post on the far side of the line.
     st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: foe, tile: b.fy * MAP_W + b.fx, targetTile: -1 });
     st.ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.DefensePost, owner: foe, tile: b.fy * MAP_W + b.fx, level: 2 });
-  });
+  }, 0.9);
   if (live(s)) return;
   const I = internalsOrThrow();
   await settle(s, I, Number(s.params.get('fight') ?? 6));
@@ -309,7 +353,7 @@ registerShot('command-ship-coast', 'command', 'Warship at sea off the Spanish co
 registerShot('command-tank', 'command', 'Tank at a real front (the command-front staging, facing the nearest enemy)', async (s) => {
   await stageBorder(s, UnitType.ArmoredDivision, 42.7, -0.5, 16, 2, 200, (st, foe, b) => {
     st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: foe, tile: b.fy * MAP_W + b.fx, targetTile: -1 });
-  });
+  }, 2);
   if (live(s)) return;
   const I = internalsOrThrow();
   I.skipIntro();

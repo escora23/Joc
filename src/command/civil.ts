@@ -166,7 +166,7 @@ export class Civil {
       return im;
     };
     this.houses = mk(houseGeometry(), MAX_HOUSES, 'civil-houses');
-    const post = new THREE.CylinderGeometry(0.09, 0.11, 1.4, 6).translate(0, 0.7, 0);
+    const post = new THREE.CylinderGeometry(0.12, 0.15, 2.4, 6).translate(0, 1.2, 0);
     const pc = new Float32Array(post.attributes.position.count * 3).fill(1);
     post.setAttribute('color', new THREE.BufferAttribute(pc, 3));
     this.posts = mk(post, MAX_POSTS, 'border-posts');
@@ -614,7 +614,7 @@ export class Civil {
       const pts: number[] = [];
       const step = this.kind === 'jet' ? 120 : 25;
       const flush = () => {
-        if (pts.length >= 6) rib.add(pts, this.kind === 'jet' ? 30 : 1.6, C.r * 0.9, C.g * 0.9, C.b * 0.9);
+        if (pts.length >= 6) rib.add(pts, this.kind === 'jet' ? 30 : 3.5, C.r * 0.9, C.g * 0.9, C.b * 0.9);
         pts.length = 0;
       };
       for (let s = 0; s <= L; s += step) {

@@ -370,7 +370,7 @@ export class CommandOverlay {
       g.textAlign = 'center';
       g.fillStyle = 'rgba(0,0,0,0.55)';
       g.fillText(txt, x + 1, y + 1);
-      g.fillStyle = l.kind === 'base' ? '#e8f2ff' : '#fff6e0';
+      g.fillStyle = l.kind === 'border' ? '#ffd58a' : l.kind === 'base' ? '#e8f2ff' : '#fff6e0';
       g.fillText(txt, x, y);
       g.fillStyle = l.color;
       g.fillRect(x - 5, y + 5, 10, 3);
@@ -435,7 +435,7 @@ export class CommandOverlay {
 }
 
 function rankOf(l: CivilLabel): number {
-  return l.kind === 'capital' ? 0 : l.kind === 'city' ? 1 : l.kind === 'base' ? 2 : 3;
+  return l.kind === 'border' ? -1 : l.kind === 'capital' ? 0 : l.kind === 'city' ? 1 : l.kind === 'base' ? 2 : 3;
 }
 
 function bold(s: string): string {
