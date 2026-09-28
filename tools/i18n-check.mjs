@@ -12,9 +12,10 @@ import { esW3, enW3 } from '../src/ui/i18n/w3.ts';
 import { esW4, enW4 } from '../src/ui/i18n/w4.ts';
 import { esW6, enW6 } from '../src/ui/i18n/w6.ts';
 import { SIM_STRINGS, FALLBACK_NAMES_ES, FALLBACK_NAMES_EN } from '../src/sim/strings.ts';
+import { COMMAND_STRINGS } from '../src/command/strings.ts';
 
-const ES = { ...FALLBACK_NAMES_ES, ...SIM_STRINGS.es, ...es, ...esW1, ...esW2, ...esW3, ...esW4, ...esW6 };
-const EN = { ...FALLBACK_NAMES_EN, ...SIM_STRINGS.en, ...en, ...enW1, ...enW2, ...enW3, ...enW4, ...enW6 };
+const ES = { ...FALLBACK_NAMES_ES, ...SIM_STRINGS.es, ...es, ...esW1, ...esW2, ...esW3, ...esW4, ...esW6, ...COMMAND_STRINGS.es };
+const EN = { ...FALLBACK_NAMES_EN, ...SIM_STRINGS.en, ...en, ...enW1, ...enW2, ...enW3, ...enW4, ...enW6, ...COMMAND_STRINGS.en };
 const files = [];
 const walk = (d) => {
   for (const f of fs.readdirSync(d)) {
@@ -23,7 +24,7 @@ const walk = (d) => {
     else if (p.endsWith('.ts') && !p.endsWith('strings.ts')) files.push(p);
   }
 };
-walk('src/ui'); walk('src/sim'); walk('src/audio');
+walk('src/ui'); walk('src/sim'); walk('src/audio'); walk('src/command'); walk('src/app');
 const keys = new Set();
 const re = /\b(?:t|tx|tn)\(\s*'([a-zA-Z][a-zA-Z0-9_.]+)'/g;
 const re2 = /key: '((?:answer|diplo\.reason|treaty\.reason|tension|war\.reason|peace\.reason|escalation\.reason|msg)\.[a-zA-Z0-9_.]+)'/g;

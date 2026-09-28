@@ -422,6 +422,9 @@ const en: Record<string, string> = {
   'alert.incursion.entered.body': 'Your {unit} entered {nation} without permission. {nation} will decide how to respond.',
 };
 
+/** The dictionaries (tools/i18n-check.mjs reads them). */
+export const COMMAND_STRINGS = { es, en };
+
 let registered = false;
 export function registerCommandStrings(): void {
   if (registered) return;
