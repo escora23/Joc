@@ -147,6 +147,10 @@ export interface GameView {
   readonly truces: readonly { a: number; b: number; untilTick: number }[];
   /** The human's economy with its terms (top-bar breakdowns, §12.2); null before the first update. */
   readonly economy: import('./types').HumanEconomyView | null;
+  /** v2 (W5): command-mode state from the sim (§9.7, §9.8); null when nothing runs. */
+  readonly command: import('./types').CommandView | null;
+  /** performance.now() when `command` last arrived. */
+  readonly commandAt: number;
   treatiesBetween(a: number, b: number): TreatyView[];
   // --- v2 (W4) ---
   /** Planned paths of units (tile waypoints: water paths, division land/rail routes, train lines). */

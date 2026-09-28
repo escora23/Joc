@@ -286,7 +286,10 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         request.mode = msg.mode;
         request.rate = msg.rate ?? 0;
         request.throttled = !!msg.throttled;
-        if (game) game.observationFocus = msg.focus ? { x: msg.focus.x, y: msg.focus.y } : null;
+        if (game) {
+          game.observationFocus = msg.focus ? { x: msg.focus.x, y: msg.focus.y } : null;
+          game.commandTravel = msg.mode === 'travel';
+        }
         forcePost = true;
         break;
       case 'settings':

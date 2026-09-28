@@ -18,6 +18,7 @@ import {
   type SimEvent, type TickUpdate,
 } from '../shared/protocol';
 import { Rng } from '../shared/rng';
+import { CommandSystem } from './command';
 import type {
   AiDirector, ModifierKey, NewPlayerDef, ProposalAnswer, SimAttack, SimGame, SimPlayer, SimProposal, SimStructure, SimUnit, WorldEventDirector,
 } from '../shared/simapi';
@@ -123,6 +124,10 @@ export class Game implements SimGame {
   readonly fronts: FrontTracker;
   readonly labels: LabelPlacer;
   readonly enclaves: EnclaveSystem;
+  /** v2 (W5): command mode sync, incursions and quick-reaction forces (§9.7, §9.8). Not saved (transient). */
+  readonly command: CommandSystem;
+  /** v2 (W5): the worker runs travel time (set from the clock request): controlledMove checks the strategic speed. */
+  commandTravel = false;
   private ai: AiDirector;
   private worldEvents: WorldEventDirector;
   private aiErrors = 0;
@@ -235,6 +240,7 @@ export class Game implements SimGame {
     this.fronts = new FrontTracker(this);
     this.labels = new LabelPlacer(this);
     this.enclaves = new EnclaveSystem(this);
+    this.command = new CommandSystem(this);
 
     this.addPlayer({ name: config.playerName, kind: 'human', personality: null, color: config.playerColor, countryIndex: 0 });
     // AI directors: sim-ai's, with the sim-core fallback taking over if it throws.
@@ -607,8 +613,17 @@ export class Game implements SimGame {
         return this.diplomacy.answer(p, cmd.proposalId, cmd.accept);
       case 'leaveTreaty':
         return this.diplomacy.leaveTreaty(p, cmd.target, cmd.treaty);
-      case 'unitControl':
-        return this.unitSys.control(p, cmd.unitId, cmd.controlled);
+      case 'unitControl': {
+        const ok = this.unitSys.control(p, cmd.unitId, cmd.controlled);
+        if (ok) this.command.onControl(p, cmd.unitId, cmd.controlled);
+        return ok;
+      }
+      case 'controlledMove':
+        return this.command.move(p, cmd);
+      case 'commandCasualties':
+        return this.command.casualties(p, cmd);
+      case 'controlledDamage':
+        return this.command.damage(p, cmd);
       case 'commandResult':
         return this.applyCommandResult(p, cmd);
     }
@@ -1269,6 +1284,7 @@ export class Game implements SimGame {
     // 8. eliminations & win check
     this.checkEliminations();
     this.checkWin();
+    this.command.tick();
   }
 
   private aiFault(err: unknown): void {
@@ -1572,6 +1588,10 @@ export class Game implements SimGame {
       const hp = this.playerById[HUMAN_ID];
       if (hp && hp.spawned && hp.alive) u.economy = this.economy.breakdown(hp);
     }
+    {
+      const cv = this.command.view(full);
+      if (cv) u.command = cv;
+    }
     if (this.doomsdayDirty || full) {
       this.doomsdayDirty = false;
       u.doomsday = this.doomsday;
@@ -1674,7 +1694,7 @@ const SAVE_SPEC: GraphSpec = {
     DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES,
   ],
   skip: new Map<SaveCtor, ReadonlySet<string>>([
-    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug', 'rules'])],
+    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'command', 'commandTravel', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug', 'rules'])],
     [AttackSystem, new Set(['terrainTime', 'terrainDef', 'nb', 'nb2', 'tc', 'ready', 'atkArmor', 'defArmor', 'posts'])],
     [WeaponSystem, new Set(['falloutStamp', 'threats'])],
     [EnclaveSystem, new Set(['stamp', 'stack', 'nb', 'nb2'])],

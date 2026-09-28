@@ -133,6 +133,10 @@ class ClientView implements GameView {
   treaties: TreatyView[] = [];
   /** v2 (W3): the human's economy terms (top-bar breakdowns). */
   economy: import('../shared/types').HumanEconomyView | null = null;
+  /** v2 (W5): command-mode state (controlled units, incursions, quick-reaction forces); null when nothing runs. */
+  command: import('../shared/types').CommandView | null = null;
+  /** Wall ms (performance.now) when `command` arrived: the client extrapolates CommandView.sec from it. */
+  commandAt = 0;
   /** The AIs' opinions of the human, by AI id. */
   opinions = new Map<number, OpinionView>();
   /** The human's proposals (open ones and the latest answered), by id. */
@@ -218,6 +222,7 @@ class ClientView implements GameView {
     this.treaties = [];
     this.opinions.clear();
     this.economy = null;
+    this.command = null;
     this.proposals.clear();
     this.proposalsAtMs = 0;
     this.frontByKey.clear();
@@ -482,6 +487,10 @@ export function createSimClient(bus: GameBus): SimClientApi {
     if (u.truces) view.truces = u.truces;
     if (u.treaties) view.treaties = u.treaties;
     if (u.economy) view.economy = u.economy;
+    if (u.command) {
+      view.command = u.command;
+      view.commandAt = performance.now();
+    }
     if (u.opinions) {
       view.opinions.clear();
       for (const o of u.opinions) view.opinions.set(o.of, o);

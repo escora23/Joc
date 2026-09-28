@@ -299,7 +299,8 @@ export class UnitSystem {
     if (!a || a.ended || a.defender <= 0) return s;
     const reach = a.frontage / 2 + DIVISION_ATTACH_TILES;
     const scan = (owner: number, fn: (u: Unit) => void) => {
-      for (const u of g.unitsByOwner.get(owner) ?? []) if (!u.dead && u.state !== UnitState.Controlled) fn(u);
+      // v2 (W5, §9.8): a division driven in command mode keeps supporting its front (it stays near the axis to count).
+      for (const u of g.unitsByOwner.get(owner) ?? []) if (!u.dead && (u.state !== UnitState.Controlled || u.type === UnitType.ArmoredDivision)) fn(u);
     };
     scan(a.attacker, (u) => {
       if (u.type === UnitType.ArmoredDivision && u.mode === Mode.Front && u.enemy === a.defender && nearAxis(a, u.x, u.y, reach)) s!.atk.push(u);

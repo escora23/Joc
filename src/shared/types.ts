@@ -731,3 +731,51 @@ export interface ProductionView {
   /** The ordinal the unit will carry. */
   serial: number;
 }
+
+// --- v2 (W5): command mode (DESIGN_V2 §9.7, §9.8) ---
+/** A quick-reaction force a victim sends against an incursion (continuous tile coords; moved between ticks). */
+export interface QrfView {
+  x: number;
+  y: number;
+  fromX: number;
+  fromY: number;
+  /** Local soldiers (1 = 25 troops of the victim's garrison). */
+  soldiers: number;
+  dispatchSec: number;
+  arriveSec: number;
+  arrived: boolean;
+  source: 'city' | 'post' | 'base' | 'border';
+  /** Real divisions ordered toward the intruder, fighters vectored to an intruding jet. */
+  divisions: number[];
+  fighters: number[];
+}
+/** An incursion involving the human (as intruder or victim). Times are CommandView.sec game seconds. */
+export interface IncursionView {
+  id: number;
+  intruder: number;
+  victim: number;
+  unitId: number;
+  kind: CommandKind;
+  enteredSec: number;
+  decideAtSec: number;
+  response: 'none' | 'protest' | 'intercept' | 'war';
+  respondedSec: number;
+  /** Protest: withdraw by this time (game s); 0 = none. */
+  deadlineSec: number;
+  depthKm: number;
+  left: boolean;
+  qrf: QrfView | null;
+}
+/** Command-mode state of the sim (TickUpdate.command): present while a unit is controlled or an incursion runs. */
+export interface CommandView {
+  /** The command system's game clock (game seconds; sub-steps in command mode, 360 per strategic tick). */
+  sec: number;
+  /** The worker runs travel time (the move check uses the strategic speed). */
+  travel: boolean;
+  controlled: { unitId: number; x: number; y: number; sec: number; returning: boolean }[];
+  incursions: IncursionView[];
+  /** Move-check tallies (§9.8). */
+  moves: { accepted: number; snapped: number; rejected: number; lastSnapKm: number; lastRejectKm: number };
+  /** Recent decisions (snaps, rejections, incursion decisions), newest last. */
+  log: { sec: number; text: string }[];
+}

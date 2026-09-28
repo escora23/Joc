@@ -92,7 +92,17 @@ export type PlayerCommand =
       unitsDestroyed: number[];
       structuresDestroyed: number[];
       unitLost: boolean;
-    };
+    }
+  // --- v2 (W5): command mode sync (§9.8) ---
+  /** Where the controlled unit is now (continuous tile coords, compass heading; alt in km for aircraft). */
+  | { type: 'controlledMove'; unitId: number; x: number; y: number; heading: number; alt?: number }
+  /**
+   * Losses inflicted in command mode since the last report: `troops` of `victim` (soldiers × 25), and hits on real
+   * units (fraction of the unit: tank 0.25, IFV 0.10, jet 1/3, ship hit 0.25) and structures (SAM launcher 0.35...).
+   */
+  | { type: 'commandCasualties'; unitId: number; victim: number; troops: number; unitHits: { unitId: number; dmg: number }[]; structureHits: { structureId: number; dmg: number }[] }
+  /** The controlled unit's integrity after local losses (0 = destroyed, by = the player who destroyed it). */
+  | { type: 'controlledDamage'; unitId: number; integrity: number; by?: number };
 
 export type PlayerCommandType = PlayerCommand['type'];
 
@@ -150,6 +160,11 @@ export type SimEvent =
   | { type: 'invasionDetected'; tick: number; unitId: number; owner: number; target: number; toTile: number; etaTicks: number; troops: number; by: 'radar' | 'coast' | 'neighbour' }
   | { type: 'clockChanged'; tick: number; mode: ClockMode; rate: number }
   | { type: 'unrest'; tick: number; owner: number; region: number[]; cause: 'occupation' | 'exhaustion' | 'nuclear'; stage: 'start' | 'cancelled' | 'rebellion'; untilTick: number; x: number; y: number }
+  /**
+   * v2 (W5, §9.7): a controlled unit entered (or left) foreign land at peace; the victim's answer; its quick-reaction
+   * force arrived. sec = CommandView.sec game seconds; etaSec = the force's arrival from now; deadlineSec = protest.
+   */
+  | { type: 'borderIncursion'; tick: number; intruder: number; victim: number; unitId: number; tile: number; stage: 'entered' | 'left' | 'response' | 'arrived'; response?: 'protest' | 'intercept' | 'war'; escalated?: boolean; kind: CommandKind; sec: number; etaSec?: number; deadlineSec?: number }
   | { type: 'hegemony'; tick: number; leader: number; stage: 'start' | 'broken' | 'won'; untilTick: number }
   | { type: 'capitulation'; tick: number; loser: number; winner: number; tiles: number; war: number }
   // --- v2 (W4): units ---
@@ -320,6 +335,8 @@ export interface TickUpdate {
   proposals?: ProposalView[];
   /** v2 (W3): the human's economy with its terms (every 10 ticks), for the top-bar breakdowns. */
   economy?: import('./types').HumanEconomyView;
+  /** v2 (W5): command mode (while a unit is controlled or an incursion runs, and once after). */
+  command?: import('./types').CommandView;
 }
 
 // =================================================================================================
