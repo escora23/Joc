@@ -37,6 +37,8 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
   const banners = h('div', { class: 'fu-bbanners fu-hidden' }, ...bannerEls);
   const v = new THREE.Vector3(), vc = new THREE.Vector3();
   let acc = 1;
+  // A language change repaints at once (the strip otherwise refreshes 4 times a second).
+  ctx.bus.on('languageChanged', () => (acc = 1));
 
   function paintText(key: number): boolean {
     const view = ctx.sim.view;
@@ -67,7 +69,7 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
       toggleClass(el, 'fu-hidden', !on);
       toggleClass(banners, 'fu-hidden', !on);
       if (!on || !bv) return;
-      acc += ctx.frame.dt;
+      acc += Math.max(ctx.frame.dt, 0.05);
       if (acc >= 0.25) {
         acc = 0;
         if (!paintText(bv.frontKey)) {
@@ -100,8 +102,20 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
           e.style.display = 'none';
           continue;
         }
-        e.style.display = '';
         const x = ((vc.x + 1) / 2) * W, y = ((1 - vc.y) / 2) * H;
+        // Never under a HUD panel (alerts, leaderboard, build bar): a banner there would be unreadable.
+        let hidden = false;
+        for (const r of ctx.ui.getOccludedRects()) {
+          if (x + 8 < r.right && x + 170 > r.left && y - 40 < r.bottom && y - 14 > r.top) {
+            hidden = true;
+            break;
+          }
+        }
+        if (hidden) {
+          e.style.display = 'none';
+          continue;
+        }
+        e.style.display = '';
         e.style.transform = `translate(${(x + 8).toFixed(1)}px, ${(y - 40).toFixed(1)}px)`;
       }
     },

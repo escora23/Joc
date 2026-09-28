@@ -14,6 +14,7 @@ import { HUMAN_ID, MAP_W } from '../../shared/constants';
 import { latLonToTile, tileXYToLatLon } from '../../shared/geo';
 import { registerShot, type ShotContext } from '../../shared/shots';
 import { battleDebug } from './index';
+import { deriveLocalForces } from '../../shared/localForces';
 import { fxInternal } from '../fx/index';
 import { AUTO_PAUSE_KINDS, UnitType, type FrontView } from '../../shared/types';
 
@@ -158,7 +159,7 @@ registerShot('front-600', 'battle', 'W6: 600 km over the same war: flashes and f
 }, 10);
 
 registerShot('front-mobilization', 'battle', 'W6: a declared war during its mobilization: pulsing arrows on the aggressor side of the border, the quiet front dashed', async (s) => {
-  const st = await stageFrontWar(s, { attacker: 'enemy', mobilize: 80 });
+  const st = await stageFrontWar(s, { attacker: 'enemy', mobilize: Number(s.params.get('mob') ?? 400) });
   frameFront(s, st.front, 2200);
   await s.waitFrames(30);
 }, 10);
@@ -177,7 +178,10 @@ async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number)
   const n = f.samples.length >> 1;
   const m = Math.floor(n / 2);
   const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
-  const ll = tileXYToLatLon(x, y);
+  // Over the real (sub-tile) contact line, where the ground battle stands.
+  const lf = deriveLocalForces(s.ctx.sim.view, x, y, 40, HUMAN_ID);
+  const lfF = lf.fronts.find((q) => q.key === f.key);
+  const ll = lfF ? { lat: lfF.nearest.lat, lon: lfF.nearest.lon } : tileXYToLatLon(x, y);
   const cl = Math.cos((ll.lat * Math.PI) / 180);
   const hdg = Math.atan2(f.dirX * cl, -f.dirY) + Number(s.params.get('hdg') ?? 1.1);
   s.ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: Number(s.params.get('alt') ?? alt), tilt: Number(s.params.get('tilt') ?? tilt), heading: hdg });

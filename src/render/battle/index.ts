@@ -152,7 +152,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   // ---- the line from the sim (§11.5): displayed offset along the advance normal, following the sub-tile line ----
   /** Sim line offset (m along N from the anchor) at the last sample, the game hour of that sample, the extrapolation. */
   let simShift = 0, simHours = 0, simSpeedMs = 0, simDir = 0, simKmh = 0, simSub = false;
-  let sampleAcc = 0, divAcc = 0;
+  let sampleAcc = 0, divAcc = 0, lastWallMs = 0;
   let lineSpeed = 0;
   let splitWanted: [number, number] = [0, 0];
   const shownDivs: BattleShown['divisions'] = [];
@@ -554,6 +554,16 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const world = ctx.world;
     if (!world || !terrainShared || !propsShared || !infantry || !vehicles || !effects) return;
     teardown();
+    // Centre the battlefield on the REAL contact line: the sub-tile line (moved into the tile being taken by its
+    // pressure progress) can lie up to a tile ahead of the tile edge the front search found.
+    if (!forced) {
+      const lf0 = deriveLocalForcesAt(ctx.sim.view, an.lat, an.lon, FORCES_RADIUS_KM + 30, HUMAN_ID);
+      const f0 = pickLocalFront(lf0, an);
+      if (f0) {
+        an.lat = f0.nearest.lat;
+        an.lon = f0.nearest.lon;
+      }
+    }
     anchor = an;
     setAnchorFrame(an.lat, an.lon);
     const aux = getWorldAux(world);
@@ -967,8 +977,12 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       }
       // Battle animation runs on real time (§11.6): the same at every speed, frozen on pause. The line and the real
       // units move with the sim clock instead (followLine, updateDivisions).
-      const bdt = Math.min(frame.visualDt, 0.1);
-      clock += bdt;
+      // Wall time (frame.dt is clamped to 0.1 s): at any frame rate the battle runs at real speed; paused, it freezes.
+      const wall = lastWallMs > 0 ? Math.min(5, Math.max(0, (frame.now - lastWallMs) / 1000)) : 0;
+      lastWallMs = frame.now;
+      const wallLive = frame.visualDt > 0 ? wall : 0;
+      const bdt = Math.min(wallLive, 0.25);
+      clock += wallLive;
       uniforms.uTime.value = clock;
       ctx.cameraRig.getState(camState);
       const alt = camState.altitudeKm;
@@ -1066,18 +1080,20 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       updateLighting(alt);
       props?.updateLod(camL.x, camL.z);
       renderShadows();
-      // The fight follows the sim: the sub-tile line, who is winning, the real divisions (§11.5).
-      sampleAcc += frame.dt;
+      // The fight follows the sim: the sub-tile line, who is winning, the real divisions (§11.5). These run on wall
+      // time (not the per-frame dt, which is clamped to 0.1 s): the line keeps its real speed however low the frame
+      // rate is, and stops on pause.
+      sampleAcc += wall;
       if (sampleAcc >= 0.25) {
         sampleAcc = 0;
         sampleLine();
       }
-      divAcc += frame.dt;
+      divAcc += wall;
       if (divAcc >= 0.5) {
         divAcc = 0;
         updateDivisions(frame.simAlpha);
       }
-      followLine(frame.visualDt);
+      followLine(wallLive);
       if (bdt > 0) {
         supportFire(bdt);
         battleStep(bdt);

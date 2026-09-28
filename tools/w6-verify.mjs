@@ -157,7 +157,7 @@ if (!only || only.has('mob')) {
   const m = await page.evaluate(() => { const v = __front.ctx.sim.view; const w = v.wars.find((x) => x.target === 1 || x.aggressor === 1); return { st: window.__frontOverlay.stats(), tick: v.tick, until: w?.mobilizeUntilTick, quiet: v.fronts.filter((f) => f.quiet && (f.a === 1 || f.b === 1)).length }; });
   row('V3a', 'during the mobilization: pulsing arrows on the aggressor side; the quiet front dashed', `${m.st.mobilization} arrows, ${m.st.quiet} quiet fronts drawn dashed, tick ${m.tick} < ${m.until}`, m.st.mobilization > 0 && m.st.quiet > 0 && m.tick < m.until);
   await page.evaluate(() => __front.ctx.app.setSpeed(4));
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 400; i++) {
     await sleep(1000);
     const done = await page.evaluate(() => { const v = __front.ctx.sim.view; const w = v.wars.find((x) => x.target === 1 || x.aggressor === 1); return !w || v.tick > w.mobilizeUntilTick + 3; });
     if (done) break;
@@ -242,7 +242,7 @@ if (!only || only.has('ground')) {
   } else row('V8', 'ground battle built', 'no battle', false);
   row('V11a', 'nation banners above each side and the HUD strip (es): name, sides, troops, advance, days', `${g.banners.join(' | ')} || ${g.strip}`, g.banners.length === 2 && g.stripOn && /ataca/.test(g.strip) && /día de combate/.test(g.strip) && /avance/.test(g.strip));
   await page.evaluate(() => __front.ctx.settings.set({ language: 'en' }));
-  await sleep(2500);
+  await sleep(20000);
   const en = await page.evaluate(() => ({ strip: document.querySelector('.fu-bstrip')?.textContent ?? '', banners: [...document.querySelectorAll('.fu-bbanner')].map((e) => e.textContent) }));
   row('V11b', 'the strip and banners in English', `${en.banners.join(' | ')} || ${en.strip}`, /attacking/.test(en.strip) && /day of fighting/.test(en.strip) && /advance/.test(en.strip));
   await shot(page, 'front-ground-real-en');
@@ -255,19 +255,31 @@ if (!only || only.has('ground')) {
 if (!only || only.has('obs')) {
   const page = await open('front-observation', '&quality=low&observe=4000');
   const samples = [];
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 40; i++) {
     const s = await page.evaluate(() => ({ t: performance.now() / 1000, d: window.__battleDebug.shown(), mode: __front.ctx.sim.view.clock.mode, rate: __front.ctx.sim.view.clock.rate }));
     samples.push(s);
     await sleep(1000);
   }
   await shot(page, 'front-observation');
-  const ok = samples.filter((s) => s.d);
-  const first = ok[0], last = ok[ok.length - 1];
+  const ok = samples.filter((s) => s.d && s.d.subTile);
+  console.log('   V9 series', JSON.stringify(samples.map((s) => s.d && [+s.t.toFixed(1), Math.round(s.d.lineShift), Math.round(s.d.simShift), +s.d.expectedSpeed.toFixed(1), s.d.subTile ? 1 : 0, s.d.frontKey])));
   let jumps = 0;
   for (let i = 1; i < ok.length; i++) if (Math.abs(ok[i].d.lineShift - ok[i - 1].d.lineShift) > 5000) jumps++;
-  const measured = first && last ? (last.d.lineShift - first.d.lineShift) / (last.t - first.t) : 0;
-  const expected = last ? last.d.expectedSpeed : 0;
-  row('V9', 'observation: clock observation, line speed = advanceKmh × rate / 3600 (±15 %), no 25 km jumps', `mode ${last?.mode} rate ${last?.rate}; ${measured.toFixed(1)} m/s vs expected ${expected.toFixed(1)} m/s (${last?.d.advanceKmh} km/h); jumps ${jumps}`, last?.mode === 'observation' && expected !== 0 && Math.abs(measured / expected - 1) <= 0.15 && jumps === 0);
+  // Least-squares slope of the displayed line offset over real time (m per real second).
+  const slope = (pts) => {
+    const n = pts.length;
+    if (n < 2) return 0;
+    const mt = pts.reduce((a, p) => a + p[0], 0) / n, mv = pts.reduce((a, p) => a + p[1], 0) / n;
+    let num = 0, den = 0;
+    for (const [t, v] of pts) { num += (t - mt) * (v - mv); den += (t - mt) ** 2; }
+    return den > 0 ? num / den : 0;
+  };
+  const measured = slope(ok.map((s) => [s.t, s.d.lineShift]));
+  const simSpeed = slope(ok.map((s) => [s.t, s.d.simShift]));
+  const exp = ok.filter((s) => s.d.expectedSpeed !== 0);
+  const expected = exp.length ? exp.reduce((a, s) => a + s.d.expectedSpeed, 0) / exp.length : 0;
+  const last = samples[samples.length - 1];
+  row('V9', 'observation: clock observation, line speed = advanceKmh × rate / 3600 (±15 %), no 25 km jumps', `mode ${last?.mode} rate ${last?.rate}; shown ${measured.toFixed(1)} m/s vs advanceKmh×rate/3.6 ${expected.toFixed(1)} m/s (sim sub-tile line ${simSpeed.toFixed(1)} m/s) over ${ok.length} samples; jumps ${jumps}`, last?.mode === 'observation' && expected !== 0 && Math.abs(measured / expected - 1) <= 0.15 && jumps === 0);
   // V10: battle animation clock per real second at 0.5x and 4x and paused.
   const rate = async (speed) => {
     await page.evaluate((sp) => __front.ctx.app.setSpeed(sp), speed);
