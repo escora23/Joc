@@ -121,6 +121,11 @@ export class FrontTracker {
     return out;
   }
 
+  /** The observation focus changed (worker clock message): read the lines near it now, even while paused (W6, T41). */
+  focusChanged(): void {
+    if (this.lines.refreshFocus(this.fronts.values())) this.dirty = true;
+  }
+
   /** Garrison Gf of `p` on front `f` (troops), §4.4. */
   garrison(f: Front, p: number): number {
     const P = this.g.playerById[p];

@@ -301,6 +301,8 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         if (game) {
           game.observationFocus = msg.focus ? { x: msg.focus.x, y: msg.focus.y } : null;
           game.commandTravel = msg.mode === 'travel';
+          // The fronts under the camera publish their line at once (the ground battle stands on it), paused or not.
+          if (game.observationFocus && game.phase === 'playing') game.fronts.focusChanged();
         }
         forcePost = true;
         break;

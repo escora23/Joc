@@ -174,8 +174,12 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
         // Above its formation, else a little lower or higher, clear of the panels, the strip, the banners and the other
         // markers.
         let placedBox: { l: number; r: number; t: number; b: number } | null = null;
-        for (const dy of [0, 26, -26, 52]) {
-          const box = { l: x - bw / 2, r: x + bw / 2, t: y - bh - 6 + dy, b: y - 6 + dy };
+        // (Then shifted toward the middle of the screen, off a side panel.)
+        const toMid = x < W / 2 ? 1 : -1;
+        const tries: [number, number][] = [];
+        for (const dx of [0, 0.7, 1.4]) for (const dy of [0, 26, -26, 52]) tries.push([dx * bw * toMid, dy]);
+        for (const [dx, dy] of tries) {
+          const box = { l: x - bw / 2 + dx, r: x + bw / 2 + dx, t: y - bh - 6 + dy, b: y - 6 + dy };
           const hit = (r: { left: number; right: number; top: number; bottom: number }) =>
             box.l < r.right && box.r > r.left && box.t < r.bottom && box.b > r.top;
           if (box.t < 4 || box.b > H - 4) continue;

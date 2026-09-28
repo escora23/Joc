@@ -33,7 +33,8 @@ export function createTicker(hs: HudShared): Ticker {
   const label = h('div', { class: 'fu-tk-label' }, h('i'), tx('news.breaking'));
   const text = h('div', { class: 'fu-tk-text' });
   const time = h('div', { class: 'fu-tk-time fu-mono' });
-  const el = h('div', { class: 'fu-ticker fu-interactive is-idle' }, label, h('div', { class: 'fu-tk-viewport' }, text), time);
+  // An opaque bar: labels, badges and the battle's banners keep out from under it (occlusion rects).
+  const el = h('div', { class: 'fu-ticker fu-interactive is-idle', 'data-occludes': '' }, label, h('div', { class: 'fu-tk-viewport' }, text), time);
   const queue: NewsItem[] = [];
   let current: NewsItem | null = null;
   let left = 0;

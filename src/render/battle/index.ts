@@ -27,7 +27,7 @@ import type { QualityProfile } from '../../shared/quality';
 import { hashString } from '../../shared/rng';
 import { UnitMode, UnitType, type FrontView, type LatLon } from '../../shared/types';
 import { deriveLocalForcesAt, publishedLineOffset, visibleSplit, type LocalForces, type LocalFront } from '../../shared/localForces';
-import { Biome, getWorldAux } from '../../data';
+import { Biome, getLocalHeightfield, getWorldAux } from '../../data';
 import { updateAir, type AirState } from './atmo';
 import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, separateTeamColors } from './common';
 import { createEffects, type Effects } from './effects';
@@ -104,6 +104,8 @@ export interface BattleShown {
   samples: [number, number];
   builds: number;
   reanchorWhy: string;
+  /** Biome of the anchor tile and the farmland share the ground was built with. */
+  ground: { biome: number; farmland: number };
 }
 
 export interface BattleDebug {
@@ -124,6 +126,10 @@ export interface BattleDebug {
   /** W6 verifiers: far-layer stats, the overlay's stats, and hiding the whole battle layer (smoke coverage A/B). */
   farStats(): ReturnType<FarLayer['stats']> | null;
   setLayerVisible(on: boolean): void;
+  /** Ground under a local point (m east, m south of the anchor): splat weights and water (checks, verifiers). */
+  groundAt(x: number, z: number): { splat: number[]; water: number; height: number } | null;
+  /** Land cover of a 20 km square at lat/lon (mean splat weights) and the tile's biome: choosing shot theatres. */
+  surveyGround(lat: number, lon: number): { biome: number; mean: number[] } | null;
 }
 
 let currentDebug: BattleDebug | null = null;
@@ -178,6 +184,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   let anchorTX = 0, anchorTY = 0;
   let sampleAcc = 0, divAcc = 0, lastWallMs = 0, samplesTaken = 0, samplesFound = 0, builds = 0;
   let reanchorWhy = '';
+  let groundInfo = { biome: -1, farmland: 0 };
+  /** Since when (ms) a new battle waits for the sim's line reading at the observation focus (-1 = not waiting). */
+  let focusWaitMs = -1;
   let lineSpeed = 0;
   let splitWanted: [number, number] = [0, 0];
   const shownDivs: BattleShown['divisions'] = [];
@@ -686,6 +695,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const tx = ((Math.floor(((an.lon + 180) / 360) * MAP_W) % MAP_W) + MAP_W) % MAP_W;
     const tileBiome = aux ? aux.biome[ty * MAP_W + tx] : Biome.Grassland;
     const farmland = tileBiome === Biome.Grassland ? 1 : tileBiome === Biome.Steppe || tileBiome === Biome.Savanna ? 0.55 : tileBiome === Biome.Forest ? 0.7 : 0.2;
+    groundInfo = { biome: tileBiome, farmland };
     const view0 = ctx.sim.view;
     patch = buildTerrain(world, an.lat, an.lon, terrainShared, farmland, (la, lo) => {
       const o = view0.owner[latLonToTile(la, lo)];
@@ -968,7 +978,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       divisions: shownDivs.map((d) => ({ ...d })),
       lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simKmh * view.clock.rate) / 3.6 : 0,
       advanceKmh: simKmh, subTile: simSub, lineSnaps, anchorX: anchorTX, anchorY: anchorTY, normalBearing: normalBearing(),
-      clockMode: view.clock.mode, samples: [samplesTaken, samplesFound], builds, reanchorWhy,
+      clockMode: view.clock.mode, samples: [samplesTaken, samplesFound], builds, reanchorWhy, ground: { ...groundInfo },
     };
   }
 
@@ -984,6 +994,30 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     },
     setLayerVisible(on) {
       root.visible = on;
+      if (!on) setHole(0);
+    },
+    surveyGround(lat, lon) {
+      const world = ctx.world;
+      if (!world) return null;
+      const f = getLocalHeightfield(lat, lon, 20, 33);
+      const mean = [0, 0, 0, 0, 0, 0, 0, 0];
+      const n = 33 * 33;
+      for (let k = 0; k < n; k++) {
+        for (let c = 0; c < 4; c++) {
+          mean[c] += f.splatA[k * 4 + c] / 255 / n;
+          mean[4 + c] += f.splatB[k * 4 + c] / 255 / n;
+        }
+      }
+      const aux = getWorldAux(world);
+      const ty = Math.min(MAP_H - 1, Math.max(0, Math.floor(((90 - lat) / 180) * MAP_H)));
+      const tx = ((Math.floor(((lon + 180) / 360) * MAP_W) % MAP_W) + MAP_W) % MAP_W;
+      return { biome: aux ? aux.biome[ty * MAP_W + tx] : -1, mean: mean.map((v) => +v.toFixed(3)) };
+    },
+    groundAt(x, z) {
+      if (!patch) return null;
+      const w = new Float32Array(8);
+      const water = patch.splatAt(x, z, w);
+      return { splat: [...w].map((v) => +v.toFixed(3)), water: +water.toFixed(3), height: +patch.heightAt(x, z).toFixed(1) };
     },
     get clock() {
       return clock;
@@ -1213,10 +1247,18 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         // Fade out the old battle (if any) before streaming the new one in.
         nearFade = Math.max(0, nearFade - frame.dt * 3);
         if (nearFade <= 0.001 || !anchor) {
-          job = buildSteps(pendingAnchor, pendingDir.x, pendingDir.z);
-          builds++;
-          pendingAnchor = null;
-          nearFade = 0;
+          // In observation time the sim reads the line under the camera the moment the camera arrives (T41): wait for
+          // that reading (at most 1.5 s) so the battle is built on it rather than on the offensive's axis reading.
+          if (focusWaitMs < 0) focusWaitMs = frame.now;
+          const L = view.frontByKey.get(pendingAnchor.frontKey)?.line;
+          const wait = !forced && view.clock.mode === 'observation' && !(L && L.focus) && frame.now - focusWaitMs < 1500;
+          if (!wait) {
+            job = buildSteps(pendingAnchor, pendingDir.x, pendingDir.z);
+            builds++;
+            pendingAnchor = null;
+            nearFade = 0;
+            focusWaitMs = -1;
+          }
         }
       }
       if (job) {
@@ -1253,7 +1295,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       // Fully shown, the battlefield is the ground: the globe's coarser relief (a smoothed valley floor sits tens of
       // metres above the real one) must not poke through it at grazing views. Inside the part of the patch that never
       // dissolves (the rim melts into the globe from 47 km when the camera is high; it stays solid when low).
-      setHole(nearFade > 0.97 && ctx.app.state !== 'command' ? (uniforms.uRimK.value > 0.001 ? 45 : 54) : 0);
+      setHole(root.visible && nearFade > 0.97 && ctx.app.state !== 'command' ? (uniforms.uRimK.value > 0.001 ? 45 : 54) : 0);
       latLonToVec3(camState.lat, camState.lon, 1, focusW);
       focusL.copy(focusW).applyMatrix4(invNear);
       front.coords(focusL.x, focusL.z, focusUV);

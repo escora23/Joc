@@ -66,10 +66,11 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   for (const k of AUTO_PAUSE_KINDS) ap[k] = false;
   ctx.settings.set({ autoPause: ap });
   // Theatres: 'iberia' (default: northern Spain against south-western France, across the Pyrenees and the Ebro) or
-  // 'plains' (the Ukrainian steppe: flat ground, the speed of the front is the plains speed of §4.5).
+  // 'plains' (the open farmland of Picardy and Artois: flat ground, fields rather than woods, so the line and the
+  // soldiers read against it; the speed of the front is the plains speed of §4.5).
   const plains = (params.get('theatre') ?? opts.theatre) === 'plains';
   const TH = plains
-    ? { near: [52.5, 36.0], human: [48.9, 33.0], enemy: [52.4, 35.8], hDiv: [49.7, 32.4], eDiv: [51.6, 34.6], aimH: [47.8, 32.2], aimE: [53.0, 36.3] }
+    ? { near: [50.5, 3.0], human: [47.5, 1.5], enemy: [53.8, 5.5], hDiv: [49.2, 2.2], eDiv: [51.2, 3.6], aimH: [48.6, 2.2], aimE: [51.6, 4.2] }
     : { near: [45.8, 1.5], human: [41.6, -2.6], enemy: [45.9, 1.2], hDiv: [41.9, -1.6], eDiv: [45.0, -0.4], aimH: [40.9, -2.2], aimE: [46.2, 1.0] };
   const enemy = nearestNation(s, TH.near[0], TH.near[1]);
   const who = (params.get('attacker') as 'enemy' | 'human' | 'none' | null) ?? opts.attacker ?? 'enemy';
@@ -205,12 +206,24 @@ function axisVertex(s: ShotContext, f: FrontView): number {
   return m;
 }
 
+/**
+ * Point the observation focus where the offensive's axis crosses the front, as the camera arriving there would, and wait
+ * for the sim's reading of the line there (FrontView.line at the focus, T41): the camera is then set ON that line.
+ */
+async function focusOnAxis(s: ShotContext, f: FrontView): Promise<{ x: number; y: number }> {
+  const m = axisVertex(s, f);
+  const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
+  const view = s.ctx.sim.view;
+  s.ctx.sim.setClock('observation', undefined, { x, y });
+  for (let i = 0; i < 50 && !view.frontByKey.get(f.key)?.line?.focus; i++) await s.wait(100);
+  return { x, y };
+}
+
 /** Camera down on the front's contact line (the ground battle streams in by itself: nothing is staged in the layer). */
 async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number): Promise<void> {
   const f = st.front;
   if (!f) return;
-  const m = axisVertex(s, f);
-  const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
+  const { x, y } = await focusOnAxis(s, f);
   // Over the real (sub-tile) contact line, where the ground battle stands.
   const lf = deriveLocalForces(s.ctx.sim.view, x, y, 40, HUMAN_ID);
   const lfF = lf.fronts.find((q) => q.key === f.key);
@@ -332,8 +345,7 @@ async function frameGround(s: ShotContext, st: StagedWar): Promise<void> {
   const f = st.front;
   if (!f) return;
   const view = s.ctx.sim.view;
-  const m = axisVertex(s, f);
-  const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
+  const { x, y } = await focusOnAxis(s, f);
   const lf0 = deriveLocalForces(view, x, y, 40, HUMAN_ID);
   const fr0 = lf0.fronts.find((q) => q.key === f.key);
   if (!fr0) {

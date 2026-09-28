@@ -99,6 +99,27 @@ export class FrontLines {
     for (const k of this.lines.keys()) if (!seen.has(k)) this.lines.delete(k);
   }
 
+  /**
+   * A new observation focus (the camera came down, or moved): place and read the line of every front near it at once,
+   * without advancing time, so the ground battle can stand on it even while the game is paused.
+   */
+  refreshFocus(fronts: Iterable<Front>): boolean {
+    const focus = this.g.observationFocus;
+    if (!focus) return false;
+    let any = false;
+    for (const f of fronts) {
+      if (f.b === 0 || f.samples.length < 2) continue;
+      const near = nearestOnLine(f, focus.x, focus.y);
+      if (near.km > FOCUS_REACH_KM) continue;
+      const st = this.lines.get(f.key);
+      if (st && st.focus && st.tick >= 0 && distKm(st.fx, st.fy, focus.x, focus.y) <= FOCUS_MOVE_KM) continue;
+      const placed = this.place(f, near.x, near.y, st, true, focus.x, focus.y);
+      this.measure(f, placed, this.live(f.offensive[0], f.key), this.live(f.offensive[1], f.key), STEP_FOCUS_KM);
+      any = true;
+    }
+    return any;
+  }
+
   /** The published line of a front (null when it has none yet). */
   record(key: number): FrontLine | null {
     const st = this.lines.get(key);
