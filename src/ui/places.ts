@@ -67,6 +67,19 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
   return { text, name: t('place.area', { where: text }), named: false };
 }
 
+/**
+ * The viewer's capital as a noun phrase for the capital alerts: «tu capital, Madrid» (a place within 25 km), «tu
+ * capital, cerca de Esmirna» (within 150 km) or «tu capital» — never a nearby town standing in for the capital.
+ */
+export function capitalPhrase(view: GameView, viewer = HUMAN_ID): string {
+  const cap = view.players[viewer]?.capitalTile ?? -1;
+  if (cap < 0) return t('place.yourCapital');
+  const c = tileToLatLon(cap);
+  const p = nearestPlace(c.lat, c.lon, 150);
+  if (!p) return t('place.yourCapital');
+  return t(placeKm(c.lat, c.lon, p.lat, p.lon) < 25 ? 'place.capitalIs' : 'place.capitalNear', { place: placeName(p) });
+}
+
 export function describeTile(view: GameView, tile: number, viewer = HUMAN_ID): PlaceText {
   const ll = tileToLatLon(tile);
   return describePlace(view, ll.lat, ll.lon, viewer);

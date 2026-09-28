@@ -20,14 +20,14 @@ import { flag } from '../flag';
 import { icon } from '../icons';
 import { openModal, type ModalHandle } from '../modal';
 import { describePlace, describeTile } from '../places';
-import { tip } from '../tooltip';
+import { tip, type TipData } from '../tooltip';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
 import type { AlertInput, AlertSeverity, AutoPauseKind } from '../../shared/events';
-import { HUMAN_ID } from '../../shared/constants';
+import { FRONT_PRIORITY_WEIGHT, HUMAN_ID, MAP_W } from '../../shared/constants';
 import { latLonToVec3, tileToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
-import type { GameSpeed } from '../../shared/types';
+import type { FrontView, GameSpeed } from '../../shared/types';
 import * as THREE from 'three';
 
 export interface Alert {
@@ -79,8 +79,9 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   const bannerResume = h('button', { class: 'fu-btn fu-btn--sm fu-btn--primary' }, icon('play'), tx('alerts.autoPause.resume'));
   tip(bannerView, () => ({ title: t('alerts.autoPause.view'), text: t('alerts.autoPause.view.tip') }));
   tip(bannerResume, () => ({ title: t('alerts.autoPause.resume'), text: t('alerts.autoPause.resume.tip') }));
+  const bannerPrio = h('button', { class: 'fu-btn fu-btn--sm fu-hidden' }, icon('shield'), h('span', null, '')) as HTMLButtonElement;
   const bannerEl = h('div', { class: 'fu-autopause fu-interactive fu-hidden' },
-    h('span', { class: 'fu-ap-kicker' }, icon('pause'), tx('alerts.autoPause.kicker')), bannerText, bannerView, bannerResume);
+    h('span', { class: 'fu-ap-kicker' }, icon('pause'), tx('alerts.autoPause.kicker')), bannerText, bannerPrio, bannerView, bannerResume);
 
   const all: Alert[] = [];
   const byGroup = new Map<string, Alert>();
@@ -161,10 +162,110 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     return h <= 0 ? t('alerts.age.now') : t('alerts.age.hours', { h: formatNumber(h) });
   }
 
+  // ---- front priority (v2 W3) --------------------------------------------------------------------------------
+  // The offensive, capital-threat, front-loss and unrest texts tell the player to raise that front's priority: the
+  // entry (and the auto-pause banner) does it in one click, with the sim's own rule in the tooltip (§4.4: the home
+  // garrison is shared among our fronts by priority weight × length; «alta» doubles the weight; redeployment closes
+  // 63 % of the gap in 4.5 h).
+  function frontSide(key: number): { f: FrontView; s: 0 | 1 } | null {
+    const f = view().frontByKey.get(key);
+    if (!f) return null;
+    if (f.b === HUMAN_ID) return { f, s: 1 };
+    if (f.a === HUMAN_ID) return { f, s: 0 };
+    return null;
+  }
+  /** The front an entry acts on: its own key, else the human's front with `frontEnemy` nearest the entry's place. */
+  function alertFront(i: AlertInput): number {
+    if (i.frontKey) return i.frontKey;
+    if (!i.frontEnemy || i.lat === undefined || i.lon === undefined) return 0;
+    const x = ((i.lon + 180) / 360) * MAP_W, y = ((90 - i.lat) / 180) * (MAP_W / 2);
+    let best = 0, bd = Infinity;
+    for (const f of view().fronts) {
+      if (!((f.a === HUMAN_ID && f.b === i.frontEnemy) || (f.b === HUMAN_ID && f.a === i.frontEnemy))) continue;
+      const sm = f.samples;
+      for (let k = 0; k + 1 < sm.length; k += 2) {
+        let dx = Math.abs(sm[k] - x);
+        if (dx > MAP_W / 2) dx = MAP_W - dx;
+        const d = dx * dx + (sm[k + 1] - y) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = f.key;
+        }
+      }
+    }
+    return best;
+  }
+  function frontPriority(key: number): number {
+    const r = frontSide(key);
+    if (!r) return -1;
+    return r.s ? r.f.priorityB : r.f.priorityA;
+  }
+  function priorityTip(key: number): TipData {
+    const title = t('alerts.priority.title');
+    const r = frontSide(key);
+    if (!r) return { title, text: t('alerts.priority.gone') };
+    const { f, s } = r;
+    const prio = s ? f.priorityB : f.priorityA;
+    const gar = s ? f.garrisonB : f.garrisonA;
+    const share = s ? f.shareB : f.shareA;
+    const target = s ? f.targetShareB : f.targetShareA;
+    const now: [string, string][] = [[t('alerts.priority.garrison'), formatNumber(Math.round(gar / 1000) * 1000)], [t('alerts.priority.share'), `${formatNumber(Math.round(share * 100))} %`]];
+    if (prio >= 2) return { title, text: t('alerts.priority.already'), now, lines: [t('alerts.priority.line')] };
+    // The same total weight with this front's weight doubled from its current level: the new target share.
+    const k = FRONT_PRIORITY_WEIGHT[2] / (FRONT_PRIORITY_WEIGHT[prio] ?? 1);
+    const next = target > 0 ? (target * k) / (1 - target + target * k) : 0;
+    const expect = share > 0.001 ? (gar * next) / share : gar;
+    return {
+      title, text: t('alerts.priority.tip'), now,
+      next: [[t('alerts.priority.share'), `${formatNumber(Math.round(next * 100))} %`], [t('alerts.priority.garrison'), `≈ ${formatNumber(Math.round(expect / 1000) * 1000)}`]],
+      lines: [t('alerts.priority.line')],
+    };
+  }
+  function paintPriority(btn: HTMLElement, key: number): void {
+    const p = frontPriority(key);
+    toggleClass(btn, 'fu-hidden', p < 0);
+    toggleClass(btn, 'is-on', p >= 2);
+    const label = btn.querySelector('span') ?? btn;
+    setText(label as HTMLElement, t(p >= 2 ? 'alerts.priority.on' : 'alerts.priority'));
+  }
+  function raisePriority(key: number, btn: HTMLElement): void {
+    const p = frontPriority(key);
+    if (p < 0 || p >= 2) {
+      hs.sound(p < 0 ? 'error' : 'click');
+      return;
+    }
+    ctx.sim.send({ type: 'setFrontPriority', frontKey: key, priority: 2 });
+    hs.sound('confirm');
+    setText((btn.querySelector('span') ?? btn) as HTMLElement, t('alerts.priority.on'));
+    btn.classList.add('is-on');
+  }
+  bannerPrio.addEventListener('click', () => {
+    const key = pausedBy ? alertFront(pausedBy.alert.input) : 0;
+    if (key) raisePriority(key, bannerPrio);
+  });
+  tip(bannerPrio, () => {
+    const key = pausedBy ? alertFront(pausedBy.alert.input) : 0;
+    return key ? priorityTip(key) : null;
+  });
+
   function build(a: Alert): HTMLElement {
     const i = a.input;
     const close = h('button', { class: 'fu-alert-x', 'aria-label': 'close' }, icon('close'));
     tip(close, () => ({ title: t('alerts.dismiss'), text: t(i.severity === 'critical' ? 'alerts.dismiss.critical' : 'alerts.dismiss.tip') }));
+    // «Prioridad alta» for the front the entry is about (kept on the entry; refreshEntry repaints it).
+    const prio = h('button', { class: 'fu-alert-prio', type: 'button' }, icon('shield'), h('span', null, ''));
+    if (i.frontKey || i.frontEnemy) {
+      paintPriority(prio, alertFront(i));
+      tip(prio, () => {
+        const key = alertFront(a.input);
+        return key ? priorityTip(key) : null;
+      });
+      prio.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = alertFront(a.input);
+        if (key) raisePriority(key, prio);
+      });
+    } else prio.classList.add('fu-hidden');
     const flags = h('div', { class: 'fu-alert-flags' });
     for (const id of (i.actors ?? []).slice(0, 2)) {
       const p = view().players[id];
@@ -176,14 +277,15 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
         h('div', { class: 'fu-alert-title' }, h('span', { class: 'fu-alert-t' }, i.title), flags),
         i.body ? h('div', { class: 'fu-alert-body' }, i.body) : null,
         h('div', { class: 'fu-alert-meta fu-mono' }, h('span', { class: 'fu-alert-age' }, ageText(a)), h('span', { class: 'fu-alert-count' }),
-          i.lat !== undefined ? h('span', { class: 'fu-alert-go' }, icon('eye'), t(i.proposalId ? 'alerts.open' : 'alerts.fly')) : i.proposalId ? h('span', { class: 'fu-alert-go' }, icon('inbox'), t('alerts.open')) : null),
+          i.lat !== undefined ? h('span', { class: 'fu-alert-go' }, icon('eye'), t(i.proposalId ? 'alerts.open' : 'alerts.fly')) : i.proposalId ? h('span', { class: 'fu-alert-go' }, icon('inbox'), t('alerts.open')) : null,
+          prio),
       ),
       close,
       h('i', { class: 'fu-alert-timer' }),
     );
     tip(el, () => ({ title: i.title, text: i.proposalId ? t('alerts.click.inbox') : i.lat !== undefined ? t('alerts.click.fly') : t('alerts.click.none') }));
     el.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.fu-alert-x')) return;
+      if ((e.target as HTMLElement).closest('.fu-alert-x, .fu-alert-prio')) return;
       activate(a);
     });
     close.addEventListener('click', (e) => {
@@ -204,6 +306,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     else if (i.body) a.el.querySelector('.fu-alert-main')!.insertBefore(h('div', { class: 'fu-alert-body' }, i.body), a.el.querySelector('.fu-alert-meta'));
     setText(a.el.querySelector('.fu-alert-count') as HTMLElement, a.count > 1 ? `×${a.count}` : '');
     setText(a.el.querySelector('.fu-alert-age') as HTMLElement, ageText(a));
+    const prio = a.el.querySelector('.fu-alert-prio') as HTMLElement | null;
+    if (prio && (i.frontKey || i.frontEnemy)) paintPriority(prio, alertFront(i));
   }
 
   function raise(input: AlertInput): Alert {
@@ -295,6 +399,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     if (sp !== 0) ctx.app.setSpeed(0);
     setText(bannerText, `${a.input.title}${a.input.body ? ` · ${a.input.body}` : ''}`);
     toggleClass(bannerView, 'fu-hidden', a.input.lat === undefined && !a.input.proposalId);
+    paintPriority(bannerPrio, alertFront(a.input));
     bannerEl.classList.remove('fu-hidden');
     bannerEl.dataset.kind = kind;
     ctx.bus.emit('autoPaused', { kind, text: a.input.title });
@@ -429,8 +534,19 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       fitFeed();
       projectMarkers();
       for (const a of all) if (a.el) setText(a.el.querySelector('.fu-alert-age') as HTMLElement, ageText(a));
+      // A front that appears after its entry (a declaration's fronts), or a priority set elsewhere: repaint at 1 Hz.
+      if (now - prioPaintMs > 1000) {
+        prioPaintMs = now;
+        for (const a of all) {
+          if (!a.el || !(a.input.frontKey || a.input.frontEnemy)) continue;
+          const b = a.el.querySelector('.fu-alert-prio') as HTMLElement | null;
+          if (b) paintPriority(b, alertFront(a.input));
+        }
+        if (pausedBy && !bannerEl.classList.contains('fu-hidden')) paintPriority(bannerPrio, alertFront(pausedBy.alert.input));
+      }
     }
   }
+  let prioPaintMs = 0;
 
   // ---- Registro --------------------------------------------------------------------------------
   let logModal: ModalHandle | null = null;

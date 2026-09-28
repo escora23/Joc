@@ -35,6 +35,15 @@
 .fu-alert-meta { display: flex; gap: 0.6rem; font-size: 0.64rem; color: var(--fu-text-dim); align-items: center; }
 .fu-alert-go { display: inline-flex; align-items: center; gap: 0.2rem; color: var(--ac); text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--fu-font-cond); font-weight: 600; }
 .fu-alert-go .fu-ico { width: 0.8rem; height: 0.8rem; }
+/* «Prioridad alta» on an entry about one of our fronts (and on the auto-pause banner): the remedy, one click away. */
+.fu-alert-prio {
+  display: inline-flex; align-items: center; gap: 0.25rem; margin-left: auto; padding: 0.12rem 0.45rem; cursor: pointer;
+  font: 600 0.64rem var(--fu-font-cond); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fu-accent-2);
+  background: rgba(255, 181, 61, 0.1); border: 1px solid rgba(255, 181, 61, 0.45); border-radius: var(--fu-radius);
+}
+.fu-alert-prio:hover { background: rgba(255, 181, 61, 0.22); color: var(--fu-text); }
+.fu-alert-prio .fu-ico { width: 0.8rem; height: 0.8rem; }
+.fu-alert-prio.is-on, .fu-autopause .fu-btn.is-on { color: #7ee2a0; border-color: rgba(126, 226, 160, 0.45); background: rgba(126, 226, 160, 0.1); cursor: default; }
 .fu-alert-x { background: none; border: 0; color: var(--fu-text-dim); padding: 0.1rem; cursor: pointer; }
 .fu-alert-x:hover { color: var(--fu-text); }
 .fu-alert-x .fu-ico { width: 0.9rem; height: 0.9rem; }

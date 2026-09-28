@@ -14,6 +14,7 @@
 //   V7   Settings > Juego: 8 auto-pause toggles with the §8.5 defaults, crisisTime, observationTime, clouds, historical
 //        borders (off); the worker logs each settings message; each of the 8 kinds pauses with a banner (acceptance 7)
 //   V12  the radial has no emotes and no «Marcar objetivo»                                          (acceptance 12)
+//   V5e  the offensive entry's «Prioridad alta» raises that front's priority in the sim (tooltip with numbers)
 //   V5d  a point at the capital names the capital («tu capital» / «your capital»), never «a 0 km al N de…»   (acceptance 5)
 //   V14  per language: tooltips on W3's controls (top bar, pause/speed, nations, log) with purpose and numbers and no
 //        word of the other language; V14b the hover card over a foreign structure says the click opens its card (14)
@@ -53,6 +54,8 @@ const row = (id, what, value, target, pass) => {
   log(`${pass ? 'PASS' : 'FAIL'} ${id} ${what}: ${value}`);
 };
 const shot = async (name) => {
+  // Dialog entrances advance with rendered frames (~1-2 per second on the software renderer): let them finish first.
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || !Number.isFinite(a.effect?.getComputedTiming?.().endTime ?? Infinity)), null, { timeout: 20000, polling: 250 }).catch(() => {});
   try { await page.screenshot({ path: path.join(out, `${name}.png`), timeout: 90000 }); } catch { /* slow frame */ }
 };
 async function until(fn, arg, timeout = 30000, poll = 300) {
@@ -319,8 +322,27 @@ for (const lang of langs) {
       return keys.length - new Set(keys).size;
     });
     const o = all[all.length - 1];
-    row('V5a', 'offensive alert: attacker, place, troops', o ? `${o.title} — ${o.body}` : 'none', 'place + troops', o && /(cerca de|near|al [a-z]+ de|km)/i.test(o.title) && /\d/.test(o.body));
+    row('V5a', 'offensive alert: attacker, place, troops', o ? `${o.title} — ${o.body}` : 'none', 'place + troops', o && /(cerca de|near|junto a|next to|al [a-z]+ de|km)/i.test(o.title) && /\d/.test(o.body));
     row('V5b', 'one entry per front in the feed (updates, no stacking)', `${groups.size} front(s), ${all.length} raises, ${feedDup} duplicates in the feed, max count ${Math.max(0, ...all.map((a) => a.count))}`, '0 duplicates', first && feedDup === 0);
+    // V5e: the entry's «Prioridad alta» (the remedy its texts name) raises that front's priority in the sim, with the
+    // garrison numbers in its tooltip.
+    const pr = page.locator('.fu-alerts-list .fu-alert[data-kind="offensive"] .fu-alert-prio:not(.fu-hidden)').first();
+    if (await pr.count()) {
+      let tipText = '';
+      for (let k = 0; k < 3 && !tipText; k++) {
+        await pr.hover({ timeout: 20000 }).catch(() => {});
+        await sleep(900);
+        tipText = (await page.evaluate(() => window.__fuTip?.() ?? '')).replace(/\s+/g, ' ');
+      }
+      await pr.click({ timeout: 20000 }).catch(() => {});
+      const set = await until(() => {
+        const v = window.__front.ctx.sim.view;
+        const f = v.fronts.find((x) => (x.b === 1 && x.priorityB === 2) || (x.a === 1 && x.priorityA === 2));
+        const b = document.querySelector('.fu-alerts-list .fu-alert[data-kind="offensive"] .fu-alert-prio');
+        return f && b?.classList.contains('is-on') ? { key: f.key, label: b.textContent } : null;
+      }, null, 15000, 300);
+      row('V5e', `the offensive alert's «Prioridad alta» sets the front to high (${lang})`, set ? `front ${set.key} → alta; button «${set.label}»; tip «${tipText.slice(0, 150)}»` : `not set; tip «${tipText.slice(0, 120)}»`, 'priority 2, numbers in the tip', set && /\d/.test(tipText) && tipText.length > 40);
+    } else row('V5e', `the offensive alert's «Prioridad alta» sets the front to high (${lang})`, 'no priority button on the entry', 'button', false);
     if (o) {
       await page.evaluate(() => window.__front.ctx.cameraRig.setState({ lat: -30, lon: 120, altitudeKm: 9000, tilt: 0, heading: 0 }));
       await sleep(800);

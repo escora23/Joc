@@ -14,7 +14,7 @@ import type { AlertCenter } from './alerts';
 import type { Ticker } from './feed';
 import type { HudShared } from './shared';
 import { isHumanFacingProposal, proposalAlert } from './inboxText';
-import { describeTile, describeXY } from '../places';
+import { capitalPhrase, describeTile, describeXY } from '../places';
 import type { AlertInput } from '../../shared/events';
 import { HUMAN_ID, MAP_W, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon, tileXYToLatLon } from '../../shared/geo';
@@ -232,7 +232,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       const ll = q ? atXY(q.x, q.y) : agg && agg.capitalTile >= 0 ? at(agg.capitalTile) : null;
       alert({
         kind: e.betrayal ? 'betrayal' : 'warDeclared', severity: 'critical', icon: 'attack', actors: [e.aggressor],
-        lat: ll?.lat, lon: ll?.lon, autoPause: 'warOnYou', groupKey: `war:${e.aggressor}`,
+        lat: ll?.lat, lon: ll?.lon, autoPause: 'warOnYou', groupKey: `war:${e.aggressor}`, frontEnemy: e.aggressor,
         title: t(e.betrayal ? 'alert.betrayal.title' : e.parentWar ? 'alert.warJoinedOnUs.title' : 'alert.warOnUs.title', { name: name(e.aggressor) }),
         body: t(hours > 0 ? 'alert.warOnUs.body' : 'alert.warOnUs.bodyNow', { reason: t(e.reasonKey), hours }),
       });
@@ -358,7 +358,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       const place = describeXY(view(), e.x, e.y).name;
       const g = `unrest:${Math.round(e.x / 6)}:${Math.round(e.y / 6)}`;
       if (e.stage === 'start') {
-        alert({ kind: 'unrest', severity: 'warning', icon: 'rebellion', lat: ll.lat, lon: ll.lon, groupKey: g, sticky: true, tiles: e.region, title: t('alert.unrest.title', { place, hours }), body: t(`unrest.${e.cause}`, { place, hours }) });
+        alert({ kind: 'unrest', severity: 'warning', icon: 'rebellion', lat: ll.lat, lon: ll.lon, groupKey: g, sticky: true, tiles: e.region, frontKey: ourFrontNear(e.x, e.y) || undefined, title: t('alert.unrest.title', { place, hours }), body: t(`unrest.${e.cause}`, { place, hours }) });
       } else if (e.stage === 'cancelled') {
         alerts.resolve(g);
         alert({ kind: 'unrestCancelled', severity: 'info', icon: 'check', lat: ll.lat, lon: ll.lon, title: t('unrest.cancelled', { place }) });
@@ -406,12 +406,33 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
   });
 
   // ---- monitors (1 Hz): fronts on us, losses, capital, mobilization, expiring pacts -----------------
-  interface FrontTrack { taken: Map<number, number>; milestones: number; enemy: number }
+  interface FrontTrack { taken: Map<number, number>; milestones: number; enemy: number; fk?: number }
   const fronts = new Map<string, FrontTrack>();
   const flagged = new Map<string, number>();
   const lastTroops = new Map<string, number>();
   let capitalAlarm = 0;
   let lastRun = 0;
+
+  /** Key of the human's front nearest (x, y), against `enemy` when given (0 = none): what «Prioridad alta» acts on. */
+  function ourFrontNear(x: number, y: number, enemy = 0): number {
+    let best = 0, bd = Infinity;
+    for (const f of view().fronts) {
+      if (f.a !== HUMAN_ID && f.b !== HUMAN_ID) continue;
+      const other = f.a === HUMAN_ID ? f.b : f.a;
+      if (!other || (enemy && other !== enemy)) continue;
+      const s = f.samples;
+      for (let i = 0; i + 1 < s.length; i += 2) {
+        let dx = Math.abs(s[i] - x);
+        if (dx > MAP_W / 2) dx = MAP_W - dx;
+        const d = dx * dx + (s[i + 1] - y) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = f.key;
+        }
+      }
+    }
+    return best;
+  }
 
   function monitor(): void {
     const v = view();
@@ -419,7 +440,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     if (!me || !me.alive || v.phase !== 'playing') return;
     const now = performance.now();
     // Offensives on us, one entry per front: attacker, place, troops, ratio.
-    const groups = new Map<string, { attacker: number; troops: number; x: number; y: number; ratio: number; ids: number[]; mobilizing: boolean; eta: number }>();
+    const groups = new Map<string, { attacker: number; troops: number; x: number; y: number; ratio: number; ids: number[]; mobilizing: boolean; eta: number; fk: number }>();
     for (const a of v.attacks) {
       if (a.defender !== HUMAN_ID || a.attacker === 0 || a.attacker === HUMAN_ID) continue;
       const mob = a.state === 'mobilizing';
@@ -428,7 +449,8 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       let g = groups.get(key);
       // Where the fighting is: the offensive's front (its origin on our border), not the far axis point it aims at.
       const fx = mob || !(a.originX > 0) ? a.x : a.originX, fy = mob || !(a.originY > 0) ? a.y : a.originY;
-      if (!g) groups.set(key, (g = { attacker: a.attacker, troops: 0, x: fx, y: fy, ratio: 0, ids: [], mobilizing: mob, eta: a.etaTicks }));
+      if (!g) groups.set(key, (g = { attacker: a.attacker, troops: 0, x: fx, y: fy, ratio: 0, ids: [], mobilizing: mob, eta: a.etaTicks, fk: a.frontKey }));
+      if (!g.fk && a.frontKey) g.fk = a.frontKey;
       g.troops += a.troops;
       g.ratio = Math.max(g.ratio, a.ratio);
       g.ids.push(a.id);
@@ -436,10 +458,12 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     for (const [key, g] of groups) {
       const ll = atXY(g.x, g.y);
       const place = describeXY(v, g.x, g.y);
+      // The front it hits (a mobilizing offensive has none yet: the pair's front nearest its aim).
+      const frontKey = g.fk || ourFrontNear(g.x, g.y, g.attacker) || undefined;
       if (g.mobilizing) {
         const hours = Math.max(0, Math.round(Math.max(0, g.eta) / 10));
         if (!flagged.has(key)) {
-          alert({ kind: 'mobilization', severity: 'warning', icon: 'troops', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30, title: t('alert.mobilization.title', { name: name(g.attacker), place: place.text }), body: t('alert.mobilization.body', { hours, troops: formatCompact(g.troops) }) });
+          alert({ kind: 'mobilization', severity: 'warning', icon: 'troops', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30, frontKey, title: t('alert.mobilization.title', { name: name(g.attacker), place: place.text }), body: t('alert.mobilization.body', { hours, troops: formatCompact(g.troops) }) });
         }
         flagged.set(key, now);
         continue;
@@ -449,7 +473,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       // Update the entry (never restack) when the numbers move by more than 10 %; else refresh it now and then.
       if (prev === undefined || Math.abs(g.troops - last) > 0.1 * Math.max(1, last) || now - prev > 25_000) {
         alert({
-          kind: 'offensive', severity: 'danger', icon: 'attack', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30,
+          kind: 'offensive', severity: 'danger', icon: 'attack', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30, frontKey,
           title: t('alert.offensive.title', { name: name(g.attacker), place: place.text }),
           body: t('alert.offensive.body', { troops: formatNumber(Math.max(1000, Math.round(g.troops / 1000) * 1000)), ratio: decimal(g.ratio) }),
         });
@@ -462,6 +486,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       for (const a of v.attacks) if (g.ids.includes(a.id)) ft.taken.set(a.id, Math.max(ft.taken.get(a.id) ?? 0, a.tilesTaken));
       (ft as FrontTrack & { x?: number; y?: number }).x = g.x;
       (ft as FrontTrack & { x?: number; y?: number }).y = g.y;
+      if (frontKey) ft.fk = frontKey;
     }
     for (const key of [...flagged.keys()]) {
       if ((key.startsWith('front:') || key.startsWith('mob:')) && !groups.has(key)) {
@@ -482,7 +507,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
         const ll = fx !== undefined && fy !== undefined ? atXY(fx, fy) : null;
         const place = fx !== undefined && fy !== undefined ? describeXY(v, fx, fy).text : '';
         alert({
-          kind: 'frontLoss', severity: steps[i] >= 25 ? 'danger' : 'warning', icon: 'territory', lat: ll?.lat, lon: ll?.lon, actors: [ft.enemy], groupKey: `loss:${key}`,
+          kind: 'frontLoss', severity: steps[i] >= 25 ? 'danger' : 'warning', icon: 'territory', lat: ll?.lat, lon: ll?.lon, actors: [ft.enemy], groupKey: `loss:${key}`, frontKey: ft.fk,
           title: t('alert.frontLoss.title', { place, pct: steps[i] }), body: t('alert.frontLoss.body', { tiles: formatNumber(lost), name: name(ft.enemy) }),
         });
       }
@@ -495,7 +520,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
         if (dx > MAP_W / 2) dx = MAP_W - dx;
         return dx * dx + (y - cy) * (y - cy);
       };
-      let best = Infinity, by = 0;
+      let best = Infinity, by = 0, capFront = 0;
       for (const f of v.fronts) {
         if (f.b !== HUMAN_ID && f.a !== HUMAN_ID) continue;
         const enemy = f.a === HUMAN_ID ? f.b : f.a;
@@ -506,6 +531,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
           if (d < best) {
             best = d;
             by = enemy;
+            capFront = f.key;
           }
         }
       }
@@ -519,6 +545,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
           threat = true;
           axisBy = a.attacker;
           by = by || a.attacker;
+          if (a.frontKey) capFront = a.frontKey;
           if (!Number.isFinite(best) && a.originX > 0) best = d2(a.originX, a.originY);
         }
       }
@@ -526,10 +553,10 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
         capitalAlarm = now;
         const ll = at(me.capitalTile)!;
         const km = Number.isFinite(best) ? Math.max(25, Math.round((Math.sqrt(best) * 25) / 5) * 5) : 0;
-        const place = describeTile(v, me.capitalTile).name;
+        const place = capitalPhrase(v);
         const title = best <= 25 || !axisBy ? t('alert.capitalThreat.title', { km: formatNumber(km), place }) : t('alert.capitalThreat.axis', { name: name(axisBy), place, km: formatNumber(km) });
         alert({
-          kind: 'capitalThreat', severity: 'critical', icon: 'flag', lat: ll.lat, lon: ll.lon, actors: by ? [by] : [], autoPause: 'capitalThreat', groupKey: 'capital',
+          kind: 'capitalThreat', severity: 'critical', icon: 'flag', lat: ll.lat, lon: ll.lon, actors: by ? [by] : [], autoPause: 'capitalThreat', groupKey: 'capital', frontKey: capFront || undefined,
           title, body: t('alert.capitalThreat.body'),
         });
       } else if (!threat && capitalAlarm > 0 && now - capitalAlarm > 60_000) {

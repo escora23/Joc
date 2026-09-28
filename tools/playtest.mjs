@@ -53,12 +53,34 @@ const waitState = (s, timeout = 120000) => page.waitForFunction((want) => window
 /** Screenshots never fail a step: the software renderer can take a long time on a busy frame. */
 const shot = async (name) => {
   try {
+    // UI entrances (a dialog's 0.34 s fade-in) advance with rendered frames, which the software renderer produces at
+    // ~1-2 per second: wait until every finite CSS animation has finished, so the shot shows the dialog, not its
+    // first transparent frame.
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || !Number.isFinite(a.effect?.getComputedTiming?.().endTime ?? Infinity)), null, { timeout: 20000, polling: 250 }).catch(() => {});
     await page.screenshot({ path: path.join(out, `${name}.png`), timeout: 90000 });
     log(`  shot ${name}.png`);
   } catch (err) {
     log(`  (shot ${name} skipped: ${String(err.message).split('\n')[0]})`);
   }
 };
+/**
+ * A real mouse click at the centre of an element. Playwright's locator.click waits «for scheduled navigations» after
+ * clicking, which under heavy CPU load can hang past its timeout on this single-page app (noWaitAfter no longer
+ * applies in 1.56); raw mouse events have no such wait.
+ */
+async function clickEl(selector, timeout = 90000) {
+  const loc = page.locator(selector).first();
+  await loc.waitFor({ state: 'visible', timeout });
+  const end = Date.now() + timeout;
+  let box = null;
+  while (Date.now() < end) {
+    box = await loc.boundingBox();
+    if (box && box.width > 0) break;
+    await page.waitForTimeout(250);
+  }
+  if (!box) throw new Error(`${selector}: no box`);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { delay: 40 });
+}
 /** Polls fn() in the page until truthy; returns its value, or null on timeout. */
 async function until(fn, arg, timeout = 30000, poll = 400) {
   const end = Date.now() + timeout;
@@ -342,22 +364,25 @@ try {
   });
 
   await step('menu -> setup', async () => {
-    await page.locator('.fu-menu-item.is-primary:not(.fu-menu-continue)').first().click();
+    await clickEl('.fu-menu-item.is-primary:not(.fu-menu-continue)');
     await waitState('setup', 20000);
     await sleep(1500);
     await shot('02-setup');
   });
 
   await step('setup: Easy difficulty -> START -> spawn phase', async () => {
-    // noWaitAfter: under heavy CPU load Playwright can hang «waiting for scheduled navigations» after a plain click.
-    await page.locator('.fu-diff--easy').click({ noWaitAfter: true, timeout: 90000 });
-    await sleep(300);
-    await page.locator('.fu-setup-start').click({ noWaitAfter: true, timeout: 90000 });
+    // Raw mouse clicks (see clickEl): the selected card must read as selected before START.
+    await clickEl('.fu-diff--easy');
+    check(await until(() => document.querySelector('.fu-diff--easy')?.classList.contains('is-on'), null, 15000, 200), 'the Easy card did not select');
+    await sleep(500);
+    await clickEl('.fu-setup-start');
     await waitState('spawn', 120000);
     await sleep(2000);
     const n = await page.evaluate(() => window.__front.ctx.sim.view.playerList.filter((p) => p.spawned).length);
     check(n > 5, `only ${n} spawned players`);
-    return `${n} players spawned`;
+    const diff = await page.evaluate(() => window.__front.ctx.sim.view.config?.difficulty);
+    check(diff === 'easy', `the game runs on ${diff}, not Easy`);
+    return `${n} players spawned, difficulty ${diff}`;
   });
 
   await step('spawn waits for the human; a click on a nation\'s land is explained', async () => {
@@ -440,17 +465,28 @@ try {
   await step('expand into neutral land (25%, then 60% via the slider)', async () => {
     const cap = await page.evaluate(() => window.__pt.tileLL(window.__front.ctx.sim.view.human.capitalTile));
     await lookAt(cap.lat, cap.lon, 2200);
-    // Neutral land touching our border, farthest from the capital first (grow outward), a few candidates so a tile
-    // that is not clear (the capital's icon, an island marker, a unit) is skipped.
+    // Neutral land in direct contact with ours (4-adjacent: a tile across a strait would be a naval landing, not an
+    // expansion), farthest from the capital first (grow outward), a few candidates so a tile that is not clear (the
+    // capital's icon, an island marker, a unit) is skipped. None left (a crowded start): the later pushes are skipped.
     const findNeutral = (minD) => page.evaluate((minD) => {
       const v = window.__front.ctx.sim.view, pt = window.__pt;
       const mine = pt.humanTiles();
       const cap = v.human.capitalTile;
       const seen = new Map();
-      for (const t of mine) for (const n of [t - 1, t + 1, t - 1600, t + 1600, t - 2, t + 2, t - 3200, t + 3200]) {
-        if (v.owner[n] !== 0 || !pt.playable(n) || seen.has(n)) continue;
-        const d = pt.dist(n, cap);
-        if (d > minD) seen.set(n, d + Math.random() * 6);
+      for (const t of mine) for (const dir of [-1, 1, -1600, 1600]) {
+        const n = t + dir;
+        if (v.owner[n] !== 0 || !pt.playable(n)) continue;
+        // 3-4 tiles into the neutral land along the same direction: a running expansion takes the frontier tiles
+        // within seconds, and a click on land that has just become ours does nothing.
+        let m = n;
+        for (let k = 1; k <= 4; k++) {
+          const q = n + k * dir;
+          if (v.owner[q] !== 0 || !pt.playable(q)) break;
+          m = q;
+        }
+        if (m === n || seen.has(m)) continue;
+        const d = pt.dist(m, cap);
+        if (d > minD) seen.set(m, d + Math.random() * 6);
       }
       return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0]);
     }, minD);
@@ -465,22 +501,37 @@ try {
       const cands = await findNeutral(2);
       if (!cands.length) break;
       let ev = null;
-      for (const target of cands.slice(0, 5)) {
+      for (const target of cands.slice(0, i === 0 ? 5 : 3)) {
+        // Stay inside the step's budget: later pushes are optional once the first one started.
+        if (i > 0 && Date.now() - started > 170_000) break;
         const ll = await tileLL(target);
         await lookAt(ll.lat, ll.lon, 2200);
         const n0 = await countEvents('attackStarted', 'e.attacker === 1');
         const troops0 = (await humanStats()).troops;
+        // Troops already pushing into neutral land: a click on the same front reinforces that offensive (§4.3, no new
+        // attackStarted), which the sum shows.
+        const pushing = () => page.evaluate(() => window.__front.ctx.sim.view.attacks.filter((a) => a.attacker === 1 && a.defender === 0).reduce((n, a) => n + a.troops, 0));
+        const push0 = await pushing();
+        const m0 = await page.evaluate(() => window.__pt.events.length);
         const c = await clickLand(target);
         if (!c.ok) {
           misses.push(c.why);
           continue;
         }
-        ev = await lastEvent('attackStarted', 'e.attacker === 1 && e.defender === 0', n0, 12000);
+        ev = await until(({ n0, push0 }) => {
+          const e = window.__pt.last('attackStarted', (x) => x.attacker === 1 && x.defender === 0, n0);
+          if (e) return { troops: e.troops, how: 'new' };
+          const now = window.__front.ctx.sim.view.attacks.filter((a) => a.attacker === 1 && a.defender === 0).reduce((n, a) => n + a.troops, 0);
+          return push0 > 0 && now > push0 * 1.05 + 1000 ? { troops: Math.round(now - push0), how: 'reinforced' } : null;
+        }, { n0, push0 }, 12000, 300);
         if (ev) {
-          details.push(`${ratio}%: ${ev.troops}/${troops0}`);
+          details.push(`${ratio}%: ${ev.how} ${ev.troops}/${troops0}`);
           break;
         }
-        misses.push(`tile ${target}: clicked the land, no attackStarted`);
+        const said = await page.evaluate((m0) => window.__pt.events.slice(m0).filter((e) => e.type === 'message' && e.playerId === 1).map((e) => e.key).join(','), m0);
+        const nowOwner = await page.evaluate((t) => window.__front.ctx.sim.view.owner[t], target);
+        misses.push(`tile ${target}: clicked the land, no new or reinforced offensive (pushing ${Math.round(push0)} -> ${Math.round(await pushing())}; messages [${said}]; owner now ${nowOwner})`);
+        log(`    ${misses[misses.length - 1]}`);
       }
       if (i === 0) check(ev, `no attackStarted into neutral land (${misses.join('; ')})`);
       await sleep(2500);
@@ -801,10 +852,23 @@ try {
 
   await step('auto-pause banner: [Reanudar] resumes the game', async () => {
     check(aiWar, 'no auto-pause to resume (previous step failed)');
+    // «Prioridad alta» on the banner (shown once the war has a front with us): the remedy the alert names, one click.
+    let prio = 'no front with the aggressor yet (button hidden)';
+    const pb = page.locator('.fu-autopause .fu-btn:not(.fu-hidden):not(.fu-btn--primary)', { hasText: /Prioridad alta|High priority/ }).first();
+    if (await pb.count()) {
+      await pb.click({ force: true });
+      const set = await until((a) => {
+        const v = window.__front.ctx.sim.view;
+        const f = v.fronts.find((x) => (x.b === 1 && x.a === a && x.priorityB === 2) || (x.a === 1 && x.b === a && x.priorityA === 2));
+        return f ? f.key : null;
+      }, aiWar.aggressor, 10000, 300);
+      check(set, 'the banner\'s «Prioridad alta» did not raise the front\'s priority');
+      prio = `front ${set} set to high priority from the banner`;
+    }
     await page.locator('.fu-autopause .fu-btn--primary').click();
     check(await until(() => window.__front.ctx.sim.view.speed > 0, null, 8000, 200), 'did not resume');
     check(await until(() => !window.__fuAlerts.banner(), null, 5000, 200), 'banner still shown');
-    return `speed ${await page.evaluate(() => window.__front.ctx.sim.view.speed)}`;
+    return `speed ${await page.evaluate(() => window.__front.ctx.sim.view.speed)}; ${prio}`;
   });
 
   await step('click the alert in the feed -> the camera flies to the place', async () => {

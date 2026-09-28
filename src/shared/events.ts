@@ -219,6 +219,16 @@ export interface AlertInput {
   tiles?: number[];
   /** v2 (W4): a unit the entry selects when clicked («Ver»: unitReady, strike results). */
   unitId?: number;
+  /**
+   * v2 (W3): one of the human's fronts this entry is about (enemy offensive, capital threat, front loss, unrest): the
+   * entry and its auto-pause banner offer «Prioridad alta» for it (setFrontPriority), the remedy their texts name.
+   */
+  frontKey?: number;
+  /**
+   * v2 (W3): when the front does not exist yet (a declaration just made), the enemy whose front with the human nearest
+   * the alert's place «Prioridad alta» acts on, resolved when the button is painted or pressed.
+   */
+  frontEnemy?: number;
 }
 
 /** The complete main-thread vocabulary: app events + every sim event (keyed by SimEvent.type). */
