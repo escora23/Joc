@@ -1722,8 +1722,8 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
 | > 1,500 km | icons only | icons only |
 | 900–1,500 km | icons; models fade in from 1,200 km (min 12 px) | icons only |
 | 600–900 km | icons shrink to 14 px and float above the models | icons; models fade in from 900 km |
-| 250–600 km | models (≥ 32 px, growing from 12 px at 900 km); a 6 px owner pip above each | icons + models |
-| < 250 km | models, never smaller than 32 px on screen for ships, divisions and aircraft (owner clarification to FEEDBACK-1: close-zoom models must be clearly visible) | models only; level pips on hover and selection |
+| 250–600 km | models (34 px at 600 km, 46 px at 300 km, growing from 12 px at 900 km); a 6 px owner pip above each | icons + models (22 px at 600 km, 38 px at 250 km) |
+| < 250 km | models, growing to 60 px at 100 km and 72 px from 30 km down (owner clarification to FEEDBACK-1: close-zoom models must be clearly visible). Per-type factor on one model: ships ×1.2–1.35, bomber ×1, each of a division's 4 tanks ×0.7, each of a squadron's 3 jets ×0.6, each of a swarm's 7 drones ×0.42, each train car ×0.45. Command mode keeps real scale | models only, at least 54 px at 100 km and 58 px from 40 km (× 0.95–1.3 by type); below ~40 km most are larger at their real footprint; level pips on hover and selection |
 
 * **Icon**: 22 px frame for units, 18 px for structures. Frame shape by relation to the viewer (NATO convention):
   **own = rectangle**, ally = rectangle with a dashed outline, **at war = diamond**, others = rounded square. Fill =
@@ -1736,7 +1736,12 @@ Setting *Nubes*: **Estratégicas** (default), *Realistas*, *Ocultas*.
   for units and one for structures (2 draw calls), `renderOrder 45` (above clouds 30 and atmosphere 40), depth test off,
   horizon test as `render/units/overlays.ts`. Picking uses the icon rectangles (§7.2).
 * **Models** are no longer inflated to 16–46 px from orbit (CM§12): the `ANCHORED` min-pixel scaling applies only between
-  the thresholds above.
+  the thresholds above. A structure drawn larger than life at mid zoom is grounded for the footprint it is drawn at
+  (quarter-octave steps: fitted plane, raised base and pad over the enlarged footprint), so enlarged models never sink
+  into hills. Ports and naval yards slide along their seaward axis onto the drawn shoreline (the 0.5 contour of the
+  water fraction, at most 14 km), so quays, piers and moored ships stand on water, not inland. Parked aircraft sit on
+  the airbase apron (one per docked squadron, 9 slots) at ≥ 14–20 px, capped by the slot spacing. Tanks follow the
+  slope under their tracks.
 * **Grounded structures** (fixes F15, G01): the up vector is the terrain normal averaged over the footprint (clamped to
   ≤ 30° from the radial; W4 raised it from 15° because the ×4 relief makes valley sides 20–25° steep and acceptance 9 wants the up vector within 3° of the relief normal), the anchor is the mean surface height of the footprint, and a foundation pad with a skirt
   reaches down to the lowest point (skirt depth = relief range under the footprint + 5 %). Footprints are real: 2.5–6 km.

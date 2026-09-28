@@ -2,7 +2,7 @@
 // clearly visible, well made and grounded up close). Test tooling only.
 //
 //   node tools/w4-closeups.mjs [--url http://127.0.0.1:5401/] [--out shots/W4-closeout/closeups]
-//        [--only warship,airbase3] [--alts 300,100,40,8] [--heading 0.5] [--params "&clouds=hidden"]
+//        [--only warship,airbase3] [--alts 300,100,40,8] [--heading 0.5] [--params "&clouds=hidden"] [--crop]
 //
 // Loads the model-gallery shot once (every structure type at levels 1-3, docked aircraft, every unit type, paused),
 // then flies the camera to each subject at each altitude, captures the frame (HUD hidden) and writes one contact
@@ -61,15 +61,24 @@ for (const s of subjects) {
         const t = s.tile;
         lat = 90 - (Math.floor(t / 1600) + 0.5) * (180 / 800);
         lon = ((t % 1600) + 0.5) * (360 / 1600) - 180;
+        const a = window.__units.anchorOf?.(t);
+        if (a) { lat = a.lat; lon = a.lon; }
       } else {
         const u = v.units.get(s.tile);
         if (!u) return null;
         lat = 90 - (u.y / 800) * 180;
         lon = (u.x / 1600) * 360 - 180;
+        // Centre on the model as drawn (interpolated), and look straight down on aircraft from above them.
         const tr = window.__units.tracks.get(u.id);
-        if (tr && tr.hasPos) lift = Math.max(0, (tr.pos.length() - ctx.globe.surfaceRadiusAt(lat, lon)) * 6371);
+        if (tr && tr.hasPos) {
+          const p = tr.pos.clone().normalize();
+          lat = Math.asin(p.y) * 180 / Math.PI;
+          lon = Math.atan2(-p.z, p.x) * 180 / Math.PI;
+          lift = Math.max(0, (tr.pos.length() - ctx.globe.surfaceRadiusAt(lat, lon)) * 6371);
+        }
       }
-      ctx.cameraRig.setState({ lat, lon, altitudeKm: alt + lift, tilt, heading });
+      const air = lift > 0.5;
+      ctx.cameraRig.setState({ lat, lon, altitudeKm: alt + lift, tilt: air ? 0.15 : tilt, heading });
       const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
       for (let i = 0; i < 3; i++) await frame();
       const size = window.__units.sizeOf?.(s.kind, s.tile) ?? null;
@@ -95,11 +104,19 @@ function writeSheet(file, frames) {
   frames.forEach((f, i) => {
     const img = PNG.sync.read(f.buf);
     const ox = (i % cols) * cw, oy = Math.floor(i / cols) * ch;
+    // --crop: the centre quarter of the frame at native resolution (the subject is at the centre), else the whole
+    // frame downscaled 2x.
+    const crop = args.crop === 'true';
     for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
       let r = 0, g = 0, b = 0;
-      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-        const k = ((y * 2 + dy) * img.width + (x * 2 + dx)) * 4;
-        r += img.data[k]; g += img.data[k + 1]; b += img.data[k + 2];
+      if (crop) {
+        const k = ((y + H / 4) * img.width + (x + W / 4)) * 4;
+        r = img.data[k] * 4; g = img.data[k + 1] * 4; b = img.data[k + 2] * 4;
+      } else {
+        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+          const k = ((y * 2 + dy) * img.width + (x * 2 + dx)) * 4;
+          r += img.data[k]; g += img.data[k + 1]; b += img.data[k + 2];
+        }
       }
       const o = ((oy + y) * sheet.width + ox + x) * 4;
       sheet.data[o] = r / 4; sheet.data[o + 1] = g / 4; sheet.data[o + 2] = b / 4; sheet.data[o + 3] = 255;

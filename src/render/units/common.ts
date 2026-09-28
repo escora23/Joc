@@ -23,8 +23,8 @@ export interface RenderEnv {
   fxDt: number;
   /**
    * The minimum on-screen size of unit models (px) at the current camera altitude, before the per-type factor
-   * (UNIT_LOOK.pxK): 12 while they fade in under the icons (900-1,200 km), 32 at 600 km, 40 at 300 km, 52 at 100 km
-   * and 64 from 30 km down (DESIGN_V2 §10.7 as revised by the owner's clarification: close-zoom models must be
+   * (UNIT_LOOK.pxK): 12 while they fade in under the icons (900-1,200 km), 34 at 600 km, 46 at 300 km, 60 at 100 km
+   * and 72 from 30 km down (DESIGN_V2 §10.7 as revised by the owner's clarification: close-zoom models must be
    * clearly visible). Strategic view only: command mode draws its own scene at real scale.
    */
   unitMinPx: number;
@@ -106,10 +106,10 @@ export interface UnitLook {
 }
 
 export const UNIT_LOOK: Record<UnitType, UnitLook> = {
-  [UnitType.TransportShip]: { realKm: 0.35, pxK: 1.0, maxKm: 110 },
-  [UnitType.TradeShip]: { realKm: 0.4, pxK: 0.9, maxKm: 110 },
-  [UnitType.Warship]: { realKm: 0.3, pxK: 1.0, maxKm: 130 },
-  [UnitType.ArmoredDivision]: { realKm: 0.35, pxK: 0.62, maxKm: 80 },
+  [UnitType.TransportShip]: { realKm: 0.35, pxK: 1.3, maxKm: 110 },
+  [UnitType.TradeShip]: { realKm: 0.4, pxK: 1.2, maxKm: 110 },
+  [UnitType.Warship]: { realKm: 0.3, pxK: 1.35, maxKm: 130 },
+  [UnitType.ArmoredDivision]: { realKm: 0.35, pxK: 0.7, maxKm: 80 },
   [UnitType.FighterSquadron]: { realKm: 0.06, pxK: 0.6, maxKm: 70 },
   [UnitType.Bomber]: { realKm: 0.09, pxK: 1.0, maxKm: 110 },
   [UnitType.DroneSwarm]: { realKm: 0.05, pxK: 0.42, maxKm: 40 },
@@ -119,7 +119,7 @@ export const UNIT_LOOK: Record<UnitType, UnitLook> = {
   [UnitType.Mirv]: { realKm: 0.05, pxK: 0.8, maxKm: 110 },
   [UnitType.MirvWarhead]: { realKm: 0.02, pxK: 0.35, maxKm: 44 },
   [UnitType.SamInterceptor]: { realKm: 0.02, pxK: 0.35, maxKm: 34 },
-  [UnitType.Train]: { realKm: 0.12, pxK: 0.55, maxKm: 40 },
+  [UnitType.Train]: { realKm: 0.12, pxK: 0.45, maxKm: 40 },
   [UnitType.Shell]: { realKm: 0.01, pxK: 0.15, maxKm: 10 },
 };
 

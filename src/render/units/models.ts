@@ -270,6 +270,10 @@ function tank(): THREE.BufferGeometry {
   // A main battle tank (length 1 = hull + gun overhang): tracks with road wheels behind side skirts, a sloped glacis,
   // an angular wedge turret in the nation's colour with its bustle and cupola, and a long 120 mm gun.
   const olive = 0x56613f, oliveD = 0x3d4530, trackC = 0x1f211d;
+  // A dark ground scar under the hull (churned earth and shade): separates the tank from land of any colour.
+  m.push().translate(0, 0.002, 0.03).scale(1, 1, 1.9);
+  m.cyl(0.25, 0.25, 0.002, 0, 0, 0, 0x2a2822, 10);
+  m.pop();
   for (const side of [1, -1]) {
     m.block(0.075, 0.085, 0.7, side * 0.135, 0, 0.03, trackC);
     for (let i = 0; i < 6; i++) {
@@ -901,29 +905,29 @@ function defensePost(L: number): THREE.BufferGeometry {
 
 function samSite(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  m.cyl(0.5, 0.5, 0.05, 0, -0.05, 0, G.gravel, 28);
-  const ring = new THREE.TorusGeometry(0.25, 0.014, 3, 36);
+  m.cyl(0.5, 0.5, 0.05, 0, -0.05, 0, 0x716c5a, 28);
+  const ring = new THREE.TorusGeometry(0.24, 0.016, 3, 36);
   ring.rotateX(Math.PI / 2);
   ring.scale(1, 0.15, 1);
   m.add(ring, G.asphaltLight);
-  strip(m, 0, 0.25, 0, 0.5, 0.028, 0.003, G.asphaltLight);
+  strip(m, 0, 0.24, 0, 0.5, 0.03, 0.003, G.asphaltLight);
   const n = 2 * L;
-  const r = 0.37;
+  const r = 0.36;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + Math.PI / 4 + (L === 1 ? 0.6 : 0);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    strip(m, Math.cos(a) * 0.26, Math.sin(a) * 0.26, x, z, 0.022, 0.003, G.asphaltLight);
+    strip(m, Math.cos(a) * 0.25, Math.sin(a) * 0.25, x, z, 0.026, 0.003, G.asphaltLight);
     // Launcher facing outward (its -Z), in a horseshoe earth revetment open toward the ring road.
     m.push().translate(x, 0, z).rotateY(-a - Math.PI / 2);
-    m.block(0.03, 0.03, 0.16, 0.06, 0, 0.0, G.earth, { flat: true });
-    m.block(0.03, 0.03, 0.16, -0.06, 0, 0.0, G.earth, { flat: true });
-    m.block(0.15, 0.03, 0.03, 0, 0, -0.085, G.earth, { flat: true });
-    m.block(0.05, 0.022, 0.15, 0, 0.006, 0.01, 0x2a2c26);
-    m.block(0.05, 0.03, 0.035, 0, 0.012, -0.055, 0x56613f, { team: 0.6 });
-    m.push().translate(0, 0.034, 0.05).rotateX(1.05);
+    m.block(0.035, 0.04, 0.2, 0.075, 0, 0.0, G.earth, { flat: true });
+    m.block(0.035, 0.04, 0.2, -0.075, 0, 0.0, G.earth, { flat: true });
+    m.block(0.185, 0.04, 0.035, 0, 0, -0.1, G.earth, { flat: true });
+    m.block(0.065, 0.028, 0.19, 0, 0.006, 0.01, 0x2a2c26);
+    m.block(0.065, 0.04, 0.045, 0, 0.014, -0.07, 0x56613f, { team: 0.6 });
+    m.push().translate(0, 0.045, 0.065).rotateX(1.05);
     for (let c = 0; c < 4; c++) {
-      m.cylZ(0.011, 0.011, 0.12, (c % 2 - 0.5) * 0.024, Math.floor(c / 2) * 0.024, -0.06, 0x56613f, 8);
-      m.cylZ(0.0105, 0.0105, 0.004, (c % 2 - 0.5) * 0.024, Math.floor(c / 2) * 0.024, -0.121, 0xd8d6cf, 8, { team: 0.8 });
+      m.cylZ(0.015, 0.015, 0.16, (c % 2 - 0.5) * 0.032, Math.floor(c / 2) * 0.032, -0.08, 0x5e6947, 8);
+      m.cylZ(0.0145, 0.0145, 0.005, (c % 2 - 0.5) * 0.032, Math.floor(c / 2) * 0.032, -0.161, 0xd8d6cf, 8, { team: 0.8 });
     }
     m.pop();
     m.pop();
@@ -931,8 +935,8 @@ function samSite(L: number): THREE.BufferGeometry {
   // Engagement radar on its trailer (a raised phased-array face), command post, generators.
   m.block(0.05, 0.02, 0.1, 0, 0.004, 0.02, 0x2a2c26);
   m.push().translate(0, 0.03, -0.02).rotateX(-0.22);
-  m.block(0.12, 0.11, 0.018, 0, 0, 0, 0x56613f, { team: 0.2 });
-  m.box(0.1, 0.085, 0.004, 0, 0.056, -0.011, 0x2a3036);
+  m.block(0.16, 0.14, 0.022, 0, 0, 0, 0x56613f, { team: 0.25 });
+  m.box(0.13, 0.11, 0.004, 0, 0.07, -0.013, 0x2a3036);
   m.pop();
   truck(m, 0.1, 0.1, 0.4, 0.09, 0x56613f, 0.5);
   truck(m, -0.1, 0.1, -0.4, 0.08, 0x4a5236);

@@ -16,7 +16,8 @@
 import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
 import { FROZEN_TIME_SEC, presentationTime, shotView } from '../../shared/shots';
-import { EARTH_RADIUS_KM, HUMAN_ID, MAP_W, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, TILE_KM, structureLevel } from '../../shared/constants';
+import { getWorldAux } from '../../data';
+import { EARTH_RADIUS_KM, HUMAN_ID, MAP_H, MAP_W, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, TILE_KM, structureLevel } from '../../shared/constants';
 import { labelRects } from '../globe/labels';
 import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, vec3ToLatLon, wrapDX } from '../../shared/geo';
 import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
@@ -111,8 +112,8 @@ const BUILDING_COLORS = [0xc9c3b6, 0xa9b4bf, 0x8d9aa6, 0xd8d6d0, 0x6f7f8e, 0xb8a
  *   250-600 km       unit models with a 6 px owner pip above each; structures icons + models
  *   < 250 km         models only; structure level shown on hover/selection by the card
  * Minimum on-screen sizes grow as the camera descends (owner clarification to FEEDBACK-1: every model clearly
- * visible up close): units 32 px at 600 km, 40 at 300, 52 at 100, 64 from 30 km (times their UNIT_LOOK.pxK);
- * structures 20 px at 600 km, 34 at 250, 46 at 100, 50 from 40 km (times STRUCT_PX_K). Below ~40 km most structures
+ * visible up close): units 34 px at 600 km, 46 at 300, 60 at 100, 72 from 30 km (times their UNIT_LOOK.pxK);
+ * structures 22 px at 600 km, 38 at 250, 54 at 100, 58 from 40 km (times STRUCT_PX_K). Below ~40 km most structures
  * are drawn at their real footprint (2.5-6.6 km), which is larger than the minimum.
  */
 export interface IconLod {
@@ -135,8 +136,8 @@ export interface IconLod {
 export const WORLD_VIEW_KM = 8000;
 
 /** [altitude km, px] from high to low; linear in log-altitude between points, flat beyond the ends. */
-const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 32], [300, 40], [100, 52], [30, 64]];
-const STRUCT_PX_CURVE: readonly [number, number][] = [[1200, 12], [600, 20], [250, 34], [100, 46], [40, 50]];
+const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 34], [300, 46], [100, 60], [30, 72]];
+const STRUCT_PX_CURVE: readonly [number, number][] = [[1200, 12], [600, 22], [250, 38], [100, 54], [40, 58]];
 function pxCurve(altKm: number, c: readonly [number, number][]): number {
   if (altKm >= c[0][0]) return c[0][1];
   for (let i = 1; i < c.length; i++) {
@@ -573,7 +574,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   /** World position of unit u at sim coordinates (x, y, alt) with a given drawn size. */
   function worldAt(u: UnitView, t: Track, x: number, y: number, alt: number, sizeKm: number, out: THREE.Vector3): THREE.Vector3 {
     tileXYToLatLon(x, y, ll2);
-    const gr = t.ship ? seaRadius(ll2.lat, ll2.lon) : ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon);
+    const gr = t.ship ? seaRadius(ll2.lat, ll2.lon) : ctx.globe.meshRadiusAt(ll2.lat, ll2.lon);
     const h = airHeightKm(u.type, alt, sizeKm, t.range, t.apex);
     return latLonToVec3(ll2.lat, ll2.lon, gr + h / EARTH_RADIUS_KM, out);
   }
@@ -587,7 +588,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     tileXYToLatLon(x, y, ll);
     tangentFrame(ll.lat, ll.lon, E, N, U);
     t.ship = isShip(u.type);
-    const gr = t.ship ? seaRadius(ll.lat, ll.lon) : ctx.globe.surfaceRadiusAt(ll.lat, ll.lon);
+    // Land units stand on the relief as the globe mesh draws it (meshRadiusAt), like structures.
+    const gr = t.ship ? seaRadius(ll.lat, ll.lon) : ctx.globe.meshRadiusAt(ll.lat, ll.lon);
     G.copy(U).multiplyScalar(gr);
     const sizeKm = unitSizeKm(u.type, env.camPos.distanceTo(G)) * (u.type === UnitType.Shell ? 1 : unitK);
     t.size = sizeKm;
@@ -852,7 +854,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   /** Relief radius under a world direction. */
   function radiusUnder(v: THREE.Vector3): number {
     const l = v.length();
-    return ctx.globe.surfaceRadiusAt(Math.asin(clamp(v.y / l, -1, 1)) * (180 / Math.PI), Math.atan2(-v.z, v.x) * (180 / Math.PI));
+    return ctx.globe.meshRadiusAt(Math.asin(clamp(v.y / l, -1, 1)) * (180 / Math.PI), Math.atan2(-v.z, v.x) * (180 / Math.PI));
   }
 
   /**
@@ -1194,13 +1196,60 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const MAX_TILT = (30 * Math.PI) / 180;
   const gP = new THREE.Vector3(), gN = new THREE.Vector3(), gC = new THREE.Vector3();
   const gll: LatLon = { lat: 0, lon: 0 };
-  function groundOf(st: StructureView, S: number, heading: number): Ground {
+  /** The NASA water fraction (0 land .. 1 sea) at a point, bilinear over the tile grid (the drawn coast's position). */
+  function waterAt(lat: number, lon: number): number {
+    const wf = getWorldAux(ctx.world)?.waterFrac;
+    if (!wf) return 0;
+    const fx = ((((lon + 180) / 360) * MAP_W - 0.5) % MAP_W + MAP_W) % MAP_W, fy = clamp(((90 - lat) / 180) * MAP_H - 0.5, 0, MAP_H - 1.001);
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = (x0 + 1) % MAP_W, y1 = y0 + 1, tx = fx - x0, ty = fy - y0;
+    const a = wf[y0 * MAP_W + x0] * (1 - tx) + wf[y0 * MAP_W + x1] * tx;
+    const b = wf[y1 * MAP_W + x0] * (1 - tx) + wf[y1 * MAP_W + x1] * tx;
+    return (a * (1 - ty) + b * ty) / 255;
+  }
+
+  /**
+   * Ports and naval yards stand ON the coast: the sim puts them on a coastal tile, whose centre can lie ~10 km
+   * inland of the drawn shoreline, which left their quays, piers and moored ships on dry land. The model is slid
+   * along its seaward axis F until its quay line (model z = -0.1) meets the shoreline (the 0.5 contour of the
+   * water fraction), at most 14 km. Returns the shift in km along F (from the tile centre at `c`).
+   */
+  const cP = new THREE.Vector3();
+  function coastShiftKm(c: THREE.Vector3, f: THREE.Vector3, Skm: number): number {
+    const at = (dKm: number): number => {
+      cP.copy(c).addScaledVector(f, dKm / EARTH_RADIUS_KM).normalize();
+      vec3ToLatLon(cP, gll);
+      return waterAt(gll.lat, gll.lon);
+    };
+    const dir = at(0) >= 0.5 ? -1 : 1;
+    let prev = 0, shore = NaN;
+    for (let k = 1; k <= 60; k++) {
+      const d = dir * k * 0.5;
+      if ((at(d) >= 0.5) !== (dir < 0)) {
+        shore = (prev + d) / 2;
+        break;
+      }
+      prev = d;
+    }
+    if (!Number.isFinite(shore)) return 0;
+    return clamp(shore - 0.13 * Skm, -14, 14);
+  }
+
+  function groundOf(st: StructureView, S: number, heading: number, cache = true): Ground {
     const key = `${st.tile}:${st.level}:${S.toExponential(4)}:${heading.toFixed(4)}`;
     let g = grounds.get(st.id);
     if (g && g.key === key) return g;
     tileToLatLon(st.tile, ll);
     tangentFrame(ll.lat, ll.lon, E, N, U);
     F.copy(N).multiplyScalar(Math.cos(heading)).addScaledVector(E, Math.sin(heading));
+    if (st.type === StructureType.Port || st.type === StructureType.NavalYard) {
+      const shift = coastShiftKm(U, F, (structKm(st.type, st.level) / EARTH_RADIUS_KM) * EARTH_RADIUS_KM);
+      if (shift !== 0) {
+        gC.copy(U).addScaledVector(F, shift / EARTH_RADIUS_KM).normalize();
+        vec3ToLatLon(gC, ll);
+        tangentFrame(ll.lat, ll.lon, E, N, U);
+        F.addScaledVector(U, -F.dot(U)).normalize();
+      }
+    }
     R.crossVectors(F, U).normalize();
     B.copy(F).negate();
     // Relief samples over the footprint (a 5 x 5 grid on the model's own axes).
@@ -1211,7 +1260,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       vec3ToLatLon(gP, gll);
       xs.push(x);
       zs.push(z);
-      hs.push(ctx.globe.surfaceRadiusAt(gll.lat, gll.lon) - 1);
+      // The relief as the globe mesh draws it (GPU bilinear over the relief texture): what the model must stand on.
+      hs.push(ctx.globe.meshRadiusAt(gll.lat, gll.lon) - 1);
     }
     // Least-squares plane h = a + b x + c z (symmetric grid: independent sums).
     let a = 0, sxx = 0, szz = 0, sxh = 0, szh = 0;
@@ -1242,11 +1292,12 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     const back = new THREE.Vector3().crossVectors(right, up).normalize();
     // Base on the plane at the centre, raised by the highest bump; the pad reaches the lowest hollow + 5 % of the range.
     const lift = Math.max(0, maxE);
-    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U)));
+    // + 0.4 % of the footprint of clearance for relief between the 5 x 5 samples (the pad hides the gap below).
+    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U))).addScaledVector(up, 0.004 * S);
     const range = Math.max(0, maxE - minE);
-    const pad = range * 1.05 + 0.012 * S;
+    const pad = range * 1.05 + 0.02 * S;
     g = { key, anchor, up, right, back, pad, S, maxE, minE, devDeg: (Math.acos(Math.min(1, up.dot(gN))) * 180) / Math.PI, tiltDeg: (tilt * 180) / Math.PI };
-    grounds.set(st.id, g);
+    if (cache) grounds.set(st.id, g);
     return g;
   }
 
@@ -1698,7 +1749,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const out: { id: number; type: number; level: number; footprintKm: number; residualPct: number; maxVerticalErrorPct: number; visibleErrorPct: number; upDevDeg: number; tiltDeg: number; padKm: number; padOk: boolean }[] = [];
       for (const st of ctx.sim.view.structures.values()) {
         const S = structKm(st.type, st.level) / EARTH_RADIUS_KM;
-        const g = groundOf(st, S, headingFor(st));
+        const g = groundOf(st, S, headingFor(st), false);
         const lift = Math.max(0, g.maxE);
         const gap = Math.max(0, lift - g.minE - g.pad);
         const poke = Math.max(0, g.maxE - lift);
@@ -1716,6 +1767,14 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
      * On-screen size of what is drawn for a unit (its whole formation) or a structure this frame: the projected box
      * of the model(s) in CSS px (px = the larger side). tools/w4-closeups.mjs reads it at 300 / 100 / 40 / 8 km.
      */
+    /** Where a structure is drawn (its grounded anchor: ports and yards sit on the shoreline, not the tile centre). */
+    anchorOf(tile: number): { lat: number; lon: number } | null {
+      const st = [...ctx.sim.view.structures.values()].find((x) => x.tile === tile);
+      const a = st ? structAnchor.get(st.id) : undefined;
+      if (!a) return null;
+      const p = a.clone().normalize();
+      return { lat: (Math.asin(clamp(p.y, -1, 1)) * 180) / Math.PI, lon: (Math.atan2(-p.z, p.x) * 180) / Math.PI };
+    },
     sizeOf(kind: 'unit' | 'struct', id: number): { px: number; w: number; h: number; scale: number } | null {
       if (kind === 'unit') {
         const m = modelView.list.find((x) => x.id === id);

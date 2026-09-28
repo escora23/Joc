@@ -18,6 +18,7 @@
 //   V10  structure models differ by level (vertex counts)                                           (acceptance 10)
 //   V11  a division by rail Sevilla -> Zaragoza: km / 100 h ± 10 %, on the rail line                  (acceptance 11)
 //   V14  a selected unit / structure draws its effect ring                                          (acceptance 14)
+//   V15  close-zoom model sizes: warship, division, airbase, radar, SAM at 300 / 100 / 40 / 8 km     (FEEDBACK-1)
 //   V17  the hourglass badge while producing or building; no v2-stub markers                        (acceptance 17)
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -539,6 +540,53 @@ if (want('V14')) {
   }
   const all = [...res, ...unitsRings];
   row('V14', 'a selected structure or unit draws its effect ring / zone (count beyond the selection ring)', all.join(', '), '>= 1 each', all.every((x) => Number(x.split(': ')[1]) >= 1));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// V15 (owner clarification to FEEDBACK-1, §10.7): up close every model is clearly visible. The camera flies to a
+// warship, a division, a docked squadron's airbase, a radar and a SAM site at 300 / 100 / 40 / 8 km and the drawn
+// size (__units.sizeOf: the projected box of the model or formation, px) must reach the minimum for that altitude.
+if (want('V15')) {
+  const MIN = { unit: { 300: 38, 100: 50, 40: 55, 8: 60 }, struct: { 300: 30, 100: 45, 40: 50, 8: 150 } };
+  const subjects = await view(() => {
+    const v = window.__front.ctx.sim.view;
+    window.__fuHud.shared.select({ kind: 'none' });
+    const u = (type) => [...v.units.values()].find((x) => x.owner === 1 && x.type === type && x.state !== 8);
+    const st = (type) => [...v.structures.values()].find((x) => x.owner === 1 && x.type === type);
+    return [['warship', 'unit', u(2)?.id], ['division', 'unit', u(3)?.id], ['airbase', 'struct', st(6)?.tile], ['radar', 'struct', st(9)?.tile], ['SAM site', 'struct', st(4)?.tile]]
+      .filter((x) => x[2] !== undefined);
+  });
+  const fails = [], got = [];
+  for (const [name, kind, id] of subjects) {
+    for (const alt of [300, 100, 40, 8]) {
+      const px = await view(async ({ kind, id, alt }) => {
+        const { ctx } = window.__front;
+        let lat, lon;
+        if (kind === 'unit') {
+          const t = window.__units.tracks.get(id);
+          const u = ctx.sim.view.units.get(id);
+          if (!u) return -1;
+          if (t && t.hasPos) {
+            const p = t.pos.clone().normalize();
+            lat = Math.asin(p.y) * 180 / Math.PI;
+            lon = Math.atan2(-p.z, p.x) * 180 / Math.PI;
+          } else { lat = 90 - u.y * 0.225; lon = u.x * 0.225 - 180; }
+        } else {
+          lat = 90 - (Math.floor(id / 1600) + 0.5) * 0.225;
+          lon = ((id % 1600) + 0.5) * 0.225 - 180;
+        }
+        const t = Math.min(1, Math.max(0, (Math.log10(3000) - Math.log10(alt)) / (Math.log10(3000) - Math.log10(2))));
+        ctx.cameraRig.setState({ lat, lon, altitudeKm: alt, tilt: 1.22 * Math.pow(t, 1.15), heading: 0.5 });
+        const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
+        for (let i = 0; i < 4; i++) await frame();
+        return window.__units.sizeOf(kind, id)?.px ?? 0;
+      }, { kind, id, alt });
+      got.push(`${name}@${alt}:${Math.round(px)}`);
+      if (px < MIN[kind][alt]) fails.push(`${name}@${alt} ${Math.round(px)} < ${MIN[kind][alt]}`);
+    }
+  }
+  row('V15', 'close-zoom model sizes (px) at 300 / 100 / 40 / 8 km', got.join(' '), 'units >= 38/50/55/60, structures >= 30/45/50/150', subjects.length >= 4 && fails.length === 0);
+  await shot('v15-closeup');
 }
 
 if (want('V17')) {
