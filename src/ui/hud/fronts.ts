@@ -172,6 +172,15 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     const cur = hsd === 0 ? f.priorityA : f.priorityB;
     const next = targetShareIf(f, p);
     const expect = share > 0.001 ? (gar * next) / share : gar;
+    // With a single front the whole field army already stands there: priority only matters between fronts.
+    const mine = view().fronts.filter((q) => q.b !== 0 && (q.a === HUMAN_ID || q.b === HUMAN_ID)).length;
+    if (mine <= 1) {
+      return {
+        title: t('fr.prio.title', { level: title }), text: t(`fr.prio.${p}.tip`),
+        now: [[t('fr.prio.now'), t(PRIO_LABEL[cur])], [t('fr.garrison.own'), formatNumber(Math.round(gar / 1000) * 1000)], [t('fr.share'), `${formatNumber(Math.round(share * 100))} %`]],
+        lines: [t('fr.prio.single'), t('fr.prio.line')],
+      };
+    }
     return {
       title: t('fr.prio.title', { level: title }), text: t(`fr.prio.${p}.tip`),
       now: [[t('fr.prio.now'), t(PRIO_LABEL[cur])], [t('fr.garrison.own'), formatNumber(Math.round(gar / 1000) * 1000)], [t('fr.share'), `${formatNumber(Math.round(share * 100))} %`]],

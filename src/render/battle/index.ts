@@ -782,7 +782,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   function updateFar(dt: number): void {
     if (!far) return;
     const alt = camState.altitudeKm;
-    const fade = (1 - smoothstep(BATTLE_LAYER_ALT_KM * 0.65, BATTLE_LAYER_ALT_KM, alt)) * smoothstep(6, 16, alt);
+    // §11.1: the far layer covers 150-600 km fully (fading out by 900 km, where the orbit overlay alone reads).
+    const fade = (1 - smoothstep(Math.max(650, BATTLE_LAYER_ALT_KM), 900, alt)) * smoothstep(6, 16, alt);
     far.uniforms.uTime.value = clock;
     ll.lat = camState.lat;
     ll.lon = camState.lon;

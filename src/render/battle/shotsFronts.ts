@@ -83,8 +83,8 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   if (who === 'none') {
     ctx.sim.debug({ type: 'war', a: enemy, b: HUMAN_ID, mobilizeTicks: mob });
   } else if (mob > 0) {
-    // The aggressor declares with its offensive queued for the end of the mobilization (the real §4.2 flow).
-    ctx.sim.debug({ type: 'command', playerId: attacker, cmd: { type: 'declareWar', target: defender, queuedAttack: { tile: aim, ratio: 0.6 } } });
+    // Declared with a mobilization window: the aggressor may not attack before mobilizeUntilTick (§4.2).
+    ctx.sim.debug({ type: 'war', a: attacker, b: defender, mobilizeTicks: mob });
   } else {
     ctx.sim.debug({ type: 'war', a: attacker, b: defender, mobilizeTicks: 0 });
   }
@@ -220,7 +220,8 @@ registerShot('plume-zoom', 'battle', 'W6: a missile launched from Madrid seen at
   ctx.sim.debug({ type: 'launchNuke', weapon: UnitType.AtomBomb, owner: 2, fromTile: from, targetTile: target });
   const t0 = performance.now();
   while (performance.now() - t0 < 20_000 && !(fx?.plumes().alive)) await s.wait(100);
-  ctx.sim.setSpeed(0);
+  // Let the plume grow for a few real seconds (its world size follows its age, 6 -> 20 km).
+  await s.wait(Number(params.get('grow') ?? 10000));
   for (const alt of [700, 200]) {
     ctx.cameraRig.setState({ lat: 40.42, lon: -3.7, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.6), heading: 0.3 });
     await s.waitFrames(6);
@@ -229,6 +230,7 @@ registerShot('plume-zoom', 'battle', 'W6: a missile launched from Madrid seen at
   const at = Number(params.get('alt') ?? 200);
   ctx.cameraRig.setState({ lat: 40.42, lon: -3.7, altitudeKm: at, tilt: Number(params.get('tilt') ?? 0.6), heading: 0.3 });
   await s.waitFrames(6);
+  ctx.sim.setSpeed(0);
   (window as unknown as { __plumeZoom?: unknown }).__plumeZoom = samples;
   console.info(`[w6] plume-zoom ${JSON.stringify(samples)}`);
 }, 6);

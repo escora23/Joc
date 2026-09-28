@@ -213,13 +213,17 @@ void main() {
   if (a < 0.003) discard;
   float edgePx = (1.0 - abs(vSide)) * vHalfPx;
   float outline = 1.0 - smoothstep(1.2 * uPx, 2.4 * uPx, edgePx);
+  // A light inner stroke just inside the dark outline (the classic operational-map arrow): the arrow stays distinct
+  // even over land of its own colour.
+  float inner = smoothstep(2.4 * uPx, 3.0 * uPx, edgePx) * (1.0 - smoothstep(3.8 * uPx, 4.6 * uPx, edgePx));
   vec3 col = mix(vCol, vec3(0.02), outline * 0.92);
+  col = mix(col, vec3(0.96, 0.95, 0.9), inner * (vInfo.x < 0.5 ? 0.75 : 0.0));
   float alpha;
   if (vInfo.x < 0.5) {
     // Operational arrow: solid rim, lighter body so the territory under a corridor-wide arrow stays readable; the
     // tail fades in.
     float rim = 1.0 - smoothstep(0.62, 0.8, 1.0 - abs(vSide));
-    alpha = mix(0.26, 0.74, max(rim, outline)) * smoothstep(0.0, 0.12, vU);
+    alpha = mix(0.26, 0.74, max(max(rim, outline), inner)) * smoothstep(0.0, 0.12, vU);
   } else if (vInfo.x < 1.5) {
     alpha = 0.85 * smoothstep(0.0, 0.08, vU);
   } else {

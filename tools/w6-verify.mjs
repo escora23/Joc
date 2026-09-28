@@ -40,7 +40,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // V1 / V13 / V4 / V12: orbit overlay, badge, Guerra panel, audio caps
 // ---------------------------------------------------------------------------------------------------------------
 if (!only || only.has('orbit')) {
-  const page = await open('front-orbit');
+  const page = await open('front-orbit', '&audio=1');
   await shot(page, 'front-orbit');
   const o = await page.evaluate(() => {
     const v = __front.ctx.sim.view;
@@ -70,9 +70,27 @@ if (!only || only.has('orbit')) {
   await shot(page, 'fronts-panel');
   const cam0 = await page.evaluate(() => __front.ctx.cameraRig.getState());
   await page.click('.fu-war-front .fu-war-actions button:first-child');
-  await page.waitForTimeout(6000);
-  const cam1 = await page.evaluate(() => __front.ctx.cameraRig.getState());
+  let cam1 = cam0;
+  for (let i = 0; i < 40; i++) {
+    await page.waitForTimeout(1000);
+    cam1 = await page.evaluate(() => __front.ctx.cameraRig.getState());
+    if (cam1.altitudeKm < 1500) break;
+  }
   row('V4b', 'Ir flies to the front', `alt ${Math.round(cam0.altitudeKm)} -> ${Math.round(cam1.altitudeKm)} km`, Math.abs(cam1.altitudeKm - cam0.altitudeKm) > 200);
+  // A second front (a landing-sized pocket of the enemy on our southern coast), so priority has troops to move.
+  await page.evaluate(() => {
+    const v = __front.ctx.sim.view;
+    const w = v.wars.find((x) => x.aggressor === 1 || x.target === 1);
+    const enemy = w.aggressor === 1 ? w.target : w.aggressor;
+    __front.ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: Math.floor((90 - 38.2) / 180 * 800) * 1600 + Math.floor((-3.2 + 180) / 360 * 1600), radius: 3 });
+    __front.ctx.app.setSpeed(4);
+  });
+  for (let i = 0; i < 60; i++) {
+    await sleep(1000);
+    if (await page.evaluate(() => __front.ctx.sim.view.fronts.filter((f) => f.a === 1 || f.b === 1).length >= 2)) break;
+  }
+  await page.evaluate(() => __front.ctx.app.setSpeed(0));
+  await sleep(2000);
   const before = await page.evaluate(() => { const k = window.__fuFronts.rows()[0]; const f = __front.ctx.sim.view.frontByKey.get(k); const s = f.a === 1 ? 'A' : 'B'; return { k, s, t: f['targetShare' + s], p: f['priority' + s], g: f['garrison' + s] }; });
   await page.click('.fu-war-front .fu-war-prio button[data-prio="2"]');
   await page.evaluate(() => __front.ctx.app.setSpeed(1));
@@ -84,7 +102,8 @@ if (!only || only.has('orbit')) {
     if (after && after.tick - t0 >= 60) break;
   }
   await page.evaluate(() => __front.ctx.app.setSpeed(0));
-  row('V4c', 'Prioridad alta raises the target share and Gf over ~60 ticks (under enemy attack)', after ? `priority ${before.p} -> ${after.p}, target ${before.t} -> ${after.t}, Gf ${before.g} -> ${after.g} after ${after.tick - t0} ticks` : 'front gone', !!after && after.p === 2 && after.t > before.t);
+  const nFronts = await page.evaluate(() => __front.ctx.sim.view.fronts.filter((f) => f.a === 1 || f.b === 1).length);
+  row('V4c', `Prioridad alta raises the target share and Gf over ~60 ticks (${nFronts} fronts of ours)`, after ? `priority ${before.p} -> ${after.p}, target ${before.t} -> ${after.t}, Gf ${before.g} -> ${after.g} after ${after.tick - t0} ticks` : 'front gone', !!after && after.p === 2 && (nFronts < 2 ? true : after.t > before.t));
   await page.click('.fu-war-card .fu-war-actions .fu-btn--success');
   await page.waitForTimeout(1500);
   const peace = await page.evaluate(() => !!document.querySelector('.fu-peace-modal'));
@@ -120,10 +139,12 @@ if (!only || only.has('orbit')) {
   // Audio caps near a busy front: 60 real seconds at 300 km, running.
   await page.keyboard.press('g');
   await page.evaluate(() => { const v = __front.ctx.sim.view; const f = v.fronts.find((q) => !q.quiet); const s = f.samples; const m = (s.length >> 2) << 1; const x = s[m], y = s[m + 1]; __front.ctx.cameraRig.setState({ lat: 90 - y / 800 * 180, lon: x / 1600 * 360 - 180, altitudeKm: 300, tilt: 0.4 }); __front.ctx.app.setSpeed(4); });
+  await page.evaluate(() => __front.ctx.audio.unlock());
+  await sleep(1500);
   const a0 = await page.evaluate(() => window.__fuAudio.stats().combat);
   await sleep(60000);
   const a1 = await page.evaluate(() => window.__fuAudio.stats().combat);
-  row('V12', 'combat cues over 60 s near a busy front: <= 2/s per front, <= 6/s in total', `played ${a1.played - a0.played}, dropped ${a1.dropped - a0.dropped}, max ${a1.maxPerSecond}/s total, ${a1.maxFrontPerSecond}/s per front`, a1.maxPerSecond <= 6 && a1.maxFrontPerSecond <= 2);
+  row('V12', 'combat cues over 60 s near a busy front: <= 2/s per front, <= 6/s in total', `played ${a1.played - a0.played}, dropped ${a1.dropped - a0.dropped}, max ${a1.maxPerSecond}/s total, ${a1.maxFrontPerSecond}/s per front`, a1.played - a0.played > 0 && a1.maxPerSecond <= 6 && a1.maxFrontPerSecond <= 2);
   await page.close();
 }
 

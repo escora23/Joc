@@ -194,9 +194,13 @@ export function createAudio(ctx: GameContext): AudioApi {
   }
 
   function playXY(cue: string, x: number, y: number, gain = 1, minGain = 0, delay = 0): void {
-    // Combat cues obey the density caps (per front and in all).
-    if (COMBAT_CUES.has(cue) && inGame() && !allowCombat(frontAt(x, y))) return;
     tileXYToLatLon(x, y, ll);
+    // Combat cues obey the density caps (per front and in all), counting only cues loud enough to be heard here.
+    if (COMBAT_CUES.has(cue) && inGame()) {
+      hear(cam, ll.lat, ll.lon, CUE_REF_KM[cue] ?? 120, heard);
+      if (Math.max(minGain, heard.gain) * gain * (appState === 'command' ? 0.25 : 1) < 0.02) return;
+      if (!allowCombat(frontAt(x, y))) return;
+    }
     playAt(cue, ll.lat, ll.lon, gain, minGain, delay);
   }
 
@@ -306,7 +310,8 @@ export function createAudio(ctx: GameContext): AudioApi {
 
   // --- sim events --------------------------------------------------------------------------------
   bus.on('combat', (e) => {
-    if (!snd || !inGame()) return;
+    // The density caps run (and count) even before the audio unlocks, so the cue budget is the same in every session.
+    if (!inGame()) return;
     switch (e.kind) {
       case 'shell':
         playXY('navalGun', e.fromX, e.fromY, 0.8);
@@ -329,7 +334,7 @@ export function createAudio(ctx: GameContext): AudioApi {
     }
   });
   bus.on('unitDestroyed', (e) => {
-    if (!snd || !inGame()) return;
+    if (!inGame()) return;
     if (e.unit === UnitType.Shell || e.unit === UnitType.SamInterceptor || e.unit === UnitType.Train) return;
     const big = e.unit === UnitType.Warship || e.unit === UnitType.Bomber || e.unit === UnitType.TransportShip || e.unit === UnitType.TradeShip;
     playXY(big ? 'explosionLarge' : 'explosionSmall', e.x, e.y, 0.9, e.owner === HUMAN_ID ? 0.12 : 0);
@@ -589,7 +594,8 @@ export function createAudio(ctx: GameContext): AudioApi {
       progress(1);
     },
     unlock() {
-      if (ctx.app?.isShot) return Promise.resolve();
+      // Shots stay silent unless they ask for sound (&audio=1: the W6 verifier measures the combat-cue caps).
+      if (ctx.app?.isShot && new URLSearchParams(location.search).get('audio') !== '1') return Promise.resolve();
       if (unlocking) {
         const a = ac;
         if (a && a.state !== 'running') void a.resume().then(() => (unlocked = a.state === 'running')).catch(() => undefined);
