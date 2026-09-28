@@ -53,7 +53,7 @@ Visual evidence (gitignored `shots/codemap/`, recipe in §23):
 | `src/render/globe`, `camera`, `post` | 3.8k | globe | Earth shader + territory overlay, clouds/atmosphere, labels, camera rig, HDR post |
 | `src/render/units`, `fx` | 5.4k | units | Instanced unit/structure models, rails, overlays; particles, trails, nukes |
 | `src/render/battle` | 6.6k | battle | Ground battlefield near fronts (<70 km) + far flashes (<600 km) |
-| `src/command` | 10.7k | command | Command mode: local world, AI, mission, vehicles, HUD |
+| `src/command` | 10.7k | command | Command mode: streamed local world, civil layer, forces from the sim, AI, vehicles, HUD (§17) |
 | `src/ui` | 7.9k | ui | DOM HUD, menus, i18n tables |
 | `src/audio` | 3.8k | audio | Procedural Web Audio |
 | `tools` | 0.8k | app/architect | `capture.mjs`, `playtest.mjs` (+3 stray dot-files, §24) |
@@ -1060,6 +1060,28 @@ Everything is in `src/sim/units.ts` unless noted. `step` L599-L632 dispatches pe
   strategic-map move while in control.
 * Returning must resync the renderers after a long absence (they tolerate gaps).
 * Audio moods, and the `commandExitRequested` reasons (§24).
+
+**v2 as built (W5-command-v2, 2026-09).** Everything above «v2 (F8)» describes v1; `mission.ts`, the objectives,
+waves, operation names, air strikes and `commandResult` are gone.
+* Entry (`bootstrap.ts enterCommandMode`): `unitControl` first, then `commandParams` from the latest unit view (lat,
+  lon, heading, alt, integrity, formation), `context` and enemy from `deriveLocalForces` (enemy 0 is legal), and
+  `battleHandoff` from `ctx.battle.handoff?.()` when a ground battle is on screen. Exit: `setClock('strategic')`,
+  `command.exit()`, `unitControl false` (the sim walks a unit left in foreign land home), fly to 2,500 km above the
+  unit's new tile.
+* Sim side `src/sim/command.ts` (`game.command`): `controlledMove` (clamp maxKmh × elapsed × 1.1, snap, reject jumps
+  > 5 km and > 2× allowed), `commandCasualties`, `controlledDamage`, incursions (decision 30–90 game s via
+  `subStep`, protest / intercept / war, QRF 5–15 game min, real divisions within 30 km and fighters within 150 km
+  ordered in), `borderIncursion` events, `TickUpdate.command` (CommandView). Headless test:
+  `npx tsx src/sim/test/command-audit.mjs`.
+* Client `src/command/`: `frame.ts` (local equirectangular frame, floating origin), `stream.ts` + `terrain/`
+  (near/mid chunk rings + horizon patch built in two workers, shader masks against overlap, 6 ms budget,
+  `missingAround` / `readyAheadM` drive the travel throttle), `civil.ts` (towns, night-light villages, roads,
+  structures at human scale, border line with posts and gates, rail), `forces.ts` (every local entity from
+  `deriveLocalForces` pools or a real unit / structure, `EntSource` for the kill sync), `tacmap.ts` (M map and
+  waypoint), `hud/overlay.ts` (place, land status, clock chip, alerts, pips, dialogs, debrief), `alerts.ts`,
+  `index.ts` (clock ×1/10/60/300/900 with contact and border drops, autopilot travel, sync, decisions, formation).
+* Tools: `window.__cmdStats` (every 10 frames), `window.__cmd` (internals), shots `command-*` (`&live=1` keeps the
+  session running), `node tools/w5-verify.mjs` (browser checks per acceptance criterion).
 
 ---
 

@@ -175,25 +175,32 @@ if (ONLY.includes('border')) {
   const { page, errs } = await open('command-border');
   let s = await stats(page);
   rec('B1 border warning at ~1.5 km', !!s.border && s.border.distM < 2500, s.border);
-  // Autopilot across the border: it must stop and ask.
-  await page.evaluate(() => {
-    const s = window.__cmdStats, I = window.__cmd, w = I.where();
-    const b = s.border; // {owner, distM, x, z}
-    const P = I.controller.ent;
+  // Drive at it at ×1 (near a border travel drops to ×1). Under SwiftShader a frame takes seconds and the local step
+  // is clamped to 0.1 s, so the vehicle is advanced here at 15 m per real second (below the tank's 18 m/s, the sim's
+  // clock runs 1:1 with real time), straight at the nearest border point; the frame loop does the rest.
+  const push = (m) => page.evaluate((m) => {
+    const s = window.__cmdStats, I = window.__cmd, P = I.controller.ent;
+    const b = s.border;
+    if (!b) return false;
     const dx = b.x - P.pos.x, dz = b.z - P.pos.z, d = Math.hypot(dx, dz) || 1;
-    const tx = P.pos.x + (dx / d) * (d + 3000), tz = P.pos.z + (dz / d) * (d + 3000);
-    const ll = I.frame.latLonOfScene(tx, tz, { lat: 0, lon: 0 });
-    I.setWaypoint(ll.lat, ll.lon);
-    I.requestRate(10);
-    void w;
-  });
+    // Past the line: keep the last heading.
+    const ux = d > 1 ? dx / d : -Math.sin(P.yaw), uz = d > 1 ? dz / d : -Math.cos(P.yaw);
+    P.pos.x += ux * m;
+    P.pos.z += uz * m;
+    P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
+    P.yaw = Math.atan2(-ux, -uz);
+    window.__w5dir = { x: ux, z: uz };
+    return true;
+  }, m);
   let asked = false;
-  for (let i = 0; i < 180 && !asked; i++) {
+  for (let i = 0; i < 200 && !asked; i++) {
+    await push(15);
     await wait(1000);
     s = await stats(page);
     asked = !!s.dialog;
   }
-  rec('B2 confirmation before crossing', asked, { dialog: s.dialog, border: s.border, rate: s.rate });
+  const early = await page.evaluate(() => window.__cmd.ctx.sim.view.command?.incursions?.length ?? 0);
+  rec('B2 confirmation before crossing (no incursion in the sim yet)', asked && early === 0, { dialog: s.dialog, border: s.border, simIncursions: early });
   // Accept: the first button of the command dialog.
   const clicked = await page.evaluate(() => {
     const btn = document.querySelector('.fu-cmdx-dialog.show button.danger');
@@ -202,10 +209,20 @@ if (ONLY.includes('border')) {
   });
   let inc = null;
   for (let i = 0; i < 240 && !inc; i++) {
+    if (i < 90) await page.evaluate(() => {
+      const I = window.__cmd, P = I.controller.ent;
+      P.pos.x += window.__w5dir.x * 15;
+      P.pos.z += window.__w5dir.z * 15;
+      P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
+    });
     await wait(1000);
     inc = await page.evaluate(() => window.__cmd.ctx.sim.view.command?.incursions?.[0] ?? null);
   }
-  rec('B3 incursion raised by the sim', !!inc, { clicked, incursion: inc });
+  const dbg = await page.evaluate(() => {
+    const I = window.__cmd, v = I.ctx.sim.view, s = window.__cmdStats;
+    return { land: s.landOwner, local: I.where(), sim: v.command?.controlled?.[0], moves: v.command?.moves, dialog: I.overlay.dialogOpen, log: v.command?.log?.slice(-4) };
+  });
+  rec('B3 incursion raised by the sim after the confirmation', !!inc && !!clicked && !inc.left, { clicked, incursion: inc, ...(inc ? {} : { dbg }) });
   if (inc) {
     const t0 = await page.evaluate(() => window.__cmd.ctx.sim.view.command.sec);
     let r = inc;
@@ -288,5 +305,9 @@ await browser.close();
 const fails = results.filter((r) => r.ok === false).length;
 console.log(`\n${results.filter((r) => r.ok === true).length} pass, ${fails} fail, ${results.filter((r) => r.ok === null).length} info`);
 fs.mkdirSync('shots/W5-command-v2', { recursive: true });
-fs.writeFileSync('shots/W5-command-v2/verify.json', JSON.stringify(results, null, 1));
+// Merge with the results of earlier runs of other sections (a section at a time fits a SwiftShader session).
+let prev = [];
+try { prev = JSON.parse(fs.readFileSync('shots/W5-command-v2/verify.json', 'utf8')); } catch { prev = []; }
+const ids = new Set(results.map((r) => r.id));
+fs.writeFileSync('shots/W5-command-v2/verify.json', JSON.stringify([...prev.filter((r) => !ids.has(r.id)), ...results.map((r) => ({ ...r, at: new Date().toISOString() }))], null, 1));
 process.exit(fails ? 1 : 0);

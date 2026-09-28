@@ -516,6 +516,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const moved = P.pos.distanceTo(lastMovePos);
     if (!force && now - lastMoveWall < 1000 && moved < MOVE_SEND_M[kind]) return;
     const tp = tileOf(P.pos.x, P.pos.z);
+    // Never report a position across a peaceful border before the player confirmed the crossing (the frame's border
+    // check puts the vehicle back on the line; a move sent in between would start an incursion in the sim).
+    const o = ownerOfTile(tileIndex(tp.x, tp.y));
+    if (incursionOwner(o) && !confirmed.has(o)) return;
     const heading = LocalFrame.headingOfYaw(P.yaw);
     const alt = kind === 'jet' ? Math.max(0, Math.min(1, P.pos.y / FLIGHT_CEILING_M)) : undefined;
     ctx.sim.send({ type: 'controlledMove', unitId: params.unitId, x: tp.x, y: tp.y, heading, ...(alt !== undefined ? { alt } : {}) });
