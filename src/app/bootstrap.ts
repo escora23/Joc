@@ -32,6 +32,7 @@ import { createAudio } from '../audio';
 import { createInputRouter } from './input';
 import { createWorldFx } from './worldfx';
 import { installProbes } from './probes';
+import { installLocalForcesProbe } from './localForcesProbe';
 import { installAutosave } from './autosave';
 import { registerAllShots } from './shots';
 
@@ -241,6 +242,7 @@ export async function bootstrap(): Promise<void> {
   const frontHook: Record<string, unknown> = { ctx, app };
   (window as unknown as { __front: unknown }).__front = frontHook;
   installProbes(ctx, frontHook);
+  installLocalForcesProbe(ctx);
   registerAllShots();
 
   function setState(next: AppState): void {
