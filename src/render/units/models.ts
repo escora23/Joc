@@ -716,8 +716,8 @@ function airbase(L: number): THREE.BufferGeometry {
  * taxiway (-Z). index.ts parks one aircraft per docked squadron here.
  */
 export const AIRBASE_SLOTS: readonly [number, number][] = [
-  [-0.4, -0.08], [-0.29, -0.08], [-0.18, -0.08], [-0.07, -0.08], [0.04, -0.08],
-  [-0.4, 0.04], [-0.29, 0.04], [-0.18, 0.04], [-0.07, 0.04],
+  [-0.4, -0.085], [-0.29, -0.085], [-0.18, -0.085], [-0.07, -0.085], [0.04, -0.085],
+  [-0.4, 0.05], [-0.29, 0.05], [-0.18, 0.05], [-0.07, 0.05],
 ];
 
 // ---- Port: 1 / 2 / 3 berths with 2 / 4 / 6 cranes, the container yard, warehouses and the rail spur -------------
@@ -1155,6 +1155,16 @@ function radar(L: number): THREE.BufferGeometry {
   for (let i = 0; i < 2; i++) {
     m.cyl(0.003, 0.005, 0.2, 0.3 + i * 0.06, 0, -0.35, 0x8e959c, 4);
     m.sphere(0.006, 0.3 + i * 0.06, 0.2, -0.35, 0xff2211, 4, 3, { heat: 0.8 });
+  }
+  if (L >= 2) {
+    // Height-finder: a second, slimmer mast with a tall nodding antenna (orange-trimmed), west of the main tower.
+    const hx = -0.06, hz = -0.3;
+    // (Its top stays under the rotating dish, which sweeps above y = 0.38.)
+    m.cyl(0.02, 0.028, 0.19, hx, 0, hz, 0xa4aaaf, 8);
+    m.block(0.05, 0.03, 0.05, hx, 0.19, hz, 0xd2d4d2, { team: 0.8 });
+    m.push().translate(hx, 0.22, hz + 0.01).rotateX(-0.25);
+    m.box(0.022, 0.13, 0.07, 0, 0.065, 0, 0xe4e6e6, { team: 0.2 });
+    m.pop();
   }
   if (L >= 3) {
     // Early-warning phased-array building: a truncated pyramid with its dark array face toward -Z.

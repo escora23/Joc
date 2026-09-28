@@ -166,7 +166,8 @@ export class Overlays {
     this.mesh = new THREE.Mesh(g, mat);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 61;
-    this.path = new SurfaceRibbon(512, { widthKm: 1.2, minPx: 2.2, dash: 18, opacity: 0.95, lift: 0.3, depthTest: false, name: 'units-order-path', renderOrder: 62 });
+    // A screen-width line (2.2 px half width at every zoom): a 1.2 km world width became a glowing 30 px bar at 40 km.
+    this.path = new SurfaceRibbon(512, { widthKm: 0.02, minPx: 2.2, dash: 18, opacity: 0.95, lift: 0.05, depthTest: false, name: 'units-order-path', renderOrder: 62 });
     this.path.material.uniforms.uGlow.value = 0.6;
     this.ghostMat = createModelMaterial({ ghost: true });
     this.group.add(this.mesh, this.path.mesh);

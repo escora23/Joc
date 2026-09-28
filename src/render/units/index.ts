@@ -112,7 +112,8 @@ const BUILDING_COLORS = [0xc9c3b6, 0xa9b4bf, 0x8d9aa6, 0xd8d6d0, 0x6f7f8e, 0xb8a
  *   250-600 km       unit models with a 6 px owner pip above each; structures icons + models
  *   < 250 km         models only; structure level shown on hover/selection by the card
  * Minimum on-screen sizes grow as the camera descends (owner clarification to FEEDBACK-1: every model clearly
- * visible up close): units 34 px at 600 km, 46 at 300, 60 at 100, 72 from 30 km (times their UNIT_LOOK.pxK);
+ * visible up close): units 34 px at 600 km, 46 at 300, 62 at 100, 80 at 30, 104 at 10 and 130 from 3 km (times their
+ * UNIT_LOOK.pxK: a warship 176 px long at 3 km, one tank of a division 91 px);
  * structures 22 px at 600 km, 38 at 250, 54 at 100, 58 from 40 km (times STRUCT_PX_K). Below ~40 km most structures
  * are drawn at their real footprint (2.5-6.6 km), which is larger than the minimum.
  */
@@ -136,7 +137,7 @@ export interface IconLod {
 export const WORLD_VIEW_KM = 8000;
 
 /** [altitude km, px] from high to low; linear in log-altitude between points, flat beyond the ends. */
-const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 34], [300, 46], [100, 60], [30, 72]];
+const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 34], [300, 46], [100, 62], [30, 80], [10, 104], [3, 130]];
 const STRUCT_PX_CURVE: readonly [number, number][] = [[1200, 12], [600, 22], [250, 38], [100, 54], [40, 58]];
 function pxCurve(altKm: number, c: readonly [number, number][]): number {
   if (altKm >= c[0][0]) return c[0][1];
@@ -198,7 +199,7 @@ interface CitySpec {
   spires: number;
 }
 
-interface RadarInfo { id: number; anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; aS: number; col: THREE.Color; built: number; hp: number; sel: number }
+interface RadarInfo { id: number; anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; aS: number; col: THREE.Color; built: number; hp: number; sel: number; level: number }
 interface FactoryInfo { anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; k: number; acc: number; level: number }
 
 export function createUnitsRenderer(ctx: GameContext): UnitsApi {
@@ -369,7 +370,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     buildings = makeInst(buildBuilding(), cityMat, MAX_BUILDINGS, true, 'city-buildings');
     spires = makeInst(buildSpire(), structMat(1), MAX_SPIRES, true, 'city-spires');
     progress(++k / total);
-    rails = new SurfaceRibbon(60000, { widthKm: 0.3, minPx: 0.65, opacity: 0.85, lift: 1.2, name: 'units-rails', renderOrder: 6 });
+    rails = new SurfaceRibbon(60000, { widthKm: 0.14, minPx: 0.65, opacity: 0.85, lift: 1.2, name: 'units-rails', renderOrder: 6 });
     root.add(rails.mesh);
     overlays = new Overlays();
     root.add(overlays.group);
@@ -828,8 +829,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
    * Parked aircraft on the apron: length as a fraction of the drawn airbase footprint (slots are 0.11 apart), and a
    * minimum on-screen length (px) so a docked squadron reads as an aircraft, not a speck, at 40 km and below.
    */
-  const PARKED: Record<4 | 5 | 6, number> = { 4: 0.1, 5: 0.068, 6: 0.055 };
-  const PARKED_PX: Record<4 | 5 | 6, number> = { 4: 18, 5: 20, 6: 14 };
+  const PARKED: Record<4 | 5 | 6, number> = { 4: 0.12, 5: 0.082, 6: 0.066 };
+  const PARKED_PX: Record<4 | 5 | 6, number> = { 4: 26, 5: 28, 6: 20 };
 
   /** Apron slot of a docked aircraft: its rank among the docked aircraft of its base (by id), rebuilt per frame. */
   const dockRank = new Map<number, number>();
@@ -928,7 +929,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           t.ground.copy(T);
           const frac = PARKED[u.type as 4 | 5 | 6] ?? 0.1;
           const wpp = env.pixelK * env.camPos.distanceTo(T);
-          const s = Math.min(frac * Se * 1.25, Math.max(frac * Se, PARKED_PX[u.type as 4 | 5 | 6] * wpp));
+          const s = Math.min(frac * Se * 1.1, Math.max(frac * Se, PARKED_PX[u.type as 4 | 5 | 6] * wpp));
           t.size = s * EARTH_RADIUS_KM;
           F.copy(g.back).negate();
           const sel = selectedUnits.has(u.id) ? 1 : 0;
@@ -1400,7 +1401,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         }
       } else if (st.type === StructureType.Radar) {
         F.copy(g.back).negate();
-        radarList.push({ id: st.id, anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, aS, col: col.clone(), built: st.built, hp: st.hp, sel });
+        radarList.push({ id: st.id, anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, aS, col: col.clone(), built: st.built, hp: st.hp, sel, level: Math.max(1, Math.min(3, st.level)) });
       } else if (st.type === StructureType.Factory && st.built >= 1) {
         F.copy(g.back).negate();
         factoryList.push({ anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, k: STRUCT_PX_K[st.type], acc: Math.random(), level: Math.max(1, Math.min(3, st.level)) });
@@ -1437,7 +1438,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         bB.copy(r.n).multiplyScalar(-ca).addScaledVector(r.e, sa);
         // Tower top in model units (0.1, 0.38, -0.05) -> world (model -Z = forward n).
         Q.copy(r.anchor).addScaledVector(r.e, 0.1 * r.S).addScaledVector(r.u, 0.38 * r.S).addScaledVector(r.n, 0.05 * r.S);
-        put(dish, Q, bR, r.u, bB, r.S, r.S, r.S, r.col, r.built, r.sel, r.hp, 0, r.anchor, r.aS);
+        // The antenna grows with the level (§6.5: coverage 20 / 28 / 36 tiles): 1.0 / 1.3 / 1.6 times as wide.
+        const k = [1, 1.3, 1.6][r.level - 1];
+        put(dish, Q, bR, r.u, bB, r.S * k, r.S * k, r.S * k, r.col, r.built, r.sel, r.hp, 0, r.anchor, r.aS);
       }
     }
     commit(dish);

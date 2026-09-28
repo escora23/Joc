@@ -32,6 +32,14 @@ import type { Relation } from '../relations';
 
 export const ROUTE_BUDGET = 64;
 
+/**
+ * Height of route lines above the sea / the relief (km). Route lines draw without the depth buffer (fx/trails.ts
+ * ROUTE_LINES), so the lift only moves them: it must stay small, or at close zoom (8-40 km) a ship's line floats
+ * visibly above the water beside the ship instead of running into its stern.
+ */
+const ROUTE_LIFT_SEA_KM = 0.02;
+const ROUTE_LIFT_LAND_KM = 0.15;
+
 type RouteKind = 'convoy' | 'trade' | 'warship' | 'air';
 
 /** Real seconds a finished route stays at full opacity, then fades (§10.8). */
@@ -224,7 +232,7 @@ export class RouteManager {
   private point(env: RouteEnv, x: number, y: number, ship: boolean, out: THREE.Vector3): THREE.Vector3 {
     tileXYToLatLon(x, y, tmpLL);
     const r = ship ? 1 : env.radiusAt(tmpLL.lat, tmpLL.lon);
-    return latLonToVec3(tmpLL.lat, tmpLL.lon, r + (ship ? 0.4 : 1.2) / EARTH_RADIUS_KM, out);
+    return latLonToVec3(tmpLL.lat, tmpLL.lon, r + (ship ? ROUTE_LIFT_SEA_KM : ROUTE_LIFT_LAND_KM) / EARTH_RADIUS_KM, out);
   }
 
   /** Great-circle points from (ax, ay) to (bx, by), every `segKm`, written into pathBuf; returns the count. */
@@ -247,7 +255,7 @@ export class RouteManager {
       const lat = Math.asin(Math.max(-1, Math.min(1, V.y))) * (180 / Math.PI);
       const lon = Math.atan2(-V.z, V.x) * (180 / Math.PI);
       const r = ship ? 1 : env.radiusAt(lat, lon);
-      V.multiplyScalar(r + (ship ? 0.4 : 1.2) / EARTH_RADIUS_KM);
+      V.multiplyScalar(r + (ship ? ROUTE_LIFT_SEA_KM : ROUTE_LIFT_LAND_KM) / EARTH_RADIUS_KM);
       pathBuf[i * 3] = V.x;
       pathBuf[i * 3 + 1] = V.y;
       pathBuf[i * 3 + 2] = V.z;

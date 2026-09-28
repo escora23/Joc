@@ -198,7 +198,7 @@ registerShot('air-raid', 'ui', 'An air raid announced at take-off (our radar cov
  * structures-levels (§6.5): the structure level as the player reads it on the strategic map — every type at L1 / L2 /
  * L3 (cities 1 / 5 / 10) on Castilian land at an icon zoom where the icons (with their 1-3 level dots) float over the
  * models, and the Factory L2 card open with its ●●○ pips. The geometry itself is compared up close in the gallery
- * frames structures-levels-1 … -6 below.
+ * frames structures-levels-1 … -10 below (one type each).
  */
 registerShot('structures-levels', 'units', 'Every structure type at levels 1, 2 and 3 (cities 1, 5, 10) at icon zoom: level dots under every icon and the Factory L2 card with its pips (§6.5)', async (s) => {
   const { ctx, waitFrames, wait, params } = s;
@@ -242,20 +242,27 @@ registerShot('structures-levels', 'units', 'Every structure type at levels 1, 2 
 }, 10);
 
 /**
- * Gallery frames of the structure models by level, at real size: L1 / L2 / L3 of each type on neighbouring tiles
- * (19-25 km apart), the camera at 26-40 km as a player would zoom in, the HUD hidden and a caption under each model
- * (type, «Nivel n/3» and the pips, as on the structure card). No enlargement: what the player sees in play.
- * Ports and naval yards stand on the straight Portuguese coast, in a north-south line seen from the sea.
+ * Gallery frames of the structure models by level (§6.5; verify:W4 criterion 10): ONE type per frame, its L1 / L2 /
+ * L3 (cities 1 / 5 / 10) on three neighbouring tiles (19 km apart) left to right, the camera framed so the three fill
+ * the width (32-40 km, as a player zoomed in), the HUD hidden and a caption under each model with the type, «Nivel
+ * n/3» and the pips, as on the structure card. Airbases carry their docked squadrons (3 / 6 / 9: the level's
+ * capacity). No enlargement: what the player sees in play. Ports and naval yards stand on the straight Portuguese
+ * coast, a north-south line (25 km apart) seen from the sea.
  */
-interface LevelFrame { types: S[]; alt: number; coast?: boolean }
+interface LevelFrame { type: S; alt: number; coast?: boolean }
 const LEVEL_FRAMES: LevelFrame[] = [
-  { types: [S.DefensePost, S.Radar], alt: 30 },
-  { types: [S.SamSite, S.MissileSilo], alt: 32 },
-  { types: [S.Factory, S.ArmyBase], alt: 36 },
-  { types: [S.City, S.Airbase], alt: 44 },
-  { types: [S.Port], alt: 34, coast: true },
-  { types: [S.NavalYard], alt: 34, coast: true },
+  { type: S.City, alt: 38 },
+  { type: S.Port, alt: 44, coast: true },
+  { type: S.Factory, alt: 36 },
+  { type: S.DefensePost, alt: 34 },
+  { type: S.SamSite, alt: 34 },
+  { type: S.MissileSilo, alt: 34 },
+  { type: S.Airbase, alt: 40 },
+  { type: S.ArmyBase, alt: 36 },
+  { type: S.NavalYard, alt: 44, coast: true },
+  { type: S.Radar, alt: 34 },
 ];
+const STRUCT_KEYS = ['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'];
 
 /** The westernmost land tile of the row at `lat` whose western neighbour is sea (the Atlantic coast of Portugal). */
 function coastTile(ctx: GameContext, lat: number): number {
@@ -274,35 +281,48 @@ const tileLat = (t: number) => 90 - (Math.floor(t / MAP_W) + 0.5) * (180 / MAP_H
 const tileLon = (t: number) => ((t % MAP_W) + 0.5) * (360 / MAP_W) - 180;
 
 LEVEL_FRAMES.forEach((frame, fi) => {
-  const names = frame.types.map((ty) => ['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'][ty]).join(' and ');
-  registerShot(`structures-levels-${fi + 1}`, 'units', `Structure models by level at real size (gallery ${fi + 1}/${LEVEL_FRAMES.length}: ${names}), camera at ${frame.alt} km, HUD hidden, captions with the level pips (§6.5)`, async (s) => {
+  const name = STRUCT_KEYS[frame.type];
+  registerShot(`structures-levels-${fi + 1}`, 'units', `Structure models by level at real size (gallery ${fi + 1}/${LEVEL_FRAMES.length}: ${name} L1 / L2 / L3), camera at ${frame.alt} km, HUD hidden, captions with the level pips (§6.5)`, async (s) => {
     const { ctx, waitFrames, wait, params } = s;
     await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-45) });
     const sim = ctx.sim;
     const placed: { type: S; level: number; tile: number }[] = [];
-    const TILE = 180 / MAP_H;
     if (frame.coast) {
+      const TILE = 180 / MAP_H;
       sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(40.1, -8.3), radius: 9 });
-      [40.1 + TILE, 40.1, 40.1 - TILE].forEach((lat, c) => placed.push({ type: frame.types[0], level: c + 1, tile: coastTile(ctx, lat) }));
+      [40.1 + TILE, 40.1, 40.1 - TILE].forEach((lat, c) => placed.push({ type: frame.type, level: c + 1, tile: coastTile(ctx, lat) }));
     } else {
       sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.4, -3.2), radius: 12 });
-      // Neighbouring tiles: one type per row (rows 25 km apart), L1 / L2 / L3 left to right (19 km apart).
-      frame.types.forEach((type, r) => [1, 2, 3].forEach((L, c) => {
-        placed.push({ type, level: type === S.City ? [1, 5, 10][c] : L, tile: at(39.6 - r * TILE * (frame.types.length > 1 ? 1 : 0), -3.45 + c * TILE) });
-      }));
+      // Three neighbouring tiles of one row (tile indices, not rounded lat/lon: exactly one tile apart).
+      const t0 = at(39.5, -3.45);
+      [1, 2, 3].forEach((L, c) => placed.push({ type: frame.type, level: frame.type === S.City ? [1, 5, 10][c] : L, tile: t0 + c }));
     }
     for (const p of placed) sim.debug({ type: 'spawnStructure', structure: p.type, owner: HUMAN_ID, tile: p.tile, level: p.level });
     s.setUiVisible(false);
     await until(s, () => placed.every((p) => [...ctx.sim.view.structures.values()].some((x) => x.tile === p.tile)), 60000);
+    if (frame.type === S.Airbase) {
+      // Docked squadrons up to each level's capacity (3 / 6 / 9): fighters, bombers and drones on the apron.
+      for (const p of placed) {
+        const base = [...ctx.sim.view.structures.values()].find((x) => x.tile === p.tile);
+        if (!base) continue;
+        for (let i = 0; i < 3 * p.level; i++) {
+          sim.debug({ type: 'spawnUnit', unit: i % 3 === 1 ? U.Bomber : i % 3 === 2 ? U.DroneSwarm : U.FighterSquadron, owner: HUMAN_ID, tile: p.tile, targetTile: -1 });
+        }
+      }
+      await until(s, () => [...ctx.sim.view.units.values()].filter((u) => u.owner === HUMAN_ID).length >= 18, 30000);
+    }
     const alt = Number(params.get('alt') ?? frame.alt);
+    const units = (window as unknown as { __units?: { sizeOf(k: 'struct', id: number): { px: number; w: number; h: number } | null; anchorOf(t: number): { lat: number; lon: number } | null } }).__units;
+    // Where the models are drawn (ports and yards slide onto the shoreline): frame and caption those points.
+    await waitFrames(4);
+    const where = placed.map((p) => units?.anchorOf(p.tile) ?? { lat: tileLat(p.tile), lon: tileLon(p.tile) });
+    const lat = (Math.min(...where.map((w) => w.lat)) + Math.max(...where.map((w) => w.lat))) / 2;
+    const lon = (Math.min(...where.map((w) => w.lon)) + Math.max(...where.map((w) => w.lon))) / 2;
     if (frame.coast) {
       // Seen from the sea (looking east): the north-south line of models runs left to right.
-      const mid = placed[1].tile;
-      ctx.cameraRig.setState({ lat: tileLat(mid), lon: tileLon(mid) - 0.02, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.72), heading: Math.PI / 2 });
+      ctx.cameraRig.setState({ lat, lon, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.62), heading: Math.PI / 2 });
     } else {
-      const lats = placed.map((p) => tileLat(p.tile)), lons = placed.map((p) => tileLon(p.tile));
-      const lat = (Math.min(...lats) + Math.max(...lats)) / 2, lon = (Math.min(...lons) + Math.max(...lons)) / 2;
-      ctx.cameraRig.setState({ lat: Number(params.get('lat') ?? lat), lon: Number(params.get('lon') ?? lon), altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.62), heading: 0 });
+      ctx.cameraRig.setState({ lat: Number(params.get('lat') ?? lat), lon: Number(params.get('lon') ?? lon), altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.55), heading: 0 });
     }
     await waitFrames(14);
     await wait(800);
@@ -315,18 +335,17 @@ LEVEL_FRAMES.forEach((frame, fi) => {
     title.textContent = t('shot.levels.real', { km: formatNumber(alt) });
     title.style.cssText = 'position:absolute;left:24px;top:18px;padding:6px 12px;background:rgba(18,16,12,.78);border:1px solid rgba(255,200,120,.35);border-radius:4px;letter-spacing:.04em;';
     box.append(title);
-    const units = (window as unknown as { __units?: { sizeOf(k: 'struct', id: number): { px: number; w: number; h: number } | null } }).__units;
-    for (const p of placed) {
-      const sp = screenOf(ctx, tileLat(p.tile), tileLon(p.tile));
+    placed.forEach((p, i) => {
+      const sp = screenOf(ctx, where[i].lat, where[i].lon);
       const size = units?.sizeOf('struct', p.tile);
       const max = STRUCTURE_DEFS[p.type].maxLevel;
       const pips = max > 3 ? '' : ' ' + '●'.repeat(p.level) + '○'.repeat(3 - p.level);
       const cap = document.createElement('div');
-      cap.textContent = `${t(`structure.${['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'][p.type]}`)} · ${t('card.levelN', { n: p.level, max })}${pips}`;
+      cap.textContent = `${t(`structure.${STRUCT_KEYS[p.type]}`)} · ${t('card.levelN', { n: p.level, max })}${pips}`;
       const dy = Number(params.get('capdy') ?? (size ? size.h * 0.55 + 10 : 60));
-      cap.style.cssText = `position:absolute;left:${sp.x}px;top:${sp.y + dy}px;transform:translateX(-50%);white-space:nowrap;padding:3px 8px;background:rgba(18,16,12,.72);border-radius:3px;`;
+      cap.style.cssText = `position:absolute;left:${sp.x}px;top:${Math.min(sp.y + dy, innerHeight - 34)}px;transform:translateX(-50%);white-space:nowrap;padding:3px 8px;background:rgba(18,16,12,.72);border-radius:3px;`;
       box.append(cap);
-    }
+    });
     document.body.append(box);
     await waitFrames(4);
   }, 10);

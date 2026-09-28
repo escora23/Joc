@@ -32,7 +32,9 @@ void main() {
   float w = max(wWorld, uMinPx * pxw);
   vPx = wWorld / pxw;
   p += aSide * w * aInfo.x;
-  p += normalize(p) * (uLift + pxw * 0.5);
+  // The lift clears the relief between the ribbon's samples when seen from afar; up close it is capped at ~20 px so a
+  // rail line does not hover a kilometre above the ground beside the port or city it serves.
+  p += normalize(p) * (min(uLift, pxw * 20.0) + pxw * 0.5);
   vSide = aInfo.x;
   vAlong = aInfo.y;
   vCol = aCol;

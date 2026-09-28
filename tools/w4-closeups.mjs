@@ -78,7 +78,14 @@ for (const s of subjects) {
         }
       }
       const air = lift > 0.5;
-      ctx.cameraRig.setState({ lat, lon, altitudeKm: alt + lift, tilt: air ? 0.15 : tilt, heading });
+      if (air) {
+        // Aircraft fly `lift` km above the ground: aim the rig at the ground point behind them on the view axis (the
+        // rig looks at the surface), so the aircraft sits at the centre, `alt` km from the camera, seen at 3/4.
+        const tl = Math.min(tilt, 0.7), shift = lift * Math.tan(tl);
+        lat += (shift * Math.cos(heading)) / 111.2;
+        lon += (shift * Math.sin(heading)) / (111.2 * Math.cos((lat * Math.PI) / 180));
+        ctx.cameraRig.setState({ lat, lon, altitudeKm: alt + lift / Math.cos(tl), tilt: tl, heading });
+      } else ctx.cameraRig.setState({ lat, lon, altitudeKm: alt, tilt, heading });
       const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
       for (let i = 0; i < 3; i++) await frame();
       const size = window.__units.sizeOf?.(s.kind, s.tile) ?? null;
