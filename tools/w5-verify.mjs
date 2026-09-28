@@ -245,10 +245,35 @@ if (ONLY.includes('border')) {
 if (ONLY.includes('front')) {
   const { page, errs } = await open('command-front');
   const s = await stats(page);
-  const pools = s.pools?.pools ?? [];
-  const war = pools.filter((p) => p.relation === 'war');
-  const infOk = war.every((p) => p.shownInfantry === Math.min(40, Math.floor(p.front + p.offensive)) || p.shownInfantry === Math.min(40, Math.round(p.front + p.offensive)));
-  rec('F1 forces from deriveLocalForces (infantry = min(40, pool))', war.length > 0 && infOk, war.map((p) => ({ owner: p.owner, front: Math.round(p.front), shown: p.shownInfantry, divisions: p.divisions })));
+  const sides = s.pools?.sides ?? [];
+  const war = sides.filter((p) => p.relation === 'war');
+  const near = s.pools?.frontKm >= 0 && s.pools.frontKm < 6;
+  const infOk = near && war.some((p) => p.shownInfantry > 0) && war.every((p) => p.shownInfantry === 0 || p.shownInfantry === Math.min(40, Math.round(p.front + p.offensive)));
+  rec('F1 infantry shown = min(40, front + offensive pool)', infOk, { frontKm: s.pools?.frontKm, sides: war.map((p) => ({ owner: p.owner, front: Math.round(p.front), offensive: Math.round(p.offensive), shown: p.shownInfantry })) });
+  // The same point through the shared derivation (window.__localForces = deriveLocalForces): equal pools; every real
+  // enemy division within 30 km drawn with its tanks at its position.
+  const same = await page.evaluate(() => {
+    const I = window.__cmd, w = I.where();
+    const lf = window.__localForces.at(w.x, w.y, 30);
+    const log = window.__cmdStats.pools.sides;
+    const poolsEqual = lf.sides.every((sd) => {
+      const l = log.find((x) => x.owner === sd.owner);
+      return !!l && Math.abs(l.front - sd.pools.front) <= Math.max(2, sd.pools.front * 0.1) && Math.abs(l.rear - sd.pools.rear) <= Math.max(2, sd.pools.rear * 0.1);
+    });
+    const divs = lf.units.filter((u) => u.tanks > 0 && u.distKm <= 30);
+    const drawn = divs.map((u) => {
+      const ents = I.world.ents.filter((e) => e.alive && e.kind === 'tank' && e.src?.kind === 'division' && e.src.id === u.unitId);
+      let cx = 0, cz = 0;
+      for (const e of ents) { cx += e.pos.x; cz += e.pos.z; }
+      const sc = I.frame.sceneOf(u.lat, u.lon, { x: 0, z: 0 });
+      const off = ents.length ? Math.hypot(cx / ents.length - sc.x, cz / ents.length - sc.z) : -1;
+      return { unitId: u.unitId, owner: u.owner, tanks: u.tanks, drawn: ents.length, offM: Math.round(off) };
+    });
+    return { poolsEqual, drawn, src: 'deriveLocalForces' };
+  });
+  const ctrlId = await page.evaluate(() => window.__cmd.ctx.sim.view.command?.controlled?.[0]?.unitId);
+  const others = same.drawn.filter((d) => d.unitId !== ctrlId);
+  rec('F1b pools = deriveLocalForces at the same point; real divisions drawn as 1 tank per 25 %', same.poolsEqual && others.every((d) => d.drawn === d.tanks), others);
   const f = await page.evaluate(async () => {
     const I = window.__cmd, v = I.ctx.sim.view, w = I.world;
     const soldier = w.ents.find((e) => e.alive && e.team === 1 && e.kind === 'soldier' && e.src && !e.neutral);
@@ -278,6 +303,20 @@ if (ONLY.includes('front')) {
   }
   const hpSim = (await syncState(page)).sim?.hp;
   rec('F4 own tank lost → −25 % and next vehicle', Math.abs(own0.integrity - own1.integrity - 0.25) < 0.02 && own1.phase === 'play', { before: own0, after: own1, simHp: hpSim });
+  // Lose every remaining tank: the division dies in the sim, the debrief shows and the app returns to the map.
+  const unitId = await page.evaluate(() => window.__cmd.ctx.sim.view.command?.controlled?.[0]?.unitId ?? window.__w5unit);
+  let back = false, st2 = null;
+  for (let i = 0; i < 150 && !back; i++) {
+    st2 = await page.evaluate(() => {
+      const I = window.__cmd, s = window.__cmdStats;
+      if (I?.world?.player?.alive && s?.phase === 'play') I.world.kill(I.world.player, null, false);
+      return { phase: s?.phase, lost: s?.vehiclesLost, integrity: s?.integrity, app: window.__front.app.state };
+    });
+    back = st2.app === 'playing';
+    await wait(1000);
+  }
+  const gone = await page.evaluate((id) => !window.__front.ctx.sim.view.units.get(id), unitId);
+  rec('F5 last tank lost → division destroyed, debrief, back to the map', back && gone, { ...st2, unitGone: gone });
   rec('front page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
 }

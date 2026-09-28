@@ -11,13 +11,16 @@
 //   I2  with an alliance / open borders no incursion is raised;
 //   I3  releasing the unit inside foreign land walks it back home and ends the incursion ('left');
 //   C1  commandCasualties: N×25 troops leave the victim; a unit hit of 0.25 takes 25 % integrity; a structure hit 0.35;
-//   C2  controlledDamage lowers the unit's integrity; 0 destroys it.
+//   C2  controlledDamage lowers the unit's integrity; 0 destroys it;
+//   S1  a warship in open sea raises nothing; in water next to a foreign coast at peace it raises an incursion (ship);
+//   J1  a fighter over foreign land at peace raises an incursion (jet, airspace).
 
 import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
 import { HUMAN_ID, MAP_W, MAP_H, DEFAULT_START_WORLD_TIME, TILE_KM } from '../../shared/constants.ts';
 import { latLonToTile } from '../../shared/geo.ts';
 import { UnitType, StructureType, UnitState } from '../../shared/types.ts';
+import { isWaterTerrain } from '../../shared/terrain.ts';
 
 const world = await loadWorldInit();
 let pass = 0, fail = 0;
@@ -222,6 +225,87 @@ function spawnDivision(g, x, y) {
   }
   for (let i = 0; i < 120; i++) g.subStep(1);
   ok(inForeign && !events.some((e) => e.type === 'borderIncursion'), 'I2 with open borders, entering raises no incursion');
+}
+
+// ------------------------------------------------------------------------------------------------ S1, J1
+{
+  const { g, events } = makeGame(21);
+  const nationTiles = (t) => { const o = g.owner[t]; return o > 0 && o !== HUMAN_ID && g.playerById[o]?.kind === 'nation' && g.war.pairState(HUMAN_ID, o) === 'peace' ? o : 0; };
+  const landNear = (x, y, r) => {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= MAP_H) continue;
+      const t = yy * MAP_W + ((x + dx + MAP_W) % MAP_W);
+      if (!isWaterTerrain(g.terrain[t]) || g.owner[t] > 0) return true;
+    }
+    return false;
+  };
+  // A water tile next to a foreign coast at peace, with open sea (no land within 2 tiles) 3 tiles straight out.
+  let spot = null;
+  for (let t = 0; t < g.owner.length && !spot; t++) {
+    if (!isWaterTerrain(g.terrain[t])) continue;
+    const x = t % MAP_W, y = (t / MAP_W) | 0;
+    let victim = 0;
+    for (let dy = -1; dy <= 1 && !victim; dy++) for (let dx = -1; dx <= 1 && !victim; dx++) victim = nationTiles((y + dy) * MAP_W + ((x + dx + MAP_W) % MAP_W));
+    if (!victim) continue;
+    for (const dir of [1, -1]) {
+      const ox = x + dir * 3;
+      const ot = y * MAP_W + ((ox + MAP_W) % MAP_W);
+      if (isWaterTerrain(g.terrain[ot]) && !landNear(ox, y, 2) && isWaterTerrain(g.terrain[y * MAP_W + x + dir]) && isWaterTerrain(g.terrain[y * MAP_W + x + 2 * dir])) {
+        spot = { x, y, ox, victim, dir };
+        break;
+      }
+    }
+  }
+  ok(!!spot, `S1 found a foreign coast at peace with open sea 3 tiles out (victim ${spot?.victim})`);
+  if (spot) {
+    g.applyDebug({ type: 'spawnUnit', unit: UnitType.Warship, owner: HUMAN_ID, tile: spot.y * MAP_W + spot.ox, targetTile: -1 });
+    let ship = null;
+    for (const u of g.unitMap.values()) if (u.owner === HUMAN_ID && u.type === UnitType.Warship) ship = u;
+    ok(!!ship, 'S1 a warship spawned in open sea');
+    if (ship) {
+      ship.x = spot.ox + 0.5;
+      ship.y = spot.y + 0.5;
+      g.issue(HUMAN_ID, { type: 'unitControl', unitId: ship.id, controlled: true });
+      const kx = kmX(ship.y);
+      // Sail around in open sea (1 km steps), then toward the coast until the water next to it.
+      const n0 = events.filter((e) => e.type === 'borderIncursion').length;
+      for (let i = 0; i < 5; i++) {
+        g.subStep(60);
+        g.issue(HUMAN_ID, { type: 'controlledMove', unitId: ship.id, x: ship.x, y: ship.y + (i % 2 ? 1 : -1) / TILE_KM, heading: 0 });
+      }
+      ok(events.filter((e) => e.type === 'borderIncursion').length === n0, 'S1 sailing in open sea raises no incursion');
+      let entered = null;
+      for (let i = 0; i < 200 && !entered; i++) {
+        g.subStep(60);
+        g.issue(HUMAN_ID, { type: 'controlledMove', unitId: ship.id, x: ship.x - spot.dir * (1 / kx), y: spot.y + 0.5, heading: 0 });
+        entered = events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered' && e.unitId === ship.id) ?? null;
+        if (Math.floor(ship.x) === spot.x) break;
+      }
+      entered ??= events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered' && e.unitId === ship.id) ?? null;
+      ok(!!entered && entered.kind === 'ship' && entered.victim === spot.victim, `S1 water next to ${spot.victim}'s coast at peace raises an incursion (${entered ? entered.kind + ' → ' + entered.victim : 'none'})`);
+    }
+  }
+  // J1: a fighter squadron from own land into the neighbour's airspace.
+  const b = borderSpot(g);
+  if (b) {
+    g.applyDebug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: HUMAN_ID, tile: Math.floor(b.y) * MAP_W + Math.floor(b.x), targetTile: -1 });
+    let jet = null;
+    for (const u of g.unitMap.values()) if (u.owner === HUMAN_ID && u.type === UnitType.FighterSquadron) jet = u;
+    if (jet) {
+      jet.x = b.x;
+      jet.y = b.y;
+      g.issue(HUMAN_ID, { type: 'unitControl', unitId: jet.id, controlled: true });
+      const kx = kmX(jet.y);
+      let entered = null;
+      for (let i = 0; i < 40 && !entered; i++) {
+        g.subStep(30);
+        g.issue(HUMAN_ID, { type: 'controlledMove', unitId: jet.id, x: jet.x + b.dir * (10 / kx), y: jet.y, heading: 0, alt: 0.8 });
+        entered = events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered' && e.unitId === jet.id) ?? null;
+      }
+      ok(!!entered && entered.kind === 'jet' && entered.victim === b.victim, `J1 a fighter over ${b.victim}'s land at peace raises an airspace incursion (${entered ? entered.kind : 'none'})`);
+    } else ok(false, 'J1 fighter spawned');
+  }
 }
 
 console.log(`\ncommand-audit: ${pass} passed, ${fail} failed`);
