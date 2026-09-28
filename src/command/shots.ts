@@ -317,6 +317,13 @@ registerShot('command-front', 'command', 'At a real front of a staged war: enemy
   }, 0.9);
   if (live(s)) return;
   const I = internalsOrThrow();
+  // Face the nearest enemy (turret on it), so the frame shows the line rather than the ground behind it.
+  const p = I.controller!.ent;
+  const foeEnt = nearest(I, p.pos, 1, ['tank', 'ifv', 'at', 'soldier']);
+  if (foeEnt) {
+    p.yaw = Math.atan2(-(foeEnt.pos.x - p.pos.x), -(foeEnt.pos.z - p.pos.z));
+    I.controller!.aimAt(foeEnt.pos.clone().setY(foeEnt.pos.y + 1.4));
+  }
   await settle(s, I, Number(s.params.get('fight') ?? 6));
   await freezeAndWait(s, I);
 });
@@ -343,7 +350,8 @@ registerShot('command-jet-cap', 'command', 'Fighter squadron on patrol over its 
 });
 
 registerShot('command-ship-coast', 'command', 'Warship at sea off the Spanish coast at peace: calm sea and the real coast', async (s) => {
-  await stage(s, { unit: UnitType.Warship, lat: 39.3, lon: 0.05, hour: 17, ownRadius: 8 });
+  // ~10 km off Málaga (inside the territorial waters), bow north toward the east-west coast.
+  await stage(s, { unit: UnitType.Warship, lat: 36.62, lon: -4.35, hour: 17, ownRadius: 8 });
   if (live(s)) return;
   const I = internalsOrThrow();
   await settle(s, I, 2);
