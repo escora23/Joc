@@ -57,8 +57,9 @@ export function proposalWhat(hs: HudShared, p: ProposalView): string {
   switch (p.kind) {
     case 'peace': {
       const tm = p.terms ?? { kind: 'white' };
-      if (tm.kind === 'cede') return t('proposal.what.peaceCede', { tiles: formatNumber(tm.tiles ?? 0), loser: tm.loser === HUMAN_ID ? t('proposal.you') : hs.name(tm.loser ?? 0) });
-      if (tm.kind === 'tribute') return t('proposal.what.peaceTribute', { loser: tm.loser === HUMAN_ID ? t('proposal.you') : hs.name(tm.loser ?? 0) });
+      // The human as the side that cedes or pays reads as «a cambio de que le cedas…», never «por parte de ti».
+      if (tm.kind === 'cede') return tm.loser === HUMAN_ID ? t('proposal.what.peaceCede.you', { tiles: formatNumber(tm.tiles ?? 0) }) : t('proposal.what.peaceCede', { tiles: formatNumber(tm.tiles ?? 0), loser: hs.name(tm.loser ?? 0) });
+      if (tm.kind === 'tribute') return tm.loser === HUMAN_ID ? t('proposal.what.peaceTribute.you') : t('proposal.what.peaceTribute', { loser: hs.name(tm.loser ?? 0) });
       return t('proposal.what.peaceWhite');
     }
     case 'callToArms':

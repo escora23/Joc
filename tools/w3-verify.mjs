@@ -291,6 +291,16 @@ for (const lang of langs) {
   // A white peace offered at once to the neighbour that just declared on us: nobody is tired yet, so it is refused
   // later in the session (the chimeBad cue V19 needs; the accepted proposals of the V7 staging give chimeGood).
   await page.evaluate((n) => window.__front.ctx.sim.send({ type: 'propose', target: n, kind: 'peace', terms: { kind: 'white' } }), S.n);
+  // And trade agreements with a sweetener to the three friendliest nations at peace (a trade deal needs an opinion of
+  // -10; 5 % of the treasury adds up to +25): their acceptance gives the chimeGood cue V19 needs, in either language.
+  await page.evaluate(() => {
+    const { ctx } = window.__front;
+    const v = ctx.sim.view;
+    const op = (id) => v.opinions.get(id)?.score ?? 0;
+    const c = v.playerList.filter((p) => p.alive && p.kind === 'nation' && p.id !== 1 && v.pairState(1, p.id) === 'peace' && !v.hasTreaty(1, p.id, 'trade')).sort((a, b) => op(b.id) - op(a.id));
+    const gold = Math.floor((v.human?.gold ?? 0) * 0.05);
+    for (const p of c.slice(0, 3)) ctx.sim.send({ type: 'propose', target: p.id, kind: 'trade', gold });
+  });
   // ------------------------------------------------------------------------------------------ V5 offensive grouped per front
   {
     await page.evaluate((a) => {
