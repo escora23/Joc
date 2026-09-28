@@ -14,7 +14,9 @@
 //   V7   Settings > Juego: 8 auto-pause toggles with the §8.5 defaults, crisisTime, observationTime, clouds, historical
 //        borders (off); the worker logs each settings message; each of the 8 kinds pauses with a banner (acceptance 7)
 //   V12  the radial has no emotes and no «Marcar objetivo»                                          (acceptance 12)
-//   V14  sampled tooltips on W3's controls (top bar, nations, alerts, radial) with purpose and numbers (acceptance 14)
+//   V5d  a point at the capital names the capital («tu capital» / «your capital»), never «a 0 km al N de…»   (acceptance 5)
+//   V14  per language: tooltips on W3's controls (top bar, pause/speed, nations, log) with purpose and numbers and no
+//        word of the other language; V14b the hover card over a foreign structure says the click opens its card (14)
 //   V16  crisis: amber for a foreign launch, red alarm when the human is the target, no v1 banner   (acceptance 16)
 //   V18  every alert / ticker text of the session: 0 matches of /\(a\)|\{[a-zA-Z]+\}/ (es and en)   (acceptance 18)
 import { chromium } from 'playwright';
@@ -141,6 +143,85 @@ await page.evaluate(() => {
   window.__V = V;
 });
 
+// V14: tooltips of W3's controls in the current language, with purpose and numbers and no word of the other language
+// (the pause button once read «Pausa (Space)»); V14b: the hover card over a foreign structure says what the click does
+// there (open its card), never «declarar la guerra».
+async function tipsCheck(lang) {
+  await page.evaluate(() => window.__V.resume());
+  for (let i = 0; i < 3 && (await page.locator('.fu-modal').count()); i++) {
+    await page.locator('.fu-modal .fu-close').last().click().catch(() => {});
+    await sleep(500);
+  }
+  const targets = [
+    ['nations', '.fu-nations-btn'], ['log', '.fu-alerts-log'], ['pause', '.fu-time-seg button:nth-child(1)'], ['1x', '.fu-time-seg button:nth-child(3)'],
+    ['troops', '.fu-tb-stat.is-troops'], ['gold', '.fu-tb-stat.is-gold'], ['wars', '.fu-tb-stat.is-wars'],
+  ];
+  const other = lang === 'es' ? /\b(Space|Pause|Speed|Click|Troops|Gold|Nations|Log)\b/ : /\b(Espacio|Pausa|Velocidad|Clic|Tropas|Oro|Naciones|Registro)\b/;
+  const tipTexts = [];
+  let okAll = true;
+  for (const [name, sel] of targets) {
+    const el = page.locator(sel).first();
+    if (!(await el.count())) { tipTexts.push(`${name}: missing`); okAll = false; continue; }
+    let txt = '';
+    for (let k = 0; k < 3 && !txt; k++) {
+      await page.mouse.move(800, 450);
+      await sleep(300);
+      await el.hover({ timeout: 20000 }).catch(() => {});
+      await sleep(900);
+      txt = (await page.evaluate(() => window.__fuTip?.() ?? '')).replace(/\s+/g, ' ').trim();
+    }
+    if (!txt) {
+      txt = `(no tooltip; under its centre: ${await page.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e ? `${e.tagName}.${e.className}`.slice(0, 80) : 'nothing'; }, sel)})`;
+    }
+    const good = txt.length > 20 && !txt.startsWith('(no tooltip') && !other.test(txt) && !BAD.test(txt);
+    if (!good) okAll = false;
+    tipTexts.push(`${good ? '' : '✗ '}${name}: ${txt.slice(0, 110)}`);
+    await page.mouse.move(800, 450);
+    await sleep(300);
+  }
+  row('V14', `tooltips on W3 controls (${lang}): purpose, numbers, only ${lang}`, tipTexts.join(' ## '), `non-empty, no ${lang === 'es' ? 'English' : 'Spanish'}`, okAll);
+
+  // V14b: a foreign structure at icon zoom; the pointer on it.
+  const st = await page.evaluate(() => {
+    const v = window.__front.ctx.sim.view;
+    const list = [...v.structures.values()].filter((x) => x.owner !== 1 && v.players[x.owner]?.kind === 'nation' && x.built >= 1);
+    const s0 = list[0];
+    if (!s0) return null;
+    return { id: s0.id, tile: s0.tile, lat: 90 - ((Math.floor(s0.tile / 1600) + 0.5) / 800) * 180, lon: (((s0.tile % 1600) + 0.5) / 1600) * 360 - 180 };
+  });
+  if (!st) {
+    row('V14b', `hover card over a foreign structure (${lang})`, 'no foreign structure', 'card', false);
+    return;
+  }
+  await page.evaluate((st) => window.__front.ctx.cameraRig.setState({ lat: st.lat, lon: st.lon, altitudeKm: 1500, tilt: 0, heading: 0 }), st);
+  await sleep(2500);
+  let card = null;
+  for (let k = 0; k < 6 && !card; k++) {
+    const p = await page.evaluate((st) => {
+      const { ctx } = window.__front;
+      const cam = ctx.camera;
+      const r = ctx.globe.surfaceRadiusAt(st.lat, st.lon);
+      const la = (st.lat * Math.PI) / 180, lo = (st.lon * Math.PI) / 180;
+      const q = cam.position.clone().set(r * Math.cos(la) * Math.cos(lo), r * Math.sin(la), -r * Math.cos(la) * Math.sin(lo));
+      q.project(cam);
+      return { x: ((q.x + 1) / 2) * innerWidth, y: ((1 - q.y) / 2) * innerHeight };
+    }, st);
+    // The icon sits on the structure's anchor; search a few pixels around it until the pick resolves to it.
+    const dx = [0, 4, -4, 0, 0, 8][k], dy = [0, 0, 0, 4, -4, -8][k];
+    await page.mouse.move(p.x + dx - 6, p.y + dy - 6);
+    await page.mouse.move(p.x + dx, p.y + dy, { steps: 2 });
+    card = await until((id) => {
+      const hv = window.__fuHud?.shared.hover;
+      const el = document.querySelector('.fu-tt:not(.fu-hidden)');
+      return hv && hv.structureId === id && el ? el.innerText.replace(/\s+/g, ' ') : null;
+    }, st.id, 4000, 200);
+  }
+  await shot(`${lang}-V14b-structure-hover`);
+  const good = card && /ver su ficha|abrir su ficha|open its card/i.test(card) && !/declarar|declare/i.test(card);
+  row('V14b', `hover card over a foreign structure says the click opens its card (${lang})`, card ? `«${card.slice(0, 160)}»` : 'no card on the structure', 'card, no «declarar»', good);
+  await page.mouse.move(800, 450);
+}
+
 for (const lang of langs) {
   log(`=== language ${lang} ===`);
   await page.evaluate(async (lang) => {
@@ -263,6 +344,29 @@ for (const lang of langs) {
       await shot(`${lang}-V5-offensive`);
     }
     await page.evaluate(() => window.__V.resume());
+  }
+
+  // ------------------------------------------------------------------------------------------ V5d the capital as a place
+  // An offensive or front at the capital itself names the capital, never «a 0 km al N de tu capital»: a capital staged
+  // far from every named place (describePlace's bearing branch), the point at the capital and one tile beside it, plus
+  // a point 3 tiles away that must read as a real bearing (or near a named place).
+  {
+    const r = await page.evaluate(() => {
+      const W = 1600, H = 800;
+      const tileOf = (lat, lon) => Math.floor(((90 - lat) / 180) * H) * W + (Math.floor(((lon + 180) / 360) * W) % W);
+      const spots = [[22, 12], [-25, 131], [64, 110], [-6, -66], [72, -40], [66, -100], [47, 88], [-22, 20]];
+      for (const [lat, lon] of spots) {
+        const cap = tileOf(lat, lon);
+        const at = window.__fuAlerts.placeFrom(cap, cap);
+        if (/^(cerca de|near) /.test(at.text)) continue;
+        return { cap, at, beside: window.__fuAlerts.placeFrom(cap + 1, cap), far: window.__fuAlerts.placeFrom(cap + 3 * W, cap) };
+      }
+      return null;
+    });
+    const capWord = lang === 'es' ? 'tu capital' : 'your capital';
+    const ok = r && r.at.named && r.at.name === capWord && r.beside.named && r.beside.name === capWord && !/\b0 km\b/.test(`${r.at.text} ${r.beside.text}`)
+      && !/\b0 km\b/.test(r.far.text) && (r.far.named ? /^(cerca de|near) /.test(r.far.text) : /\d+ km/.test(r.far.text));
+    row('V5d', `a point at the capital names the capital (${lang}), no «0 km» bearing`, r ? `at «${r.at.text}» → «${r.at.name}» (named ${r.at.named}); beside «${r.beside.text}»; 3 tiles S «${r.far.text}»` : 'no remote spot', `«${capWord}», named`, ok);
   }
 
   // ------------------------------------------------------------------------------------------ V6 invasion ETA, air raid
@@ -470,9 +574,10 @@ for (const lang of langs) {
   // ------------------------------------------------------------------------------------------ V18 texts
   {
     const texts = await page.evaluate(() => [...window.__V.texts, ...window.__fuAlerts.list().map((a) => `${a.title} | ${a.body}`)]);
-    const bad = texts.filter((x) => BAD.test(x));
-    row('V18', `alert texts (${lang}) free of «(a)» and {param}`, `${texts.length} texts, ${bad.length} bad${bad.length ? `: ${bad.slice(0, 3).join(' // ')}` : ''}`, '0', texts.length > 20 && bad.length === 0);
+    const bad = texts.filter((x) => BAD.test(x) || /\b0 km\b/.test(x) || /the area [^|]* front\b/.test(x));
+    row('V18', `alert texts (${lang}) free of «(a)», {param}, «0 km» and «the area … front»`, `${texts.length} texts, ${bad.length} bad${bad.length ? `: ${bad.slice(0, 3).join(' // ')}` : ''}`, '0', texts.length > 20 && bad.length === 0);
   }
+  await tipsCheck(lang);
 }
 
 // ------------------------------------------------------------------------------------------ V7 settings, V12 radial, V14 tips
@@ -542,30 +647,7 @@ for (const lang of langs) {
   const tipsRad = await page.evaluate(() => [...document.querySelectorAll('.fu-radial [data-has-tip]')].length);
   row('V12', 'radial without emotes or «Marcar objetivo»', radial ? `${nW} wedges: ${[...new Set(labels)].join(' | ').slice(0, 200)}` : 'radial did not open', 'no emote', radial && !/emot|marcar objetivo|mark target/i.test(labels.join(' ')));
   await page.keyboard.press('Escape');
-  // Tooltips: hover a sample of W3's controls and read the tooltip.
-  const targets = ['.fu-nations-btn', '.fu-alerts-log', '.fu-time-seg button:nth-child(3)'];
-  const tipTexts = [];
-  for (const sel of targets) {
-    const el = page.locator(sel).first();
-    if (!(await el.count())) { tipTexts.push(`${sel}: missing`); continue; }
-    let txt = '';
-    for (let k = 0; k < 3 && !txt; k++) {
-      await page.mouse.move(800, 450);
-      await sleep(300);
-      await el.hover().catch(() => {});
-      await sleep(900);
-      txt = (await page.evaluate(() => window.__fuTip?.() ?? '')).replace(/\s+/g, ' ');
-    }
-    if (!txt) {
-      // What covers it: the element under its centre.
-      txt = `(no tooltip; under its centre: ${await page.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e ? `${e.tagName}.${e.className}`.slice(0, 80) : 'nothing'; }, sel)})`;
-    }
-    tipTexts.push(`${sel}: ${txt.slice(0, 90)}`);
-    await page.mouse.move(800, 450);
-    await sleep(300);
-  }
   const topbar = await page.$$eval('.fu-topbar [data-has-tip], .fu-tb-stat[data-has-tip]', (l) => l.length).catch(() => 0);
-  row('V14', 'sampled tooltips on W3 controls show text', tipTexts.join(' ## '), 'non-empty', tipTexts.every((x) => !/missing|\(no tooltip/.test(x) && x.split(': ').slice(1).join(': ').trim().length > 20));
   log(`top bar controls with tooltips: ${topbar}; radial wedges with tooltips: ${tipsRad}`);
 }
 

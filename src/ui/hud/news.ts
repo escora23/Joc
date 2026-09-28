@@ -286,7 +286,8 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
   });
   bus.on('offensive', (e) => {
     const ll = atXY(e.x, e.y);
-    const place = describeXY(view(), e.x, e.y).name;
+    // «Nuestra ofensiva cerca de Lyon…» / «…a 370 km al NO de Madrid…»: the locative phrase, not the bare name.
+    const place = describeXY(view(), e.x, e.y).text;
     if (e.attacker === HUMAN_ID) {
       if (e.stage === 'stalled') {
         alert({ kind: 'offensiveStalled', severity: 'info', icon: 'attack', lat: ll.lat, lon: ll.lon, groupKey: `our:${e.attackId}`, title: t('alert.offensiveStalled.title', { place }), body: t('alert.offensiveStalled.body', { ratio: decimal(e.ratio), name: name(e.defender) }) });
@@ -311,7 +312,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     if (e.defender !== HUMAN_ID || e.owner === HUMAN_ID) return;
     const ll = at(e.tile)!;
     alerts.resolve(`inv:${e.unitId}`);
-    alert({ kind: 'landing', severity: 'danger', icon: 'boat', lat: ll.lat, lon: ll.lon, actors: [e.owner], title: t('alert.landing.title', { place: describeTile(view(), e.tile).name }), body: t('alert.landing.body', { name: name(e.owner), troops: formatCompact(e.troops) }) });
+    alert({ kind: 'landing', severity: 'danger', icon: 'boat', lat: ll.lat, lon: ll.lon, actors: [e.owner], title: t('alert.landing.title', { place: describeTile(view(), e.tile).text }), body: t('alert.landing.body', { name: name(e.owner), troops: formatCompact(e.troops) }) });
   });
   bus.on('airRaid', (e) => {
     if (e.target !== HUMAN_ID) return;
@@ -479,7 +480,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
         if (pct < steps[i]) break;
         ft.milestones = i + 1;
         const ll = fx !== undefined && fy !== undefined ? atXY(fx, fy) : null;
-        const place = fx !== undefined && fy !== undefined ? describeXY(v, fx, fy).name : '';
+        const place = fx !== undefined && fy !== undefined ? describeXY(v, fx, fy).text : '';
         alert({
           kind: 'frontLoss', severity: steps[i] >= 25 ? 'danger' : 'warning', icon: 'territory', lat: ll?.lat, lon: ll?.lon, actors: [ft.enemy], groupKey: `loss:${key}`,
           title: t('alert.frontLoss.title', { place, pct: steps[i] }), body: t('alert.frontLoss.body', { tiles: formatNumber(lost), name: name(ft.enemy) }),

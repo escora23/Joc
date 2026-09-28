@@ -94,7 +94,8 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
   for (const sp of [0, 0.5, 1, 2, 4] as GameSpeed[]) {
     const label = sp === 0.5 ? t('hud.speed.half') : `${sp}×`;
     // Texts are read when the tooltip opens, so they follow a language change.
-    const title = () => (sp === 0 ? `${t('hud.pause')} (Space)` : t('hud.speed.tip', { speed: sp === 0.5 ? '0,5' : sp, per: perSecond(sp) }));
+    // The pause key is shown (localized) by the tooltip's hotkey chip, never inside the text.
+    const title = () => (sp === 0 ? t('tb.pause.tip') : t('hud.speed.tip', { speed: sp === 0.5 ? '0,5' : sp, per: perSecond(sp) }));
     const b = h('button', { type: 'button' }, sp === 0 ? icon('pause') : label) as HTMLButtonElement;
     tip(b, () => ({ title: sp === 0 ? t('hud.pause') : t('tb.speed.title', { speed: sp === 0.5 ? '0,5' : sp }), text: title(), hotkey: sp === 0 ? t('keys.space') : '+ / −', lines: [t('tb.speed.line')] }));
     b.addEventListener('click', () => {

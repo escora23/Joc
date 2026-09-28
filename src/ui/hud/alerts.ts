@@ -19,13 +19,13 @@ import { h, leave, setText, toggleClass } from '../dom';
 import { flag } from '../flag';
 import { icon } from '../icons';
 import { openModal, type ModalHandle } from '../modal';
-import { describeTile } from '../places';
+import { describePlace, describeTile } from '../places';
 import { tip } from '../tooltip';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
 import type { AlertInput, AlertSeverity, AutoPauseKind } from '../../shared/events';
 import { HUMAN_ID } from '../../shared/constants';
-import { latLonToVec3 } from '../../shared/geo';
+import { latLonToVec3, tileToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
 import type { GameSpeed } from '../../shared/types';
 import * as THREE from 'three';
@@ -514,6 +514,11 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     place: (tile: number) => {
       const p = describeTile(view(), tile);
       return p.named ? p.name : p.text;
+    },
+    /** The full place description of a tile as seen from a given capital tile (w3-verify V5d). */
+    placeFrom: (tile: number, capitalTile: number) => {
+      const ll = tileToLatLon(tile);
+      return describePlace(view(), ll.lat, ll.lon, HUMAN_ID, capitalTile);
     },
   };
   return center;

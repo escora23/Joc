@@ -7,6 +7,8 @@ import { icon } from '../icons';
 import { nationRelation } from './diplomacy';
 import type { HudShared } from './shared';
 import { chipText, previewOrders, selectedUnitIds, type OrderPreview } from './orderCtl';
+import { structureName, unitName } from './forcesInfo';
+import { describeXY } from '../places';
 import { HUMAN_ID, NUKE_DEFS, OFFENSIVE_CONTACT_TICKS, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
 import { predictOffensive } from '../../shared/orders';
 import { viewRules } from '../../sim/rulesView';
@@ -142,9 +144,51 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     ctx.bus.emit('offensivePreview', { tile: -1, frontageTiles: 0, ratio: 0, valid: false });
   }
 
+  /**
+   * The pointer is on a unit or a structure (its icon or its model): a left click selects it (or fans out an icon
+   * cluster) instead of acting on the land beneath, so the card says so — never «CLIC: declarar la guerra» over an enemy
+   * silo. Returns false when nothing is picked there.
+   */
+  function paintPicked(): boolean {
+    const hv = hs.hover;
+    if ((hv.unitId < 0 && hv.structureId < 0) || hs.radialOpen) return false;
+    const view = ctx.sim.view;
+    const s = hv.structureId >= 0 ? view.structures.get(hv.structureId) : undefined;
+    const u = !s && hv.unitId >= 0 ? view.units.get(hv.unitId) : undefined;
+    if (!s && !u) return false;
+    const now = performance.now();
+    const key = `p${hv.unitId}:${hv.structureId}`;
+    if (key === lastKey && now - lastPaint < 250) return true;
+    lastKey = key;
+    lastPaint = now;
+    clearOffensive();
+    tooltip.classList.remove('fu-hidden');
+    markDirty(tooltip);
+    const pick = ctx.units.pickIcon?.(hv.clientX, hv.clientY) ?? null;
+    const cluster = pick && pick.kind === 'cluster' ? pick.members.length : 0;
+    const owner = s ? s.owner : u!.owner;
+    const p = view.players[owner];
+    setStyle(ttSw, 'background', p ? hexToCss(p.color) : 'transparent');
+    const own = owner === HUMAN_ID;
+    const rel = own ? 'self' : nationRelation(hs, owner);
+    if (cluster) setText(ttName, own ? t('tt.pick.cluster.own', { n: cluster }) : t('tt.pick.cluster', { n: cluster, name: hs.name(owner) }));
+    else setText(ttName, s ? structureName(hs, s) : unitName(u!));
+    setText(ttRel, own ? t('rel.self') : t(`rel.${rel}`));
+    ttRel.className = `fu-tt-rel fu-rel--${rel}`;
+    if (s && !cluster) setText(ttStats, `${own ? p?.name ?? '' : hs.name(owner)} · ${t('card.levelN', { n: s.level, max: STRUCTURE_DEFS[s.type].maxLevel })}`);
+    else setText(ttStats, own ? '' : hs.name(owner));
+    const x = s ? (s.tile % 1600) + 0.5 : u!.x, y = s ? Math.floor(s.tile / 1600) + 0.5 : u!.y;
+    setText(ttTerrain, describeXY(view, x, y).text);
+    const what = s ? 'structure' : 'unit';
+    setText(ttAction, cluster ? t('tt.pick.fan', { n: cluster }) : own ? t(`tt.pick.own.${what}`) : t(`tt.pick.foreign.${what}`, { name: hs.name(owner) }));
+    ttAction.className = 'fu-tt-action';
+    return true;
+  }
+
   function paintTooltip(tile: number): void {
     const view = ctx.sim.view;
     const world = view.world;
+    if (paintPicked()) return;
     if (!world || tile < 0 || isWaterTerrain(world.terrain[tile]) || hs.radialOpen) {
       tooltip.classList.add('fu-hidden');
       clearOffensive();

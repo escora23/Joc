@@ -9,7 +9,7 @@
 
 import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
-import { HUMAN_ID, MAP_W, DEFAULT_START_WORLD_TIME, STRUCTURE_DEFS, upgradeTicks } from '../../shared/constants.ts';
+import { ALLIANCE_NOTICE_TICKS, DELIBERATION_TICKS, HUMAN_ID, MAP_W, DEFAULT_START_WORLD_TIME, STRUCTURE_DEFS, upgradeTicks } from '../../shared/constants.ts';
 import { latLonToTile } from '../../shared/geo.ts';
 import { StructureType as S, UnitType as U, UnitState } from '../../shared/types.ts';
 
@@ -399,32 +399,52 @@ await scenario('nukes-sam-fallout', (note) => {
 });
 
 await scenario('diplomacy', (note) => {
+  // v2 (DESIGN_V2 §5): the v1 alliance commands map onto proposals. allianceRequest is a proposal the receiver
+  // deliberates on (DELIBERATION_TICKS) and answers with reasons; an offer to the human waits in its inbox and
+  // allianceReply answers it; breakAlliance leaves with notice (never a betrayal); declaring war on an ally is the
+  // betrayal (allianceBroken + traitor flag); emotes are gone.
   const g = quietGame(3);
   const [h, a, b] = [g.playerById[HUMAN_ID], g.playerArr[1], g.playerArr[2]];
   claim(g, HUMAN_ID, MADRID, 30);
   claim(g, a.id, T(40.4, 3.5), 30);
   claim(g, b.id, PARIS, 20);
+  const props = (ev) => eventsOf(ev, 'proposal').map((e) => e.proposal);
   expect(g.issue(HUMAN_ID, { type: 'allianceRequest', target: a.id }), 'request');
   let ev = run(g, 1);
-  expect(eventsOf(ev, 'allianceRequested').length === 1, 'requested event');
-  expect(g.issue(a.id, { type: 'allianceReply', from: HUMAN_ID, accept: true }), 'accept');
+  const sent = props(ev).find((p) => p.from === HUMAN_ID && p.to === a.id && p.kind === 'alliance');
+  expect(sent && sent.status === 'considering', 'the request is a proposal under consideration at once');
+  ev = run(g, DELIBERATION_TICKS.alliance[1] + 1);
+  const ans = props(ev).filter((p) => p.id === sent.id && p.status !== 'considering').pop();
+  expect(ans && (ans.reasons?.length ?? 0) >= 1, 'answered with a reason');
+  const took = ans.resolvedTick - ans.createdTick;
+  expect(took >= DELIBERATION_TICKS.alliance[0] && took <= DELIBERATION_TICKS.alliance[1] + 1, `answered after deliberating (${took} ticks)`);
+  note(`alliance request: ${ans.status} after ${took} ticks (${ans.reasons.map((r) => r.key).join(', ')})`);
+  // An alliance offered by a (as its AI would): pending in the human's inbox until answered.
+  const offer = g.diplomacy.propose(a.id, HUMAN_ID, 'alliance');
+  expect(offer && offer.status === 'pending', 'an offer to the human waits in the inbox');
+  expect(g.issue(HUMAN_ID, { type: 'allianceReply', from: a.id, accept: true }), 'accept');
   ev = run(g, 1);
-  expect(g.isAllied(HUMAN_ID, a.id), 'allied');
+  expect(g.isAllied(HUMAN_ID, a.id) && eventsOf(ev, 'allianceFormed').length === 1, 'allied');
   expect(!g.issue(HUMAN_ID, { type: 'attack', target: a.id, ratio: 0.3, tile: T(40.4, 1) }), 'cannot attack an ally');
   const gold = a.gold;
   expect(g.issue(HUMAN_ID, { type: 'donate', target: a.id, gold: 10_000, troops: 1_000 }), 'donate');
   expect(a.gold >= gold + 10_000 - 1, 'donation arrives');
-  expect(g.issue(HUMAN_ID, { type: 'breakAlliance', target: a.id }), 'betray');
+  expect(!g.issue(HUMAN_ID, { type: 'emote', target: 0, emote: 'skull' }), 'emotes are gone');
+  // Leaving: notice, then the alliance ends; no traitor flag.
+  expect(g.issue(HUMAN_ID, { type: 'breakAlliance', target: a.id }), 'leave with notice');
   ev = run(g, 1);
-  expect(eventsOf(ev, 'allianceBroken').length === 1 && h.traitorUntilTick > g.tick, 'traitor flag');
-  expect(g.issue(HUMAN_ID, { type: 'emote', target: 0, emote: 'skull' }), 'emote');
-  // Alliance expiry.
-  g.issue(HUMAN_ID, { type: 'allianceRequest', target: b.id });
-  g.issue(b.id, { type: 'allianceReply', from: HUMAN_ID, accept: true });
-  ev = [];
-  for (let i = 0; i < 7000 && g.isAllied(HUMAN_ID, b.id); i += 100) ev.push(...run(g, 100));
-  note(`traitor ticks ${h.traitorUntilTick}, alliance expired: ${eventsOf(ev, 'allianceExpired').length}`);
-  expect(!g.isAllied(HUMAN_ID, b.id), 'alliance expires');
+  expect(g.isAllied(HUMAN_ID, a.id) && eventsOf(ev, 'treatyChanged').some((e) => e.treaty === 'alliance' && e.leavingTick > g.tick), 'still allied during the notice');
+  ev = run(g, ALLIANCE_NOTICE_TICKS + 2);
+  expect(!g.isAllied(HUMAN_ID, a.id) && !(h.traitorUntilTick > g.tick), 'the alliance ends after the notice, no traitor flag');
+  // Betrayal: war declared on an ally.
+  const offer2 = g.diplomacy.propose(b.id, HUMAN_ID, 'alliance');
+  expect(offer2 && g.issue(HUMAN_ID, { type: 'allianceReply', from: b.id, accept: true }), 'second alliance');
+  run(g, 1);
+  expect(g.isAllied(HUMAN_ID, b.id), 'allied with b');
+  expect(g.issue(HUMAN_ID, { type: 'declareWar', target: b.id }), 'declare war on an ally');
+  ev = run(g, 1);
+  expect(eventsOf(ev, 'allianceBroken').some((e) => e.breaker === HUMAN_ID && e.victim === b.id) && h.traitorUntilTick > g.tick, 'betrayal: allianceBroken and the traitor flag');
+  note(`traitor until tick ${h.traitorUntilTick} (now ${g.tick})`);
 });
 
 await scenario('encirclement', (note) => {

@@ -33,7 +33,8 @@ function countryAt(view: GameView, lat: number, lon: number): string {
   return countryName(w.countries[w.country[tile]]);
 }
 
-export function describePlace(view: GameView, lat: number, lon: number, viewer = HUMAN_ID): PlaceText {
+/** `capitalTile` overrides the viewer's capital (verification: the «junto a tu capital» case far from any place). */
+export function describePlace(view: GameView, lat: number, lon: number, viewer = HUMAN_ID, capitalTile?: number): PlaceText {
   const p = nearestPlace(lat, lon, 150);
   if (p) {
     const name = placeName(p);
@@ -41,16 +42,17 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
     const text = country && country !== name ? t('place.near', { place: name, country }) : t('place.nearSame', { place: name });
     return { text, name, named: true };
   }
-  const cap = view.players[viewer]?.capitalTile ?? -1;
+  const cap = capitalTile ?? view.players[viewer]?.capitalTile ?? -1;
   if (cap >= 0) {
     const c = tileToLatLon(cap);
     const cp = nearestPlace(c.lat, c.lon, 120);
     const from = cp ? placeName(cp) : t('place.yourCapital');
     const rawKm = placeKm(c.lat, c.lon, lat, lon);
-    // At the capital itself a bearing reads as nonsense («a 0 km al N de tu capital»): name the capital instead.
+    // At the capital itself a bearing reads as nonsense («a 0 km al N de tu capital»): name the capital instead, by its
+    // place name or as «tu capital». Either way `name` is a noun a sentence can use («hacia tu capital»), so named.
     if (rawKm < 25) {
       const text = t('place.besideCapital', { from });
-      return { text, name: from, named: !!cp };
+      return { text, name: from, named: true };
     }
     const km = Math.round(rawKm / 10) * 10;
     const y = Math.sin((lon - c.lon) * Math.PI / 180) * Math.cos(lat * Math.PI / 180);

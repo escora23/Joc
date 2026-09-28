@@ -75,12 +75,18 @@ export function unitName(u: UnitView): string {
   return unitLabel(u.type, u.serial);
 }
 
-/** Name of a front by its key: «Frente de Lyon». */
+/**
+ * Name of a front by its key: «Frente de Lyon» / «Lyon front». Where no place is near, the label is built from the
+ * bearing phrase instead: «Frente de la zona situada a 370 km al NO de Madrid» / «Front 370 km NW of Madrid» (never
+ * «the area 370 km NW of Madrid front»).
+ */
 export function frontName(hs: HudShared, key: number): string {
   if (!key) return '';
   const f = hs.ctx.sim.view.frontByKey.get(key);
   if (!f) return '';
-  return t('front.name', { place: describeXY(hs.ctx.sim.view, f.x, f.y).name });
+  const p = describeXY(hs.ctx.sim.view, f.x, f.y);
+  if (p.named && p.name !== t('place.yourCapital')) return t('front.name', { place: p.name });
+  return t('front.nameAt', { name: p.name, where: p.text });
 }
 
 /** Game hours + real seconds at the current clock: «6 h (6 s a 1x)». */

@@ -188,6 +188,19 @@ async function installHelpers() {
         }
         return -1;
       },
+      /**
+       * Only the land answers a click at a screen point: no unit, structure, icon (or icon cluster) or island marker
+       * within `margin` px of it (units move between this check and the click), and nothing of the HUD over it.
+       */
+      clearAt(x, y, margin = 16) {
+        const u = ctx.units;
+        const k = margin * 0.7;
+        for (const [dx, dy] of [[0, 0], [margin, 0], [-margin, 0], [0, margin], [0, -margin], [k, k], [-k, k], [k, -k], [-k, -k]]) {
+          const px = x + dx, py = y + dy;
+          if (u.pickUnit(px, py) >= 0 || u.pickStructure(px, py) >= 0 || u.pickIcon?.(px, py) || ctx.globe.pickIsland?.(px, py)) return false;
+        }
+        return document.elementFromPoint(x, y) === ctx.canvas;
+      },
       record(type, p) {
         pt.counts[type] = (pt.counts[type] ?? 0) + 1;
         if (pt.events.length >= 30000) return;
@@ -212,7 +225,7 @@ async function installHelpers() {
       else pt.record(type, payload);
       orig(type, payload);
     };
-    ctx.bus.on('worldHover', (e) => { window.__lastHover = e.tile; });
+    ctx.bus.on('worldHover', (e) => { window.__lastHover = e.tile; window.__lastHoverPick = { unitId: e.unitId, structureId: e.structureId, island: !!e.islandLabel }; });
     window.__pt = pt;
   });
 }
@@ -240,6 +253,33 @@ async function clickTile(tile, button = 'left') {
   const p = await hoverTile(tile);
   await page.mouse.click(p.x, p.y, { button, delay: 40 });
   return p;
+}
+const tileDist = (a, b) => {
+  let dx = Math.abs((a % 1600) - (b % 1600));
+  if (dx > 800) dx = 1600 - dx;
+  return Math.hypot(dx, Math.floor(a / 1600) - Math.floor(b / 1600));
+};
+/**
+ * A left click that must act on the land itself (expand, attack, declare): the point is checked clear of units,
+ * structures, icons, island markers and HUD before clicking, and the worldClick it produced must name that tile with no
+ * unit or structure. Returns { ok, why, ev }; a miss is deselected so the next attempt starts clean.
+ */
+async function clickLand(tile) {
+  await page.mouse.move(8, 450);
+  const p = await hoverTile(tile);
+  const clear = await page.evaluate(({ x, y }) => window.__pt.clearAt(x, y), p);
+  if (!clear) return { ok: false, why: `tile ${tile}: something clickable within 16 px` };
+  const n0 = await countEvents('worldClick');
+  await page.mouse.click(p.x, p.y, { delay: 40 });
+  const ev = await lastEvent('worldClick', 'e.button === 0', n0, 10000);
+  if (!ev) return { ok: false, why: `tile ${tile}: no worldClick` };
+  if (ev.unitId >= 0 || ev.structureId >= 0 || ev.tile < 0 || tileDist(ev.tile, tile) > 1.5) {
+    // Like a player: Esc drops what the click selected (only then: with nothing selected Esc opens the pause menu).
+    if (await page.evaluate(() => window.__fuHud?.shared.selection.kind !== 'none')) await page.keyboard.press('Escape');
+    await sleep(300);
+    return { ok: false, why: `tile ${tile}: the click resolved to unit ${ev.unitId} / structure ${ev.structureId} / tile ${ev.tile}` };
+  }
+  return { ok: true, ev };
 }
 /** Returns the HUD to a neutral state like a player would: close dialogs, cancel a pending build/target mode. */
 async function resetUi() {
@@ -400,41 +440,54 @@ try {
   await step('expand into neutral land (25%, then 60% via the slider)', async () => {
     const cap = await page.evaluate(() => window.__pt.tileLL(window.__front.ctx.sim.view.human.capitalTile));
     await lookAt(cap.lat, cap.lon, 2200);
+    // Neutral land touching our border, farthest from the capital first (grow outward), a few candidates so a tile
+    // that is not clear (the capital's icon, an island marker, a unit) is skipped.
     const findNeutral = (minD) => page.evaluate((minD) => {
       const v = window.__front.ctx.sim.view, pt = window.__pt;
       const mine = pt.humanTiles();
-      // Neutral land touching our border, farthest from the capital first (grow outward).
       const cap = v.human.capitalTile;
-      let best = -1, bd = -1;
+      const seen = new Map();
       for (const t of mine) for (const n of [t - 1, t + 1, t - 1600, t + 1600, t - 2, t + 2, t - 3200, t + 3200]) {
-        if (v.owner[n] !== 0 || !pt.playable(n)) continue;
-        const d = pt.dist(n, cap) + Math.random() * 6;
-        if (d > minD && d > bd) { bd = d; best = n; }
+        if (v.owner[n] !== 0 || !pt.playable(n) || seen.has(n)) continue;
+        const d = pt.dist(n, cap);
+        if (d > minD) seen.set(n, d + Math.random() * 6);
       }
-      return best;
+      return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0]);
     }, minD);
     const details = [];
+    const misses = [];
     const started = Date.now();
     for (const [i, ratio] of [[0, '25'], [1, '60'], [2, '60'], [3, '60']]) {
       // A slow software renderer: two pushes are enough when the clicks take long (the step is bounded to 240 s).
       if (i >= 2 && Date.now() - started > 120_000) break;
       if (ratio === '25') await page.locator('.fu-ar-tick', { hasText: /^25$/ }).click();
       else await page.locator('.fu-ar input[type=range]').fill(ratio);
-      const target = await findNeutral(2);
-      if (target < 0) break;
-      const ll = await tileLL(target);
-      await lookAt(ll.lat, ll.lon, 2200);
-      const n0 = await countEvents('attackStarted', 'e.attacker === 1');
-      const troops0 = (await humanStats()).troops;
-      await clickTile(target);
-      const ev = await lastEvent('attackStarted', 'e.attacker === 1 && e.defender === 0', n0, 12000);
-      if (i === 0) check(ev, 'no attackStarted into neutral land');
-      if (ev) details.push(`${ratio}%: ${ev.troops}/${troops0}`);
+      const cands = await findNeutral(2);
+      if (!cands.length) break;
+      let ev = null;
+      for (const target of cands.slice(0, 5)) {
+        const ll = await tileLL(target);
+        await lookAt(ll.lat, ll.lon, 2200);
+        const n0 = await countEvents('attackStarted', 'e.attacker === 1');
+        const troops0 = (await humanStats()).troops;
+        const c = await clickLand(target);
+        if (!c.ok) {
+          misses.push(c.why);
+          continue;
+        }
+        ev = await lastEvent('attackStarted', 'e.attacker === 1 && e.defender === 0', n0, 12000);
+        if (ev) {
+          details.push(`${ratio}%: ${ev.troops}/${troops0}`);
+          break;
+        }
+        misses.push(`tile ${target}: clicked the land, no attackStarted`);
+      }
+      if (i === 0) check(ev, `no attackStarted into neutral land (${misses.join('; ')})`);
       await sleep(2500);
     }
     await until(() => (window.__front.ctx.sim.view.human?.tiles ?? 0) > 260, null, 30000, 1000);
     const st = await humanStats();
-    return `${details.join(', ')} -> ${st.tiles} tiles`;
+    return `${details.join(', ')} -> ${st.tiles} tiles${misses.length ? `; skipped: ${misses.join('; ')}` : ''}`;
   });
 
   await step('speed 4x (+ key), then 1x (button)', async () => {
@@ -591,49 +644,67 @@ try {
   let warTarget = -1;
   await step('declare war through the §4.2 dialog (left click on a neighbour)', async () => {
     await resetUi();
+    // Candidate tiles of a neighbouring nation (2-3 tiles inside its border), nearest to our capital first.
     const find = () => page.evaluate(() => {
       const v = window.__front.ctx.sim.view, pt = window.__pt;
       const cap = v.human.capitalTile;
-      let best = -1, bd = 1e9;
+      const found = new Map();
       for (const t of pt.humanTiles()) {
         for (const dir of [-1, 1, -1600, 1600]) {
           const n2 = t + 2 * dir, n3 = t + 3 * dir, n = t + dir;
           const o = v.owner[n];
           const p = v.players[o];
           if (o && o !== 1 && p && p.kind === 'nation' && v.owner[n2] === o && v.owner[n3] === o && pt.playable(n2) && !v.human.allies.includes(o) && v.pairState(1, o) !== 'war') {
-            const d = pt.dist(n2, cap);
-            if (d < bd) { bd = d; best = n2; }
+            if (!found.has(n2)) found.set(n2, pt.dist(n2, cap));
           }
         }
       }
-      return best;
+      return [...found.entries()].sort((a, b) => a[1] - b[1]).map((e) => e[0]);
     });
-    let target = await find();
-    if (target < 0) {
+    let cands = await find();
+    if (!cands.length) {
       // Nobody borders us by land: declare on the nearest nation across the sea (the dialog then speaks of a landing).
-      target = await page.evaluate(() => {
+      cands = await page.evaluate(() => {
         const v = window.__front.ctx.sim.view, pt = window.__pt;
         const cap = v.human.capitalTile;
-        let best = -1, bd = Infinity;
+        const list = [];
         for (let t = 1600; t < v.owner.length - 1600; t++) {
           const o = v.owner[t];
           if (!o || o === 1 || v.players[o]?.kind !== 'nation' || v.pairState(1, o) === 'war' || v.human.allies.includes(o)) continue;
           if (v.owner[t - 1] !== o || v.owner[t + 1] !== o || v.owner[t - 1600] !== o || v.owner[t + 1600] !== o) continue;
-          const d = pt.dist(t, cap);
-          if (d < bd) { bd = d; best = t; }
+          list.push([t, pt.dist(t, cap)]);
         }
-        return best;
+        return list.sort((a, b) => a[1] - b[1]).slice(0, 400).map((e) => e[0]);
       });
     }
-    check(target >= 0, 'no nation to declare war on');
-    const ll = await tileLL(target);
-    await lookAt(ll.lat, ll.lon, 1800);
-    await clickTile(target);
-    await page.waitForSelector('.fu-declare-modal', { timeout: 15000 });
-    // The dialog fades in: read it once its body is laid out.
-    await until(() => /\d+ h/.test(document.querySelector('.fu-declare-modal')?.innerText ?? ''), null, 8000, 200);
-    await sleep(500);
-    const text = await page.locator('.fu-declare-modal').innerText();
+    check(cands.length, 'no nation to declare war on');
+    // Spread the attempts over different spots (neighbouring candidates share the same icons).
+    const tries = [];
+    for (const c of cands) if (tries.every((x) => tileDist(x, c) >= 3)) tries.push(c);
+    const misses = [];
+    let target = -1, text = '';
+    for (const cand of tries.slice(0, 6)) {
+      const ll = await tileLL(cand);
+      await lookAt(ll.lat, ll.lon, 1800);
+      const c = await clickLand(cand);
+      if (!c.ok) {
+        misses.push(c.why);
+        continue;
+      }
+      // The dialog fades in: read it once its body is laid out.
+      const laid = await until(() => /\d+ h/.test(document.querySelector('.fu-declare-modal')?.innerText ?? ''), null, 20000, 200);
+      if (!laid) {
+        misses.push(`tile ${cand}: clicked the land, no declaration dialog`);
+        await shot(`15x-declare-miss-${cand}`);
+        await resetUi();
+        continue;
+      }
+      target = cand;
+      await sleep(500);
+      text = await page.locator('.fu-declare-modal').innerText();
+      break;
+    }
+    check(target >= 0, `no declaration dialog after ${misses.length} tries: ${misses.join('; ')}`);
     await shot('15a-declare-dialog');
     check(/podrá (?:empezar|zarpar) en \d+ h|can (?:start|sail) in \d+ h/.test(text), `no mobilization line in the dialog: ${text.slice(0, 300)}`);
     check(!BAD_TEXT.test(text.replace(/\s+/g, ' ')), 'raw text in the declaration dialog');
@@ -644,7 +715,7 @@ try {
     check(ev, 'no warDeclared after confirming');
     warTarget = ev.target;
     const mob = await page.evaluate(() => window.__front.ctx.sim.view.tick);
-    return `war on ${ev.target} (clicked ${defender}); offensive after tick ${ev.mobilizeUntilTick} (now ${mob}); dialog: «${text.split('\n').find((l) => /empezar|zarpar|start|sail/.test(l))?.trim()}»`;
+    return `war on ${ev.target} (clicked ${defender}); offensive after tick ${ev.mobilizeUntilTick} (now ${mob}); dialog: «${text.split('\n').find((l) => /empezar|zarpar|start|sail/.test(l))?.trim()}»${misses.length ? `; skipped: ${misses.join('; ')}` : ''}`;
   });
 
   // A white peace offered at once to the nation we just attacked: nobody is tired yet, so it is refused with a reason
@@ -898,6 +969,8 @@ try {
     // Cleanup: peace with the stager so the capital does not fall under the rest of the tour.
     await page.evaluate(({ a }) => window.__front.ctx.sim.debug({ type: 'war', a, b: 1, peace: true }), plan);
     check(heard, `cues missing: ${need.filter((k) => !(cues[k] > 0)).join(', ')} (convoy ${convoy ? `launched to ${convoy.toTile}` : `not launched: ${plan.conv.length} candidates; ${convoyWhy.join(' | ')}`})`);
+    // The capital alert names the capital (its place, or «tu capital»), never «a 0 km al N de tu capital».
+    check(siren && !/\b0 km\b/.test(siren.title) && !BAD_TEXT.test(`${siren.title} ${siren.body}`), `capital alert text: «${siren?.title}»`);
     return `«${siren?.title ?? '-'}»; ${need.map((k) => `${k}=${cues[k]}`).join(' ')}`;
   });
 

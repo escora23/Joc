@@ -49,7 +49,7 @@ export function wireForcesNews(hs: HudShared, alerts: AlertCenter): void {
     } else {
       alerts.raise({
         kind: 'shipCaptured', severity: 'warning', icon: 'tradeShip', lat: ll.lat, lon: ll.lon, actors: [e.by], groupKey: `captured:${e.by}`,
-        title: t('alert.shipCaptured.them', { name: hs.name(e.by), place: describeXY(view(), e.x, e.y).name }),
+        title: t('alert.shipCaptured.them', { name: hs.name(e.by), place: describeXY(view(), e.x, e.y).text }),
       });
     }
   });

@@ -320,7 +320,7 @@ export const esW4: Record<string, string> = {
   // ---- alerts ---------------------------------------------------------------------------------------------------
   'alert.unitReady.base': 'en la base de {place}',
   'alert.shipCaptured.us': 'Nuestro {ship} ha capturado un mercante de {name}: +{gold} de oro',
-  'alert.shipCaptured.them': '{name} ha capturado uno de nuestros mercantes cerca de {place}',
+  'alert.shipCaptured.them': '{name} ha capturado uno de nuestros mercantes {place}',
   'alert.strike.result': '{unit}: {what}',
   'alert.strike.structure': '{s} alcanzada ({dmg})',
   'alert.strike.destroyed': '{s} destruida',
@@ -643,7 +643,7 @@ export const enW4: Record<string, string> = {
 
   'alert.unitReady.base': 'at the {place} base',
   'alert.shipCaptured.us': 'Our {ship} captured a {name} trade ship: +{gold} gold',
-  'alert.shipCaptured.them': '{name} captured one of our trade ships near {place}',
+  'alert.shipCaptured.them': '{name} captured one of our trade ships {place}',
   'alert.strike.result': '{unit}: {what}',
   'alert.strike.structure': '{s} hit ({dmg})',
   'alert.strike.destroyed': '{s} destroyed',
