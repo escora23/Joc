@@ -198,9 +198,8 @@ passed 18/23; its five failures were verifier/staging issues (division count che
 HUD panel, a slow ally treaty, window alignment at 0.3 fps) and the T41 note above; after the fixes, orbit + panel +
 audio + ground (17/17 except V9), mobilization (2/2) and observation (2/2) passed. Headless `w6-audit` 7/7.
 
-**Not done / open:** the orbit badge and arrows are DOM/WebGL overlays only in the strategic view (command mode hides
-them by design); W5 still has to consume `BattleApi.handoff()` for criterion 14 of W5 (the field is provided);
-the sim-side T41 follow-up above.
+**Open:** the sim-side T41 follow-up above. (`BattleApi.handoff()` is already passed by the app into
+`CommandEnterParams.battleHandoff` and read by W5's command/forces.ts.)
 
 ## W6-battle-clarity: brief
 
