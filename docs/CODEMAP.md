@@ -455,8 +455,11 @@ tiles per second, makes wars whiplash.
 * Cost ~0.5 ms per call in the browser (iterates units and structures once); call it every 2 real s, not per frame.
 * Test: `npx tsx src/shared/test/localForces.test.ts`. Debug: `__localForces(lat, lon, radiusKm = 30, viewer = 1)`,
   `__localForces.at(x, y, ...)`, `__localForces.split(f, budget)`, `__localForces.text(side)`.
-* Sub-tile line: `progress` is published only for fronts near the observation focus; elsewhere the line sits on the
-  tile edge (`subTile: false`). Command mode should keep the clock focus on the controlled unit to get it.
+* Sub-tile line: every front with an offensive publishes its line as ONE smoothed depth (`FrontView.line`, T41, see
+  W6 below); inside that line's window `LocalFront.line` gives its offset from the query point and `lineKm` /
+  `nearest` lie on it (carried to the view's tick at its own speed, `publishedDepthAt`). Elsewhere the per-vertex
+  `progress` (near the observation focus) or the tile edge (`subTile: false`). Command mode keeps the clock focus on
+  the controlled unit, so the line there is read at the focus every tick.
 
 **W6 battle clarity (landed)**
 * **Orbit overlay** `render/battle/overlay.ts` (created by the battle renderer, above 150 km, hidden in command mode): two
@@ -467,6 +470,14 @@ tiles per second, makes wars whiplash.
   tail extended so a wide corridor still reads as an arrow), naval (transport route), mobilization (pulsing, until
   `mobilizeUntilTick`). Rebuilt into preallocated buffers when fronts / attacks / wars change and at 2 Hz.
   Debug: `__frontOverlay.stats()`.
+* **The line as one depth** (sim, `sim/frontLine.ts`, T41): per front, a window 150 km along the line × ±75 km across
+  it, sampled every 2.5 km (5 km off the focus); per column the side-a share, where a frontier tile under side a's
+  offensive counts p/θ (under b's counter-offensive 1 − p/θ), so a falling tile adds nothing it had not already added:
+  the raw depth moves continuously. A critically damped tracker (τ 5 ticks, speed ≤ 1.5 × the §4.5 cap) integrated so
+  the published depth moves EXACTLY `kmh / 10` km per tick; `FrontView.advanceKmh = |line.kmh|` (badge, panel, strip).
+  Measured at the observation focus every tick (and at once on a focus change, even paused: `FrontTracker.focusChanged`
+  from the worker's clock message), else on the lead offensive's axis every 5 ticks; quiet fronts off the focus have
+  none. View data only (not saved). Headless check: `w6-audit` A6.
 * **Momentum** (sim, `sim/fronts.ts`): `tanh(5 × (push_a − push_b))`, push = EMA α 0.2 of the pressure each side's
   offensive adds per tick (`Attack.pushThisTick`, Σ of the per-tile increments): it reacts within a few ticks when a
   side stalls or a counter-offensive starts, not only when 25 km tiles fall.
@@ -480,13 +491,20 @@ tiles per second, makes wars whiplash.
   `setFrontPriority`, Enviar divisiones (own divisions with ETA → `unitOrder attach`), Contraofensiva/Reforzar →
   `attack`, Retirar → `retreat`), Mundo tab. Debug `__fuFronts`.
 * **Ground battle** `render/battle/index.ts`: anchored by front key (stays while the camera stays and the line is within
-  4.5 km of the patch centre); infantry per side = `visibleSplit()` of `deriveLocalForcesAt(anchor, 6 km)`; no generic
-  vehicles — real divisions within 50 km as 1 tank per 25 % integrity + 2 IFVs at their real positions
-  (`vehicles.setFormation`, `UnitsApi.setBattleOwned` hides their strategic models); the line follows the sub-tile
-  line (`LocalFront.nearest`), extrapolated between ticks at the measured km/h when the sim publishes progress, and the
-  living soldiers move with it (`infantry.translate`); animation clock = `frame.visualDt`. `BattleApi.view()` feeds
-  the HUD strip and banners (`ui/hud/battleStrip.ts`), `BattleApi.handoff()` the command-mode hand-off.
-  Debug `__battleDebug.shown()` / `.clock` / `.farStats()` / `.setLayerVisible()`.
+  4.5 km of the patch centre; in observation time a new battle waits ≤ 1.5 s for the line read at the focus); infantry
+  per side = `visibleSplit()` of `deriveLocalForcesAt(anchor, 6 km)`; no generic vehicles — real divisions within 50 km
+  as 1 tank per 25 % integrity + 2 IFVs at their real positions (`vehicles.setFormation`, `UnitsApi.setBattleOwned`
+  hides their strategic models). The line IS the sim's published line: its readings (offset along the battle's normal,
+  speed per tick) are interpolated on the client's drawn tick (`view.simTime`, the timeline every unit is drawn on), so
+  it glides at exactly the km/h the strip shows; it snaps when more than 2 km off (also paused); without a published
+  line it stands where the tile-level line crosses the normal through the anchor. The living soldiers move with it
+  (`infantry.translate`); animation clock = `frame.visualDt`. While fully shown the globe leaves out its ground under
+  the patch (`GlobeApi.setBattleHole`, 45-54 km) so its smoother relief never pokes through at grazing views; ground-
+  level views get full aerial haze (`aerialHazeK`, shared with the globe) and no territory fill near the camera.
+  `BattleApi.view()` feeds the HUD strip, the banners (spots along/behind each line; the HUD takes the first on screen
+  and clear of every panel) and the division markers (`ui/hud/battleStrip.ts`; off screen they wait at the edge with
+  bearing and distance); `BattleApi.handoff()` the command-mode hand-off.
+  Debug `__battleDebug.shown()` (line, sim line, snaps, anchor, normal) / `.clock` / `.farStats()` / `.setLayerVisible()`.
 * **Far layer**: nothing on quiet fronts, flashes inside the band leaning to the side pushed back, ≤ 6 smoke columns
   per front, puffs ≤ 0.2 opacity, tops < 3 km. **Plumes** `render/fx/plume.ts`: world 6 → 20 km, re-sized every
   frame, min 22 px, ≤ 8 % of the screen height (`__fx.plumes()`). **Audio**: combat cues capped at 2/s per front
@@ -494,7 +512,9 @@ tiles per second, makes wars whiplash.
 * Tools: `npx tsx src/sim/test/w6-audit.mjs` (momentum reversal, garrisons, priority, T34 via the panel command,
   retreat, key stability), `node tools/w6-verify.mjs` (browser: overlay, badge, panel, mobilization, front-600,
   plume, ground battle, observation, animation clock, audio), shots `front-orbit`, `front-600`, `front-mobilization`,
-  `fronts-panel`, `front-ground-real`, `front-observation`, `plume-zoom` (`render/battle/shotsFronts.ts`).
+  `fronts-panel`, `front-ground-real`, `front-observation`, `plume-zoom` (`render/battle/shotsFronts.ts`; staged in
+  exact ticks with `fastForward`, so every run stages the same front; the ground shots put one real division per side
+  where the offensive's axis crosses the line, focus the sim there and frame the line clear of the HUD).
 
 **Risks**
 * Front ids flicker today.
