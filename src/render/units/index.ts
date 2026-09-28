@@ -644,6 +644,54 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return s;
   }
 
+  const RA = new THREE.Vector3(), RB = new THREE.Vector3();
+  /**
+   * A train rides the rail as drawn (FEEDBACK-1 item 15): the sim moves it in a straight line in map space between
+   * stations, the rail is drawn as the great circle between their tile centres, so place it at the same fraction
+   * along that great circle, facing the next station (sim-space headings skew by up to 1/cos(lat) off the line).
+   * Rewrites P / G and the model basis; `s` is the drawn size (world units).
+   */
+  function railFrame(u: UnitView, x: number, y: number): void {
+    const r = ctx.sim.view.routes.get(u.id);
+    if (!r || r.length < 2) return;
+    let best = Infinity, bi = -1, bt = 0;
+    for (let i = 0; i + 1 < r.length; i++) {
+      const ax = (r[i] % MAP_W) + 0.5, ay = Math.floor(r[i] / MAP_W) + 0.5;
+      const dx = wrapDX(ax, (r[i + 1] % MAP_W) + 0.5), dy = Math.floor(r[i + 1] / MAP_W) + 0.5 - ay;
+      const px = wrapDX(ax, x), py = y - ay;
+      const L2 = dx * dx + dy * dy;
+      if (L2 < 1e-9) continue;
+      const t = clamp((px * dx + py * dy) / L2, 0, 1);
+      const ex = t * dx - px, ey = t * dy - py, d = ex * ex + ey * ey;
+      if (d < best) {
+        best = d;
+        bi = i;
+        bt = t;
+      }
+    }
+    if (bi < 0 || best > 4) return;
+    tileToLatLon(r[bi], ll2);
+    latLonToVec3(ll2.lat, ll2.lon, 1, RA);
+    tileToLatLon(r[bi + 1], ll2);
+    latLonToVec3(ll2.lat, ll2.lon, 1, RB);
+    const ang = Math.acos(clamp(RA.dot(RB), -1, 1));
+    if (ang < 1e-7) return;
+    const sa = Math.sin(ang);
+    const ka = Math.sin((1 - bt) * ang) / sa, kb = Math.sin(bt * ang) / sa;
+    U.set(RA.x * ka + RB.x * kb, RA.y * ka + RB.y * kb, RA.z * ka + RB.z * kb).normalize();
+    vec3ToLatLon(U, ll);
+    const gr = ctx.globe.meshRadiusAt(ll.lat, ll.lon);
+    G.copy(U).multiplyScalar(gr);
+    P.copy(G);
+    // Forward: the great circle's tangent toward the next station.
+    F.copy(RB).addScaledVector(U, -RB.dot(U));
+    if (F.lengthSq() < 1e-14) return;
+    F.normalize();
+    UP.copy(U);
+    R.crossVectors(F, UP).normalize();
+    B.copy(F).negate();
+  }
+
   /**
    * Feed the unit's trails from the current pose. `frame` = per-frame live head (may also stop trails),
    * otherwise a sim-tick sample (commits points at sim rate, independent of the frame rate).
@@ -992,9 +1040,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           break;
         }
         case UnitType.DroneSwarm: {
-          for (let j = 0; j < 7; j++) {
+          // Five drones in a loose, slowly weaving formation (fewer and larger reads better than a cloud of specks).
+          for (let j = 0; j < 5; j++) {
             const ang = j * 2.39996 + env.time * 0.4 * (j % 2 === 0 ? 1 : -1);
-            const rr = j === 0 ? 0 : 0.7 + 0.35 * (j % 3);
+            const rr = j === 0 ? 0 : 0.85 + 0.3 * (j % 2);
             const bob = Math.sin(env.time * 2 + j * 1.7) * 0.15;
             Q.copy(P).addScaledVector(R, Math.cos(ang) * rr * s).addScaledVector(B, Math.sin(ang) * rr * s + 0.3 * s).addScaledVector(UP, bob * s);
             put(im, Q, R, UP, B, s, s, s, col, 1, sel, hp, seed + j * 0.1);
@@ -1012,6 +1061,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           break;
         }
         case UnitType.Train: {
+          railFrame(u, x, y);
+          t.pos.copy(P);
+          t.ground.copy(G);
           put(im, P, R, UP, B, s, s, s, col, 1, sel, hp, seed);
           const wag = unitMeshes.wagon;
           for (let j = 1; j <= 3; j++) {
@@ -1229,11 +1281,12 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   /**
    * Ports and naval yards stand ON the coast: the sim puts them on a coastal tile, whose centre can lie ~10 km
    * inland of the drawn shoreline, which left their quays, piers and moored ships on dry land. The model is slid
-   * along its seaward axis F until its quay line (model z = -0.1) meets the shoreline (the 0.5 contour of the
-   * water fraction), at most 14 km. Returns the shift in km along F (from the tile centre at `c`).
+   * along its seaward axis F until its quay line meets the shoreline (the 0.5 contour of the water fraction), at most
+   * 14 km: model z = -0.13 for a port (its quay at -0.1, piers beyond), z = -0.44 for a naval yard (the dock gates at
+   * its sea edge, the basins running on into the water). Returns the shift in km along F (from the tile centre at `c`).
    */
   const cP = new THREE.Vector3();
-  function coastShiftKm(c: THREE.Vector3, f: THREE.Vector3, Skm: number): number {
+  function coastShiftKm(c: THREE.Vector3, f: THREE.Vector3, Skm: number, quayZ = 0.13): number {
     const at = (dKm: number): number => {
       cP.copy(c).addScaledVector(f, dKm / EARTH_RADIUS_KM).normalize();
       vec3ToLatLon(cP, gll);
@@ -1250,7 +1303,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       prev = d;
     }
     if (!Number.isFinite(shore)) return 0;
-    return clamp(shore - 0.13 * Skm, -14, 14);
+    return clamp(shore - quayZ * Skm, -14, 14);
   }
 
   function groundOf(st: StructureView, S: number, heading: number, cache = true): Ground {
@@ -1261,7 +1314,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     tangentFrame(ll.lat, ll.lon, E, N, U);
     F.copy(N).multiplyScalar(Math.cos(heading)).addScaledVector(E, Math.sin(heading));
     if (st.type === StructureType.Port || st.type === StructureType.NavalYard) {
-      const shift = coastShiftKm(U, F, (structKm(st.type, st.level) / EARTH_RADIUS_KM) * EARTH_RADIUS_KM);
+      const shift = coastShiftKm(U, F, (structKm(st.type, st.level) / EARTH_RADIUS_KM) * EARTH_RADIUS_KM, st.type === StructureType.NavalYard ? 0.44 : 0.13);
       if (shift !== 0) {
         gC.copy(U).addScaledVector(F, shift / EARTH_RADIUS_KM).normalize();
         vec3ToLatLon(gC, ll);

@@ -181,6 +181,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
   let fade = 0;
   let fadeAnim: { from: number; to: number; t: number; dur: number; resolve: () => void } | null = null;
   let exposure = 1;
+  let ghostGate = 0, ghostTarget = 0;
   let bloomLevels = cfg.bloomLevels;
 
   function allocate(): void {
@@ -302,6 +303,7 @@ export function createPostPipeline(ctx: GameContext): PostApi {
       }
       flashLevel = Math.max(0, flashLevel - realDt * flashDecay);
       caPulse = Math.max(0, caPulse - realDt * caDecay);
+      ghostGate += (ghostTarget - ghostGate) * Math.min(1, realDt * 2);
       compUniforms.uTime.value = presentationTime(frame.time);
     },
     render(scene: THREE.Scene, camera: THREE.Camera, _frame: FrameInfo) {
@@ -337,6 +339,8 @@ export function createPostPipeline(ctx: GameContext): PostApi {
       // only command mode and cinematic camera shots keep the lens look.
       const lensLook = ctx.app.state === 'command' || ctx.cameraRig.mode === 'cinematic';
       compUniforms.uCA.value = lensLook ? (cfg.cinematic ? 0.0022 : 0) + caPulse : 0;
+      // Lens ghosts: the cinematic camera and command mode keep them; the strategic view only while a nuke burns.
+      compUniforms.uFlare.value = 0.24 * (lensLook ? 1 : ghostGate);
       compUniforms.uExposure.value = exposure * (1 + Math.min(f, 1) * 0.6);
       compUniforms.uFade.value = fade;
 
@@ -354,6 +358,9 @@ export function createPostPipeline(ctx: GameContext): PostApi {
       }
       renderer.setRenderTarget(null);
       renderer.autoClear = prevAuto;
+    },
+    setLensGhosts(k: number) {
+      ghostTarget = clamp01(k);
     },
     flash(intensity, durationMs, color = 0xffffff) {
       if (!ctx.settings.get().screenShake) intensity *= 0.35;

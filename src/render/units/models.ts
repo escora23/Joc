@@ -417,16 +417,17 @@ function drone(): THREE.BufferGeometry {
   const m = new ModelBuilder();
   // A MALE drone: slender body with the satellite-link bulge, long straight wings, inverted V-tail, pusher propeller
   // and the sensor turret under the nose.
-  const white = 0xc9ccce;
+  // Mid-grey airframe (a white one burns out in sunlight from above) with nation-coloured wings and tail.
+  const white = 0x8f959b;
   m.latheZ([[-0.42, 0], [-0.38, 0.03], [-0.3, 0.045], [-0.15, 0.04], [0.2, 0.032], [0.38, 0.018], [0.42, 0.012]], 0, 0, white, 10, 0.9);
   m.push().translate(0, 0.025, -0.3).scale(0.045, 0.04, 0.11);
   m.sphere(1, 0, 0, 0, white, 10, 6);
   m.pop();
   m.sphere(0.024, 0, -0.045, -0.3, 0x2a2d30, 8, 6);
-  m.wing([[0.02, -0.06], [0.64, -0.03], [0.64, 0.02], [0.02, 0.04]], 0.012, 0.012, white, { team: 0.8 });
-  m.wing([[-0.02, -0.06], [-0.02, 0.04], [-0.64, 0.02], [-0.64, -0.03]], 0.012, 0.012, white, { team: 0.8 });
-  m.push().translate(0.02, -0.005, 0).rotateZ(-2.3).fin([[0.26, 0], [0.34, 0.16], [0.39, 0.16], [0.38, 0]], 0, 0.01, white, { team: 0.5 }).pop();
-  m.push().translate(-0.02, -0.005, 0).rotateZ(2.3).fin([[0.26, 0], [0.34, 0.16], [0.39, 0.16], [0.38, 0]], 0, 0.01, white, { team: 0.5 }).pop();
+  m.wing([[0.02, -0.07], [0.64, -0.035], [0.64, 0.025], [0.02, 0.05]], 0.012, 0.014, white, { team: 1 });
+  m.wing([[-0.02, -0.07], [-0.02, 0.05], [-0.64, 0.025], [-0.64, -0.035]], 0.012, 0.014, white, { team: 1 });
+  m.push().translate(0.02, -0.005, 0).rotateZ(-2.3).fin([[0.26, 0], [0.34, 0.16], [0.39, 0.16], [0.38, 0]], 0, 0.01, white, { team: 0.9 }).pop();
+  m.push().translate(-0.02, -0.005, 0).rotateZ(2.3).fin([[0.26, 0], [0.34, 0.16], [0.39, 0.16], [0.38, 0]], 0, 0.01, white, { team: 0.9 }).pop();
   m.cylZ(0.014, 0.014, 0.02, 0, 0, 0.43, 0x2a2d30, 6, { heat: 0.2 });
   m.box(0.16, 0.012, 0.006, 0, 0, 0.445, 0x2a2d30);
   return m.build();
@@ -784,7 +785,7 @@ function port(L: number): THREE.BufferGeometry {
   crane(0.08, -0.08, 0);
   if (L >= 2) { crane(0.3, -0.22, -Math.PI / 2); crane(0.3, -0.38, -Math.PI / 2); }
   if (L >= 3) { crane(-0.33, -0.22, -Math.PI / 2); crane(-0.33, -0.38, -Math.PI / 2); }
-  m.block(1.0, 0.003, 0.01, 0, 0.0, -0.095, 0xffffff, { glow: 1.0 });
+  m.block(1.0, 0.003, 0.01, 0, 0.0, -0.45, 0xffffff, { glow: 1.0 });
   return m.build();
 }
 
@@ -970,33 +971,50 @@ function samSite(L: number): THREE.BufferGeometry {
 
 function silo(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
+  // A pale concrete compound on dark gravel so it reads from 40 km; every level shows three silo cells (the level
+  // arms 1 / 2 / 3 of them) and the erector gantry standing over the armed, open cell.
   plate(m, 1, 1, G.gravel);
+  m.block(0.86, 0.004, 0.62, 0, 0, -0.12, G.concrete);
   fence(m, 0.96, 0.96);
   fence(m, 0.9, 0.9);
-  strip(m, 0.0, 0.5, 0.0, 0.22, 0.04, 0.003, G.asphaltLight);
-  strip(m, -0.24, -0.18, 0.24, -0.18, 0.04, 0.003, G.asphaltLight);
-  strip(m, 0, 0.22, 0, -0.18, 0.04, 0.003, G.asphaltLight);
-  const pads: [number, number][] = [[-0.24, -0.2], [0.24, -0.2], [0.0, 0.14]];
+  strip(m, 0.0, 0.5, 0.0, 0.2, 0.05, 0.006, G.asphalt);
+  strip(m, -0.28, -0.2, 0.28, -0.2, 0.05, 0.006, G.asphalt);
+  strip(m, 0, 0.2, 0, -0.2, 0.05, 0.006, G.asphalt);
+  const pads: [number, number][] = [[-0.26, -0.22], [0.26, -0.22], [0.0, 0.1]];
   for (let i = 0; i < 3; i++) {
     const [x, z] = pads[i];
-    const built = i < L;
-    m.block(0.24, 0.006, 0.24, x, 0, z, built ? G.concrete : G.gravel);
-    if (!built) continue;
-    // Door rails.
-    m.block(0.2, 0.006, 0.01, x + 0.05, 0.006, z - 0.05, 0x5a5c5e);
-    m.block(0.2, 0.006, 0.01, x + 0.05, 0.006, z + 0.05, 0x5a5c5e);
-    m.cyl(0.075, 0.08, 0.012, x, 0.006, z, G.concreteDark, 16);
-    if (i === 0) {
-      // Open: the door slid aside, the hatch showing the missile's nose in the owner's colours.
-      m.cyl(0.058, 0.058, 0.004, x, 0.018, z, 0x121314, 16);
-      m.lathe([[0.04, 0], [0.04, 0.02], [0.03, 0.05], [0.012, 0.075], [0.001, 0.085]], x, 0.012, z, 0xe8e8e6, 12);
-      m.cyl(0.0405, 0.0405, 0.012, x, 0.02, z, 0xe8e8e6, 12, { team: 1 });
-      m.block(0.12, 0.03, 0.12, x + 0.15, 0.012, z, G.concreteDark, { team: 0.25 });
-      m.block(0.122, 0.004, 0.122, x + 0.15, 0.042, z, 0xd6ae38);
+    const armed = i < L;
+    // The cell: a dark raised collar with a yellow/black hazard ring, whatever the level (an unarmed cell is closed
+    // and unpainted).
+    m.cyl(0.115, 0.12, 0.014, x, 0.004, z, 0x1b1c1e, 20);
+    m.cyl(0.1, 0.1, 0.004, x, 0.018, z, armed ? G.yellow : 0x5a5c5e, 20);
+    m.cyl(0.085, 0.085, 0.006, x, 0.02, z, G.concreteDark, 20);
+    // Door rails for the sliding hatch.
+    const rx = x + (x > 0.1 ? -0.08 : 0.08);
+    m.block(0.3, 0.008, 0.014, rx, 0.018, z - 0.07, 0x3a3c3e);
+    m.block(0.3, 0.008, 0.014, rx, 0.018, z + 0.07, 0x3a3c3e);
+    if (armed && i === 0) {
+      // Open: the hatch slid aside, the missile's nose in the owner's colours, the erector gantry over it.
+      m.cyl(0.07, 0.07, 0.004, x, 0.026, z, 0x0c0d0e, 16);
+      m.lathe([[0.05, 0], [0.05, 0.03], [0.038, 0.07], [0.015, 0.1], [0.001, 0.115]], x, 0.02, z, 0xf0f0ee, 12);
+      m.cyl(0.0505, 0.0505, 0.016, x, 0.03, z, 0xe8e8e6, 12, { team: 1 });
+      m.block(0.15, 0.035, 0.15, x + 0.18, 0.02, z, G.concreteDark, { team: 0.3 });
+      m.block(0.152, 0.005, 0.152, x + 0.18, 0.055, z, G.yellow);
+      // Erector / service gantry: two lattice legs and a nation-coloured bridge with its warning lights.
+      for (const dz of [-0.09, 0.09]) m.block(0.022, 0.24, 0.022, x - 0.1, 0.02, z + dz, 0xc9ccce, { team: 0.6 });
+      m.block(0.14, 0.03, 0.22, x - 0.04, 0.24, z, 0xc9ccce, { team: 0.9 });
+      m.sphere(0.012, x - 0.1, 0.28, z - 0.09, 0xff3322, 4, 3, { heat: 0.8 });
+      m.sphere(0.012, x - 0.1, 0.28, z + 0.09, 0xff3322, 4, 3, { heat: 0.8 });
     } else {
-      m.block(0.12, 0.03, 0.12, x, 0.012, z, G.concreteDark, { team: 0.25 });
-      m.block(0.122, 0.004, 0.122, x, 0.042, z, 0xd6ae38);
-      m.block(0.08, 0.002, 0.08, x, 0.046, z, G.concreteDark);
+      // Closed: the massive hatch lid (yellow-topped when armed) with its hinge block.
+      m.block(0.15, 0.04, 0.15, x, 0.02, z, G.concreteDark, { team: armed ? 0.3 : 0 });
+      m.block(0.152, 0.005, 0.152, x, 0.06, z, armed ? G.yellow : 0x8a8880);
+      m.block(0.09, 0.003, 0.09, x, 0.065, z, armed ? 0x1b1c1e : G.concreteDark);
+      if (armed) {
+        // A service mast with its warning light beside every armed cell.
+        m.cyl(0.006, 0.008, 0.16, x - 0.12, 0.02, z + 0.08, 0x8e959c, 4);
+        m.sphere(0.01, x - 0.12, 0.18, z + 0.08, 0xff3322, 4, 3, { heat: 0.8 });
+      }
     }
   }
   // Buried launch control centre (grassed mound with its portal) and one antenna mast per level.
@@ -1078,27 +1096,31 @@ function armyBase(L: number): THREE.BufferGeometry {
 
 function navalYard(L: number): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  m.block(1.0, 0.06, 0.6, 0, -0.06, 0.2, G.concreteDark);
-  m.block(1.0, 0.012, 0.02, 0, -0.012, -0.1, 0x55534d);
+  // The yard's quay runs along the sea front (-Z, the edge placed on the drawn shoreline): every dry dock opens
+  // through its caisson gate straight onto the water, and its basin runs on past the quay edge into the sea.
+  m.block(1.0, 0.06, 0.96, 0, -0.06, 0.02, G.concreteDark);
+  m.block(1.0, 0.014, 0.024, 0, -0.012, -0.46, 0x55534d);
   const docks = L === 1 ? [0] : L === 2 ? [-0.18, 0.18] : [-0.32, 0, 0.32];
   const w = L === 3 ? 0.18 : 0.22;
   const ship = warship();
   for (const dx of docks) {
-    // The basin (flooded, dark), its walls and the caisson gate at the sea end.
-    m.block(w, 0.004, 0.46, dx, 0.0, 0.13, 0x1e3444);
-    m.block(0.025, 0.035, 0.48, dx - w / 2 - 0.012, 0, 0.12, G.concrete);
-    m.block(0.025, 0.035, 0.48, dx + w / 2 + 0.012, 0, 0.12, G.concrete);
+    // The basin (flooded, sea-coloured) from the head wall to beyond the quay edge, its walls, the head wall at the
+    // land end and the caisson gate (swung open, against the wall) at the sea end.
+    m.block(w, 0.004, 0.94, dx, -0.004, -0.1, 0x1e3b52);
+    m.block(0.025, 0.035, 0.84, dx - w / 2 - 0.012, 0, -0.04, G.concrete);
+    m.block(0.025, 0.035, 0.84, dx + w / 2 + 0.012, 0, -0.04, G.concrete);
     m.block(w + 0.05, 0.035, 0.025, dx, 0, 0.37, G.concrete);
-    m.block(w, 0.03, 0.02, dx, 0, -0.1, 0x5a5c5e);
-    // A warship under construction, its bow toward the gate, scaffolding towers along it.
-    m.push().translate(dx, 0.004, 0.13).scale(0.44, 0.44, 0.44);
+    m.block(0.02, 0.03, w * 0.7, dx - w / 2 + 0.01, 0, -0.44 + w * 0.35, 0x5a5c5e);
+    // A warship under construction, its bow toward the open gate, scaffolding towers along it.
+    m.push().translate(dx, 0.0, -0.02).scale(0.44, 0.44, 0.44);
     m.merge(ship);
     m.pop();
-    for (const side of [-1, 1]) for (let k = 0; k < 3; k++) m.block(0.01, 0.06, 0.02, dx + side * (w / 2 - 0.012), 0.004, 0.0 + k * 0.12, 0xd6ae38);
+    for (const side of [-1, 1]) for (let k = 0; k < 3; k++) m.block(0.01, 0.06, 0.02, dx + side * (w / 2 - 0.012), 0.004, -0.14 + k * 0.12, 0xd6ae38);
   }
-  // Level 2+: a finished warship at the fitting-out quay (along the sea front).
+  // Level 2+: a finished warship moored at the fitting-out pier, out on the water beside the docks.
   if (L >= 2) {
-    m.push().translate(0.0, -0.01, -0.14).rotateY(Math.PI / 2).scale(0.5, 0.5, 0.5);
+    m.block(0.04, 0.03, 0.4, 0.49, -0.02, -0.66, G.concrete);
+    m.push().translate(0.57, -0.012, -0.66).scale(0.4, 0.4, 0.4);
     m.merge(ship);
     m.pop();
   }
@@ -1120,7 +1142,7 @@ function navalYard(L: number): THREE.BufferGeometry {
     const x = -0.34 + i * 0.34;
     building(m, 0.26, 0.12, 0.1, x, 0.43, 0, 0x8e959c, G.roof, 0.55, true);
   }
-  m.block(1.0, 0.003, 0.01, 0, 0.0, -0.095, 0xffffff, { glow: 1.0 });
+  m.block(1.0, 0.003, 0.01, 0, 0.0, -0.45, 0xffffff, { glow: 1.0 });
   return m.build();
 }
 

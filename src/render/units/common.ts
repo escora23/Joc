@@ -112,20 +112,25 @@ export const UNIT_LOOK: Record<UnitType, UnitLook> = {
   [UnitType.ArmoredDivision]: { realKm: 0.35, pxK: 0.7, maxKm: 80 },
   [UnitType.FighterSquadron]: { realKm: 0.06, pxK: 0.6, maxKm: 70 },
   [UnitType.Bomber]: { realKm: 0.09, pxK: 1.0, maxKm: 110 },
-  [UnitType.DroneSwarm]: { realKm: 0.05, pxK: 0.42, maxKm: 40 },
+  [UnitType.DroneSwarm]: { realKm: 0.05, pxK: 0.6, maxKm: 40 },
   [UnitType.CruiseMissile]: { realKm: 0.03, pxK: 0.55, maxKm: 50 },
   [UnitType.AtomBomb]: { realKm: 0.04, pxK: 0.7, maxKm: 90 },
   [UnitType.HydrogenBomb]: { realKm: 0.05, pxK: 0.75, maxKm: 100 },
   [UnitType.Mirv]: { realKm: 0.05, pxK: 0.8, maxKm: 110 },
   [UnitType.MirvWarhead]: { realKm: 0.02, pxK: 0.35, maxKm: 44 },
   [UnitType.SamInterceptor]: { realKm: 0.02, pxK: 0.35, maxKm: 34 },
-  [UnitType.Train]: { realKm: 0.12, pxK: 0.45, maxKm: 40 },
+  // A train is a locomotive and three wagons (4 x the drawn size): 0.22 keeps the whole consist at ~40 px at
+  // 300 km and ~55 px at 100 km, smaller than the stations it links.
+  [UnitType.Train]: { realKm: 0.12, pxK: 0.22, maxKm: 12 },
   [UnitType.Shell]: { realKm: 0.01, pxK: 0.15, maxKm: 10 },
 };
 
 /** Minimum on-screen length (px) of one model of a unit type right now. */
 export function unitMinPxOf(type: UnitType): number {
-  return env.unitMinPx * UNIT_LOOK[type].pxK;
+  // A train stays smaller than the stations it links from afar, and grows back to a readable consist up close
+  // (x2 at 8 km: about 160 px for the locomotive and its three wagons).
+  const k = type === UnitType.Train ? 1 + Math.min(1, Math.max(0, (100 - env.altitudeKm) / 92)) : 1;
+  return env.unitMinPx * UNIT_LOOK[type].pxK * k;
 }
 
 /** Drawn length (km) of a unit at distance `distUnits` from the camera. */
@@ -160,12 +165,21 @@ export function airHeightKm(type: UnitType, alt: number, sizeKm: number, rangeKm
       return alt * (60 + sizeKm * 2) + sizeKm * 0.5;
     case UnitType.FighterSquadron:
     case UnitType.Bomber:
-      return alt * (14 + sizeKm * 1.6) + sizeKm * 0.25;
+      return alt * aircraftCeilingKm(14 + sizeKm * 1.6, sizeKm) + sizeKm * 0.25;
     case UnitType.DroneSwarm:
-      return alt * (8 + sizeKm * 1.8) + sizeKm * 0.4;
+      return alt * aircraftCeilingKm(8 + sizeKm * 1.8, sizeKm) + sizeKm * 0.4;
     default:
       return 0;
   }
+}
+
+/**
+ * Cruise height of an aircraft as drawn (km): its strategic height, capped below the camera up close (at most 40 % of
+ * the camera's altitude, never under 1.5 drawn sizes above the ground) so a camera at 8-40 km looks down on the
+ * aircraft instead of flying under it. From 50 km up the cap never binds.
+ */
+function aircraftCeilingKm(strategicKm: number, sizeKm: number): number {
+  return Math.min(strategicKm, Math.max(sizeKm * 1.5, env.altitudeKm * 0.4));
 }
 
 /** Stencil value written by drawn 3D models; route lines (render/fx/trails.ts) are not drawn over them. */

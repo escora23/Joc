@@ -261,6 +261,11 @@ export interface PostApi extends Subsystem {
   fadeTo(opacity: number, durationMs: number): Promise<void>;
   /** Extra exposure multiplier (1 = neutral), e.g. night-side dimming or command-mode grading. */
   setExposure(v: number): void;
+  /**
+   * Lens ghosts in the strategic view (0..1): only a nuclear detonation earns them (fx sets 1 while one burns), so a
+   * conventional fireball never throws ghost discs across a close-up view.
+   */
+  setLensGhosts?(k: number): void;
 }
 
 export interface UnitsApi extends Subsystem {

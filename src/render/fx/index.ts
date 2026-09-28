@@ -11,7 +11,7 @@ import { EARTH_RADIUS_KM, MIN_VISUAL_PROJECTILE_SEC, MIN_VISUAL_SAM_SEC, NUKE_DE
 import { greatCircleKm, latLonToVec3, tileAtXY, tileToLatLon, tileXYToLatLon } from '../../shared/geo';
 import type { NukeWeapon } from '../../shared/protocol';
 import { TerrainClass, TERRAIN_CLASS_MASK, UnitType, type LatLon } from '../../shared/types';
-import { env, refreshEnv } from '../units/common';
+import { airHeightKm, env, refreshEnv } from '../units/common';
 import { NukeSystem, type NukeParams } from './nuke';
 import { PK, ParticleSystem } from './particles';
 import { createSpriteAtlas } from './sprites';
@@ -405,7 +405,9 @@ export function createFx(ctx: GameContext): FxApi {
   ctx.bus.on('structureDestroyed', (e) => {
     tileToLatLon(e.tile, ll);
     surfacePoint(ll.lat, ll.lon, tmp3);
-    const km = visKm(tmp3, 9, 20);
+    // A conventional demolition: a fireball of about 2.5 km (the base's fuel and ammunition going up), enlarged only
+    // as far as a 20 px floor from orbit. Up close it stays a fire on the base, not a disc that hides the view.
+    const km = visKm(tmp3, 2.5, 20);
     explosionAt(tmp3, km, 'large');
     schedule(0.35, 'explosion', tmp3, km * 0.7, 'medium');
     burn(tmp3, km * 0.35, 22);
@@ -455,14 +457,14 @@ export function createFx(ctx: GameContext): FxApi {
       }
       case 'bomb': {
         tilePoint(e.toX, e.toY, tmp3);
-        schedule(0.2 + particles.rand() * 0.9, isWaterXY(e.toX, e.toY) ? 'splash' : 'explosion', tmp3, visKm(tmp3, 2.5, 10), 'medium');
+        schedule(0.2 + particles.rand() * 0.9, isWaterXY(e.toX, e.toY) ? 'splash' : 'explosion', tmp3, visKm(tmp3, 0.9, 10), 'medium');
         break;
       }
       case 'strafe': {
         // Air-to-air bursts between the dogfighting squadrons, at the rendered flight level.
         tilePoint(e.fromX, e.fromY, tA);
         const sizeKm = visKm(tA, 0.06, 20);
-        const h = 14 + sizeKm * 1.6 + sizeKm * 0.25;
+        const h = airHeightKm(UnitType.FighterSquadron, 1, sizeKm, 0);
         tilePoint(e.fromX, e.fromY, tA, h);
         tilePoint(e.toX, e.toY, tB, h);
         const dur = Math.min(0.4, Math.max(0.12, (tA.distanceTo(tB) * EARTH_RADIUS_KM) / 400));
@@ -527,6 +529,9 @@ export function createFx(ctx: GameContext): FxApi {
       particles.setTime(now);
       trails.setTime(now);
       const dt = env.fxDt;
+      // Lens ghosts belong to nuclear light only (a fireball of a conventional strike never earns them).
+      const nukeAge = nukes.latestAge();
+      ctx.post.setLensGhosts?.(nukeAge >= 0 && nukeAge < 25 ? 1 : 0);
 
       // Delayed effects.
       for (let i = pending.length - 1; i >= 0; i--) {

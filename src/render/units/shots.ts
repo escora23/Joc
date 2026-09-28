@@ -8,7 +8,7 @@ import type { CameraState, GameContext } from '../../shared/api';
 import { HUMAN_ID } from '../../shared/constants';
 import { latLonToTile, worldTimeForSubsolarLon } from '../../shared/geo';
 import { registerShot } from '../../shared/shots';
-import { StructureType, UnitState, UnitType } from '../../shared/types';
+import { StructureType, UnitMode, UnitState, UnitType } from '../../shared/types';
 import { isLandTerrain } from '../../shared/terrain';
 
 const at = (lat: number, lon: number) => latLonToTile(lat, lon);
@@ -231,10 +231,17 @@ registerShot('model-gallery', 'units', 'Every unit and structure model (levels 1
   await until(() => [...sim.view.units.values()].some((u) => u.owner === HUMAN_ID && u.type === UnitType.DroneSwarm) && [...sim.view.structures.values()].some((x) => x.owner === enemy && x.type === S.ArmyBase), 30000, wait);
   sim.setSpeed(0);
   const target = [...sim.view.structures.values()].find((x) => x.owner === enemy && x.type === S.ArmyBase);
+  // The drone swarm (slow) leaves first; the bomber (fast) is sent once the drones are out, so both are in cruise
+  // together, far short of the target.
+  const sortie: number[] = [];
   for (const ty of [UnitType.Bomber, UnitType.DroneSwarm]) {
     const u = [...sim.view.units.values()].find((x) => x.owner === HUMAN_ID && x.type === ty);
-    if (u && target) sim.send({ type: 'unitOrder', unitIds: [u.id], order: 'strike', tile: target.tile, targetId: target.id });
+    if (u) sortie.push(u.id);
   }
+  const strike = (id: number): void => {
+    if (target) sim.send({ type: 'unitOrder', unitIds: [id], order: 'strike', tile: target.tile, targetId: target.id });
+  };
+  if (sortie[1] !== undefined) strike(sortie[1]);
   // Ships bound far away (still under way when the frame is paused), a division, a fighter patrol, a train.
   spawn(UnitType.Warship, [39.2, 1.0], [38.9, 2.2]);
   spawn(UnitType.TransportShip, [39.7, 1.2], [37.6, 6.5]);
@@ -242,17 +249,55 @@ registerShot('model-gallery', 'units', 'Every unit and structure model (levels 1
   spawn(UnitType.ArmoredDivision, [39.25, -1.2]);
   spawn(UnitType.FighterSquadron, [39.9, -1.4], [39.9, -1.4]);
   spawn(UnitType.Train, [40.3, -1.2], [39.4, -3.9]);
-  sim.setSpeed(1);
   const want = [UnitType.Warship, UnitType.TransportShip, UnitType.TradeShip, UnitType.ArmoredDivision, UnitType.FighterSquadron, UnitType.Bomber, UnitType.DroneSwarm, UnitType.Train];
+  // Stepped with the sim paused (fastForward runs exact tick counts in the worker, whatever the page's frame rate):
+  // the drone swarm (slow) is sent first; once it cruises at least 60 km out the bomber (fast) is sent, and the
+  // gallery stops on the first tick the bomber also cruises 60 km out, both far short of the 800 km strike. So the
+  // two are frozen in flight, never at the strike (a frozen fireball) nor back on the apron. w4-closeups fails the
+  // run, naming what is missing, if either is not.
+  const outbound = (id: number): boolean => {
+    const u = sim.view.units.get(id);
+    const home = u ? sim.view.structures.get(u.home) : undefined;
+    if (!u || !home || u.state === UnitState.Docked || u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming || u.mode === UnitMode.Returning) return false;
+    const hx = (home.tile % 1600) + 0.5, hy = Math.floor(home.tile / 1600) + 0.5;
+    const km = Math.hypot((u.x - hx) * Math.cos((39.5 * Math.PI) / 180), u.y - hy) * 25;
+    return km >= 60 && u.alt > 0.6;
+  };
+  const present = (): boolean => want.every((ty) => [...sim.view.units.values()].some((u) => u.type === ty && u.owner === HUMAN_ID && u.state !== UnitState.Docked));
   const t0 = sim.view.tick;
-  await until(() => want.every((ty) => [...sim.view.units.values()].some((u) => u.type === ty && u.owner === HUMAN_ID && u.state !== UnitState.Docked)) && sim.view.tick >= t0 + 4, 8000, wait);
   sim.setSpeed(0);
-  await waitFrames(6);
-  for (const ty of want) {
-    const u = [...sim.view.units.values()].find((x) => x.type === ty && x.owner === HUMAN_ID && x.state !== UnitState.Docked);
-    if (u) subjects.push({ name: ['transport', 'trade', 'warship', 'division', 'fighter', 'bomber', 'drone', 'cruise', 'atom', 'hbomb', 'mirv', 'warhead', 'sam', 'train', 'shell'][ty], kind: 'unit', type: ty, level: 1, tile: u.id });
+  let bomberSent = false;
+  for (let k = 0; k < 80; k++) {
+    await sim.fastForward(1);
+    if (!bomberSent && sortie.length === 2 && outbound(sortie[1])) {
+      bomberSent = true;
+      strike(sortie[0]);
+    }
+    if (bomberSent && sortie.every(outbound) && present() && sim.view.tick >= t0 + 4) break;
   }
-  (window as unknown as { __gallery?: unknown }).__gallery = { subjects };
+  await waitFrames(6);
+  const names = ['transport', 'trade', 'warship', 'division', 'fighter', 'bomber', 'drone', 'cruise', 'atom', 'hbomb', 'mirv', 'warhead', 'sam', 'train', 'shell'];
+  const missing: string[] = [];
+  // The train subject: one a factory dispatched along the rail network (its route is the chain of stations, drawn as
+  // the rail line), rather than the staged one, whose straight path follows no drawn line.
+  const stationTiles = new Set([...sim.view.structures.values()].map((x) => x.tile));
+  const railTrain = [...sim.view.units.values()].find((u) => {
+    if (u.type !== UnitType.Train || u.owner !== HUMAN_ID) return false;
+    const r = sim.view.routes.get(u.id);
+    return !!r && r.length >= 2 && [...r].every((t) => stationTiles.has(t));
+  });
+  for (const ty of want) {
+    const u = ty === UnitType.Train && railTrain ? railTrain : ty === UnitType.Bomber || ty === UnitType.DroneSwarm
+      ? sortie.map((id) => sim.view.units.get(id)).find((x) => x && x.type === ty && outbound(x.id))
+      : [...sim.view.units.values()].find((x) => x.type === ty && x.owner === HUMAN_ID && x.state !== UnitState.Docked);
+    if (u) subjects.push({ name: names[ty], kind: 'unit', type: ty, level: 1, tile: u.id });
+    else missing.push(names[ty]);
+  }
+  const diag = sortie.map((id) => {
+    const u = sim.view.units.get(id);
+    return u ? `${names[u.type]} ${id}: state ${u.state} mode ${u.mode} alt ${u.alt.toFixed(2)} at ${u.x.toFixed(1)},${u.y.toFixed(1)}` : `${id} gone`;
+  });
+  (window as unknown as { __gallery?: unknown }).__gallery = { subjects, missing, diag: `paused at tick ${sim.view.tick} (${sim.view.tick - t0} after the sortie), bomber sent ${bomberSent}; ${diag.join('; ')}` };
   const first = subjects[0];
   ctx.cameraRig.setState({ lat: 90 - (Math.floor(first.tile / 1600) + 0.5) * 0.225, lon: ((first.tile % 1600) + 0.5) * 0.225 - 180, altitudeKm: 300, tilt: 0.5, heading: 0 });
   await waitFrames(6);

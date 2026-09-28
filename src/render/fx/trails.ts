@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import { EARTH_RADIUS_KM } from '../../shared/constants';
-import { MODEL_STENCIL, sharedUniforms } from '../units/common';
+import { MODEL_STENCIL, env, sharedUniforms } from '../units/common';
 import { inverseToneGlsl } from '../units/icons';
 
 const RIBBON_ATTRS = ['position', 'aTan', 'aData', 'aCol', 'aAlong', 'aLook'];
@@ -24,6 +24,8 @@ export interface TrailStyle {
   w1: number;
   /** Minimum on-screen half-width in px. */
   minPx: number;
+  /** Maximum on-screen half-width in px (0 = none): contrails stay thin lines up close. */
+  maxPx: number;
   color: [number, number, number];
   alpha: number;
   additive: boolean;
@@ -47,7 +49,7 @@ export interface TrailStyle {
 }
 
 const S = (o: Partial<TrailStyle> & Pick<TrailStyle, 'life' | 'w0' | 'w1'>): TrailStyle => ({
-  minPx: 1.5, color: [1, 1, 1], alpha: 1, additive: false, flat: false, minSeg: 2, maxPts: 32, fade: 1.5, noise: 0, releaseFade: 0,
+  minPx: 1.5, maxPx: 0, color: [1, 1, 1], alpha: 1, additive: false, flat: false, minSeg: 2, maxPts: 32, fade: 1.5, noise: 0, releaseFade: 0,
   hold: 0, look: 0, keepAll: false, ...o,
 });
 
@@ -57,7 +59,8 @@ const ROUTE = { life: 1e9, w0: 0.05, w1: 0.05, fade: 0, releaseFade: 5, hold: 15
 export const TRAIL_STYLES = {
   // Thin streaks that spread a little (0.03 -> 0.25 km): a wide 2.6 km fan behind each enlarged jet read as a white
   // cone at 8-100 km, wider than the aircraft themselves.
-  contrail: S({ life: 7, w0: 0.03, w1: 0.25, minPx: 1.1, color: [0.95, 0.96, 1.0], alpha: 0.5, minSeg: 1.5, maxPts: 40, fade: 1.4, noise: 0.25 }),
+  // Up close the half-width is capped at 2.2 px, so each streak tapers from a hairline at the engine to a thin line.
+  contrail: S({ life: 7, w0: 0.03, w1: 0.25, minPx: 0.9, maxPx: 2.2, color: [0.95, 0.96, 1.0], alpha: 0.5, minSeg: 1.5, maxPts: 40, fade: 1.4, noise: 0.25 }),
   smoke: S({ life: 10, w0: 0.15, w1: 7, minPx: 1.8, color: [0.78, 0.77, 0.75], alpha: 0.65, minSeg: 3, maxPts: 48, fade: 1.2, noise: 0.6 }),
   samSmoke: S({ life: 5, w0: 0.1, w1: 3.5, minPx: 1.6, color: [0.92, 0.92, 0.93], alpha: 0.75, minSeg: 1.5, maxPts: 36, fade: 1.3, noise: 0.5 }),
   wake: S({ life: 7, w0: 0.12, w1: 2.6, minPx: 1.5, color: [0.75, 0.82, 0.9], alpha: 0.9, additive: true, flat: true, minSeg: 0.6, maxPts: 36, fade: 1.1 }),
@@ -593,7 +596,13 @@ export class TrailSystem {
         const lenK = tr.maxLen > 0 ? Math.min(1, dist[k] / tr.maxLen) : 0;
         const age = st.look > 0 ? 0 : Math.min(1, Math.max(lenK, (now - tr.times[i]) / st.life));
         const wKm = st.w0 + (st.w1 - st.w0) * Math.sqrt(age);
-        const w = wKm / EARTH_RADIUS_KM;
+        let w = wKm / EARTH_RADIUS_KM;
+        if (st.maxPx > 0) {
+          // Taper within the px cap too: a hairline (0.35 of the cap) at the emitter widening to the cap with age.
+          const dx = px - env.camPos.x, dy = py - env.camPos.y, dz = pz - env.camPos.z;
+          const cap = st.maxPx * (0.35 + 0.65 * Math.sqrt(age)) * env.pixelK * Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (w > cap) w = cap;
+        }
         let a = st.alpha * tr.opacity * rf * Math.pow(1 - age, st.fade);
         if (st.look === 0) {
           // Fade in the very first segment at the emitter so the ribbon does not start with a hard cap.

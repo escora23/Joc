@@ -43,6 +43,11 @@ await page.goto(`${base}?shot=model-gallery&hud=0${args.params || ''}`, { waitUn
 await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 600000, polling: 500 });
 log('gallery staged');
 const subjects = await page.evaluate(() => window.__gallery?.subjects ?? []);
+// Every unit type must be staged (the bomber and the drone swarm frozen in cruise): a missing one fails the run.
+const WANT_UNITS = ['warship', 'transport', 'trade', 'division', 'fighter', 'bomber', 'drone', 'train'];
+const missing = WANT_UNITS.filter((n) => !subjects.some((x) => x.name === n));
+const gone = [];
+if (missing.length) log(`FAIL: the gallery staged no ${missing.join(', ')} (${await page.evaluate(() => window.__gallery?.diag ?? '')})`);
 const autoTilt = (alt) => {
   const t = Math.min(1, Math.max(0, (Math.log10(3000) - Math.log10(alt)) / (Math.log10(3000) - Math.log10(2))));
   return 1.22 * Math.pow(t, 1.15);
@@ -75,16 +80,27 @@ async function capture(s, alt) {
           lift = Math.max(0, (tr.pos.length() - ctx.globe.surfaceRadiusAt(lat, lon)) * 6371);
         }
       }
-      const air = lift > 0.5;
+      const air = s.kind === 'unit' && [4, 5, 6].includes(s.type);
+      const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
       if (air) {
-        // Aircraft fly `lift` km above the ground: aim the rig at the ground point behind them on the view axis (the
-        // rig looks at the surface), so the aircraft sits at the centre, `alt` km from the camera, seen at 3/4.
-        const tl = Math.min(tilt, 0.7), shift = lift * Math.tan(tl);
+        // Aircraft fly `lift` km above the ground, and the drawn height depends on the camera (capped under it up
+        // close): put the camera at `alt` first, read the height the aircraft is drawn at from there, then aim the rig
+        // at the ground point behind the aircraft on the view axis (the rig looks at the surface) so it sits at the
+        // centre of the frame, seen at 3/4 from above, the camera still `alt` km above the ground.
+        const tl = Math.min(tilt, 0.7);
+        ctx.cameraRig.setState({ lat, lon, altitudeKm: alt, tilt: tl, heading });
+        for (let i = 0; i < 3; i++) await frame();
+        const u = v.units.get(s.tile), tr = u && window.__units.tracks.get(u.id);
+        if (tr && tr.hasPos) {
+          const p = tr.pos.clone().normalize();
+          const la = Math.asin(p.y) * 180 / Math.PI, lo = Math.atan2(-p.z, p.x) * 180 / Math.PI;
+          lift = Math.max(0, (tr.pos.length() - ctx.globe.surfaceRadiusAt(la, lo)) * 6371);
+        }
+        const shift = lift * Math.tan(tl);
         lat += (shift * Math.cos(heading)) / 111.2;
         lon += (shift * Math.sin(heading)) / (111.2 * Math.cos((lat * Math.PI) / 180));
-        ctx.cameraRig.setState({ lat, lon, altitudeKm: alt + lift / Math.cos(tl), tilt: tl, heading });
+        ctx.cameraRig.setState({ lat, lon, altitudeKm: alt, tilt: tl, heading });
       } else ctx.cameraRig.setState({ lat, lon, altitudeKm: alt, tilt, heading });
-      const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
       for (let i = 0; i < 3; i++) await frame();
       const size = window.__units.sizeOf?.(s.kind, s.tile) ?? null;
       return { lat, lon, lift, size, stats: { unitMinPx: window.__units.stats().lod.unitMinPx, structMinPxScale: window.__units.stats().lod.structMinPxScale } };
@@ -117,15 +133,16 @@ if (args.levels) {
     const frames = [];
     for (const alt of ALTS) {
       const buf = await capture(s, alt);
-      if (!buf) { log(`${s.name}: gone`); break; }
+      if (!buf) { log(`FAIL ${s.name}: gone`); gone.push(s.name); break; }
       frames.push({ alt, buf });
     }
     if (frames.length) writeSheet(path.join(out, `${s.name}.png`), frames);
   }
 }
-fs.writeFileSync(path.join(out, 'closeups.json'), JSON.stringify({ report, errors }, null, 1));
-log(`done: ${report.length} frames, ${errors.length} page errors`);
+fs.writeFileSync(path.join(out, 'closeups.json'), JSON.stringify({ report, errors, missing, gone }, null, 1));
+log(`done: ${report.length} frames, ${errors.length} page errors${missing.length || gone.length ? `, FAIL: missing ${missing.join(', ') || '-'}, gone ${gone.join(', ') || '-'}` : ', every unit type staged'}`);
 await browser.close();
+if (missing.length || gone.length || errors.length) process.exit(1);
 
 /** 2 x 2 (or 1 x n) contact sheet of the frames, each downscaled 2x (box filter), with the altitude burnt in. */
 function writeSheet(file, frames) {
