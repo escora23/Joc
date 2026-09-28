@@ -294,7 +294,7 @@ export class CommandSystem {
     u.x = nx;
     u.y = ny;
     if (Number.isFinite(cmd.heading)) u.heading = cmd.heading;
-    if (UNIT_DEFS[u.type].airborne && Number.isFinite(cmd.alt ?? NaN)) u.alt = Math.max(0, cmd.alt ?? 0);
+    if (UNIT_DEFS[u.type].airborne && Number.isFinite(cmd.alt ?? NaN)) u.alt = Math.max(0, Math.min(1, cmd.alt ?? 0));
     c.x = nx;
     c.y = ny;
     c.sec = this.sec;

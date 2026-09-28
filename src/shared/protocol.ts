@@ -94,7 +94,7 @@ export type PlayerCommand =
       unitLost: boolean;
     }
   // --- v2 (W5): command mode sync (§9.8) ---
-  /** Where the controlled unit is now (continuous tile coords, compass heading; alt in km for aircraft). */
+  /** Where the controlled unit is now (continuous tile coords, compass heading; alt = 0..1 of the flight ceiling for aircraft). */
   | { type: 'controlledMove'; unitId: number; x: number; y: number; heading: number; alt?: number }
   /**
    * Losses inflicted in command mode since the last report: `troops` of `victim` (soldiers × 25), and hits on real

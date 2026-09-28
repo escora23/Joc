@@ -191,19 +191,11 @@ export class CommandHud {
     this.over.className = 'fu-cmd-over';
     this.over.innerHTML = '';
     this.banner.className = 'fu-cmd-banner';
-    this.obj.classList.remove('done');
-    this.objT.textContent = t('command.objective.short');
-    this.objD.textContent = t('command.objective', { n: info.objective });
-    this.objN.textContent = `0 / ${info.objective}`;
-    this.objBar.style.width = '0%';
-    this.mission.innerHTML = `<div class="k">${t('command.intro.op')} · ${esc(info.opName)}</div>
-      <div class="v">${t(`command.vehicle.${info.kind}`)}</div>
-      <div class="vs"><span class="sw" style="background:${info.friendlyColor};color:${info.friendlyColor}"></span>${esc(info.friendlyName)}
-      <span style="opacity:.5">vs</span><span class="sw" style="background:${info.enemyColor};color:${info.enemyColor}"></span>${esc(info.enemyName)}</div>`;
-    this.mission.appendChild(this.clock);
+    // v2: no objective counter and no operation name (the strategic panel is hud/overlay.ts).
+    this.obj.innerHTML = '';
+    this.mission.innerHTML = '';
     this.exitBtn.innerHTML = `${t('command.exit')}<kbd>ESC</kbd>`;
-    this.help.innerHTML = t(`command.help.${info.kind}`).replace(/([A-Z0-9/]{1,4}|ESC|WASD|Clic der\.|Right-click|Click|Clic|Ratón|Mouse|Espacio|Space)(?=\s)/g, '<b>$1</b>');
-    this.help.style.opacity = '1';
+    this.help.innerHTML = '';
     // Status panel
     const hpLbl = info.kind === 'jet' ? 'command.hp.jet' : info.kind === 'ship' ? 'command.hp.ship' : 'command.hp';
     const icon = ICONS[info.kind];
@@ -287,16 +279,6 @@ export class CommandHud {
     }
   }
 
-  setObjective(done: number, total: number, complete: boolean): void {
-    this.objN.textContent = `${Math.min(done, total)} / ${total}`;
-    this.objBar.style.width = `${Math.min(100, (done / Math.max(1, total)) * 100)}%`;
-    if (complete && !this.obj.classList.contains('done')) {
-      this.obj.classList.add('done');
-      this.objT.textContent = t('command.objective.done');
-      this.showBanner(t('command.objective.done'), t('command.objective.doneSub'), 6);
-    }
-  }
-
   private bannerT = 0;
   showBanner(big: string, sub: string, seconds: number): void {
     this.banner.innerHTML = `<div class="big">${esc(big)}</div><div class="sub">${esc(sub)}</div>`;
@@ -304,45 +286,10 @@ export class CommandHud {
     this.bannerT = this.time + seconds;
   }
 
-  showIntro(info: MissionInfo, on: boolean): void {
-    if (on) {
-      this.intro.innerHTML = `<div class="op">${t('command.intro.op')}</div><div class="name">${esc(info.opName)}</div><div class="line"></div>
-        <div class="row"><b>${t(`command.kind.${info.kind}`)}</b> · ${esc(t('command.intro.front', { enemy: info.enemyName }))}</div>
-        <div class="row mono">${esc(info.coords)} · ${esc(t('command.intro.local', { time: info.localTime }))}</div>`;
-    }
-    this.intro.classList.toggle('show', on);
-  }
-
   showDestroyed(): void {
     this.over.className = 'fu-cmd-over dead';
     this.over.innerHTML = `<div class="card"><div class="hdr">${t('command.debrief.status')}</div><div class="ttl">${t('command.destroyed')}</div>
       <div class="sum" style="color:#ffb0a8">${t('command.destroyedSub')}</div></div>`;
-    this.root.classList.add('fu-cmd-report');
-    requestAnimationFrame(() => this.over.classList.add('show'));
-  }
-
-  showDebrief(d: DebriefData, seconds: number): void {
-    const sum = d.kills > 0
-      ? t('command.debrief.summary', { n: d.kills, troops: formatNumber(d.troops) })
-      : t('command.debrief.none');
-    const mins = Math.floor(d.durationSec / 60), secs = Math.floor(d.durationSec % 60);
-    const kinds = d.byKind.map(([k, n], i) => `<div class="r" style="animation-delay:${0.25 + i * 0.07}s"><span>${t(`command.type.${k}`)}</span><b>× ${n}</b></div>`).join('');
-    this.over.className = `fu-cmd-over${d.lost ? ' dead' : ''}`;
-    this.over.innerHTML = `<div class="card fu-cmd-panel">
-      <div class="hdr">${t('command.debrief')}</div>
-      <div class="ttl">${d.lost ? t('command.destroyed') : t(`command.vehicle.${this.kind}`)}</div>
-      <div class="rows">
-        <div class="r"><span>${t('command.debrief.kills')}</span><b>${d.kills}</b></div>
-        ${kinds}
-        <div class="r"><span>${t('command.debrief.troops')}</span><b class="red">${d.troops > 0 ? '−' : ''}${formatNumber(d.troops)}</b></div>
-        ${d.strategic > 0 ? `<div class="r"><span>${t('command.debrief.strategic', { n: '' }).replace(/[:：]\s*$/, '')}</span><b class="red">${d.strategic}</b></div>` : ''}
-        <div class="r"><span>${t('command.debrief.acc')}</span><b>${Math.round(d.accuracy * 100)}%</b></div>
-        <div class="r"><span>${t('command.debrief.time')}</span><b>${mins}:${String(secs).padStart(2, '0')}</b></div>
-        <div class="r"><span>${t('command.debrief.status')}</span><b class="${d.lost ? 'red' : 'green'}">${d.lost ? t('command.debrief.lost') : t('command.debrief.intact')}</b></div>
-      </div>
-      <div class="sum">${esc(sum)}</div>
-      <div class="ret">${t('command.debrief.return')}<i style="--dur:${seconds}s"></i></div>
-    </div>`;
     this.root.classList.add('fu-cmd-report');
     requestAnimationFrame(() => this.over.classList.add('show'));
   }
@@ -410,7 +357,6 @@ export class CommandHud {
     const warns: string[] = [];
     if (s.missileWarning) warns.push(`<div>${t('command.missileWarning')}</div>`);
     if (s.pullUp) warns.push(`<div>${t('command.pullUp')}</div>`);
-    if (s.boundary) warns.push(`<div class="amber">${t('command.boundary')}</div>`);
     if (s.stall && this.kind === 'jet') warns.push(`<div class="amber">${t('command.stall')}</div>`);
     const html = warns.join('');
     if (html !== this.lastWarn) {
@@ -504,9 +450,9 @@ export class CommandHud {
       if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
       if (e.team === 1) {
         if (inf) {
-          // Small diamond; AT teams (a real threat to armor) are brighter and tagged.
+          // Small diamond; AT teams (a real threat to armor) are brighter and tagged. Amber: a nation at peace.
           const sz = e.kind === 'at' ? 3.6 : 2.6;
-          g.fillStyle = e.kind === 'at' ? 'rgba(255,90,60,0.95)' : 'rgba(255,80,60,0.75)';
+          g.fillStyle = e.neutral ? 'rgba(255,196,74,0.85)' : e.kind === 'at' ? 'rgba(255,90,60,0.95)' : 'rgba(255,80,60,0.75)';
           g.beginPath();
           g.moveTo(x, y - sz);
           g.lineTo(x + sz, y);
@@ -530,7 +476,8 @@ export class CommandHud {
           }
         }
         const sz = d < 250 ? 7 : d < 700 ? 6 : 5;
-        g.fillStyle = 'rgba(255,70,55,0.95)';
+        // A nation at peace (quick-reaction force, border guards): amber, never a target.
+        g.fillStyle = e.neutral ? 'rgba(255,196,74,0.95)' : 'rgba(255,70,55,0.95)';
         g.strokeStyle = 'rgba(40,0,0,0.8)';
         g.lineWidth = 1.5;
         g.beginPath();

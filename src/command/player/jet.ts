@@ -52,6 +52,11 @@ export class JetController implements Controller {
     this.updateAimDir();
   }
 
+  rebase(dx: number, dz: number): void {
+    this.camPos.x -= dx;
+    this.camPos.z -= dz;
+  }
+
   private updateAimDir(): void {
     const cp = Math.cos(this.aimPitch);
     this.aimDir.set(-Math.sin(this.aimYaw) * cp, Math.sin(this.aimPitch), -Math.cos(this.aimYaw) * cp);
@@ -137,7 +142,7 @@ export class JetController implements Controller {
     const drag = 0.000235 * spd * spd;
     const turnBleed = Math.abs(this.rates.x) * spd * 0.055;
     e.speed += (thrust - drag - turnBleed - 9.81 * FWD.y * 0.9) * dt;
-    e.speed = Math.max(95, Math.min(560, e.speed));
+    e.speed = Math.max(95, Math.min(Math.max(130, Math.min(560, c.speedCap)), e.speed));
     this.gl = Math.min(9.6, 1 + (Math.abs(this.rates.x) * spd / 9.81) * 0.42);
     // Velocity lags the nose (weight).
     T1.copy(FWD).multiplyScalar(e.speed);
@@ -163,9 +168,7 @@ export class JetController implements Controller {
     }
     this.hud.pullUp = pull;
     this.hud.stall = e.speed < 120;
-    const hd = Math.hypot(e.pos.x, e.pos.z);
-    this.hud.boundary = hd > c.radius * 0.9;
-    this.hud.boundaryDir = Math.atan2(-e.pos.x, -e.pos.z);
+    this.hud.boundary = false;
     if (e.pos.y > 12000) e.vel.y = Math.min(e.vel.y, 0);
     // Afterburner flame
     if (e.rig?.flame) {

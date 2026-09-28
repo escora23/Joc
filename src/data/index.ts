@@ -166,3 +166,21 @@ export function getLocalHeightfield(lat: number, lon: number, sizeKm: number, re
   if (!current) throw new Error('[data] getLocalHeightfield before loadWorldData');
   return buildLocalHeightfield(current, getWorldAux(current), lat, lon, sizeKm, resolution, opts);
 }
+
+/**
+ * v2 (W5, §14.9): Black Marble city-light luminance 0..1 at a point (bilinear on the reduced night texture): how
+ * densely people live there. Command mode seeds its villages with it. 0 before loading.
+ */
+export function sampleNightLights(lat: number, lon: number): number {
+  const aux = getWorldAux(current);
+  const L = aux?.lights;
+  if (!L) return 0;
+  const fx = ((lon + 180) / 360) * L.width - 0.5, fy = ((90 - lat) / 180) * L.height - 0.5;
+  const x0 = Math.floor(fx), y0 = Math.max(0, Math.min(L.height - 1, Math.floor(fy)));
+  const tx = fx - x0, ty = fy - Math.floor(fy);
+  const y1 = Math.min(L.height - 1, y0 + 1);
+  const xa = ((x0 % L.width) + L.width) % L.width, xb = (xa + 1) % L.width;
+  const d = L.data;
+  const v = (d[y0 * L.width + xa] * (1 - tx) + d[y0 * L.width + xb] * tx) * (1 - ty) + (d[y1 * L.width + xa] * (1 - tx) + d[y1 * L.width + xb] * tx) * ty;
+  return v / 255;
+}

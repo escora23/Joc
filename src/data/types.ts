@@ -197,4 +197,11 @@ export interface LocalHeightfieldOptions {
   verticalScale?: number;
   /** Reuse these output arrays when they have the right size (avoid allocations for repeated calls). */
   reuse?: LocalHeightfield;
+  /**
+   * Latitude whose cosine scales longitude across the patch (default: the patch's own centre). Patches of one local
+   * map share it so that neighbours meet exactly (command mode's streamed chunks).
+   */
+  refLat?: number;
+  /** Interpolate the relief ruggedness per sample (no per-patch step): neighbouring patches match on shared edges. */
+  seamless?: boolean;
 }

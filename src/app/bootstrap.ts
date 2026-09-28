@@ -10,7 +10,8 @@ import {
   DEFAULT_START_WORLD_TIME, HUMAN_ID, MAP_H, MAP_W, MENU_WORLD_TIME_SCALE, OBSERVATION_ENTER_KM, OBSERVATION_LEAVE_KM, TICK_MS, UNIT_DEFS,
 } from '../shared/constants';
 import { EventBus, type GameEvents } from '../shared/events';
-import { latLonToTile, tileAtXY, tileToLatLon, tileX, tileY, worldTimeForSubsolarLon, wrapX } from '../shared/geo';
+import { latLonToTile, tileAtXY, tileToLatLon, tileX, tileXYToLatLon, tileY, worldTimeForSubsolarLon, wrapX } from '../shared/geo';
+import { deriveLocalForces } from '../shared/localForces';
 import { setLanguage } from '../shared/i18n';
 import { qualityProfile, type QualityProfile } from '../shared/quality';
 import { hashString } from '../shared/rng';
@@ -134,8 +135,17 @@ export async function bootstrap(): Promise<void> {
     },
     async enterCommandMode(unitId) {
       if (state !== 'playing' || ctx.command.active) return;
+      const u0 = ctx.sim.view.units.get(unitId);
+      if (!u0 || u0.owner !== HUMAN_ID || !UNIT_DEFS[u0.type].command || !(u0.hp > 0)) {
+        bus.emit('uiSound', { kind: 'error' });
+        return;
+      }
+      // v2 (§9.2): the unit stops where it is in the sim first; the local scene is then built exactly there.
+      ctx.sim.send({ type: 'unitControl', unitId, controlled: true });
+      await waitSimUpdate(600);
       const params = commandParams(unitId);
       if (!params) {
+        ctx.sim.send({ type: 'unitControl', unitId, controlled: false });
         bus.emit('uiSound', { kind: 'error' });
         return;
       }
@@ -143,7 +153,6 @@ export async function bootstrap(): Promise<void> {
       input.setEnabled(false);
       await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
       await ctx.post.fadeTo(1, isShot ? 1 : 350);
-      ctx.sim.send({ type: 'unitControl', unitId, controlled: true });
       await ctx.command.enter(params);
       setState('command');
       bus.emit('commandEnter', { params });
@@ -152,17 +161,19 @@ export async function bootstrap(): Promise<void> {
     async exitCommandMode() {
       if (state !== 'command') return;
       await ctx.post.fadeTo(1, 300);
+      // The speed chosen before command mode comes back (tactical time was only a clock mode).
+      ctx.sim.setClock('strategic');
       const result = ctx.command.exit();
-      ctx.sim.send({
-        type: 'commandResult', unitId: result.unitId, kind: result.kind, enemy: result.enemy, tile: result.tile,
-        troopsKilled: result.troopsKilled, unitsDestroyed: result.unitsDestroyed,
-        structuresDestroyed: result.structuresDestroyed, unitLost: result.unitLost,
-      });
+      // v2 (§9.8): kills, damage, losses and the position were synced while playing; release the unit (inside
+      // foreign land at peace the sim first walks it back home).
       if (!result.unitLost) ctx.sim.send({ type: 'unitControl', unitId: result.unitId, controlled: false });
       setState('playing');
       bus.emit('commandExit', { result });
       await ctx.post.fadeTo(0, 400);
-      await ctx.cameraRig.flyTo({ altitudeKm: 2500, tilt: 0.3 }, 2000);
+      // Climb to 2,500 km above the unit's new position.
+      const u = ctx.sim.view.units.get(result.unitId);
+      const at = u ? tileXYToLatLon(u.x, u.y) : null;
+      await ctx.cameraRig.flyTo(at ? { lat: at.lat, lon: at.lon, altitudeKm: 2500, tilt: 0.3 } : { altitudeKm: 2500, tilt: 0.3 }, 2000);
       ctx.cameraRig.setMode('game');
       input.setEnabled(true);
     },
@@ -286,47 +297,53 @@ export async function bootstrap(): Promise<void> {
     return tile;
   }
 
+  /**
+   * v2 (W5, §9.2): the entry into command mode at the unit's real, interpolated position and heading. `enemy` is only
+   * the main foreign nation of the place (0 is the normal case at peace in your own land): everything the local scene
+   * shows comes from the simulation there (src/shared/localForces.ts), never from this.
+   */
+  /** Resolves on the next sim update (or after `ms`). */
+  function waitSimUpdate(ms: number): Promise<void> {
+    const t0 = ctx.sim.view.tick;
+    const w0 = performance.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (ctx.sim.view.tick !== t0 || performance.now() - w0 > ms) resolve();
+        else setTimeout(check, 30);
+      };
+      setTimeout(check, 120);
+    });
+  }
+
   function commandParams(unitId: number): CommandEnterParams | null {
     const view = ctx.sim.view;
     const u = view.units.get(unitId);
     if (!u || u.owner !== HUMAN_ID) return null;
     const kind = UNIT_DEFS[u.type].command;
-    if (!kind) return null;
-    const tile = tileAtXY(u.x, u.y);
-    // Enemy: the dominant non-allied foreign owner around the unit (40 tiles, widening to 160 if the unit is deep
-    // inside our own land), else the strongest hostile nation in the world — never a skirmish against nobody.
-    const allies = view.human?.allies ?? [];
-    const cx = tileX(tile), cy = tileY(tile);
-    let enemy = 0;
-    for (const radius of [40, 90, 160]) {
-      const counts = new Map<number, number>();
-      const step = radius > 40 ? 4 : 2;
-      for (let dy = -radius; dy <= radius; dy += step) {
-        for (let dx = -radius; dx <= radius; dx += step) {
-          const y = cy + dy;
-          if (y < 0 || y >= MAP_H || dx * dx + dy * dy > radius * radius) continue;
-          const o = view.owner[y * MAP_W + wrapX(cx + dx)];
-          if (o && o !== HUMAN_ID && !allies.includes(o)) counts.set(o, (counts.get(o) ?? 0) + 1 / (1 + Math.hypot(dx, dy) * 0.05));
-        }
-      }
-      let best = 0;
-      for (const [o, c] of counts) if (c > best) { best = c; enemy = o; }
-      if (enemy) break;
-    }
-    if (!enemy) {
-      let best = 0;
-      for (const p of view.playerList) {
-        if (p.alive && p.id !== HUMAN_ID && !allies.includes(p.id) && p.troops > best) { best = p.troops; enemy = p.id; }
-      }
-    }
-    const ll = tileToLatLon(tile);
+    if (!kind || !(u.hp > 0)) return null;
+    // The unit is under control (frozen in the sim): its latest position is where it really is.
+    const x = u.x, y = u.y;
+    const ll = tileXYToLatLon(x, y);
+    const tile = tileAtXY(x, y);
+    const lf = deriveLocalForces(view, x, y, kind === 'jet' ? 150 : 30, HUMAN_ID);
+    const fr = lf.fronts[0];
+    const frontFoe = fr && fr.nearest.distKm < 30 ? (fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0) : 0;
+    const here = lf.point.owner !== HUMAN_ID ? lf.point.owner || lf.point.coastOwner : 0;
+    const enemy = frontFoe || here || 0;
+    const context: CommandEnterParams['context'] = kind === 'jet' ? 'air' : kind === 'ship' ? 'sea'
+      : frontFoe ? 'front' : lf.point.relation === 'war' ? 'enemyLand' : lf.owners.some((o) => o.owner !== HUMAN_ID && o.owner > 0) ? 'border' : 'peace';
     const me = view.human!;
-    const foe = view.players[enemy];
+    const foe = enemy ? view.players[enemy] : undefined;
+    const integrity = Math.max(0.01, Math.min(1, u.hp));
+    const formation = kind === 'tank' ? Math.max(1, Math.ceil(integrity * 4 - 1e-6)) : kind === 'jet' ? Math.max(1, Math.ceil(integrity * 3 - 1e-6)) : 1;
+    // Entered from a visible ground battle: the battle layer hands over what it was showing (§9.6).
+    const handoff = ctx.battle.active ? ctx.battle.handoff?.() ?? undefined : undefined;
     return {
       unitId, unitType: u.type, kind, lat: ll.lat, lon: ll.lon, tile, owner: HUMAN_ID, enemy,
-      friendlyColor: me.color, enemyColor: foe?.color ?? 0xcc3333, friendlyTroops: me.troops,
-      enemyTroops: foe?.troops ?? 0, seed: hashString(`${view.config?.seed ?? 0}:${unitId}:${view.tick}`),
-      worldTimeSec: frame.worldTime, difficulty: view.config?.difficulty ?? 'normal',
+      friendlyColor: me.color, enemyColor: foe?.color ?? 0xcc3333, friendlyTroops: me.troops, enemyTroops: foe?.troops ?? 0,
+      seed: hashString(`${view.config?.seed ?? 0}:${unitId}:${view.tick}`), worldTimeSec: frame.worldTime,
+      difficulty: view.config?.difficulty ?? 'normal', heading: u.heading, x, y, integrity, formation, alt: u.alt, context,
+      ...(handoff ? { battleHandoff: handoff } : {}),
     };
   }
 

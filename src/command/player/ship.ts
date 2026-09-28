@@ -86,7 +86,7 @@ export class ShipController implements Controller {
       else this.rudder += -this.rudder * Math.min(1, dt * 0.5);
     }
     // --- Hull ------------------------------------------------------------------------------------
-    const target = SPEEDS[this.telegraph + 1];
+    const target = Math.max(-c.speedCap, Math.min(c.speedCap, SPEEDS[this.telegraph + 1]));
     const acc = target > e.speed ? 0.55 : 0.8;
     e.speed += Math.max(-acc * dt, Math.min(acc * dt, target - e.speed));
     const auth = Math.max(0.12, Math.min(1.2, Math.abs(e.speed) / 12));
@@ -110,13 +110,7 @@ export class ShipController implements Controller {
       e.pos.z = nz;
     }
     this.grounded = Math.max(0, this.grounded - dt);
-    const hd = Math.hypot(e.pos.x, e.pos.z);
-    this.hud.boundary = hd > c.radius * 0.85;
-    this.hud.boundaryDir = Math.atan2(-e.pos.x, -e.pos.z);
-    if (hd > c.radius) {
-      e.pos.x *= c.radius / hd;
-      e.pos.z *= c.radius / hd;
-    }
+    this.hud.boundary = false;
     e.vel.copy(DIR).multiplyScalar(e.speed);
     const t = c.world.time;
     const heel = -this.rudder * Math.min(1, Math.abs(e.speed) / 14) * 0.07;

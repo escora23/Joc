@@ -85,8 +85,11 @@ export interface ControllerCtx {
   /** Houses / obstacles (x, z, r) for ground collision. */
   obstacles: { x: number; z: number; r: number }[];
   shake(amount: number): void;
-  /** Combat area radius (m). */
-  radius: number;
+  /**
+   * Top speed allowed right now (m/s): Infinity at ×1 (full tactical manoeuvre); the unit's strategic speed in travel
+   * time (§9.3: division 40 km/h «marcha en columna», squadron 450 km/h, warship 55 km/h).
+   */
+  speedCap: number;
   /** Viewport size in CSS px (for projecting HUD points). */
   viewW: number;
   viewH: number;
@@ -102,6 +105,8 @@ export interface Controller {
   /** Autopilot for staged shots / intro: aim at a target and optionally fire. */
   aimAt(p: THREE.Vector3): void;
   fire(): void;
+  /** Floating origin moved by (dx, dz): shift any world position the controller keeps. */
+  rebase?(dx: number, dz: number): void;
 }
 
 const OC = new THREE.Vector3();

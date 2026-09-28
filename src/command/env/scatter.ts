@@ -1,10 +1,9 @@
 // FRONT ULTRA — command mode: scenery scattering (owner: command). Conifers / broadleaf trees where the data
-// layer says forest, houses where it says urban, boulders on rock and scree. Instanced (one draw call per kind),
-// deterministic per battlefield seed, density scaled by quality.commandDetail.
+// layer says forest, houses where it says urban (the Black Marble night lights: villages and suburbs), boulders on
+// rock and scree. Instanced (one draw call per kind), anchored to the world (see stream()), density scaled by
+// quality.commandDetail.
 
 import * as THREE from 'three';
-import type { LocalHeightfield } from '../../data/types';
-import type { Rng } from '../../shared/rng';
 import { broadleafGeometry, coniferGeometry, houseGeometry, rockGeometry, sandbagGeometry } from '../models/props';
 import type { Ground } from './ground';
 
@@ -69,105 +68,160 @@ export class Scatter {
     this.houseList.length = 0;
   }
 
-  /**
-   * Scatter props over the near patch. `radius` limits the area (m), `clear` lists keep-out discs (x, z, r),
-   * `density` 0..1 (quality). `treeScale` > 1 makes forests readable from the air.
-   */
-  build(ground: Ground, hf: LocalHeightfield, rng: Rng, radius: number, density: number, clear: number[], treeScale = 1): void {
+  // ---------------------------------------------------------------------------------------------
+  // Streamed layout (command v2): props on a world-anchored jittered grid of cells around the vehicle, decided by a
+  // hash of the absolute cell (the same place always gets the same trees, whatever path led there), from the splat of
+  // the streamed near chunks. Built in slices under a per-frame budget into staging arrays, then swapped in at once.
+  // ---------------------------------------------------------------------------------------------
+  private job: {
+    cx: number; cz: number; offX: number; offZ: number; row: number; rows: number; x0: number; z0: number;
+    cell: number; radius: number; density: number; treeScale: number;
+    mats: [Float32Array, Float32Array, Float32Array, Float32Array]; cols: [Float32Array, Float32Array, Float32Array, Float32Array];
+    counts: [number, number, number, number]; houses: { x: number; z: number; r: number; y: number; h: number }[];
+  } | null = null;
+  private lastCx = 1e12;
+  private lastCz = 1e12;
+  private readonly sampleOut = { splat: new Float32Array(8), tint: [0, 0, 0] as [number, number, number] };
+  private readonly caps = [MAX_TREES, MAX_TREES, MAX_HOUSES, MAX_ROCKS];
+
+  /** Forget the layout (new session). */
+  resetStream(): void {
+    this.job = null;
+    this.lastCx = this.lastCz = 1e12;
     this.clear();
-    const size = hf.sizeKm * 1000;
-    const res = hf.resolution;
-    const area = Math.PI * radius * radius;
-    const tries = Math.min(90000, Math.floor((area / 900) * density * 1.8));
-    const conifer = this.conifers, broad = this.broadleaf, houses = this.houses, rocks = this.rocks;
-    let nc = 0, nb = 0, nh = 0, nr = 0;
-    const lat = Math.abs(hf.lat);
-    const coniferBias = Math.min(1, Math.max(0, (lat - 35) / 25)) + (hf.maxHeight > 1500 ? 0.35 : 0);
-    const blocked = (x: number, z: number, pad: number) => {
-      for (let i = 0; i < clear.length; i += 3) {
-        const dx = x - clear[i], dz = z - clear[i + 1], r = clear[i + 2] + pad;
-        if (dx * dx + dz * dz < r * r) return true;
-      }
-      return false;
-    };
-    for (let t = 0; t < tries; t++) {
-      const a = rng.next() * Math.PI * 2;
-      const r = Math.sqrt(rng.next()) * radius;
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (Math.abs(x) > size / 2 - 5 || Math.abs(z) > size / 2 - 5) continue;
-      const j = Math.round((x / size + 0.5) * (res - 1)), i = Math.round((z / size + 0.5) * (res - 1));
-      const k = i * res + j;
-      const sa = hf.splatA, sb = hf.splatB;
-      const forest = sa[k * 4 + 2] / 255, rock = sa[k * 4 + 3] / 255, grass = sa[k * 4 + 1] / 255;
-      const urban = sb[k * 4 + 1] / 255, snow = sb[k * 4] / 255;
-      const h = ground.heightAt(x, z);
-      if (h < 0.8) continue;
-      ground.normalAt(x, z, this.n, 3);
-      const slope = 1 - this.n.y;
-      const roll = rng.next();
-      if (urban > 0.25 && roll < urban * 0.5 && slope < 0.12 && nh < MAX_HOUSES && !blocked(x, z, 14)) {
-        const w = 7 + rng.next() * 9, d = 7 + rng.next() * 7, hh = 5 + rng.next() * (urban > 0.6 ? 14 : 5);
-        this.q.setFromAxisAngle(this.up, Math.round(rng.next() * 4) * (Math.PI / 2) + (rng.next() - 0.5) * 0.3);
-        this.s.set(w, hh, d);
-        this.p.set(x, h - 0.5, z);
-        this.m.compose(this.p, this.q, this.s);
-        houses.setMatrixAt(nh, this.m);
-        const v = 0.8 + rng.next() * 0.35;
-        this.c.setRGB(v, v * (0.95 + rng.next() * 0.06), v * (0.88 + rng.next() * 0.1));
-        houses.setColorAt(nh, this.c);
-        this.houseList.push({ x, z, r: Math.max(w, d) * 0.6, y: h, h: hh });
-        nh++;
-      } else if (forest > 0.2 && roll < 0.1 + forest * 0.85 && slope < 0.5 && !blocked(x, z, 4)) {
-        const isCon = rng.next() < 0.25 + coniferBias * 0.6 + snow;
-        const sc = (0.75 + rng.next() * 0.6) * treeScale;
-        this.q.setFromAxisAngle(this.up, rng.next() * Math.PI * 2);
-        this.s.set(sc, sc * (0.9 + rng.next() * 0.3), sc);
-        this.p.set(x, h - 0.3, z);
-        this.m.compose(this.p, this.q, this.s);
-        const v = 0.75 + rng.next() * 0.45;
-        this.c.setRGB(v * (0.9 + rng.next() * 0.2), v, v * (0.85 + rng.next() * 0.2));
-        if (isCon && nc < MAX_TREES) {
-          conifer.setMatrixAt(nc, this.m);
-          conifer.setColorAt(nc++, this.c);
-        } else if (!isCon && nb < MAX_TREES) {
-          broad.setMatrixAt(nb, this.m);
-          broad.setColorAt(nb++, this.c);
-        }
-      } else if (grass > 0.3 && roll > 0.93 && slope < 0.35 && !blocked(x, z, 4)) {
-        // Lone trees, bushes and hedgerows in farmland.
-        const bush = roll < 0.975;
-        const sc = (bush ? 0.28 + rng.next() * 0.25 : 0.8 + rng.next() * 0.5) * treeScale;
-        this.q.setFromAxisAngle(this.up, rng.next() * Math.PI * 2);
-        this.s.set(sc, sc * (bush ? 0.7 : 1), sc);
-        this.p.set(x, h - (bush ? 0.9 * sc : 0.3), z);
-        this.m.compose(this.p, this.q, this.s);
-        const v = 0.75 + rng.next() * 0.35;
-        this.c.setRGB(v * 0.95, v, v * 0.85);
-        if (nb < MAX_TREES) {
-          broad.setMatrixAt(nb, this.m);
-          broad.setColorAt(nb++, this.c);
-        }
-      } else if ((rock > 0.2 || slope > 0.35) && roll < 0.08 + rock * 0.25 && nr < MAX_ROCKS && !blocked(x, z, 3)) {
-        const sc = 0.6 + Math.pow(rng.next(), 3) * 4.5;
-        this.q.setFromUnitVectors(this.up, this.n);
-        this.s.set(sc * (0.8 + rng.next() * 0.5), sc * (0.6 + rng.next() * 0.6), sc);
-        this.p.set(x, h - sc * 0.15, z);
-        this.m.compose(this.p, this.q, this.s);
-        rocks.setMatrixAt(nr, this.m);
-        const v = 0.7 + rng.next() * 0.4;
-        this.c.setRGB(v, v * 0.97, v * 0.93);
-        rocks.setColorAt(nr++, this.c);
-      }
+    this.group.position.set(0, 0, 0);
+  }
+
+  /** Floating origin moved by (dx, dz): the committed instances follow; a running job restarts. */
+  rebase(dx: number, dz: number): void {
+    this.group.position.x -= dx;
+    this.group.position.z -= dz;
+    for (const h of this.houseList) {
+      h.x -= dx;
+      h.z -= dz;
     }
-    conifer.count = nc;
-    broad.count = nb;
-    houses.count = nh;
-    rocks.count = nr;
-    for (const im of [conifer, broad, houses, rocks]) {
+    this.lastCx -= dx;
+    this.lastCz -= dz;
+    this.job = null;
+  }
+
+  /**
+   * Keep the props laid out around (x, z) (scene). `offX/offZ` = the frame's scene offset (absolute anchor);
+   * `radius` (m), `cell` (m), `density` 0..1; `budgetMs` of work this frame. Returns the ms spent.
+   */
+  stream(ground: Ground, x: number, z: number, offX: number, offZ: number, radius: number, cell: number, density: number, treeScale: number, budgetMs: number): number {
+    const t0 = performance.now();
+    if (!this.job) {
+      if (Math.hypot(x - this.lastCx, z - this.lastCz) < radius * 0.22) return 0;
+      if (!ground.nearReady(x, z)) return 0;
+      const rows = Math.ceil((radius * 2) / cell);
+      this.job = {
+        cx: x, cz: z, offX, offZ, row: 0, rows, x0: Math.floor((x + offX - radius) / cell), z0: Math.floor((z + offZ - radius) / cell),
+        cell, radius, density, treeScale,
+        mats: [new Float32Array(MAX_TREES * 16), new Float32Array(MAX_TREES * 16), new Float32Array(MAX_HOUSES * 16), new Float32Array(MAX_ROCKS * 16)],
+        cols: [new Float32Array(MAX_TREES * 3), new Float32Array(MAX_TREES * 3), new Float32Array(MAX_HOUSES * 3), new Float32Array(MAX_ROCKS * 3)],
+        counts: [0, 0, 0, 0], houses: [],
+      };
+    }
+    const j = this.job;
+    if (j.offX !== offX || j.offZ !== offZ) {
+      this.job = null;
+      return performance.now() - t0;
+    }
+    const S = this.sampleOut;
+    const R2 = j.radius * j.radius;
+    while (j.row < j.rows && performance.now() - t0 < budgetMs) {
+      const iz = j.z0 + j.row;
+      for (let c = 0; c < j.rows; c++) {
+        const ix = j.x0 + c;
+        const h1 = hash2(ix, iz), h2 = hash2(iz * 7 + 3, ix * 13 + 1), h3 = hash2(ix + 91, iz - 17), h4 = hash2(ix - 55, iz * 3 + 7);
+        if (h4 > 0.25 + 0.75 * j.density) continue;
+        const sx = (ix + h1) * j.cell - offX, sz = (iz + h2) * j.cell - offZ;
+        const dx = sx - j.cx, dz = sz - j.cz;
+        if (dx * dx + dz * dz > R2) continue;
+        if (!ground.sample(sx, sz, S)) continue;
+        const sp = S.splat;
+        const forest = sp[2], rock = sp[3], grass = sp[1], urban = sp[5], snow = sp[4];
+        const h = ground.heightAt(sx, sz);
+        if (h < 0.8) continue;
+        ground.normalAt(sx, sz, this.n, 3);
+        const slope = 1 - this.n.y;
+        const roll = h3;
+        let type = -1;
+        if (urban > 0.25 && roll < urban * 0.42 && slope < 0.12) {
+          const w = 7 + h1 * 9, d = 7 + h2 * 7, hh = 5 + h4 * (urban > 0.6 ? 14 : 5);
+          this.q.setFromAxisAngle(this.up, Math.round(h2 * 4) * (Math.PI / 2) + (h3 - 0.5) * 0.3);
+          this.s.set(w, hh, d);
+          this.p.set(sx, h - 0.5, sz);
+          type = 2;
+          const v = 0.8 + h4 * 0.35;
+          this.c.setRGB(v, v * (0.95 + h1 * 0.06), v * (0.88 + h2 * 0.1));
+          if (j.counts[2] < MAX_HOUSES) j.houses.push({ x: sx, z: sz, r: Math.max(w, d) * 0.6, y: h, h: hh });
+        } else if (forest > 0.2 && roll < 0.1 + forest * 0.85 && slope < 0.5) {
+          const con = hash2(ix * 5 + 11, iz * 9 - 3) < 0.25 + Math.min(1, Math.max(0, (Math.abs(this.latHint) - 35) / 25)) * 0.6 + snow;
+          const sc = (0.75 + h1 * 0.6) * j.treeScale;
+          this.q.setFromAxisAngle(this.up, h2 * Math.PI * 2);
+          this.s.set(sc, sc * (0.9 + h4 * 0.3), sc);
+          this.p.set(sx, h - 0.3, sz);
+          type = con ? 0 : 1;
+          const v = 0.75 + h3 * 0.45;
+          this.c.setRGB(v * (0.9 + h1 * 0.2), v, v * (0.85 + h2 * 0.2));
+        } else if (grass > 0.3 && roll > 0.93 && slope < 0.35) {
+          const bush = roll < 0.975;
+          const sc = (bush ? 0.28 + h1 * 0.25 : 0.8 + h1 * 0.5) * j.treeScale;
+          this.q.setFromAxisAngle(this.up, h2 * Math.PI * 2);
+          this.s.set(sc, sc * (bush ? 0.7 : 1), sc);
+          this.p.set(sx, h - (bush ? 0.9 * sc : 0.3), sz);
+          type = 1;
+          const v = 0.75 + h4 * 0.35;
+          this.c.setRGB(v * 0.95, v, v * 0.85);
+        } else if ((rock > 0.2 || slope > 0.35) && roll < 0.08 + rock * 0.25) {
+          const sc = 0.6 + Math.pow(h1, 3) * 4.5;
+          this.q.setFromUnitVectors(this.up, this.n);
+          this.s.set(sc * (0.8 + h2 * 0.5), sc * (0.6 + h4 * 0.6), sc);
+          this.p.set(sx, h - sc * 0.15, sz);
+          type = 3;
+          const v = 0.7 + h3 * 0.4;
+          this.c.setRGB(v, v * 0.97, v * 0.93);
+        }
+        if (type < 0 || j.counts[type] >= this.caps[type]) continue;
+        if (this.keepOut && this.keepOut(sx, sz)) continue;
+        this.m.compose(this.p, this.q, this.s);
+        const k = j.counts[type]++;
+        this.m.toArray(j.mats[type], k * 16);
+        j.cols[type][k * 3] = this.c.r;
+        j.cols[type][k * 3 + 1] = this.c.g;
+        j.cols[type][k * 3 + 2] = this.c.b;
+      }
+      j.row++;
+    }
+    if (j.row >= j.rows) this.commit(j);
+    return performance.now() - t0;
+  }
+
+  /** Latitude of the session (conifer bias). */
+  latHint = 45;
+  /** Optional keep-out test (roads, town squares, bases): no prop there. */
+  keepOut: ((x: number, z: number) => boolean) | null = null;
+
+  private commit(j: NonNullable<Scatter['job']>): void {
+    const ims = [this.conifers, this.broadleaf, this.houses, this.rocks];
+    for (let t = 0; t < 4; t++) {
+      const im = ims[t];
+      const n = j.counts[t];
+      (im.instanceMatrix.array as Float32Array).set(j.mats[t].subarray(0, n * 16));
+      if (im.instanceColor) (im.instanceColor.array as Float32Array).set(j.cols[t].subarray(0, n * 3));
+      im.count = n;
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
       im.computeBoundingSphere();
     }
+    this.group.position.set(0, 0, 0);
+    this.houseList.length = 0;
+    this.houseList.push(...j.houses);
+    this.lastCx = j.cx;
+    this.lastCz = j.cz;
+    this.job = null;
   }
 
   /** Does any tree trunk / crown stand within `r` m of the XZ segment a-b? (staging and line-of-sight polish) */
@@ -208,4 +262,12 @@ export class Scatter {
     if (this.bags.instanceColor) this.bags.instanceColor.needsUpdate = true;
     this.bags.computeBoundingSphere();
   }
+}
+
+function hash2(a: number, b: number): number {
+  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 12;
+  return ((h >>> 0) % 10007) / 10007;
 }

@@ -20,6 +20,8 @@ uniform sampler2D uDepthNear;
 uniform sampler2D uDepthFar;
 uniform float uNearSize;
 uniform float uFarSize;
+uniform vec2 uNearCenter;
+uniform vec2 uFarCenter;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uSunVis;
@@ -33,9 +35,9 @@ uniform float uWave;
 varying vec3 vWPos;
 
 float depthAt(vec2 p) {
-  vec2 un = p / uNearSize + 0.5;
+  vec2 un = (p - uNearCenter) / uNearSize + 0.5;
   if (un.x > 0.002 && un.x < 0.998 && un.y > 0.002 && un.y < 0.998) return texture2D(uDepthNear, un).r * 40.0;
-  vec2 uf = p / uFarSize + 0.5;
+  vec2 uf = (p - uFarCenter) / uFarSize + 0.5;
   if (uf.x > 0.0 && uf.x < 1.0 && uf.y > 0.0 && uf.y < 1.0) return texture2D(uDepthFar, uf).r * 40.0;
   return 40.0;
 }
@@ -114,6 +116,8 @@ export class Water {
         uDepthFar: { value: null },
         uNearSize: { value: 4000 },
         uFarSize: { value: 40000 },
+        uNearCenter: { value: new THREE.Vector2() },
+        uFarCenter: { value: new THREE.Vector2() },
         uSunDir: { value: new THREE.Vector3(0, 1, 0) },
         uSunColor: { value: new THREE.Color(1, 1, 1) },
         uSunVis: { value: 1 },
@@ -141,6 +145,15 @@ export class Water {
     u.uFarSize.value = farSize;
     u.uWave.value = wave;
     this.mesh.scale.set(extent, 1, extent);
+  }
+
+  /** Streamed depth maps (command mode): textures and their scene centres. */
+  setDepth(depthNear: THREE.Texture, depthFar: THREE.Texture, nearCenter: THREE.Vector2, farCenter: THREE.Vector2): void {
+    const u = this.material.uniforms;
+    u.uDepthNear.value = depthNear;
+    u.uDepthFar.value = depthFar;
+    (u.uNearCenter.value as THREE.Vector2).copy(nearCenter);
+    (u.uFarCenter.value as THREE.Vector2).copy(farCenter);
   }
 
   apply(a: Atmos, fogDensity: number): void {

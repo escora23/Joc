@@ -100,6 +100,33 @@ export interface Ent {
   tossSpin: number;
   /** Incoming guided missile (for evasion / warnings). */
   threatT: number;
+  // --- v2 (W5): where it comes from in the simulation and what it is doing ---
+  /** Player id of its nation (0 = unknown). */
+  nation: number;
+  /** A force of a nation at peace with the player (quick-reaction force, border guards): never fires, not a target. */
+  neutral: boolean;
+  /** The sim source it stands for (sync of kills and damage, §9.8). */
+  src: EntSource | null;
+  /** Part of the player's own formation (the division's tanks and IFVs, the squadron's jets). */
+  formation: boolean;
+  /** Behaviour: 'front' fight toward `goal`, 'hold' stay near `goal`, 'goto' drive to `goal`, 'follow' keep `slot` off
+   *  the formation leader, 'escort' shadow the player without firing, 'patrol' circle `goal` (aircraft, ships). */
+  order: EntOrder;
+  goal: THREE.Vector3;
+  slot: THREE.Vector3;
+}
+
+export type EntOrder = 'front' | 'hold' | 'goto' | 'follow' | 'escort' | 'patrol';
+
+/** The simulation object a local entity represents. */
+export interface EntSource {
+  kind: 'pool' | 'division' | 'sam' | 'post' | 'qrf' | 'ship' | 'squadron' | 'formation';
+  /** Unit id (division, ship, squadron), structure id (SAM, post), 0 for garrison pools. */
+  id: number;
+  /** Owner of the source (the nation that loses the troops or the unit). */
+  owner: number;
+  /** Fraction of the unit one local entity is worth (tank 0.25, IFV 0.10, jet 1/3, launcher 0.35). */
+  share: number;
 }
 
 export type ProjKind = 'shell' | 'bullet' | 'missile' | 'bomb' | 'flare';
@@ -144,6 +171,8 @@ export interface SmokeZone {
 }
 
 export interface WorldHooks {
+  /** The player's projectile reached a force of a nation at peace: no damage until the player confirms war (§9.7). */
+  onNeutralHit?(e: Ent): void;
   /** A player projectile hit something (hit marker). kill = the hit destroyed it. */
   onPlayerHit(e: Ent, kill: boolean, ricochet: boolean): void;
   /** Any kill (kill feed, objective). */
@@ -347,6 +376,7 @@ export class World {
       pitchV: 0, rollV: 0, tiltP: 0, tiltR: 0,
       value: d.troops, strategicId: -1, group: -1, burnT: 0, deadT: 0, flares: 30, missiles: 4, bank: 0, throttle: 0.7,
       trackAcc: 0, lastHitBy: -1, tossV: null, tossSpin: 0, threatT: 0,
+      nation: 0, neutral: false, src: null, formation: false, order: 'front', goal: new THREE.Vector3(x, 0, z), slot: new THREE.Vector3(),
     };
     if (kind === 'jet') {
       e.pos.y = y ?? this.ground.surfaceAt(x, z) + 800;
@@ -417,6 +447,49 @@ export class World {
     this.stats.strategicKilled.length = 0;
     this.strategicGroups.clear();
     this.nextId = 1;
+  }
+
+  /** Remove one entity for good (a dead body out of sight, a force that left the area). */
+  despawn(e: Ent): void {
+    const i = this.ents.indexOf(e);
+    if (i < 0) return;
+    this.ents.splice(i, 1);
+    e.alive = false;
+    if (e.rig) this.group.remove(e.rig.root);
+    if (e.inst >= 0) {
+      const list = this.soldierSlots[e.team * 2 + e.variant];
+      if (list[e.inst] === e) list[e.inst] = null;
+      e.inst = -1;
+    }
+    for (const o of this.ents) if (o.target === e) o.target = null;
+    for (const p of this.projs) if (p.alive && p.target === e) p.target = null;
+  }
+
+  /** Floating origin moved by (dx, dz): every position this world keeps moves with it. */
+  rebase(dx: number, dz: number): void {
+    for (const e of this.ents) {
+      e.pos.x -= dx;
+      e.pos.z -= dz;
+      e.moveT.x -= dx;
+      e.moveT.z -= dz;
+      e.goal.x -= dx;
+      e.goal.z -= dz;
+      if (e.rig) {
+        e.rig.root.position.x -= dx;
+        e.rig.root.position.z -= dz;
+      }
+    }
+    for (const p of this.projs) {
+      if (!p.alive) continue;
+      p.pos.x -= dx;
+      p.pos.z -= dz;
+      p.prev.x -= dx;
+      p.prev.z -= dz;
+    }
+    for (const sm of this.smokes) {
+      sm.x -= dx;
+      sm.z -= dz;
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -594,6 +667,11 @@ export class World {
   // ---------------------------------------------------------------------------------------------
   damage(e: Ent, amount: number, from: Ent | null, player: boolean, dir: THREE.Vector3 | null): void {
     if (!e.alive) return;
+    // Nobody fights a nation at peace by accident: the first hit asks the player to declare war (§9.7) instead.
+    if (e.neutral) {
+      if (player || from?.formation) this.hooks.onNeutralHit?.(e);
+      return;
+    }
     let dmg = amount;
     let ricochet = false;
     if (dir && (e.kind === 'tank' || e.kind === 'ifv')) {

@@ -102,7 +102,7 @@ export class TankController implements Controller {
     // --- Drive ------------------------------------------------------------------------------
     const fwdIn = allowInput ? (inp.down('KeyW') || inp.down('ArrowUp') ? 1 : 0) - (inp.down('KeyS') || inp.down('ArrowDown') ? 1 : 0) : 0;
     const turnIn = allowInput ? (inp.down('KeyA') || inp.down('ArrowLeft') ? 1 : 0) - (inp.down('KeyD') || inp.down('ArrowRight') ? 1 : 0) : 0;
-    this.speedTarget = fwdIn > 0 ? 17 : fwdIn < 0 ? -6.5 : 0;
+    this.speedTarget = fwdIn > 0 ? Math.min(17, c.speedCap) : fwdIn < 0 ? -Math.min(6.5, c.speedCap) : 0;
     forwardOf(e.yaw, DIR);
     c.ground.normalAt(e.pos.x, e.pos.z, N, 2.5);
     const slopeAlong = -(N.x * DIR.x + N.z * DIR.z); // >0 uphill
@@ -153,14 +153,7 @@ export class TankController implements Controller {
         e.speed *= 0.8;
       }
     }
-    // Soft boundary
-    const hd = Math.hypot(e.pos.x, e.pos.z);
-    this.hud.boundary = hd > c.radius * 0.85;
-    this.hud.boundaryDir = Math.atan2(-e.pos.x, -e.pos.z);
-    if (hd > c.radius) {
-      e.pos.x *= c.radius / hd;
-      e.pos.z *= c.radius / hd;
-    }
+    this.hud.boundary = false;
     e.vel.copy(DIR).multiplyScalar(e.speed);
     e.pos.y = c.ground.heightAt(e.pos.x, e.pos.z);
     // --- Suspension: terrain tilt + spring-damped dynamics ------------------------------------

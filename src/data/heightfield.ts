@@ -141,7 +141,8 @@ export function buildLocalHeightfield(
 
   const sc = getScratch(res);
   const { latI, lonJ, cosI, sinI, cosJ, sinJ, fbm, ridge, slope } = sc;
-  const cosLat0 = Math.max(0.01, Math.cos(lat0 * DEG));
+  // Longitude scale: the patch's own latitude, or a shared reference latitude so patches tile seamlessly (command mode).
+  const cosLat0 = Math.max(0.01, Math.cos((opts.refLat ?? lat0) * DEG));
   for (let i = 0; i < res; i++) {
     latI[i] = Math.max(-89.99, Math.min(89.99, lat0 + ((0.5 - i / (res - 1)) * size) / M_PER_DEG));
     cosI[i] = Math.cos(latI[i] * DEG);
@@ -215,6 +216,28 @@ export function buildLocalHeightfield(
     }
     rug = mx - mn;
   }
+  // Seamless tiling (command mode): the ruggedness is a per-relief-pixel field interpolated like the relief itself,
+  // so two patches sharing an edge compute the same heights on it (the patch-level value above would step).
+  const seamless = !!opts.seamless;
+  const rugCache = seamless ? new Map<number, number>() : null;
+  const rugAt = (px: number, py: number): number => {
+    const k = py * rw + px;
+    let v = rugCache!.get(k);
+    if (v === undefined) {
+      let mx = -Infinity, mn = Infinity;
+      for (let dy = -2; dy <= 2; dy++) {
+        const y = Math.min(rh - 1, Math.max(0, py + dy));
+        for (let dx = -2; dx <= 2; dx++) {
+          const r = rd[y * rw + (((px + dx) % rw) + rw) % rw];
+          if (r > mx) mx = r;
+          if (r < mn) mn = r;
+        }
+      }
+      v = mx - mn;
+      rugCache!.set(k, v);
+    }
+    return v;
+  };
 
   // --- heights ------------------------------------------------------------------------------------------------
   let minH = Infinity, maxH = -Infinity;
@@ -241,7 +264,10 @@ export function buildLocalHeightfield(
       w += f * 0.5 + (rr - 0.45) * 0.1;
       const mount = smoothstep(700, 2600, base);
       const hill = smoothstep(120, 1000, base);
-      const amp = (22 + 90 * hill + 820 * mount + Math.min(400, rug * 0.12)) * detailMul;
+      const rugHere = seamless
+        ? (rugAt(x0, ry0) * (1 - tx) + rugAt(x1, ry0) * tx) * (1 - rty) + (rugAt(x0, ry1) * (1 - tx) + rugAt(x1, ry1) * tx) * rty
+        : rug;
+      const amp = (22 + 90 * hill + 820 * mount + Math.min(400, rugHere * 0.12)) * detailMul;
       const detail = amp * ((1 - mount) * f * 2.2 + mount * (rr - 0.45) * 2.2);
       // Land: real relief + detail, lifted just above sea level near the coast (beaches, not swamps).
       const shore = Math.min(1, Math.max(0, (0.5 - w) * 6));

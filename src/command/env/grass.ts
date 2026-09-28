@@ -4,7 +4,6 @@
 // rock / sand / water / roads). Re-laid when the focus moves far enough; wind sway in the vertex shader.
 
 import * as THREE from 'three';
-import type { LocalHeightfield } from '../../data/types';
 import type { Ground } from './ground';
 
 const MAX = 14000;
@@ -78,7 +77,10 @@ export class Grass {
   private readonly time = { value: 0 };
   private cx = 1e9;
   private cz = 1e9;
-  private hf: LocalHeightfield | null = null;
+  /** Absolute anchor of the scene (frame offset): the jittered grid is world-anchored. */
+  private offX = 0;
+  private offZ = 0;
+  private readonly sampleOut = { splat: new Float32Array(8), tint: [0, 0, 0] as [number, number, number] };
   private ground: Ground | null = null;
   private radius = 110;
   private density = 1;
@@ -89,6 +91,8 @@ export class Grass {
   private readonly c = new THREE.Color();
   private readonly up = new THREE.Vector3(0, 1, 0);
   enabled = false;
+  /** Optional keep-out test (roads, town squares). */
+  keepOut: ((x: number, z: number) => boolean) | null = null;
 
   constructor() {
     const mat = new THREE.MeshStandardMaterial({
@@ -125,19 +129,31 @@ export class Grass {
     if (on) this.mesh.setMatrixAt(0, this.m.makeTranslation(0, 0, -6));
   }
 
-  configure(ground: Ground | null, hf: LocalHeightfield | null, density: number): void {
+  configure(ground: Ground | null, density: number): void {
     this.ground = ground;
-    this.hf = hf;
     this.density = density;
-    this.enabled = !!hf && density > 0;
+    this.enabled = !!ground && density > 0;
     this.radius = 60 + 70 * density;
     this.cx = this.cz = 1e9;
     this.mesh.count = 0;
   }
 
-  update(focus: THREE.Vector3, time: number): void {
+  /** Floating origin moved. */
+  rebase(dx: number, dz: number): void {
+    this.cx -= dx;
+    this.cz -= dz;
+    this.mesh.position.x -= dx;
+    this.mesh.position.z -= dz;
+  }
+
+  update(focus: THREE.Vector3, time: number, offX = 0, offZ = 0): void {
     this.time.value = time;
     if (!this.enabled) return;
+    if (offX !== this.offX || offZ !== this.offZ) {
+      this.offX = offX;
+      this.offZ = offZ;
+      this.cx = this.cz = 1e9;
+    }
     if (Math.hypot(focus.x - this.cx, focus.z - this.cz) < 14) return;
     this.cx = focus.x;
     this.cz = focus.z;
@@ -145,27 +161,29 @@ export class Grass {
   }
 
   private layout(): void {
-    const hf = this.hf, g = this.ground;
-    if (!hf || !g) return;
-    const size = hf.sizeKm * 1000, res = hf.resolution;
+    const g = this.ground;
+    if (!g) return;
+    this.mesh.position.set(0, 0, 0);
+    const ox = this.offX, oz = this.offZ;
+    const S = this.sampleOut;
     const R = this.radius;
-    const x0 = Math.floor((this.cx - R) / CELL), x1 = Math.ceil((this.cx + R) / CELL);
-    const z0 = Math.floor((this.cz - R) / CELL), z1 = Math.ceil((this.cz + R) / CELL);
+    const x0 = Math.floor((this.cx + ox - R) / CELL), x1 = Math.ceil((this.cx + ox + R) / CELL);
+    const z0 = Math.floor((this.cz + oz - R) / CELL), z1 = Math.ceil((this.cz + oz + R) / CELL);
     let n = 0;
     const keep = 0.35 + 0.65 * this.density;
     for (let iz = z0; iz <= z1 && n < MAX; iz++) {
       for (let ix = x0; ix <= x1 && n < MAX; ix++) {
         const h1 = hash(ix, iz), h2 = hash(iz * 7 + 3, ix * 13 + 1), h3 = hash(ix + 91, iz - 17);
         if (h3 > keep) continue;
-        const x = (ix + h1) * CELL, z = (iz + h2) * CELL;
+        const x = (ix + h1) * CELL - ox, z = (iz + h2) * CELL - oz;
         const dx = x - this.cx, dz = z - this.cz;
         const d2 = dx * dx + dz * dz;
         if (d2 > R * R || d2 < 30) continue;
-        if (Math.abs(x) > size / 2 - 2 || Math.abs(z) > size / 2 - 2) continue;
-        const j = Math.round((x / size + 0.5) * (res - 1)), i = Math.round((z / size + 0.5) * (res - 1));
-        const k = i * res + j;
-        const grass = hf.splatA[k * 4 + 1] / 255, forest = hf.splatA[k * 4 + 2] / 255, dirt = hf.splatB[k * 4 + 2] / 255;
-        const sand = hf.splatA[k * 4] / 255, rock = hf.splatA[k * 4 + 3] / 255, urban = hf.splatB[k * 4 + 1] / 255, snow = hf.splatB[k * 4] / 255;
+        if (!g.sample(x, z, S)) continue;
+        const sp = S.splat;
+        const grass = sp[1], forest = sp[2], dirt = sp[6];
+        const sand = sp[0], rock = sp[3], urban = sp[5], snow = sp[4];
+        if (this.keepOut && this.keepOut(x, z)) continue;
         const cover = grass + forest * 0.8 + dirt * 0.35;
         // Semi-arid ground (sand / dirt dominant) still carries sparse dry scrub; rock, snow and towns do not.
         const arid = sand > 0.45 && rock + urban + snow < 0.3;
@@ -184,12 +202,11 @@ export class Grass {
         this.mesh.setMatrixAt(n, this.m);
         // Color from the terrain albedo under it (same palette as the terrain shader), a touch greener and
         // brighter at the tips so the clumps add texture instead of dark dots.
-        const w0 = sand, w1 = grass, w2 = forest, w3 = rock, w4 = snow, w5 = urban, w6 = dirt, w7 = hf.splatB[k * 4 + 3] / 255;
+        const w0 = sand, w1 = grass, w2 = forest, w3 = rock, w4 = snow, w5 = urban, w6 = dirt, w7 = sp[7];
         let r = 0.57 * w0 + 0.18 * w1 + 0.07 * w2 + 0.33 * w3 + 0.8 * w4 + 0.37 * w5 + 0.3 * w6 + 0.15 * w7;
         let gg = 0.47 * w0 + 0.21 * w1 + 0.1 * w2 + 0.3 * w3 + 0.84 * w4 + 0.35 * w5 + 0.23 * w6 + 0.13 * w7;
         let b = 0.31 * w0 + 0.07 * w1 + 0.04 * w2 + 0.28 * w3 + 0.9 * w4 + 0.32 * w5 + 0.15 * w6 + 0.1 * w7;
-        const ti = k * 3;
-        const tr = Math.pow(hf.tint[ti] / 255, 2.2), tg = Math.pow(hf.tint[ti + 1] / 255, 2.2), tb = Math.pow(hf.tint[ti + 2] / 255, 2.2);
+        const tr = Math.pow(S.tint[0], 2.2), tg = Math.pow(S.tint[1], 2.2), tb = Math.pow(S.tint[2], 2.2);
         const lt = tr * 0.299 + tg * 0.587 + tb * 0.114 + 1e-3, lc = r * 0.299 + gg * 0.587 + b * 0.114;
         r += (tr * (lc / lt) - r) * 0.3;
         gg += (tg * (lc / lt) - gg) * 0.3;

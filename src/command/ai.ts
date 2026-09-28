@@ -20,26 +20,24 @@ const Q = new THREE.Quaternion();
 const JF = new THREE.Vector3();
 const UPV = new THREE.Vector3(0, 1, 0);
 
-export interface Front {
-  /** Where each team pushes toward (team 0 pushes toward enemyBase and vice versa). */
-  friendlyBase: THREE.Vector3;
-  enemyBase: THREE.Vector3;
-  /** Combat area radius around the origin (m). */
-  radius: number;
-  /** Strike runs (tank mode): the world asks the mission for targets. */
-}
+/** Patrol radius around an aircraft's or ship's station (m). */
+const PATROL_R = 6000;
 
 export class Brain {
   /** Player-attention weight: enemies prefer the player when distances are similar. */
   playerBias = 0.85;
 
-  constructor(private readonly w: World, private readonly front: Front) {}
+  constructor(private readonly w: World) {}
 
   update(dt: number): void {
     const w = this.w;
     for (const e of w.ents) {
       if (!e.alive || e.player) continue;
       this.shooterTeam = e.team;
+      if (e.neutral) {
+        this.neutral(e, dt);
+        continue;
+      }
       switch (e.kind) {
         case 'tank':
         case 'ifv':
@@ -80,7 +78,7 @@ export class Brain {
     w.center(e, T1);
     T1.y += 1;
     for (const t of w.ents) {
-      if (!t.alive || t.team === e.team || !filter(t)) continue;
+      if (!t.alive || t.team === e.team || t.neutral || !filter(t)) continue;
       const d = t.pos.distanceTo(e.pos);
       if (d > range) continue;
       let score = d * (t.player ? this.playerBias : 1) * (0.85 + 0.3 * ((t.id * 7919 + e.id * 104729) % 97) / 97);
@@ -110,28 +108,126 @@ export class Brain {
   // ---------------------------------------------------------------------------------------------
   // Movement helpers (ground)
   // ---------------------------------------------------------------------------------------------
+  /** Where the formation leader (the player's vehicle) is: wingmen follow it, escorts shadow it. */
+  private followPoint(e: Ent, out: THREE.Vector3): boolean {
+    const L = this.w.player;
+    if (!L || !L.alive) return false;
+    const c = Math.cos(L.yaw), sn = Math.sin(L.yaw);
+    // Slot in the leader's frame (x right, z back): rotate by its yaw.
+    out.set(L.pos.x + e.slot.x * c + e.slot.z * sn, 0, L.pos.z - e.slot.x * sn + e.slot.z * c);
+    return true;
+  }
+
   private nextMoveTarget(e: Ent, stride: number): void {
-    const f = this.front;
-    const goal = e.team === 0 ? f.enemyBase : f.friendlyBase;
-    T1.subVectors(goal, e.pos);
+    const r = this.w.rng;
+    switch (e.order) {
+      case 'goto':
+        e.moveT.copy(e.goal);
+        return;
+      case 'follow':
+        if (this.followPoint(e, e.moveT)) return;
+        break;
+      case 'escort': {
+        const P = this.w.player;
+        if (P && P.alive) {
+          // Stand off ~150 m from the intruder, on the side it came from.
+          T1.subVectors(e.pos, P.pos).setY(0);
+          const l = T1.length() || 1;
+          e.moveT.set(P.pos.x + (T1.x / l) * 150, 0, P.pos.z + (T1.z / l) * 150);
+          return;
+        }
+        break;
+      }
+      case 'hold':
+      case 'patrol': {
+        const R = e.order === 'hold' ? (e.rig ? 45 : 22) : 300;
+        e.moveT.set(e.goal.x + (r.next() - 0.5) * 2 * R, 0, e.goal.z + (r.next() - 0.5) * 2 * R);
+        return;
+      }
+      default:
+        break;
+    }
+    // 'front': bound toward the goal (the other side of the line), in steps.
+    T1.subVectors(e.goal, e.pos);
     T1.y = 0;
     const dist = T1.length();
     if (dist < 1) T1.set(0, 0, -1);
     T1.normalize();
-    const r = this.w.rng;
-    const s = Math.min(stride, dist * 0.6 + 20);
+    const s2 = Math.min(stride, dist * 0.6 + 20);
     e.moveT.set(
-      e.pos.x + T1.x * s + (r.next() - 0.5) * stride * 0.9,
+      e.pos.x + T1.x * s2 + (r.next() - 0.5) * stride * 0.9,
       0,
-      e.pos.z + T1.z * s + (r.next() - 0.5) * stride * 0.9,
+      e.pos.z + T1.z * s2 + (r.next() - 0.5) * stride * 0.9,
     );
-    const lim = f.radius * 0.95;
-    const l = Math.hypot(e.moveT.x, e.moveT.z);
-    if (l > lim) e.moveT.multiplyScalar(lim / l);
+  }
+
+  /** Forces of a nation at peace (quick-reaction force, border guards): move, block and escort; never fire. */
+  private neutral(e: Ent, dt: number): void {
+    e.target = null;
+    const d = ENT_DEFS[e.kind];
+    if (d.air) {
+      const P = this.w.player;
+      if (P && P.alive && e.order === 'escort') {
+        // Formate on the intruder at ~400 m to its side.
+        T3.set(P.pos.x + Math.cos(P.yaw) * 400, P.pos.y + 30, P.pos.z - Math.sin(P.yaw) * 400).sub(e.pos);
+        this.fly(e, T3.normalize(), dt, 0.5, Math.max(160, Math.min(320, P.speed + (T3.length() > 600 ? 40 : 0))));
+      } else {
+        T3.subVectors(e.goal, e.pos).setY((1500 - e.pos.y) * 0.001);
+        this.fly(e, T3.normalize(), dt, 0.4, 230);
+      }
+      return;
+    }
+    if (d.naval) {
+      const P = this.w.player;
+      const tgt = e.order === 'escort' && P ? P.pos : e.goal;
+      T1.subVectors(tgt, e.pos);
+      const dist = Math.hypot(T1.x, T1.z);
+      this.steerShip(e, dt, dist > 800 ? Math.atan2(-T1.x, -T1.z) : e.yaw + 0.2, dist > 800 ? 12 : 4, 0.1);
+      return;
+    }
+    if (e.kind === 'soldier' || e.kind === 'at') {
+      const dx = e.moveT.x - e.pos.x, dz = e.moveT.z - e.pos.z;
+      const dist = Math.hypot(dx, dz);
+      e.stateT -= dt;
+      if (dist < 4 || e.stateT <= 0) {
+        this.nextMoveTarget(e, 40);
+        e.stateT = 4 + this.w.rng.next() * 4;
+      }
+      let sp = 0;
+      if (dist > 4) {
+        e.yaw += angleDelta(e.yaw, Math.atan2(-dx, -dz)) * Math.min(1, dt * 4);
+        sp = dist > 60 ? 3.2 : 1.4;
+      }
+      e.speed += (sp - e.speed) * Math.min(1, dt * 4);
+      forwardOf(e.yaw, T1);
+      const nx = e.pos.x + T1.x * e.speed * dt, nz = e.pos.z + T1.z * e.speed * dt;
+      if (this.w.ground.heightAt(nx, nz) > 0.5) {
+        e.pos.x = nx;
+        e.pos.z = nz;
+      }
+      e.vel.copy(T1).multiplyScalar(e.speed);
+      e.pos.y = this.w.ground.heightAt(e.pos.x, e.pos.z);
+      return;
+    }
+    // Vehicles: drive to their point, turret level.
+    e.stateT -= dt;
+    if (e.stateT <= 0 && (e.order === 'escort' || e.order === 'follow')) {
+      this.nextMoveTarget(e, 60);
+      e.stateT = 2;
+    }
+    this.drive(e, dt, 9, 0.6, false);
+    e.turretYaw += angleDelta(e.turretYaw, 0) * Math.min(1, dt * 0.8);
   }
 
   private drive(e: Ent, dt: number, maxSpeed: number, turnRate: number, stop: boolean): void {
     const w = this.w;
+    if (e.order === 'follow' && !stop) {
+      // Wingmen: keep the slot, a little faster when behind, matching the leader when in place.
+      this.followPoint(e, e.moveT);
+      const L = w.player;
+      const lag = Math.hypot(e.moveT.x - e.pos.x, e.moveT.z - e.pos.z);
+      if (L && L.alive) maxSpeed = Math.max(3, Math.min(maxSpeed * 1.25, Math.abs(L.speed) + lag * 0.08));
+    }
     const dx = e.moveT.x - e.pos.x, dz = e.moveT.z - e.pos.z;
     const dist = Math.hypot(dx, dz);
     let want = 0;
@@ -140,7 +236,7 @@ export class Brain {
       const err = angleDelta(e.yaw, desired);
       e.yaw += Math.max(-turnRate * dt, Math.min(turnRate * dt, err));
       want = maxSpeed * Math.max(0.15, 1 - Math.abs(err) / 1.4);
-    } else if (!stop) {
+    } else if (!stop && e.order !== 'follow' && e.order !== 'goto') {
       this.nextMoveTarget(e, 180);
     }
     // Look ahead for water / cliffs.
@@ -425,11 +521,13 @@ export class Brain {
     const floor = w.ground.surfaceAt(e.pos.x, e.pos.z) + 160;
     const ahead = w.ground.surfaceAt(e.pos.x + f.x * 600, e.pos.z + f.z * 600) + 180;
     if (e.pos.y < Math.max(floor, ahead)) want.y = Math.max(want.y, 0.45);
-    // Stay in the arena (scripted strike runs fly straight through)
-    const hd = Math.hypot(e.pos.x, e.pos.z);
-    if (hd > this.front.radius && e.state !== 10) {
-      T3.set(-e.pos.x, 0, -e.pos.z).normalize();
-      want.lerp(T3, Math.min(1, (hd - this.front.radius) / 2000)).normalize();
+    // Patrols stay near their station.
+    if (e.order === 'patrol' && !e.player) {
+      const hd = Math.hypot(e.pos.x - e.goal.x, e.pos.z - e.goal.z);
+      if (hd > PATROL_R) {
+        T3.set(e.goal.x - e.pos.x, 0, e.goal.z - e.pos.z).normalize();
+        want.lerp(T3, Math.min(1, (hd - PATROL_R) / 2000)).normalize();
+      }
     }
     const ang = Math.acos(Math.max(-1, Math.min(1, f.dot(want))));
     const step = Math.min(ang, turn * dt);
@@ -495,9 +593,15 @@ export class Brain {
       return;
     }
     if (!t) {
-      // Patrol circle
-      dir.set(-e.pos.z, 0, e.pos.x).normalize().addScaledVector(T3.set(-e.pos.x, 0, -e.pos.z).normalize(), 0.3);
-      dir.y = (1200 - e.pos.y) * 0.0005;
+      // Patrol circle around the station (a wingman stays on the leader).
+      if (e.order === 'follow' && this.followPoint(e, T4)) {
+        dir.set(T4.x - e.pos.x, (w.player!.pos.y + e.slot.y - e.pos.y) * 0.5, T4.z - e.pos.z);
+        this.fly(e, dir.normalize(), dt, turn * 0.8, Math.max(160, Math.min(330, w.player!.speed + dir.length() * 0.02)));
+        return;
+      }
+      const rx = e.pos.x - e.goal.x, rz = e.pos.z - e.goal.z;
+      dir.set(-rz, 0, rx).normalize().addScaledVector(T3.set(-rx, 0, -rz).normalize(), 0.3);
+      dir.y = (Math.max(1200, e.goal.y) - e.pos.y) * 0.0005;
       this.fly(e, dir, dt, turn * 0.6, 230);
       return;
     }
@@ -565,8 +669,8 @@ export class Brain {
       T3.y -= 1.5;
       w.dropBomb(e, e.team, T3, e.vel, 60, 22);
     }
-    // Leave the map once well past the target.
-    if (along < -2500 && Math.hypot(e.pos.x, e.pos.z) > this.front.radius * 1.5) {
+    // Leave the area once well past the target.
+    if (along < -2500 && Math.hypot(e.pos.x - e.moveT.x, e.pos.z - e.moveT.z) > 15000) {
       e.alive = false;
       if (e.rig) e.rig.root.visible = false;
     }
@@ -664,7 +768,9 @@ export class Brain {
       const radial = Math.max(-1, Math.min(1, (d - R) / 800));
       desired = toT + dirSign * (Math.PI / 2) * (1 - radial);
     } else {
-      desired = Math.atan2(e.pos.x, e.pos.z);
+      // Hold the station: steam back when far from it, else keep a slow circle.
+      const gx = e.goal.x - e.pos.x, gz = e.goal.z - e.pos.z;
+      desired = Math.hypot(gx, gz) > 2500 ? Math.atan2(-gx, -gz) : e.yaw + 0.15;
     }
     this.steerShip(e, dt, desired, e.kind === 'boat' ? 20 : 11, e.kind === 'boat' ? 0.25 : 0.08);
     if (!t) return;
