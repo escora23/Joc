@@ -524,6 +524,31 @@ export interface FrontView {
   offensiveB: number;
   /** Per polyline vertex: pressure progress (p/θ × 255) of the tile being taken; only near the observation focus. */
   progress?: Uint8Array;
+  /**
+   * T41 (§11.5): the contact line as one smoothed depth offset, measured at the observation focus (every tick) or on
+   * the lead offensive's axis (every 5 ticks). When present, advanceKmh = |line.kmh|.
+   */
+  line?: FrontLine;
+}
+
+/**
+ * The contact line of a front near a point, at sub-tile precision (sim/frontLine.ts): straight over ±halfKm along it,
+ * crossing the axis through the reference point (x, y) at depthKm. The axis (e, n) is a unit vector in local km (east,
+ * north) pointing the way side a advances. kmh is the depth's speed along the axis (km per game hour, signed): every
+ * tick the line moves by exactly kmh / 10 km, so its on-screen speed is kmh × rate / 3,600 km per real second.
+ */
+export interface FrontLine {
+  x: number;
+  y: number;
+  e: number;
+  n: number;
+  depthKm: number;
+  halfKm: number;
+  kmh: number;
+  /** Tick of this reading. */
+  tick: number;
+  /** Measured at the observation focus (else on the lead offensive's axis). */
+  focus: boolean;
 }
 
 export interface ScarView {

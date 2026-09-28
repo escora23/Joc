@@ -11,6 +11,8 @@
 //     enemy's mobilization reproduces T34 (≥ 1.5× the passive garrison on the offensive's first tick); «Retirar» ends
 //     our offensive and brings the troops home with a 10 % loss.
 // A5  front keys are stable: over a 600-tick offensive the front it pushes keeps its key in ≥ 95 % of the samples.
+// A6  T41: the front's line published as one smoothed depth offset at the observation focus moves every tick by exactly
+//     its published speed, never jumps, sets the front's advanceKmh, and stays inside the tile being taken.
 
 import fs from 'node:fs';
 import { loadWorldInit } from './world.mjs';
@@ -254,7 +256,68 @@ function keys() {
   row('A5', `front key of a 600-tick offensive (keys seen: ${[...seen].join(', ')})`, `${n ? ((same / n) * 100).toFixed(1) : 0} % of ${n} samples`, '>= 95 %', n > 0 && same / n >= 0.95);
 }
 
+// ---- A6: T41 — the front's line as one smoothed depth offset -------------------------------------------------
+// With the observation focus on the line, over a 300-tick offensive: every tick the published line moves by exactly
+// its published speed (kmh / 10 km), never jumps (< 1.2 km a tick, the 8 km/h cap is 0.8), the front's advanceKmh is
+// |line.kmh|, and the line stays with the territory: its depth minus the side-a share of the same window by ownership
+// alone (the tile line, no pressure) lies within 0 .. +1 tile (it is inside the tile being taken).
+function depthLine() {
+  const { g, step, H, E, D, P, cx, cy } = theatre(12);
+  g.war.declare(E, H, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+  for (let i = 0; i < 25; i++) step();
+  D.troops = 300_000;
+  P.troops = 900_000;
+  g.issue(E, { type: 'attack', target: H, ratio: 0.7, tile: cy * W + cx - 15 });
+  const a = g.attackList.find((x) => !x.ended && x.attacker === E);
+  g.observationFocus = { x: cx - 0.5, y: cy + 3 };
+  const TILE = 25.02;
+  // Ownership-only depth of the same window (independent of the sim's measure): mean over 2.5 km columns.
+  const ownDepth = (L) => {
+    const kmX = TILE * Math.cos(((90 - (L.y / 800) * 180) * Math.PI) / 180);
+    let sum = 0, cols = 0;
+    for (let u = -L.halfKm; u <= L.halfKm; u += 2.5) {
+      let na = 0, nab = 0;
+      for (let d = L.depthKm - 75; d <= L.depthKm + 75; d += 2.5) {
+        const east = d * L.e - u * L.n, north = d * L.n + u * L.e;
+        const x = Math.floor(L.x + east / kmX), y = Math.floor(L.y - north / TILE);
+        const o = g.owner[y * W + x];
+        if (o === E) { na++; nab++; } else if (o === H) nab++;
+      }
+      if (nab < 50 || na === 0 || na === nab) continue;
+      sum += L.depthKm - 75 + (na * 61 / nab) * 2.5 - 1.25;
+      cols++;
+    }
+    return cols ? sum / cols : NaN;
+  };
+  let prev = null, maxErr = 0, maxStep = 0, kmhErr = 0, n = 0, lagMin = Infinity, lagMax = -Infinity, first = -1, last = -1;
+  for (let i = 0; i < 300 && !a.ended; i++) {
+    D.troops = Math.max(D.troops, 300_000);
+    step();
+    const r = record(g, a.frontKey);
+    const L = r?.line;
+    if (!L || !L.focus) { prev = null; continue; }
+    kmhErr = Math.max(kmhErr, Math.abs(r.advanceKmh - Math.abs(L.kmh)));
+    if (prev && prev.x === L.x && prev.y === L.y) {
+      const moved = L.depthKm - prev.depthKm;
+      maxErr = Math.max(maxErr, Math.abs(moved - L.kmh / 10));
+      maxStep = Math.max(maxStep, Math.abs(moved));
+    }
+    const lag = L.depthKm - ownDepth(L);
+    if (Number.isFinite(lag) && i > 40) {
+      lagMin = Math.min(lagMin, lag);
+      lagMax = Math.max(lagMax, lag);
+    }
+    if (first < 0) first = i;
+    last = i;
+    n++;
+    prev = { ...L };
+  }
+  row('A6a', `T41: the published line moves each tick by exactly its speed, no jumps (${n} ticks with a focus line)`, `step error ${maxErr.toFixed(4)} km, largest step ${maxStep.toFixed(2)} km`, 'error < 0.001 km, step < 1.2 km', n > 200 && maxErr < 1e-3 && maxStep < 1.2);
+  row('A6b', 'T41: FrontView.advanceKmh = |line.kmh|; the line lies inside the tile being taken (depth − tile line)', `|Δ| ${kmhErr.toFixed(3)} km/h; ${lagMin.toFixed(1)} .. ${lagMax.toFixed(1)} km`, '0 .. 25 km', kmhErr <= 0.01 && lagMin >= -2 && lagMax <= 25);
+}
+
 reversal();
+depthLine();
 garrisons();
 priorityRise();
 t34();

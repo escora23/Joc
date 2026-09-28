@@ -62,7 +62,7 @@ export type LocalForcesUnit = Pick<UnitView,
   | 'targetY' | 'alt' | 'home' | 'serial'>;
 export type LocalForcesStructure = Pick<StructureView, 'id' | 'type' | 'owner' | 'tile' | 'level' | 'hp' | 'built'>;
 export type LocalForcesFront = Pick<FrontView,
-  'key' | 'a' | 'b' | 'x' | 'y' | 'length' | 'dirX' | 'dirY' | 'samples' | 'progress' | 'garrisonA' | 'garrisonB'
+  'key' | 'a' | 'b' | 'x' | 'y' | 'length' | 'dirX' | 'dirY' | 'samples' | 'progress' | 'line' | 'garrisonA' | 'garrisonB'
   | 'momentum' | 'advanceKmh' | 'intensity' | 'quiet' | 'offensiveA' | 'offensiveB'>;
 export type LocalForcesAttack = Pick<AttackView,
   'id' | 'attacker' | 'defender' | 'troops' | 'x' | 'y' | 'originX' | 'originY' | 'frontKey' | 'frontageTiles' | 'state'
@@ -170,8 +170,14 @@ export interface LocalFront {
   anchorSide: number;
   /** The contact line at sub-tile precision in local km [e0, n0, e1, n1, ...] (vertices within 3 × radius). */
   lineKm: number[];
-  /** Whether per-vertex pressure progress was published for it (only near the observation focus, §14.5). */
+  /** Whether the line is at sub-tile precision here: the published depth line (T41) or per-vertex pressure progress. */
   subTile: boolean;
+  /**
+   * T41: the published contact line (FrontView.line) when this point lies within its window: the line's signed offset
+   * from the point along its axis (km, + = the line lies ahead of the point in side a's advance), the axis bearing, and
+   * its speed (km per game hour, signed along the axis). Inside the window `lineKm` and `nearest` follow this line.
+   */
+  line: { offsetKm: number; bearing: number; kmh: number; focus: boolean; tick: number } | null;
   /** Garrisons Gf of each side on the whole front (troops) and per km of front. */
   garrisonA: number;
   garrisonB: number;
@@ -450,6 +456,24 @@ export function deriveLocalForces(
       line[v * 2] = wdx(x, sx) * kmX;
       line[v * 2 + 1] = (y - sy) * kmY;
     }
+    // T41: within the published line's window, the contact line IS that line (one smoothed depth, straight across
+    // ±halfKm): the vertices there are moved onto it along its axis, so every consumer reads the same line.
+    let lineRec: LocalFront['line'] = null;
+    const fl = f.line;
+    if (fl) {
+      const rE = wdx(x, fl.x) * kmX, rN = (y - fl.y) * kmY;
+      const u0 = rE * fl.n - rN * fl.e;
+      if (Math.abs(u0) <= fl.halfKm + 10) {
+        const pE = rE + fl.depthKm * fl.e, pN = rN + fl.depthKm * fl.n;
+        lineRec = { offsetKm: pE * fl.e + pN * fl.n, bearing: bearing(fl.e, fl.n), kmh: fl.kmh, focus: fl.focus, tick: fl.tick };
+        for (let v = 0; v < n; v++) {
+          const u = (line[v * 2] - rE) * -fl.n + (line[v * 2 + 1] - rN) * fl.e;
+          if (Math.abs(u) > fl.halfKm) continue;
+          line[v * 2] = pE - u * fl.n;
+          line[v * 2 + 1] = pN + u * fl.e;
+        }
+      }
+    }
     // Nearest point and the window length inside the circle.
     let bestD = Infinity, bestE = line[0], bestN = line[1], bestSeg = 0, windowKm = 0;
     const segCount = Math.max(1, n - 1);
@@ -486,7 +510,7 @@ export function deriveLocalForces(
     localFronts.push({
       key: f.key, a: f.a, b: f.b, quiet: f.quiet, intensity: f.intensity, momentum: f.momentum, advanceKmh: f.advanceKmh,
       lengthKm, windowKm, nearest: nearestPos, advanceBearing: bearing(dirE, dirN), lineBearing: bearing(le, ln), anchorSide,
-      lineKm, subTile: !!f.progress, garrisonA: f.garrisonA, garrisonB: f.garrisonB,
+      lineKm, subTile: !!f.progress || !!lineRec, line: lineRec, garrisonA: f.garrisonA, garrisonB: f.garrisonB,
       troopsPerKmA: f.garrisonA / lengthKm, troopsPerKmB: f.garrisonB / lengthKm,
     });
     if (windowKm <= 0) continue;

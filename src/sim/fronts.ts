@@ -23,6 +23,7 @@ import type { Game } from './game';
 import { neighbors4 } from './game';
 import type { SaveReader, SaveWriter } from './save';
 import type { Attack } from './state';
+import { FrontLines } from './frontLine';
 import { wdx, wrapXf } from './spatial';
 import type { War } from './war';
 
@@ -92,8 +93,12 @@ export class FrontTracker {
   private nextKey = 1;
   private readonly lastPairUpdate = new Map<number, number>();
   private readonly nb = new Int32Array(4);
+  /** T41: the contact line of each front as one smoothed depth offset near the focus / the offensive's axis (W6). */
+  private readonly lines: FrontLines;
 
-  constructor(private readonly g: Game) {}
+  constructor(private readonly g: Game) {
+    this.lines = new FrontLines(g);
+  }
 
   // =================================================================================================
   // Queries (attacks, AI, views)
@@ -461,6 +466,7 @@ export class FrontTracker {
       f.intensity = hasA || hasB ? Math.max(0.15, heat) : 0.05;
       if (!hasA && !hasB) f.advanceKmh *= 0.9;
     }
+    this.lines.update(this.fronts.values());
   }
 
   // =================================================================================================
@@ -492,6 +498,12 @@ export class FrontTracker {
       if (focus && (offA || offB)) {
         const near = this.progressNear(f, focus.x, focus.y, offA ?? offB!);
         if (near) rec.progress = near;
+      }
+      // T41: where the line is measured, its speed IS the front's measured advance (badge, panel, strip, battle).
+      const line = this.lines.record(f.key);
+      if (line) {
+        rec.line = line;
+        rec.advanceKmh = +Math.abs(line.kmh).toFixed(2);
       }
       out.push(rec);
     }
@@ -543,6 +555,7 @@ export class FrontTracker {
     const d = r.json<{ fronts: Front[]; pairs: [number, number[]][]; priorities: [number, number][]; nextKey: number; last: [number, number][] }>();
     this.fronts.clear();
     this.byPair.clear();
+    this.lines.clear();
     for (const f of d.fronts) this.fronts.set(f.key, f);
     for (const [k, keys] of d.pairs) this.byPair.set(k, keys.map((key) => this.fronts.get(key)!).filter(Boolean));
     this.priorities.clear();

@@ -191,5 +191,26 @@ const f3 = deriveLocalForces(view, AX, AY, R, 3);
 ok(f3.sides.find((s) => s.owner === 2)?.relation === 'peace' && f3.point.relation === 'peace', 'seen by a third nation');
 near(f3.sides.find((s) => s.owner === 2)!.infantry, sA.infantry, 1e-9, 'pools do not depend on the viewer');
 
+// --- 5. T41: the published depth line replaces the polyline inside its window --------------------------------
+{
+  // The sim measured the line 3.2 km west of the reference (800.0, 200.0) along side a's advance (west), moving 2 km/h.
+  const withLine: LocalForcesFront = {
+    ...front, line: { x: 800, y: 200, e: -1, n: 0, depthKm: 3.2, halfKm: 75, kmh: 2, tick: 1234, focus: true },
+  };
+  const fl = deriveLocalForces({ ...view, fronts: [withLine] }, AX, AY, R, 1).fronts[0];
+  // East coordinate of the line seen from the anchor (0.5 tiles west of the reference).
+  const lineE = (800 - AX) * kmX - 3.2;
+  ok(!!fl.line && fl.subTile, 'the published line is read');
+  // The axis points west, so the line's offset from the anchor along it is -lineE.
+  near(fl.line!.offsetKm, -lineE, 1e-6, 'line offset from the anchor along the axis');
+  near(fl.nearest.eastKm, lineE, 1e-6, 'nearest point on the published line');
+  near(fl.line!.bearing, (3 * Math.PI) / 2, 1e-6, 'axis bearing (west)');
+  near(fl.line!.kmh, 2, 1e-9, 'line speed');
+  ok(fl.lineKm.every((v, i) => i % 2 === 1 || Math.abs(v - lineE) < 1e-6), 'the vertices inside the window lie on the line');
+  // Beyond its window (along the line) the published line does not apply.
+  const beyond = deriveLocalForces({ ...view, fronts: [withLine] }, AX, 200 - (75 + 12) / TILE_KM - 1, R, 1).fronts[0];
+  ok(!!beyond && !beyond.line, 'no published line beyond its window');
+}
+
 console.log(`localForces: ${checks - failures}/${checks} checks passed`);
 if (failures) (globalThis as unknown as { process: { exit(c: number): void } }).process.exit(1);
