@@ -4,6 +4,10 @@
    Fuerzas drawer (U)
    --------------------------------------------------------------------------------------------- */
 .fu-forces { position: absolute; top: 0.9rem; right: 0.9rem; bottom: 0.9rem; width: 24rem; z-index: 25; display: flex; flex-direction: column; animation: fu-slide-right 0.3s var(--fu-ease) both; }
+/* Open, the drawer starts under the clock / speed widget (its top is set from that widget's rect) and the selection
+   card docks to its left, above the build bar, so the order buttons and the card stay in view. */
+.fu-hud-root.is-forces-open .fu-hud-br { right: calc(0.9rem + var(--fu-forces-w, 24rem) + 0.6rem); bottom: var(--fu-forces-clear, 8rem); }
+.fu-hud-root.is-forces-open .fu-hud-br .fu-sel { max-height: calc(100vh - var(--fu-forces-clear, 8rem) - 8rem); }
 .fu-fo-tabn { margin-left: 0.3rem; font-size: 0.66rem; color: var(--fu-accent); }
 .fu-fo-body { display: flex; flex-direction: column; gap: 0.2rem; }
 .fu-fo-group { display: flex; align-items: center; justify-content: space-between; margin: 0.55rem 0 0.15rem; font: 700 0.62rem var(--fu-font-cond); letter-spacing: 0.2em; text-transform: uppercase; color: var(--fu-accent); border-bottom: 1px solid var(--fu-line); padding-bottom: 0.2rem; }

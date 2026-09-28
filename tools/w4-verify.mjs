@@ -5,7 +5,8 @@
 // Drives the real game in Chromium on a staged war across the Pyrenees (the scene of the `forces-panel` shot, built
 // with the sim's debug actions and real player commands) and measures through the HUD and renderer hooks:
 //   V1   the Fuerzas panel lists every own force (count = view.units minus missiles, trade ships, trains); a row click
-//        selects the unit and flies the camera there                                               (acceptance 1)
+//        selects the unit and flies the camera there; with the drawer open the unit card stays on screen and on
+//        top beside it, and the pause / speed buttons stay hit-testable                             (acceptance 1)
 //   V2   Arsenal: 10 purchases, the price shown before each = the gold charged; a division in production with an
 //        80-tick ETA; the unitReady alert names its base                                            (acceptance 2)
 //   V3   order parity: 50+ random REAL right clicks over all unit types; the chip's preview validity per unit equals
@@ -13,6 +14,7 @@
 //   V4   docked bombers and drones selectable from the airbase card (hosted rows) and the panel     (acceptance 4)
 //   V5   Shift+drag selects every own unit in the rectangle; one right click orders them; «n de m»  (acceptance 5)
 //   V7   unit card: role, km/h with the real-time equivalent, reach, effect, integrity, endurance, no «FUERZA»;
+//        a division on the train reads «100 km/h en tren» (card read in the sim update it boards);
 //        structure card: now/next effects, gold/h, upgrade cost = upgradeCost, «Te faltan»          (acceptance 7)
 //   V9   __units.grounding(): residual < 5 % of the footprint, up deviation < 3°                    (acceptance 9)
 //   V10  structure models differ by level (vertex counts)                                           (acceptance 10)
@@ -156,6 +158,45 @@ if (want('V1')) {
   const moved = Math.abs(after.cam.lat - cam0.lat) + Math.abs(after.cam.lon - cam0.lon) + Math.abs(after.cam.altitudeKm - cam0.altitudeKm) > 0.1;
   row('V1', 'row click selects the unit and flies there', `unit ${id}, card «${after.sel.split('\n')[0]}», camera ${moved ? 'moved' : 'still'}`, 'card of that unit, camera moved', after.sel.length > 0 && moved);
   void selId;
+  // With the drawer open the player keeps the unit card (and its order buttons) and the clock / speed widget:
+  // the card is on screen and on top at its centre and at its order buttons, every speed button is hit-testable.
+  // Wait for the card's entrance animation to settle (its rect unchanged across two polls).
+  let lastRect = '';
+  for (let i = 0; i < 20; i++) {
+    const r = await view(() => JSON.stringify(document.querySelector('.fu-hud-br .fu-sel')?.getBoundingClientRect() ?? null));
+    if (r === lastRect) break;
+    lastRect = r;
+    await sleep(400);
+  }
+  const vis = await view(() => {
+    // Headless Chromium may not start a CSS entrance animation until the next composited frame; end it so the rect
+    // is the settled layout the player sees.
+    for (const a of document.querySelector('.fu-hud-br .fu-sel')?.getAnimations() ?? []) a.finish();
+    const W = innerWidth, H = innerHeight;
+    const hit = (el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return false;
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > W || y > H) return false;
+      const e = document.elementFromPoint(x, y);
+      return !!e && (e === el || el.contains(e));
+    };
+    const card = document.querySelector('.fu-hud-br .fu-sel');
+    const r = card?.getBoundingClientRect();
+    const onScreen = !!r && r.width > 50 && r.left >= 0 && r.top >= 0 && r.right <= W && r.bottom <= H;
+    const orders = [...(card?.querySelectorAll('.fu-w4-orders .fu-btn, .fu-take-control') ?? [])];
+    const speeds = [...document.querySelectorAll('.fu-time-seg button')];
+    const panel = document.querySelector('.fu-forces')?.getBoundingClientRect();
+    return {
+      onScreen, cardHit: !!card && hit(card), rect: r ? [r.left, r.top, r.right, r.bottom].map(Math.round) : null, prect: panel ? [panel.left, panel.top, panel.right, panel.bottom].map(Math.round) : null,
+      orders: orders.length, ordersHit: orders.filter(hit).length,
+      speeds: speeds.length, speedsHit: speeds.filter(hit).length,
+      overlap: !!r && !!panel && r.right > panel.left && r.left < panel.right && r.bottom > panel.top && r.top < panel.bottom,
+    };
+  });
+  row('V1', 'drawer open: the unit card stays on screen and on top (centre and order buttons), beside the drawer', `rect ${JSON.stringify(vis.rect)} drawer ${JSON.stringify(vis.prect)}, centre ${vis.cardHit ? 'hit' : 'covered'}, orders ${vis.ordersHit}/${vis.orders}, overlaps drawer ${vis.overlap}`,
+    'on screen, hit, all orders, no overlap', vis.onScreen && vis.cardHit && vis.orders > 0 && vis.ordersHit === vis.orders && !vis.overlap);
+  row('V1', 'drawer open: the pause / speed buttons stay clickable', `${vis.speedsHit}/${vis.speeds}`, 'all 5', vis.speeds === 5 && vis.speedsHit === 5);
   await shot('v1-forces');
 }
 
@@ -398,18 +439,29 @@ if (want('V7')) {
         window.__w4.trace = [];
         window.__w4.traceId = id;
       }, { id, to: railDiv.to });
-      // Pause on the tick it boards the train.
-      const armed = pauseWhen(((v, id) => (v.units.get(id)?.mode === 2 ? id : null)).toString(), id, 60000);
+      // Pause on the tick it boards the train and read its card in that same sim update, in the page: the hop can be
+      // short enough to end (and the division to join its front) between two polls from here.
+      const armed = pauseWhen(((v, id) => {
+        const u = v.units.get(id);
+        if (u?.mode !== 2) return null;
+        window.__fuHud.shared.select({ kind: 'unit', id });
+        window.__fuCard.refresh();
+        return { id, mode: u.mode, text: window.__fuCard.text() };
+      }).toString(), id, 60000);
       await sleep(300);
       await view(() => window.__front.ctx.sim.setSpeed(1));
-      await armed;
+      const hit = await armed;
       v7diag = await view((id) => { const v = window.__front.ctx.sim.view; const u = v.units.get(id); const r = v.routes.get(id); const modes = [...new Set(window.__w4.trace.map((p) => p.mode))].join('>'); window.__w4.traceId = -1; return `unit ${id} mode ${u?.mode} route ${r ? r.length : 0} tiles, rail ${v.rail.length / 2} links, modes ${modes}, ${window.__w4.trace.length} updates`; }, id);
+      railText = hit?.text ?? '';
+      if (hit) v7diag += `, read at mode ${hit.mode}`;
       await view((id) => { window.__front.ctx.sim.setSpeed(0); window.__fuHud.shared.select({ kind: 'unit', id }); }, id);
-      railText = (await until(() => { const t = window.__fuCard.text(); return /100 km\/h/.test(t) ? t : null; }, null, 20000, 300)) ?? await view(() => window.__fuCard.text());
+      await shot('v7-rail-card');
     }
   }
-  row('V7', 'division by rail: the card reads the rail speed with its real-time equivalent', (railText.match(/(velocidad|speed)[^\n]*\n?[^\n]*/i)?.[0] ?? railText.slice(0, 120)).replace(/\s+/g, ' ') + (/100 km\/h/.test(railText) ? '' : ` [${v7diag}]`),
-    '100 km/h en tren ≈ 100 km por segundo a 1x', /100 km\/h/.test(railText) && /100 km por segundo|100 km per second/i.test(railText) && /(en tren|by rail)/i.test(railText));
+  const speedLine = (railText.match(/(velocidad|speed)[^\n]*\n?[^\n]*\n?[^\n]*/i)?.[0] ?? railText.slice(0, 120)).replace(/\s+/g, ' ');
+  const railOk = /100 km\/h (en tren|by rail)/i.test(railText) && /≈ ?100 km por segundo a 1x|≈ ?100 km per second at 1x/i.test(railText);
+  row('V7', 'division by rail: the card reads the rail speed with its real-time equivalent (read on the tick it boards)', speedLine + (railOk ? '' : ` [${v7diag}]`),
+    '100 km/h en tren · ≈ 100 km por segundo a 1x', railOk);
   const bomber = await view(() => {
     const v = window.__front.ctx.sim.view;
     const u = [...v.units.values()].find((x) => x.owner === 1 && x.type === 5);

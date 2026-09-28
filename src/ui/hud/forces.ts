@@ -227,8 +227,29 @@ export function createForces(hs: HudShared): ForcesPanel {
   }
 
   // ---- refresh -----------------------------------------------------------------------------------
+  /**
+   * Dock the drawer so it never hides the time controls or the selected unit's card (FEEDBACK-1 item 7): it starts
+   * under the clock and speed widget, and while it is open the selection card moves to its left, above the build bar.
+   */
+  function dock(): void {
+    const root = el.parentElement;
+    if (!root) return;
+    root.classList.toggle('is-forces-open', isOpen);
+    if (!isOpen) return;
+    const time = root.querySelector<HTMLElement>('.fu-hud-tr .fu-time');
+    const tr = time?.getBoundingClientRect();
+    const top = tr && tr.height > 0 ? Math.round(tr.bottom + 8) : 14;
+    if (el.style.top !== `${top}px`) el.style.top = `${top}px`;
+    const bar = root.querySelector<HTMLElement>('.fu-hud-bottom-row')?.getBoundingClientRect();
+    const clear = bar && bar.height > 0 ? Math.round(window.innerHeight - bar.top + 10) : 14;
+    root.style.setProperty('--fu-forces-w', `${Math.round(el.getBoundingClientRect().width)}px`);
+    root.style.setProperty('--fu-forces-clear', `${clear}px`);
+  }
+  window.addEventListener('resize', () => dock());
+
   function update(): void {
     if (!isOpen) return;
+    dock();
     const v = view();
     const list = forces();
     const counts: Record<Tab, number> = { land: 0, air: 0, sea: 0, all: 0 };
@@ -322,6 +343,7 @@ export function createForces(hs: HudShared): ForcesPanel {
     isOpen = false;
     hs.forcesOpen = false;
     el.classList.add('fu-hidden');
+    dock();
     ctx.bus.emit('panelToggled', { panel: 'forces', open: false });
   }
   function toggle(): void {
