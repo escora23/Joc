@@ -8,7 +8,8 @@ import type { CameraState, GameContext } from '../../shared/api';
 import { HUMAN_ID } from '../../shared/constants';
 import { latLonToTile, worldTimeForSubsolarLon } from '../../shared/geo';
 import { registerShot } from '../../shared/shots';
-import { StructureType, UnitType } from '../../shared/types';
+import { StructureType, UnitState, UnitType } from '../../shared/types';
+import { isLandTerrain } from '../../shared/terrain';
 
 const at = (lat: number, lon: number) => latLonToTile(lat, lon);
 
@@ -169,3 +170,85 @@ registerShot('unit-closeup', 'units', 'One unit up close (&unit=Warship|Transpor
   ctx.cameraRig.setState({ lat, lon, altitudeKm: Number(params.get('alt') ?? 100), tilt: Number(params.get('tilt') ?? 0.6), heading: Number(params.get('heading') ?? 0) });
   await waitFrames(10);
 }, 8);
+
+/**
+ * Model gallery (owner clarification to FEEDBACK-1: every model clearly visible up close). Every structure type at
+ * levels 1-3 (cities 1 / 5 / 10) on Castilian land and the Valencian coast, 50 km apart, airbases with their docked
+ * aircraft, and every unit type (warship, convoy, trade ship, division, fighter patrol, bomber and drone sorties,
+ * train), paused. window.__gallery lists the subjects; tools/w4-closeups.mjs flies the camera to each one at 300 /
+ * 100 / 40 / 8 km and captures what the player sees.
+ */
+registerShot('model-gallery', 'units', 'Every unit and structure model (levels 1-3) staged for close-up review at 300 / 100 / 40 / 8 km (tools/w4-closeups.mjs)', async ({ ctx, wait, waitFrames, params }) => {
+  await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(Number(params.get('sun') ?? -45)) });
+  const sim = ctx.sim;
+  const S = StructureType;
+  sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.7, -3.4), radius: 18 });
+  sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.5, -0.7), radius: 9 });
+  const inland = [S.City, S.Factory, S.DefensePost, S.SamSite, S.MissileSilo, S.Airbase, S.ArmyBase, S.Radar];
+  const subjects: { name: string; kind: 'struct' | 'unit'; type: number; level: number; tile: number }[] = [];
+  inland.forEach((type, i) => {
+    const r = Math.floor(i / 2), c0 = (i % 2) * 3;
+    [1, 2, 3].forEach((L, c) => {
+      const level = type === S.City ? [1, 5, 10][c] : L;
+      const tile = at(40.75 - r * 0.5, -5.0 + (c0 + c) * 0.5);
+      subjects.push({ name: `${['city', 'port', 'factory', 'defensePost', 'samSite', 'silo', 'airbase', 'armyBase', 'navalYard', 'radar'][type]}${L}`, kind: 'struct', type, level, tile });
+    });
+  });
+  // Ports and naval yards on the coast between Castellón and Dénia (the first land tile west of the sea).
+  const w = ctx.world;
+  const coast = (lat: number): number => {
+    const t0 = at(lat, 0.6);
+    if (!w) return t0;
+    const y = Math.floor(t0 / w.width);
+    for (let x = t0 % w.width; x > (t0 % w.width) - 40; x--) {
+      const t = y * w.width + x;
+      if (w.terrain[t] !== undefined && isLandTerrain(w.terrain[t]) && !isLandTerrain(w.terrain[t + 1])) return t;
+    }
+    return t0;
+  };
+  [[S.Port, [40.35, 40.0, 39.65]], [S.NavalYard, [39.3, 39.0, 38.75]]].forEach(([type, lats]) => {
+    (lats as number[]).forEach((lat, c) => subjects.push({ name: `${type === S.Port ? 'port' : 'navalYard'}${c + 1}`, kind: 'struct', type: type as number, level: c + 1, tile: coast(lat) }));
+  });
+  for (const s of subjects) sim.debug({ type: 'spawnStructure', structure: s.type as StructureType, owner: HUMAN_ID, tile: s.tile, level: s.level });
+  await until(() => sim.view.structures.size >= subjects.length, 60000, wait);
+  // Docked aircraft: 3 / 6 / 9 squadrons on the airbases of levels 1 / 2 / 3 (fighters, bombers and drones).
+  for (const s of subjects.filter((x) => x.type === S.Airbase)) {
+    for (let i = 0; i < 3 * s.level; i++) {
+      const unit = i % 3 === 1 ? UnitType.Bomber : i % 3 === 2 ? UnitType.DroneSwarm : UnitType.FighterSquadron;
+      sim.debug({ type: 'spawnUnit', unit, owner: HUMAN_ID, tile: s.tile, targetTile: -1 });
+    }
+  }
+  const spawn = (unit: UnitType, from: [number, number], to?: [number, number]) =>
+    sim.debug({ type: 'spawnUnit', unit, owner: HUMAN_ID, tile: at(...from), targetTile: to ? at(...to) : -1 });
+  spawn(UnitType.Warship, [39.2, 1.0], [38.9, 2.2]);
+  spawn(UnitType.TransportShip, [39.7, 1.2], [39.3, 2.8]);
+  spawn(UnitType.TradeShip, [38.6, 1.1], [38.2, 3.2]);
+  spawn(UnitType.ArmoredDivision, [39.25, -1.2]);
+  spawn(UnitType.FighterSquadron, [39.9, -1.4], [39.9, -1.4]);
+  spawn(UnitType.Bomber, [38.9, -2.2], [38.3, -5.5]);
+  spawn(UnitType.DroneSwarm, [39.3, -2.6], [38.9, -5.0]);
+  spawn(UnitType.Train, [40.3, -1.2], [39.4, -3.9]);
+  sim.setSpeed(1);
+  const want = [UnitType.Warship, UnitType.TransportShip, UnitType.TradeShip, UnitType.ArmoredDivision, UnitType.FighterSquadron, UnitType.Bomber, UnitType.DroneSwarm, UnitType.Train];
+  const t0 = sim.view.tick;
+  await until(() => want.every((ty) => [...sim.view.units.values()].some((u) => u.type === ty && u.owner === HUMAN_ID && u.state !== UnitState.Docked)) && sim.view.tick >= t0 + 2, 30000, wait);
+  sim.setSpeed(0);
+  await waitFrames(6);
+  for (const ty of want) {
+    const u = [...sim.view.units.values()].find((x) => x.type === ty && x.owner === HUMAN_ID && x.state !== UnitState.Docked);
+    if (u) subjects.push({ name: ['transport', 'trade', 'warship', 'division', 'fighter', 'bomber', 'drone', 'cruise', 'atom', 'hbomb', 'mirv', 'warhead', 'sam', 'train', 'shell'][ty], kind: 'unit', type: ty, level: 1, tile: u.id });
+  }
+  (window as unknown as { __gallery?: unknown }).__gallery = { subjects };
+  const first = subjects[0];
+  ctx.cameraRig.setState({ lat: 90 - (Math.floor(first.tile / 1600) + 0.5) * 0.225, lon: ((first.tile % 1600) + 0.5) * 0.225 - 180, altitudeKm: 300, tilt: 0.5, heading: 0 });
+  await waitFrames(6);
+}, 6);
+
+async function until(cond: () => boolean, ms: number, wait: (ms: number) => Promise<void>): Promise<boolean> {
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    if (cond()) return true;
+    await wait(150);
+  }
+  return cond();
+}

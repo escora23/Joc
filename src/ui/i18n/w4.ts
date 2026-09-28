@@ -190,7 +190,7 @@ export const esW4: Record<string, string> = {
 
   // ---- the structure card (§7.6) --------------------------------------------------------------------------------
   'card.levelN': 'Nivel {n}/{max}',
-  'shot.levels.title': 'Niveles de estructura · modelos ampliados ×{k} para compararlos (en juego, a tamaño real)',
+  'shot.levels.real': 'Niveles de estructura a tamaño real · cámara a {km} km',
   'card.now': 'Ahora (nivel {n})',
   'card.nextLevel': 'Nivel {n}',
   'card.goldPerHour': '{n} oro/h',
@@ -519,7 +519,7 @@ export const enW4: Record<string, string> = {
   'card.group.hint': 'Right-click on the map: each unit gets the order that fits it.',
 
   'card.levelN': 'Level {n}/{max}',
-  'shot.levels.title': 'Structure levels · models enlarged ×{k} to compare them (in play, at real size)',
+  'shot.levels.real': 'Structure levels at real size · camera at {km} km',
   'card.now': 'Now (level {n})',
   'card.nextLevel': 'Level {n}',
   'card.goldPerHour': '{n} gold/h',

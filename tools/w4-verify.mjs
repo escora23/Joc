@@ -16,6 +16,7 @@
 //        structure card: now/next effects, gold/h, upgrade cost = upgradeCost, «Te faltan»          (acceptance 7)
 //   V9   __units.grounding(): residual < 5 % of the footprint, up deviation < 3°                    (acceptance 9)
 //   V10  structure models differ by level (vertex counts)                                           (acceptance 10)
+//   V11  a division by rail Sevilla -> Zaragoza: km / 100 h ± 10 %, on the rail line                  (acceptance 11)
 //   V14  a selected unit / structure draws its effect ring                                          (acceptance 14)
 //   V17  the hourglass badge while producing or building; no v2-stub markers                        (acceptance 17)
 import { chromium } from 'playwright';
@@ -408,8 +409,101 @@ if (want('V10')) {
   row('V10', 'structure models differ between L1, L2 and L3 (vertex counts)', `${distinct.length}/${types.length}: ${types.map((k) => `${k} ${m[k]}/${m[k + '2']}/${m[k + '3']}`).join(', ')}`.slice(0, 300), 'all 9 (cities grow by buildings)', distinct.length === types.length);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// V11 (acceptance 11): a division ordered between two rail-connected cities ~600 km apart (Sevilla -> Zaragoza)
+// arrives in km / 100 h ± 10 % of game time, travelling on the train (mode Rail) along the rail line: every sampled
+// sim position during the rail leg lies within 1.5 tiles of the chain of station-to-station links its route follows.
+if (want('V11')) {
+  const setup = await view(() => {
+    const { ctx } = window.__front;
+    const at = (la, lo) => Math.floor((90 - la) / 180 * 800) * 1600 + Math.floor((lo + 180) / 360 * 1600);
+    window.__fuHud.shared.select({ kind: 'none' });
+    ctx.sim.debug({ type: 'conquer', playerId: 1, centerTile: at(38.2, -4.9), radius: 11 });
+    ctx.sim.debug({ type: 'spawnStructure', structure: 0, owner: 1, tile: at(37.39, -5.98), level: 1 });
+    ctx.sim.setSpeed(4);
+    return { A: at(37.39, -5.98), B: at(41.65, -0.88), tick: ctx.sim.view.tick };
+  });
+  // The rail graph is rebuilt at most every 60 ticks: wait until the Sevilla station is linked.
+  const linked = await until((A) => {
+    const v = window.__front.ctx.sim.view;
+    const st = [...v.structures.values()].find((s) => s.tile === A);
+    if (!st) return null;
+    for (let i = 0; i + 1 < v.rail.length; i += 2) if (v.rail[i] === st.id || v.rail[i + 1] === st.id) return st.id;
+    return null;
+  }, setup.A, 180000, 500);
+  const v11 = { hours: -1, km: 0, railSamples: 0, offLine: 0, worstTiles: 0, mode2: false };
+  if (linked) {
+    await view((A) => {
+      const { ctx } = window.__front;
+      ctx.sim.setSpeed(1);
+      ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: A, targetTile: -1 });
+    }, setup.A);
+    const id = await until((A) => {
+      const near = [...window.__front.ctx.sim.view.units.values()].filter((x) => x.owner === 1 && x.type === 3 && Math.abs(x.x - (A % 1600) - 0.5) < 1.5 && Math.abs(x.y - Math.floor(A / 1600) - 0.5) < 1.5);
+      return near.length ? Math.max(...near.map((x) => x.id)) : null;
+    }, setup.A, 30000, 300);
+    if (id) {
+      const t0 = await view(({ id, B }) => {
+        const { ctx } = window.__front;
+        ctx.sim.setSpeed(0);
+        ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: 'move', tile: B, targetId: 0 });
+        return ctx.sim.view.tick;
+      }, { id, B: setup.B });
+      const path = (await until((id) => {
+        const r = window.__front.ctx.sim.view.routes.get(id);
+        return r && r.length ? [...r] : null;
+      }, id, 20000, 200)) ?? [];
+      // The station tiles on its route, in order (the rail leg runs link by link between them).
+      const legs = await view((path) => {
+        const byTile = new Map([...window.__front.ctx.sim.view.structures.values()].map((s) => [s.tile, s]));
+        return path.filter((t) => byTile.has(t)).map((t) => [(t % 1600) + 0.5, Math.floor(t / 1600) + 0.5]);
+      }, path);
+      await view(() => window.__front.ctx.sim.setSpeed(4));
+      const segDist = (px, py) => {
+        let best = Infinity;
+        for (let i = 0; i + 1 < legs.length; i++) {
+          const [ax, ay] = legs[i], [bx, by] = legs[i + 1];
+          const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
+          const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2));
+          best = Math.min(best, Math.hypot(ax + t * dx - px, ay + t * dy - py));
+        }
+        return best;
+      };
+      let arrived = null;
+      const end = Date.now() + 300000;
+      while (Date.now() < end) {
+        const s = await view(({ id, B }) => {
+          const { ctx } = window.__front;
+          const u = ctx.sim.view.units.get(id);
+          if (!u) return { gone: true };
+          return { x: u.x, y: u.y, mode: u.mode, tick: ctx.sim.view.tick, done: Math.abs(u.x - (B % 1600) - 0.5) < 1.2 && Math.abs(u.y - Math.floor(B / 1600) - 0.5) < 1.2 && u.mode !== 2 && u.etaTicks <= 0 };
+        }, { id, B: setup.B });
+        if (s.gone) break;
+        if (s.mode === 2) {
+          v11.mode2 = true;
+          v11.railSamples++;
+          const d = segDist(s.x, s.y);
+          v11.worstTiles = Math.max(v11.worstTiles, d);
+          if (d > 1.5) v11.offLine++;
+        }
+        if (s.done) { arrived = s.tick; break; }
+        await sleep(250);
+      }
+      await view(() => window.__front.ctx.sim.setSpeed(0));
+      const [ax, ay] = [(setup.A % 1600) + 0.5, Math.floor(setup.A / 1600) + 0.5], [bx, by] = [(setup.B % 1600) + 0.5, Math.floor(setup.B / 1600) + 0.5];
+      const rad = Math.PI / 180;
+      const la1 = (90 - ay * 0.225) * rad, la2 = (90 - by * 0.225) * rad, dl = (bx - ax) * 0.225 * rad;
+      v11.km = 6371 * Math.acos(Math.min(1, Math.sin(la1) * Math.sin(la2) + Math.cos(la1) * Math.cos(la2) * Math.cos(dl)));
+      v11.hours = arrived !== null ? (arrived - t0) / 10 : -1;
+    }
+  }
+  row('V11', `Sevilla -> Zaragoza by rail (${v11.km.toFixed(0)} km): arrival in game hours`, linked ? `${v11.hours.toFixed(1)} h (${v11.mode2 ? 'on the train' : 'never on the train'})` : 'Sevilla never linked', `${(v11.km / 100).toFixed(1)} h ± 10 %`, !!linked && v11.mode2 && Math.abs(v11.hours / (v11.km / 100) - 1) <= 0.1);
+  row('V11', 'on the rail line while on the train (sim positions within 1.5 tiles of its station-to-station links)', `${v11.railSamples - v11.offLine}/${v11.railSamples} samples, worst ${v11.worstTiles.toFixed(2)} tiles`, 'all, >= 5 samples', v11.railSamples >= 5 && v11.offLine === 0);
+  await shot('v11-rail');
+}
+
 if (want('V14')) {
-  const checks = [[4, 'SAM'], [3, 'defense post'], [6, 'airbase'], [7, 'army base'], [9, 'radar']];
+  const checks =[[4, 'SAM'], [3, 'defense post'], [6, 'airbase'], [7, 'army base'], [9, 'radar']];
   const res = [];
   for (const [type, name] of checks) {
     const n = await view((type) => {

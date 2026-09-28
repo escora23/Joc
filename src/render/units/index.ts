@@ -28,7 +28,7 @@ import { viewRules } from '../../sim/rulesView';
 import { fxInternal, type FxInternal } from '../fx';
 import { PK } from '../fx/particles';
 import type { Trail, TrailStyleKey } from '../fx/trails';
-import { airHeightKm, ballisticApexKm, env, refreshEnv, unitSizeKm } from './common';
+import { airHeightKm, ballisticApexKm, env, refreshEnv, unitMinPxOf, unitSizeKm } from './common';
 import { ModelBuilder } from './geom';
 import { createModelMaterial, minPxScale, structFade, unitFade } from './material';
 import { IconLayer, unitCategory, type IconHit } from './icons';
@@ -80,19 +80,23 @@ const STRUCT_INFO: Record<StructureType, { key: StructModelKey; km: number }> = 
 function structKm(type: StructureType, level: number): number {
   const base = STRUCT_INFO[type].km;
   if (type === StructureType.City) return base + 0.35 * Math.min(10, Math.max(1, level));
-  return base * (1 + 0.05 * (Math.max(1, Math.min(3, level)) - 1));
+  // Each level adds 10 % to the footprint: an upgraded base is visibly bigger as well as busier (§6.5).
+  return base * (1 + 0.1 * (Math.max(1, Math.min(3, level)) - 1));
 }
 
-/** Minimum on-screen size of a structure model (px) while models fade in from orbit (per base type). */
-const STRUCT_MIN_PX = ((): Record<StructModelKey, number> => {
-  const base: Record<string, number> = {
-    cityBase: 30, port: 26, factory: 24, defensePost: 18, samSite: 22, silo: 22, airbase: 30, armyBase: 24,
-    navalYard: 26, radar: 20, radarDish: 20, beacon: 9, pad: 24, padRound: 24,
-  };
-  const out = {} as Record<StructModelKey, number>;
-  for (const k of STRUCT_MODELS) out[k] = base[k.replace(/[23]$/, '')] ?? 22;
-  return out;
-})();
+/**
+ * Per-type factor on the structure minimum on-screen size (lod.structMinPx): airbases and cities are drawn a little
+ * larger than a radar or a bunker. Every part of one structure (foundation pad, model, city buildings, radar dish)
+ * scales about the same anchor with the same size, so they never drift apart.
+ */
+const STRUCT_PX_K: Record<StructureType, number> = {
+  [StructureType.City]: 1.2, [StructureType.Port]: 1.1, [StructureType.Factory]: 1.05, [StructureType.DefensePost]: 0.95,
+  [StructureType.SamSite]: 1.0, [StructureType.MissileSilo]: 0.95, [StructureType.Airbase]: 1.3, [StructureType.ArmyBase]: 1.05,
+  [StructureType.NavalYard]: 1.1, [StructureType.Radar]: 0.95,
+};
+
+/** Quantization of the drawn structure size on the CPU (quarter octaves): the relief fit is recomputed per step. */
+const SCALE_STEPS_PER_OCTAVE = 4;
 
 const MAX_BUILDINGS = 26000;
 const MAX_SPIRES = 1536;
@@ -105,7 +109,11 @@ const BUILDING_COLORS = [0xc9c3b6, 0xa9b4bf, 0x8d9aa6, 0xd8d6d0, 0x6f7f8e, 0xb8a
  *   900-1,500 km     unit models fade in from 1,200 km (min 12 px); structures icons only
  *   600-900 km       unit icons shrink to 14 px and float above the models; structure models fade in from 900 km
  *   250-600 km       unit models with a 6 px owner pip above each; structures icons + models
- *   < 250 km         models only (real size below 60 km); structure level shown on hover/selection by the card
+ *   < 250 km         models only; structure level shown on hover/selection by the card
+ * Minimum on-screen sizes grow as the camera descends (owner clarification to FEEDBACK-1: every model clearly
+ * visible up close): units 32 px at 600 km, 40 at 300, 52 at 100, 64 from 30 km (times their UNIT_LOOK.pxK);
+ * structures 20 px at 600 km, 34 at 250, 46 at 100, 50 from 40 km (times STRUCT_PX_K). Below ~40 km most structures
+ * are drawn at their real footprint (2.5-6.6 km), which is larger than the minimum.
  */
 export interface IconLod {
   unitModelFade: number;
@@ -114,7 +122,8 @@ export interface IconLod {
   unitIconMode: 0 | 1 | 2;
   structIcons: boolean;
   unitMinPx: number;
-  structMinPxScale: number;
+  /** Minimum on-screen footprint of structure models (px, before STRUCT_PX_K). */
+  structMinPx: number;
   /**
    * Strategic world view (above 8,000 km): only the human's and hostile-to-human military icons (clustered); trade
    * ships, trains, structures and other nations' units are hidden, and no icon covers a nation label (FEEDBACK-1 #4).
@@ -125,16 +134,30 @@ export interface IconLod {
 /** Above this camera altitude the icon layer switches to the strategic world view (IconLod.worldView). */
 export const WORLD_VIEW_KM = 8000;
 
+/** [altitude km, px] from high to low; linear in log-altitude between points, flat beyond the ends. */
+const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 32], [300, 40], [100, 52], [30, 64]];
+const STRUCT_PX_CURVE: readonly [number, number][] = [[1200, 12], [600, 20], [250, 34], [100, 46], [40, 50]];
+function pxCurve(altKm: number, c: readonly [number, number][]): number {
+  if (altKm >= c[0][0]) return c[0][1];
+  for (let i = 1; i < c.length; i++) {
+    if (altKm >= c[i][0]) {
+      const t = Math.log(c[i - 1][0] / altKm) / Math.log(c[i - 1][0] / c[i][0]);
+      return c[i - 1][1] + (c[i][1] - c[i - 1][1]) * t;
+    }
+  }
+  return c[c.length - 1][1];
+}
+
 export function iconLod(altKm: number, out: IconLod): IconLod {
   out.unitModelFade = clamp((1200 - altKm) / 300, 0, 1);
   out.structModelFade = clamp((900 - altKm) / 250, 0, 1);
   out.unitIconMode = altKm > 900 ? 0 : altKm > 600 ? 1 : 2;
   out.worldView = altKm > WORLD_VIEW_KM;
   out.structIcons = altKm > 250 && !out.worldView;
-  // Models fade in small under the icons (12 px), then grow to a clearly readable 32 px from 600 km down to the
-  // lowest camera altitude (owner clarification to FEEDBACK-1: close-zoom models must be clearly visible).
-  out.unitMinPx = altKm >= 900 ? 12 : altKm <= 600 ? 32 : 12 + 20 * (900 - altKm) / 300;
-  out.structMinPxScale = altKm > 250 ? 0.5 : clamp((altKm - 120) / 130, 0, 1) * 0.5;
+  // Models fade in small under the icons (12 px), then keep growing as the camera descends so that up close every
+  // model is clearly visible (owner clarification to FEEDBACK-1), never a speck.
+  out.unitMinPx = pxCurve(altKm, UNIT_PX_CURVE);
+  out.structMinPx = pxCurve(altKm, STRUCT_PX_CURVE);
   return out;
 }
 
@@ -174,8 +197,8 @@ interface CitySpec {
   spires: number;
 }
 
-interface RadarInfo { id: number; anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; col: THREE.Color; built: number; hp: number; sel: number }
-interface FactoryInfo { anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; acc: number; level: number }
+interface RadarInfo { id: number; anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; aS: number; col: THREE.Color; built: number; hp: number; sel: number }
+interface FactoryInfo { anchor: THREE.Vector3; e: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; S: number; k: number; acc: number; level: number }
 
 export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const root = new THREE.Group();
@@ -190,15 +213,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   let overlays: Overlays | null = null;
   let icons: IconLayer | null = null;
   let built = false;
-  const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPxScale: 0.5, worldView: false };
+  const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPx: 12, worldView: false };
   const relations = relationsFor(ctx);
   let structModelsOn = false;
-  /**
-   * Presentation aid for the structures-levels gallery shots only (never set in play): every structure model is drawn
-   * this many times its real footprint so the L1 / L2 / L3 geometry reads side by side (the tiles are 25 km apart,
-   * the real models 2.5-6 km). Set through __units.showcase(k); 1 = real size.
-   */
-  let showcaseScale = 1;
   const routes = new RouteManager();
   // The after-arrival hold and fade of route lines run on real seconds (frozen with &freeze=1), evaluated every frame
   // and also on this timer, so a slow or stalled frame never leaves a line drawn past its hold + fade (§10.8).
@@ -329,15 +346,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
 
   async function build(progress: (f: number) => void): Promise<void> {
     const unitMat = createModelMaterial();
-    const structMats = new Map<number, THREE.ShaderMaterial>();
-    const structMat = (px: number) => {
-      let m = structMats.get(px);
-      if (!m) {
-        m = createModelMaterial({ anchored: true, minPx: px });
-        structMats.set(px, m);
-      }
-      return m;
-    };
+    // One material for every structure part: the shader's minimum size is minPxScale (px, lod.structMinPx) against
+    // the anchor size, which carries the per-type factor (see anchorSize()).
+    const structMatAll = createModelMaterial({ anchored: true, minPx: 1 });
+    const structMat = (_px: number) => structMatAll;
     let k = 0;
     const total = UNIT_MODELS.length + STRUCT_MODELS.length + 2;
     for (const key of UNIT_MODELS) {
@@ -345,16 +357,16 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       progress(++k / total);
       if (k % 4 === 0) await new Promise((r) => setTimeout(r, 0));
     }
-    const beaconMat = createModelMaterial({ anchored: true, beacon: true, minPx: STRUCT_MIN_PX.beacon });
+    const beaconMat = createModelMaterial({ anchored: true, beacon: true, minPx: 0.4 });
     for (const key of STRUCT_MODELS) {
-      const mat = key === 'beacon' ? beaconMat : structMat(STRUCT_MIN_PX[key]);
+      const mat = key === 'beacon' ? beaconMat : structMat(1);
       structMeshes[key] = makeInst(buildStructModel(key), mat, STRUCT_CAP[key], true, `struct-${key}`);
       progress(++k / total);
       if (k % 4 === 0) await new Promise((r) => setTimeout(r, 0));
     }
-    const cityMat = createModelMaterial({ anchored: true, city: true, minPx: STRUCT_MIN_PX.cityBase });
+    const cityMat = createModelMaterial({ anchored: true, city: true, minPx: 1 });
     buildings = makeInst(buildBuilding(), cityMat, MAX_BUILDINGS, true, 'city-buildings');
-    spires = makeInst(buildSpire(), structMat(STRUCT_MIN_PX.cityBase), MAX_SPIRES, true, 'city-spires');
+    spires = makeInst(buildSpire(), structMat(1), MAX_SPIRES, true, 'city-spires');
     progress(++k / total);
     rails = new SurfaceRibbon(60000, { widthKm: 0.3, minPx: 0.65, opacity: 0.85, lift: 1.2, name: 'units-rails', renderOrder: 6 });
     root.add(rails.mesh);
@@ -810,6 +822,13 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return routeEnv;
   }
 
+  /**
+   * Parked aircraft on the apron: length as a fraction of the drawn airbase footprint (slots are 0.11 apart), and a
+   * minimum on-screen length (px) so a docked squadron reads as an aircraft, not a speck, at 40 km and below.
+   */
+  const PARKED: Record<4 | 5 | 6, number> = { 4: 0.1, 5: 0.068, 6: 0.055 };
+  const PARKED_PX: Record<4 | 5 | 6, number> = { 4: 18, 5: 20, 6: 14 };
+
   /** Apron slot of a docked aircraft: its rank among the docked aircraft of its base (by id), rebuilt per frame. */
   const dockRank = new Map<number, number>();
   let dockFrame = -1;
@@ -828,6 +847,30 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       }
     }
     return dockRank.get(u.id) ?? -1;
+  }
+
+  /** Relief radius under a world direction. */
+  function radiusUnder(v: THREE.Vector3): number {
+    const l = v.length();
+    return ctx.globe.surfaceRadiusAt(Math.asin(clamp(v.y / l, -1, 1)) * (180 / Math.PI), Math.atan2(-v.z, v.x) * (180 / Math.PI));
+  }
+
+  /**
+   * Stand one tank of size s (world units) on the relief at Q: its up vector follows the slope under its tracks
+   * (front/back and left/right samples, at most 30 degrees), its base at the highest of the centre and the mean of the
+   * samples, so an enlarged tank never sinks into a hillside nor hangs over it. Writes Q and the basis tR/tU/tB.
+   */
+  const tR = new THREE.Vector3(), tU = new THREE.Vector3(), tB = new THREE.Vector3(), tA = new THREE.Vector3();
+  function groundTank(q: THREE.Vector3, s: number): void {
+    q.normalize();
+    const hC = radiusUnder(q);
+    const hF = radiusUnder(tA.copy(q).addScaledVector(B, -0.42 * s)), hBk = radiusUnder(tA.copy(q).addScaledVector(B, 0.42 * s));
+    const hR = radiusUnder(tA.copy(q).addScaledVector(R, 0.2 * s)), hL = radiusUnder(tA.copy(q).addScaledVector(R, -0.2 * s));
+    const slopeF = clamp((hF - hBk) / (0.84 * s), -0.58, 0.58), slopeR = clamp((hR - hL) / (0.4 * s), -0.58, 0.58);
+    tU.copy(q).addScaledVector(B, slopeF).addScaledVector(R, -slopeR).normalize();
+    tR.copy(R).addScaledVector(tU, -R.dot(tU)).normalize();
+    tB.copy(B).addScaledVector(tU, -B.dot(tU)).addScaledVector(tR, -B.dot(tR)).normalize();
+    q.multiplyScalar(Math.max(hC, (hF + hBk + hR + hL) / 4));
   }
 
   function updateUnits(frame: FrameInfo, fx: FxInternal | undefined): void {
@@ -860,7 +903,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         const slot = dockSlot(u);
         if (base && g && slot >= 0) {
           const [sx, sz] = AIRBASE_SLOTS[slot % AIRBASE_SLOTS.length];
-          T.copy(g.anchor).addScaledVector(g.right, sx * g.S).addScaledVector(g.back, sz * g.S).addScaledVector(g.up, 0.016 * g.S);
+          const Se = drawnStructSize(base, g);
+          T.copy(g.anchor).addScaledVector(g.right, sx * Se).addScaledVector(g.back, sz * Se).addScaledVector(g.up, 0.006 * Se);
         } else {
           tileXYToLatLon(u.x, u.y, ll2);
           latLonToVec3(ll2.lat, ll2.lon, ctx.globe.surfaceRadiusAt(ll2.lat, ll2.lon), T);
@@ -872,16 +916,26 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         t.lon = ll2.lon;
         t.hasPos = true;
         t.size = g ? g.S * 0.07 * EARTH_RADIUS_KM : 0.4;
-        if (key && g && structModelsOn && lod.structModelFade > 0) {
-          const s = g.S * (u.type === UnitType.Bomber ? 0.13 : 0.1);
+        if (key && g && base && slot >= 0 && structModelsOn && lod.structModelFade > 0) {
+          // The base as drawn this frame (its minimum on-screen size may enlarge it): slot positions and aircraft
+          // follow it. Aircraft keep a small minimum on-screen size of their own, capped so neighbours never touch.
+          const Se = drawnStructSize(base, g);
+          const [sx, sz] = AIRBASE_SLOTS[slot % AIRBASE_SLOTS.length];
+          T.copy(g.anchor).addScaledVector(g.right, sx * Se).addScaledVector(g.back, sz * Se).addScaledVector(g.up, 0.006 * Se);
+          t.pos.copy(T);
+          t.ground.copy(T);
+          const frac = PARKED[u.type as 4 | 5 | 6] ?? 0.1;
+          const wpp = env.pixelK * env.camPos.distanceTo(T);
+          const s = Math.min(frac * Se * 1.25, Math.max(frac * Se, PARKED_PX[u.type as 4 | 5 | 6] * wpp));
+          t.size = s * EARTH_RADIUS_KM;
           F.copy(g.back).negate();
           const sel = selectedUnits.has(u.id) ? 1 : 0;
           const col = ownerColor(u.owner);
           const im = unitMeshes[key];
           if (u.type === UnitType.DroneSwarm) {
             for (let j = 0; j < 3; j++) {
-              Q.copy(T).addScaledVector(g.right, (j - 1) * s * 0.8);
-              put(im, Q, g.right, g.up, g.back, s * 0.6, s * 0.6, s * 0.6, col, 1, sel, u.hp, 0);
+              Q.copy(T).addScaledVector(g.right, (j - 1) * s * 0.75).addScaledVector(g.back, (j === 1 ? -0.25 : 0.1) * s);
+              put(im, Q, g.right, g.up, g.back, s * 0.7, s * 0.7, s * 0.7, col, 1, sel, u.hp, 0);
             }
           } else put(im, T, g.right, g.up, g.back, s, s, s, col, 1, sel, u.hp, 0);
         }
@@ -893,14 +947,16 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const heading = lerpAngle(u.prevHeading, u.heading, a);
       let s = pose(u, t, x, y, alt, heading, unitK, true);
       // Minimum rendered size (owner clarification to FEEDBACK-1: close models clearly visible): the model's projected
-      // bounding box must reach lod.unitMinPx (32 px below 600 km) whatever the view angle; a ship seen bow-on or a
-      // flat hull seen from above is scaled up until its drawn box does (at most 4x).
+      // bounding box must reach its minimum on-screen size (lod.unitMinPx x UNIT_LOOK.pxK: 40 px for a ship at 300 km,
+      // 52 at 100 km, 64 from 30 km) whatever the view angle; a ship seen bow-on or a flat hull seen from above is
+      // scaled up until its drawn box does (at most 4x).
       const measured = !!key && lod.unitModelFade > 0 && !isProjectile(u.type);
       if (measured && key) {
+        const want = unitMinPxOf(u.type);
         resetPBox();
         projectInstance(boxOf(unitMeshes[key]), P, R, UP, B, s, s, s);
         const ext = pboxPx();
-        if (ext > 0.5 && ext < lod.unitMinPx) s = pose(u, t, x, y, alt, heading, unitK * Math.min(4, lod.unitMinPx / ext), false);
+        if (ext > 0.5 && ext < want) s = pose(u, t, x, y, alt, heading, unitK * Math.min(4, want / ext), false);
       }
       t.lat = ll.lat;
       t.lon = ll.lon;
@@ -947,9 +1003,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           const tanks = Math.max(1, Math.min(4, Math.ceil(hp * 4 - 1e-6)));
           for (let j = 0; j < tanks; j++) {
             Q.copy(G).addScaledVector(R, TANK_OFFS[j][0] * s).addScaledVector(B, TANK_OFFS[j][1] * s);
-            Q.normalize();
-            const rr = ctx.globe.surfaceRadiusAt(Math.asin(clamp(Q.y, -1, 1)) * (180 / Math.PI), Math.atan2(-Q.z, Q.x) * (180 / Math.PI));
-            put(im, Q.multiplyScalar(rr), R, UP, B, s, s, s, col, 1, sel, hp, seed);
+            groundTank(Q, s);
+            put(im, Q, tR, tU, tB, s, s, s, col, 1, sel, hp, seed);
           }
           break;
         }
@@ -1195,6 +1250,34 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return g;
   }
 
+  /** The footprint a structure is drawn at this frame (world units): the grounded size, enlarged by the shader's minimum. */
+  function drawnStructSize(st: StructureView, g: Ground): number {
+    return Math.max(g.S, STRUCT_PX_K[st.type] * lod.structMinPx * env.pixelK * env.camPos.distanceTo(g.anchor));
+  }
+
+  /**
+   * The size step each structure is grounded and drawn at (a quarter-octave multiple of its real footprint, >= 1): at
+   * mid zoom a structure is drawn larger than life to keep its minimum on-screen size, and it must then stand on
+   * the relief under THAT footprint (fitted plane, raised base, pad down to the lowest point), or an enlarged model
+   * would sink into hills or hang over valleys. The shader tops the size up continuously within the step.
+   */
+  const drawStep = new Map<number, number>();
+  function refreshDrawSteps(): void {
+    if (!structModelsOn) return;
+    const px = lod.structMinPx;
+    for (const st of ctx.sim.view.structures.values()) {
+      const a = structAnchor.get(st.id);
+      if (!a) continue;
+      const S0 = structKm(st.type, st.level) / EARTH_RADIUS_KM;
+      const need = (STRUCT_PX_K[st.type] * px * env.pixelK * env.camPos.distanceTo(a)) / S0;
+      const q = need <= 1 ? 1 : Math.min(16, Math.pow(2, Math.floor(Math.log2(need) * SCALE_STEPS_PER_OCTAVE) / SCALE_STEPS_PER_OCTAVE));
+      if (drawStep.get(st.id) !== q) {
+        drawStep.set(st.id, q);
+        structDirty = true;
+      }
+    }
+  }
+
   function updateStructures(): void {
     const view = ctx.sim.view;
     for (const key of STRUCT_MODELS) structMeshes[key].n = 0;
@@ -1208,12 +1291,15 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         structHeading.delete(id);
         cityCache.delete(id);
         grounds.delete(id);
+        drawStep.delete(id);
       }
     }
     for (const st of view.structures.values()) {
       const h = headingFor(st);
-      const S = (structKm(st.type, st.level) * showcaseScale) / EARTH_RADIUS_KM;
+      const S = (structKm(st.type, st.level) / EARTH_RADIUS_KM) * (structModelsOn ? drawStep.get(st.id) ?? 1 : 1);
       const g = groundOf(st, S, h);
+      // Anchor size: the shader keeps the model at least STRUCT_PX_K x lod.structMinPx px wide (see material.ts).
+      const aS = S / STRUCT_PX_K[st.type];
       let anchor = structAnchor.get(st.id);
       if (!anchor) {
         anchor = new THREE.Vector3();
@@ -1234,12 +1320,14 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const coastal = st.type === StructureType.Port || st.type === StructureType.NavalYard;
       const round = st.type === StructureType.City || st.type === StructureType.DefensePost || st.type === StructureType.SamSite;
       tmpColor.setHex(0xffffff);
-      if (round) put(structMeshes.padRound, anchor, g.right, g.up, g.back, S * 1.0, g.pad, S * 1.0, tmpColor, st.built, sel, st.hp, seed, anchor, S);
+      // The pad's top sits just under the model's ground plate (0.6 % of the footprint), so the two never z-fight.
+      P.copy(anchor).addScaledVector(g.up, -0.006 * S);
+      if (round) put(structMeshes.padRound, P, g.right, g.up, g.back, S * 1.0, g.pad, S * 1.0, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
       else if (coastal) {
-        Q.copy(anchor).addScaledVector(g.back, 0.2 * S);
-        put(structMeshes.pad, Q, g.right, g.up, g.back, S * 1.02, g.pad, S * 0.62, tmpColor, st.built, sel, st.hp, seed, anchor, S);
-      } else put(structMeshes.pad, anchor, g.right, g.up, g.back, S * 1.03, g.pad, S * 1.03, tmpColor, st.built, sel, st.hp, seed, anchor, S);
-      put(structMeshes[levelKey(info.key, st.level)], anchor, g.right, g.up, g.back, S, S, S, col, st.built, sel, st.hp, seed, anchor, S);
+        Q.copy(P).addScaledVector(g.back, 0.2 * S);
+        put(structMeshes.pad, Q, g.right, g.up, g.back, S * 1.02, g.pad, S * 0.62, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
+      } else put(structMeshes.pad, P, g.right, g.up, g.back, S * 1.03, g.pad, S * 1.03, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
+      put(structMeshes[levelKey(info.key, st.level)], anchor, g.right, g.up, g.back, S, S, S, col, st.built, sel, st.hp, seed, anchor, aS);
       if (st.type === StructureType.City) {
         const capital = view.players[st.owner]?.capitalTile === st.tile;
         const cs = citySpec(st, capital);
@@ -1252,19 +1340,19 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           bB.copy(g.back).multiplyScalar(cr).addScaledVector(g.right, -sr);
           Q.copy(anchor).addScaledVector(g.right, bx * S).addScaledVector(g.back, bz * S).addScaledVector(g.up, 0.004 * S);
           tmpColor.setHex(BUILDING_COLORS[cs.b[o + 6] | 0]);
-          put(buildings!, Q, bR, g.up, bB, w, hh, d, tmpColor, st.built, sel, cs.b[o + 7], 2 + (i % 2), anchor, S);
+          put(buildings!, Q, bR, g.up, bB, w, hh, d, tmpColor, st.built, sel, cs.b[o + 7], 2 + (i % 2), anchor, aS);
           if (hh > 0.2 * S && sp < cs.spires) {
             sp++;
             T.copy(Q).addScaledVector(g.up, hh);
-            put(spires!, T, bR, g.up, bB, w, w * 1.4, d, col, st.built, sel, st.hp, seed, anchor, S);
+            put(spires!, T, bR, g.up, bB, w, w * 1.4, d, col, st.built, sel, st.hp, seed, anchor, aS);
           }
         }
       } else if (st.type === StructureType.Radar) {
         F.copy(g.back).negate();
-        radarList.push({ id: st.id, anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, col: col.clone(), built: st.built, hp: st.hp, sel });
+        radarList.push({ id: st.id, anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, aS, col: col.clone(), built: st.built, hp: st.hp, sel });
       } else if (st.type === StructureType.Factory && st.built >= 1) {
         F.copy(g.back).negate();
-        factoryList.push({ anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, acc: Math.random(), level: Math.max(1, Math.min(3, st.level)) });
+        factoryList.push({ anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, k: STRUCT_PX_K[st.type], acc: Math.random(), level: Math.max(1, Math.min(3, st.level)) });
       }
     }
     for (const key of STRUCT_MODELS) if (key !== 'radarDish') commit(structMeshes[key]);
@@ -1298,7 +1386,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         bB.copy(r.n).multiplyScalar(-ca).addScaledVector(r.e, sa);
         // Tower top in model units (0.1, 0.38, -0.05) -> world (model -Z = forward n).
         Q.copy(r.anchor).addScaledVector(r.e, 0.1 * r.S).addScaledVector(r.u, 0.38 * r.S).addScaledVector(r.n, 0.05 * r.S);
-        put(dish, Q, bR, r.u, bB, r.S, r.S, r.S, r.col, r.built, r.sel, r.hp, 0, r.anchor, r.S);
+        put(dish, Q, bR, r.u, bB, r.S, r.S, r.S, r.col, r.built, r.sel, r.hp, 0, r.anchor, r.aS);
       }
     }
     commit(dish);
@@ -1314,7 +1402,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       T.subVectors(env.camPos, f.anchor);
       if (T.dot(f.anchor) < 0) continue;
       const dist = T.length();
-      const Se = Math.max(f.S, STRUCT_MIN_PX.factory * minPxScale.value * env.pixelK * dist);
+      const Se = Math.max(f.S, f.k * lod.structMinPx * env.pixelK * dist);
       // Stacks of models.ts factory(L): 2 per level along the back edge (x = -0.42 + 0.08 i, z = +0.38).
       const i = Math.floor(fx.particles.rand() * 2 * f.level);
       const lx = -0.42 + i * 0.08;
@@ -1513,7 +1601,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const type = preview.build.structure as StructureType;
       const km = structKm(type, 1);
       ov.ring({ lat: ll.lat, lon: ll.lon, radiusKm: km * 0.7, minPx: 22, style: 3, color: preview.build.valid ? 0x3dff8a : 0xff4030, alpha: 0.9 }, radiusAt);
-      ov.ghost(String(type), ll, km, STRUCT_MIN_PX[STRUCT_INFO[type].key] * minPxScale.value, preview.build.valid, radiusAt, env.camPos, env.pixelK);
+      ov.ghost(String(type), ll, km, STRUCT_PX_K[type] * lod.structMinPx, preview.build.valid, radiusAt, env.camPos, env.pixelK);
     } else ov.ghost(null, null, 0, 0, false, radiusAt, env.camPos, env.pixelK);
     // Order path (§7.4): one line per selected unit to the order's target, cyan when it can comply, red when not.
     ov.path.begin();
@@ -1624,10 +1712,24 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       }
       return out;
     },
-    /** Gallery shots only: draw structure models k times their real size (1 = real size). */
-    showcase(k: number): void {
-      showcaseScale = Math.max(1, Math.min(8, k || 1));
-      structDirty = true;
+    /**
+     * On-screen size of what is drawn for a unit (its whole formation) or a structure this frame: the projected box
+     * of the model(s) in CSS px (px = the larger side). tools/w4-closeups.mjs reads it at 300 / 100 / 40 / 8 km.
+     */
+    sizeOf(kind: 'unit' | 'struct', id: number): { px: number; w: number; h: number; scale: number } | null {
+      if (kind === 'unit') {
+        const m = modelView.list.find((x) => x.id === id);
+        return m ? { px: m.px, w: m.w, h: m.h, scale: 1 } : null;
+      }
+      const st = [...ctx.sim.view.structures.values()].find((x) => x.tile === id) ?? ctx.sim.view.structures.get(id);
+      if (!st) return null;
+      const g = grounds.get(st.id);
+      if (!g) return null;
+      const key = levelKey(STRUCT_INFO[st.type].key, st.level);
+      const Se = drawnStructSize(st, g);
+      resetPBox();
+      projectInstance(boxOf(structMeshes[key]), g.anchor, g.right, g.up, g.back, Se, Se, Se);
+      return { px: +pboxPx().toFixed(1), w: Math.round(pbox.x1 - pbox.x0), h: Math.round(pbox.y1 - pbox.y0), scale: +(Se / (structKm(st.type, st.level) / EARTH_RADIUS_KM)).toFixed(2) };
     },
     /** Geometry of every structure model key (vertex count): level variants differ (structures-levels, §6.5). */
     modelStats: () => Object.fromEntries(STRUCT_MODELS.map((k) => [k, structMeshes[k]?.mesh.geometry.getAttribute('position').count ?? 0])),
@@ -1755,7 +1857,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       unitFade.value = lod.unitModelFade;
       structFade.value = lod.structModelFade;
       env.unitMinPx = lod.unitMinPx;
-      minPxScale.value = lod.structMinPxScale;
+      minPxScale.value = lod.structMinPx;
       const wantStructModels = lod.structModelFade > 0;
       if (wantStructModels !== structModelsOn) {
         structModelsOn = wantStructModels;
@@ -1787,6 +1889,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         structDirty = true;
         railDirty = true;
       }
+      refreshDrawSteps();
       if (structDirty) {
         structDirty = false;
         updateStructures();

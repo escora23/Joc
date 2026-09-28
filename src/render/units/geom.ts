@@ -205,6 +205,132 @@ export class ModelBuilder {
     return this.add(g, color, { ...o, flat: true });
   }
 
+  /**
+   * Box whose top face is scaled (sloped sides): bottom w x d, top tw x td, from y to y + h, centered on (x, z).
+   * Stealthy superstructures, bunkers, pyramids, hipped roofs.
+   */
+  frustum(w: number, d: number, tw: number, td: number, h: number, x: number, y: number, z: number, color: number, o: PaintOpts = {}): this {
+    const a = w / 2, b = d / 2, c = tw / 2, e = td / 2;
+    const B = [[-a, 0, -b], [a, 0, -b], [a, 0, b], [-a, 0, b]];
+    const T = [[-c, h, -e], [c, h, -e], [c, h, e], [-c, h, e]];
+    const p: number[] = [];
+    const quad = (q: number[][]) => p.push(...q[0], ...q[1], ...q[2], ...q[0], ...q[2], ...q[3]);
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      quad([B[i], B[j], T[j], T[i]]);
+    }
+    quad([T[0], T[1], T[2], T[3]]);
+    quad([B[3], B[2], B[1], B[0]]);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+    g.translate(x, y, z);
+    fixWinding(g);
+    return this.add(g, color, { ...o, flat: true });
+  }
+
+  /** A square-section rod of thickness t from point A to point B (lattice members, booms, masts, rails). */
+  beam(ax: number, ay: number, az: number, bx: number, by: number, bz: number, t: number, color: number, o: PaintOpts = {}): this {
+    const A = new THREE.Vector3(ax, ay, az), Bv = new THREE.Vector3(bx, by, bz);
+    const len = A.distanceTo(Bv);
+    if (len < 1e-6) return this;
+    const g = new THREE.BoxGeometry(t, len, t);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), Bv.clone().sub(A).normalize());
+    g.applyQuaternion(q);
+    g.translate((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+    return this.add(g, color, { ...o, flat: true });
+  }
+
+  /** Surface of revolution around the vertical axis: profile [radius, y] bottom to top, centered on (x, y, z). */
+  lathe(profile: [number, number][], x: number, y: number, z: number, color: number, segs = 12, o: PaintOpts = {}): this {
+    const g = new THREE.LatheGeometry(profile.map(([r, h]) => new THREE.Vector2(Math.max(r, 1e-5), h)), segs);
+    g.translate(x, y, z);
+    return this.add(g, color, o);
+  }
+
+  /**
+   * Surface of revolution along the forward axis: profile [z, radius] from nose (most negative z) to tail, centered
+   * on (x, y) with the section squashed vertically by `sy` (fuselages, missiles, pods).
+   */
+  latheZ(profile: [number, number][], x: number, y: number, color: number, segs = 10, sy = 1, o: PaintOpts = {}): this {
+    // LatheGeometry revolves (r, h) around +Y; rotateX(+90°) sends +Y to +Z, so h = z.
+    const g = new THREE.LatheGeometry(profile.map(([zz, r]) => new THREE.Vector2(Math.max(r, 1e-5), zz)), segs);
+    g.rotateX(Math.PI / 2);
+    g.scale(1, sy, 1);
+    g.translate(x, y, 0);
+    return this.add(g, color, o);
+  }
+
+  /**
+   * A lofted ship hull band between yBot and yTop (so bands can be painted apart: anti-fouling, boot-top, topsides),
+   * plus the deck surface when `deck` is set. `beam(t)` = half-beam at the deck for t = 0 (bow) .. 1 (stern);
+   * `deckY(t)` = deck height (sheer); `flare` = half-beam at the keel as a fraction of the deck half-beam.
+   * Bow at z = -len/2, stern at +len/2.
+   */
+  shipHull(spec: {
+    len?: number; beam: (t: number) => number; deckY: (t: number) => number; keelY: number; flare: number;
+    yBot: number; yTop: number; stations?: number; deck?: boolean; transom?: boolean;
+  }, color: number, o: PaintOpts = {}): this {
+    const n = spec.stations ?? 24;
+    const L = spec.len ?? 1;
+    const p: number[] = [];
+    const halfW = (t: number, y: number): number => {
+      const top = spec.deckY(t);
+      const f = Math.min(1, Math.max(0, (y - spec.keelY) / Math.max(1e-6, top - spec.keelY)));
+      return spec.beam(t) * (spec.flare + (1 - spec.flare) * Math.sqrt(f));
+    };
+    const rows = 2;
+    const lvl = (t: number, r: number) => Math.min(spec.deckY(t), spec.yBot + ((spec.yTop - spec.yBot) * r) / rows);
+    for (let i = 0; i < n; i++) {
+      // Stations bunched toward the bow, where the hull curves.
+      const t0 = Math.pow(i / n, 1.35), t1 = Math.pow((i + 1) / n, 1.35);
+      const z0 = (t0 - 0.5) * L, z1 = (t1 - 0.5) * L;
+      for (let r = 0; r < rows; r++) {
+        const ya0 = lvl(t0, r), ya1 = lvl(t0, r + 1), yb0 = lvl(t1, r), yb1 = lvl(t1, r + 1);
+        for (const side of [1, -1]) {
+          const a = [side * halfW(t0, ya0), ya0, z0], b = [side * halfW(t1, yb0), yb0, z1];
+          const c = [side * halfW(t1, yb1), yb1, z1], d = [side * halfW(t0, ya1), ya1, z0];
+          if (side > 0) p.push(...a, ...c, ...b, ...a, ...d, ...c);
+          else p.push(...a, ...b, ...c, ...a, ...c, ...d);
+        }
+      }
+      if (spec.deck) {
+        const ya = spec.deckY(t0), yb = spec.deckY(t1);
+        const wa = halfW(t0, ya), wb = halfW(t1, yb);
+        p.push(-wa, ya, z0, wb, yb, z1, wa, ya, z0, -wa, ya, z0, -wb, yb, z1, wb, yb, z1);
+      }
+    }
+    if (spec.transom !== false) {
+      const y0 = spec.yBot, y1 = Math.min(spec.deckY(1), spec.yTop);
+      const w0 = halfW(1, y0), w1 = halfW(1, y1), z = 0.5 * L;
+      p.push(-w0, y0, z, w0, y0, z, w1, y1, z, -w0, y0, z, w1, y1, z, -w1, y1, z);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+    g.computeVertexNormals();
+    return this.add(g, color, o);
+  }
+
+  /** Extruded polygon (top view [x, z], any winding, may be concave) from y to y + h: aprons, quays, walls. */
+  slab(points: [number, number][], y: number, h: number, color: number, o: PaintOpts = {}): this {
+    const shape = new THREE.Shape(points.map(([x, z]) => new THREE.Vector2(x, z)));
+    const g = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 4 });
+    g.rotateX(Math.PI / 2);
+    g.translate(0, y + h, 0);
+    return this.add(g, color, { ...o, flat: true });
+  }
+
+  /**
+   * Merge an already painted model (the output of another builder's build(), not consumed) under the current
+   * transform, keeping its own paint: a naval yard's warships, a port's moored freighters.
+   */
+  merge(built: THREE.BufferGeometry): this {
+    const g = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'aColor', 'aMask']) g.setAttribute(name, built.getAttribute(name).clone());
+    g.applyMatrix4(this.m);
+    this.parts.push(g);
+    return this;
+  }
+
   isEmpty(): boolean {
     return this.parts.length === 0;
   }

@@ -22,9 +22,10 @@ export interface RenderEnv {
   fxTime: number;
   fxDt: number;
   /**
-   * Cap on the minimum on-screen size of unit models (px): 12 while they fade in under the icons (900-1,200 km),
-   * rising to 32 at 600 km and kept down to the lowest camera altitude (DESIGN_V2 §10.7 as revised by the owner's
-   * clarification: close-zoom models must be clearly visible). Caps UNIT_LOOK.minPx.
+   * The minimum on-screen size of unit models (px) at the current camera altitude, before the per-type factor
+   * (UNIT_LOOK.pxK): 12 while they fade in under the icons (900-1,200 km), 32 at 600 km, 40 at 300 km, 52 at 100 km
+   * and 64 from 30 km down (DESIGN_V2 §10.7 as revised by the owner's clarification: close-zoom models must be
+   * clearly visible). Strategic view only: command mode draws its own scene at real scale.
    */
   unitMinPx: number;
 }
@@ -94,34 +95,43 @@ export function worldPerPixel(p: THREE.Vector3): number {
 export interface UnitLook {
   /** Real-ish model length in km (the floor when zoomed in). */
   realKm: number;
-  /** Minimum on-screen length in pixels (readability from orbit). */
-  minPx: number;
+  /**
+   * The unit's share of env.unitMinPx: the minimum on-screen length of ONE model of it. Formations are drawn from
+   * several models (a division's 4 tanks, a squadron's 3 jets, a swarm's 7 drones, a train's 4 cars), so their
+   * per-model factor is smaller and the formation as a whole reads at about the size of a ship.
+   */
+  pxK: number;
   /** Largest drawn size in km (so a jet never grows bigger than a country when far away). */
   maxKm: number;
 }
 
 export const UNIT_LOOK: Record<UnitType, UnitLook> = {
-  [UnitType.TransportShip]: { realKm: 0.35, minPx: 40, maxKm: 110 },
-  [UnitType.TradeShip]: { realKm: 0.4, minPx: 38, maxKm: 110 },
-  [UnitType.Warship]: { realKm: 0.3, minPx: 46, maxKm: 130 },
-  [UnitType.ArmoredDivision]: { realKm: 0.35, minPx: 30, maxKm: 80 },
-  [UnitType.FighterSquadron]: { realKm: 0.06, minPx: 30, maxKm: 70 },
-  [UnitType.Bomber]: { realKm: 0.09, minPx: 44, maxKm: 110 },
-  [UnitType.DroneSwarm]: { realKm: 0.05, minPx: 24, maxKm: 40 },
-  [UnitType.CruiseMissile]: { realKm: 0.03, minPx: 24, maxKm: 50 },
-  [UnitType.AtomBomb]: { realKm: 0.04, minPx: 30, maxKm: 90 },
-  [UnitType.HydrogenBomb]: { realKm: 0.05, minPx: 34, maxKm: 100 },
-  [UnitType.Mirv]: { realKm: 0.05, minPx: 36, maxKm: 110 },
-  [UnitType.MirvWarhead]: { realKm: 0.02, minPx: 16, maxKm: 44 },
-  [UnitType.SamInterceptor]: { realKm: 0.02, minPx: 16, maxKm: 34 },
-  [UnitType.Train]: { realKm: 0.12, minPx: 26, maxKm: 40 },
-  [UnitType.Shell]: { realKm: 0.01, minPx: 6, maxKm: 10 },
+  [UnitType.TransportShip]: { realKm: 0.35, pxK: 1.0, maxKm: 110 },
+  [UnitType.TradeShip]: { realKm: 0.4, pxK: 0.9, maxKm: 110 },
+  [UnitType.Warship]: { realKm: 0.3, pxK: 1.0, maxKm: 130 },
+  [UnitType.ArmoredDivision]: { realKm: 0.35, pxK: 0.62, maxKm: 80 },
+  [UnitType.FighterSquadron]: { realKm: 0.06, pxK: 0.6, maxKm: 70 },
+  [UnitType.Bomber]: { realKm: 0.09, pxK: 1.0, maxKm: 110 },
+  [UnitType.DroneSwarm]: { realKm: 0.05, pxK: 0.42, maxKm: 40 },
+  [UnitType.CruiseMissile]: { realKm: 0.03, pxK: 0.55, maxKm: 50 },
+  [UnitType.AtomBomb]: { realKm: 0.04, pxK: 0.7, maxKm: 90 },
+  [UnitType.HydrogenBomb]: { realKm: 0.05, pxK: 0.75, maxKm: 100 },
+  [UnitType.Mirv]: { realKm: 0.05, pxK: 0.8, maxKm: 110 },
+  [UnitType.MirvWarhead]: { realKm: 0.02, pxK: 0.35, maxKm: 44 },
+  [UnitType.SamInterceptor]: { realKm: 0.02, pxK: 0.35, maxKm: 34 },
+  [UnitType.Train]: { realKm: 0.12, pxK: 0.55, maxKm: 40 },
+  [UnitType.Shell]: { realKm: 0.01, pxK: 0.15, maxKm: 10 },
 };
+
+/** Minimum on-screen length (px) of one model of a unit type right now. */
+export function unitMinPxOf(type: UnitType): number {
+  return env.unitMinPx * UNIT_LOOK[type].pxK;
+}
 
 /** Drawn length (km) of a unit at distance `distUnits` from the camera. */
 export function unitSizeKm(type: UnitType, distUnits: number): number {
   const l = UNIT_LOOK[type];
-  const px = Math.min(l.minPx, env.unitMinPx) * env.pixelK * distUnits * EARTH_RADIUS_KM;
+  const px = unitMinPxOf(type) * env.pixelK * distUnits * EARTH_RADIUS_KM;
   return Math.min(l.maxKm, Math.max(l.realKm, px));
 }
 

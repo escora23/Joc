@@ -242,19 +242,19 @@ registerShot('structures-levels', 'units', 'Every structure type at levels 1, 2 
 }, 10);
 
 /**
- * Gallery frames of the structure models by level: the real game models on the real terrain, drawn enlarged
- * (__units.showcase: the tiles are 25 km apart, the models 2.5-6 km across) so L1 / L2 / L3 read side by side, with
- * the HUD hidden and a caption under each model. Ports and naval yards stand on the straight Portuguese coast, in a
- * north-south line seen from the sea.
+ * Gallery frames of the structure models by level, at real size: L1 / L2 / L3 of each type on neighbouring tiles
+ * (19-25 km apart), the camera at 26-40 km as a player would zoom in, the HUD hidden and a caption under each model
+ * (type, «Nivel n/3» and the pips, as on the structure card). No enlargement: what the player sees in play.
+ * Ports and naval yards stand on the straight Portuguese coast, in a north-south line seen from the sea.
  */
-interface LevelFrame { types: S[]; scale: number; coast?: boolean }
+interface LevelFrame { types: S[]; alt: number; coast?: boolean }
 const LEVEL_FRAMES: LevelFrame[] = [
-  { types: [S.DefensePost, S.Radar], scale: 8 },
-  { types: [S.SamSite, S.MissileSilo], scale: 7 },
-  { types: [S.Factory, S.ArmyBase], scale: 6 },
-  { types: [S.City, S.Airbase], scale: 4 },
-  { types: [S.Port], scale: 5, coast: true },
-  { types: [S.NavalYard], scale: 4, coast: true },
+  { types: [S.DefensePost, S.Radar], alt: 30 },
+  { types: [S.SamSite, S.MissileSilo], alt: 32 },
+  { types: [S.Factory, S.ArmyBase], alt: 36 },
+  { types: [S.City, S.Airbase], alt: 44 },
+  { types: [S.Port], alt: 34, coast: true },
+  { types: [S.NavalYard], alt: 34, coast: true },
 ];
 
 /** The westernmost land tile of the row at `lat` whose western neighbour is sea (the Atlantic coast of Portugal). */
@@ -270,61 +270,61 @@ function coastTile(ctx: GameContext, lat: number): number {
   return t0;
 }
 
+const tileLat = (t: number) => 90 - (Math.floor(t / MAP_W) + 0.5) * (180 / MAP_H);
+const tileLon = (t: number) => ((t % MAP_W) + 0.5) * (360 / MAP_W) - 180;
+
 LEVEL_FRAMES.forEach((frame, fi) => {
   const names = frame.types.map((ty) => ['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'][ty]).join(' and ');
-  registerShot(`structures-levels-${fi + 1}`, 'units', `Structure models by level, up close (gallery ${fi + 1}/${LEVEL_FRAMES.length}: ${names}), drawn x${frame.scale} with the HUD hidden (§6.5)`, async (s) => {
+  registerShot(`structures-levels-${fi + 1}`, 'units', `Structure models by level at real size (gallery ${fi + 1}/${LEVEL_FRAMES.length}: ${names}), camera at ${frame.alt} km, HUD hidden, captions with the level pips (§6.5)`, async (s) => {
     const { ctx, waitFrames, wait, params } = s;
     await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-45) });
     const sim = ctx.sim;
-    const scale = Number(params.get('scale') ?? frame.scale);
     const placed: { type: S; level: number; tile: number }[] = [];
+    const TILE = 180 / MAP_H;
     if (frame.coast) {
       sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(40.1, -8.3), radius: 9 });
-      const lats = [41.0, 40.55, 40.1];
-      lats.forEach((lat, c) => placed.push({ type: frame.types[0], level: c + 1, tile: coastTile(ctx, lat) }));
+      [40.1 + TILE, 40.1, 40.1 - TILE].forEach((lat, c) => placed.push({ type: frame.types[0], level: c + 1, tile: coastTile(ctx, lat) }));
     } else {
       sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.4, -3.2), radius: 12 });
-      // Two tiles apart (50 km), one type per row, L1 / L2 / L3 left to right.
+      // Neighbouring tiles: one type per row (rows 25 km apart), L1 / L2 / L3 left to right (19 km apart).
       frame.types.forEach((type, r) => [1, 2, 3].forEach((L, c) => {
-        placed.push({ type, level: type === S.City ? [1, 5, 10][c] : L, tile: at(39.85 - r * 0.45, -3.65 + c * 0.45) });
+        placed.push({ type, level: type === S.City ? [1, 5, 10][c] : L, tile: at(39.6 - r * TILE * (frame.types.length > 1 ? 1 : 0), -3.45 + c * TILE) });
       }));
     }
     for (const p of placed) sim.debug({ type: 'spawnStructure', structure: p.type, owner: HUMAN_ID, tile: p.tile, level: p.level });
-    (window as unknown as { __units?: { showcase(k: number): void } }).__units?.showcase(scale);
     s.setUiVisible(false);
-    await wait(600);
+    await until(s, () => placed.every((p) => [...ctx.sim.view.structures.values()].some((x) => x.tile === p.tile)), 60000);
+    const alt = Number(params.get('alt') ?? frame.alt);
     if (frame.coast) {
       // Seen from the sea (looking east): the north-south line of models runs left to right.
       const mid = placed[1].tile;
-      const mlat = 90 - (Math.floor(mid / MAP_W) + 0.5) * (180 / MAP_H), mlon = ((mid % MAP_W) + 0.5) * (360 / MAP_W) - 180;
-      ctx.cameraRig.setState({ lat: mlat, lon: mlon - 0.05, altitudeKm: Number(params.get('alt') ?? 95), tilt: Number(params.get('tilt') ?? 0.8), heading: Math.PI / 2 });
+      ctx.cameraRig.setState({ lat: tileLat(mid), lon: tileLon(mid) - 0.02, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.72), heading: Math.PI / 2 });
     } else {
-      const two = frame.types.length > 1;
-      ctx.cameraRig.setState({
-        lat: Number(params.get('lat') ?? (two ? 39.46 : 39.7)), lon: Number(params.get('lon') ?? -3.2),
-        altitudeKm: Number(params.get('alt') ?? 105), tilt: Number(params.get('tilt') ?? 0.75), heading: 0,
-      });
+      const lats = placed.map((p) => tileLat(p.tile)), lons = placed.map((p) => tileLon(p.tile));
+      const lat = (Math.min(...lats) + Math.max(...lats)) / 2, lon = (Math.min(...lons) + Math.max(...lons)) / 2;
+      ctx.cameraRig.setState({ lat: Number(params.get('lat') ?? lat), lon: Number(params.get('lon') ?? lon), altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.62), heading: 0 });
     }
     await waitFrames(14);
     await wait(800);
-    // Captions: the type, «Nivel n/max» and the pips, under each model (the same wording as the structure card).
+    // Captions: the type, «Nivel n/max» and the pips, just under each model's drawn box (the structure card wording).
     document.getElementById('fu-levels-captions')?.remove();
     const box = document.createElement('div');
     box.id = 'fu-levels-captions';
     box.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:50;font:600 14px/1.25 "JetBrains Mono",ui-monospace,monospace;color:#f3ead8;';
     const title = document.createElement('div');
-    title.textContent = t('shot.levels.title', { k: formatNumber(scale) });
+    title.textContent = t('shot.levels.real', { km: formatNumber(alt) });
     title.style.cssText = 'position:absolute;left:24px;top:18px;padding:6px 12px;background:rgba(18,16,12,.78);border:1px solid rgba(255,200,120,.35);border-radius:4px;letter-spacing:.04em;';
     box.append(title);
+    const units = (window as unknown as { __units?: { sizeOf(k: 'struct', id: number): { px: number; w: number; h: number } | null } }).__units;
     for (const p of placed) {
-      const tx = (p.tile % MAP_W) + 0.5, ty = Math.floor(p.tile / MAP_W) + 0.5;
-      const lat = 90 - ty * (180 / MAP_H), lon = tx * (360 / MAP_W) - 180;
-      const sp = screenOf(ctx, lat, lon);
+      const sp = screenOf(ctx, tileLat(p.tile), tileLon(p.tile));
+      const size = units?.sizeOf('struct', p.tile);
       const max = STRUCTURE_DEFS[p.type].maxLevel;
       const pips = max > 3 ? '' : ' ' + '●'.repeat(p.level) + '○'.repeat(3 - p.level);
       const cap = document.createElement('div');
       cap.textContent = `${t(`structure.${['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'][p.type]}`)} · ${t('card.levelN', { n: p.level, max })}${pips}`;
-      cap.style.cssText = `position:absolute;left:${sp.x}px;top:${sp.y + Number(params.get('capdy') ?? 70)}px;transform:translateX(-50%);white-space:nowrap;padding:3px 8px;background:rgba(18,16,12,.72);border-radius:3px;`;
+      const dy = Number(params.get('capdy') ?? (size ? size.h * 0.55 + 10 : 60));
+      cap.style.cssText = `position:absolute;left:${sp.x}px;top:${sp.y + dy}px;transform:translateX(-50%);white-space:nowrap;padding:3px 8px;background:rgba(18,16,12,.72);border-radius:3px;`;
       box.append(cap);
     }
     document.body.append(box);
