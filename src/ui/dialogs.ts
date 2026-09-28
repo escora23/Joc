@@ -302,6 +302,7 @@ const SHORTCUTS: [string[], string][] = [
   [['⇧', 'Drag'], 'keys.box'],
   [['LMB', 'LMB'], 'keys.doubleClick'],
   [['U'], 'keys.forces'],
+  [['G'], 'keys.fronts'],
   [['I'], 'keys.idle'],
   [['T'], 'keys.takeControl'],
   [['N'], 'keys.nations'],

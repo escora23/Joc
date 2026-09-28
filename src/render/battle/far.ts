@@ -27,6 +27,8 @@ export interface FarLayer {
   setBudget(n: number): void;
   /** Violence of the visible far fronts 0..1. */
   readonly activity: number;
+  /** Verifiers: flashes emitted, the farthest one from its contact line (tiles), smoke columns standing per front. */
+  stats(): { flashes: number; maxLineDistTiles: number; columns: Record<number, number> };
 }
 
 const DEG = Math.PI / 180;
@@ -47,6 +49,7 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
   const w = new THREE.Vector3();
   const ll: LatLon = { lat: 0, lon: 0 };
   let activity = 0;
+  let flashes = 0, maxLineDist = 0;
   const acc = new Map<number, { flash: number; smoke: number; cols: number[] }>();
   /** §11.4: at most this many smoke columns alive per front (they last 40-70 s). */
   const MAX_COLUMNS = 6;
@@ -134,6 +137,13 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
           const surf = surfaceRadiusAt(ll.lat, ll.lon);
           if (a.flash >= 1) {
             a.flash -= 1;
+            // Distance from the contact line (sample + half a tile along dir), across the line.
+            const lx = tx + nx * 0.5, ly = ty + ny * 0.5;
+            let ddx = fx - lx;
+            if (ddx > MAP_W / 2) ddx -= MAP_W;
+            else if (ddx < -MAP_W / 2) ddx += MAP_W;
+            flashes++;
+            maxLineDist = Math.max(maxLineDist, Math.abs(ddx * nx + (fy - ly) * ny));
             local(ll.lat, ll.lon, 150, surf, p);
             const big = rng.chance(0.2);
             const t0 = now + rng.range(0, 0.3);
@@ -164,6 +174,11 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
       activity += (act - activity) * Math.min(1, dt * 2);
       alpha.flush();
       add.flush();
+    },
+    stats() {
+      const columns: Record<number, number> = {};
+      for (const [k, a] of acc) columns[k] = a.cols.length;
+      return { flashes, maxLineDistTiles: maxLineDist, columns };
     },
     clear() {
       alpha.clear();

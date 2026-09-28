@@ -181,13 +181,20 @@ async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number)
   const cl = Math.cos((ll.lat * Math.PI) / 180);
   const hdg = Math.atan2(f.dirX * cl, -f.dirY) + Number(s.params.get('hdg') ?? 1.1);
   s.ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: Number(s.params.get('alt') ?? alt), tilt: Number(s.params.get('tilt') ?? tilt), heading: hdg });
-  for (let i = 0; i < 240 && !battleDebug()?.built; i++) await s.waitFrames(1);
+  const t0 = performance.now();
+  for (let i = 0; i < 240 && !battleDebug()?.built; i++) {
+    await s.waitFrames(1);
+    if (i % 20 === 0) {
+      const c = s.ctx.cameraRig.getState();
+      console.info(`[w6] descend frame ${i} t=${Math.round(performance.now() - t0)}ms alt=${c.altitudeKm.toFixed(1)} anchor=${JSON.stringify(battleDebug()?.anchor)} built=${battleDebug()?.built}`);
+    }
+  }
   await s.waitFrames(8);
 }
 
 registerShot('front-ground-real', 'battle', 'W6: the ground battle composed from the real front: infantry per side from the local forces, the real divisions as 1 tank per 25 % integrity + 2 IFVs at their positions, the sub-tile line, banners and the HUD strip', async (s) => {
   const st = await stageFrontWar(s, { attacker: 'enemy', run: 220 });
-  await descend(s, st, 7, 1.05);
+  await descend(s, st, 3, 1.2);
   battleDebug()?.prewarm(Number(s.params.get('warm') ?? 10));
   await s.waitFrames(6);
   console.info(`[w6] ground ${JSON.stringify(battleDebug()?.shown() ?? null)}`);

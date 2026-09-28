@@ -12,6 +12,7 @@ export const esW6: Record<string, string> = {
   'fr.tab.mine.tip': 'Tus guerras y todos sus frentes, ordenados por peligro: primero donde pierdes terreno.',
   'fr.tab.world': 'Mundo',
   'fr.tab.world.tip': 'Los diez frentes más calientes del mundo, aunque no participes.',
+  'keys.fronts': 'Guerra y frentes: guarniciones, prioridad de cada frente, divisiones',
   'tb.fronts.tip': 'Guerra y frentes: tus guerras, sus frentes, las guarniciones de ambos bandos y las órdenes de defensa.',
 
   // ---- the measured advance (badge, panel, strip) -----------------------------------------------------
@@ -132,6 +133,7 @@ export const enW6: Record<string, string> = {
   'fr.tab.mine.tip': 'Your wars and all their fronts, sorted by danger: where you are losing ground first.',
   'fr.tab.world': 'World',
   'fr.tab.world.tip': 'The ten hottest fronts in the world, even ones you are not part of.',
+  'keys.fronts': 'War and fronts: garrisons, each front\'s priority, divisions',
   'tb.fronts.tip': 'War and fronts: your wars, their fronts, both sides\' garrisons and your defence orders.',
 
   'fr.adv.kmh': '{v} km/h',

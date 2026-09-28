@@ -458,6 +458,44 @@ tiles per second, makes wars whiplash.
 * Sub-tile line: `progress` is published only for fronts near the observation focus; elsewhere the line sits on the
   tile edge (`subTile: false`). Command mode should keep the clock focus on the controlled unit to get it.
 
+**W6 battle clarity (landed)**
+* **Orbit overlay** `render/battle/overlay.ts` (created by the battle renderer, above 150 km, hidden in command mode): two
+  draw calls (bands, arrows), renderOrder 42/43, depth test off, analytic horizon fade, widths extruded in screen space
+  from a world half-width and a pixel minimum. Bands: two-colour (side a behind the line, side b ahead), chevrons toward
+  the side losing ground (sign of `FrontView.momentum` beyond ±0.1, speed from the measured `advanceKmh`); quiet fronts
+  dashed. Arrows: operational (corridor `frontageTiles × 25 km` wide, from 3 tiles behind the line to the axis point,
+  tail extended so a wide corridor still reads as an arrow), naval (transport route), mobilization (pulsing, until
+  `mobilizeUntilTick`). Rebuilt into preallocated buffers when fronts / attacks / wars change and at 2 Hz.
+  Debug: `__frontOverlay.stats()`.
+* **Momentum** (sim, `sim/fronts.ts`): `tanh(5 × (push_a − push_b))`, push = EMA α 0.2 of the pressure each side's
+  offensive adds per tick (`Attack.pushThisTick`, Σ of the per-tile increments): it reacts within a few ticks when a
+  side stalls or a counter-offensive starts, not only when 25 km tiles fall.
+* **Badges** `ui/hud/frontBadges.ts` (DOM, decluttered, off the band on the attacker's side with a leader line): ISO3
+  chips («TÚ» for the human), tug-of-war `Pa/(Pa+Pd)` (garrisons on quiet fronts), measured km/h / «consolidando» /
+  «estancado» / «contacto», division chips; hover tooltip; click emits bus `frontSelected`. Shared wording in
+  `ui/hud/frontsInfo.ts` (also used by the panel and the strip).
+* **Guerra y frentes panel** `ui/hud/fronts.ts` (`G`, the swords button, the top-bar wars counter): wars (goal,
+  reason, day, escalation, score, exhaustion, Proponer paz → `openPeaceDialog`, Pedir ayuda → `askHelp`), fronts by
+  danger (both garrisons, redeployment ETA, tug of war, km/h, tiles, divisions, age; Ir, Prioridad baja/normal/alta →
+  `setFrontPriority`, Enviar divisiones (own divisions with ETA → `unitOrder attach`), Contraofensiva/Reforzar →
+  `attack`, Retirar → `retreat`), Mundo tab. Debug `__fuFronts`.
+* **Ground battle** `render/battle/index.ts`: anchored by front key (stays while the camera stays and the line is within
+  4.5 km of the patch centre); infantry per side = `visibleSplit()` of `deriveLocalForcesAt(anchor, 6 km)`; no generic
+  vehicles — real divisions within 50 km as 1 tank per 25 % integrity + 2 IFVs at their real positions
+  (`vehicles.setFormation`, `UnitsApi.setBattleOwned` hides their strategic models); the line follows the sub-tile
+  line (`LocalFront.nearest`), extrapolated between ticks at the measured km/h when the sim publishes progress, and the
+  living soldiers move with it (`infantry.translate`); animation clock = `frame.visualDt`. `BattleApi.view()` feeds
+  the HUD strip and banners (`ui/hud/battleStrip.ts`), `BattleApi.handoff()` the command-mode hand-off.
+  Debug `__battleDebug.shown()` / `.clock` / `.farStats()` / `.setLayerVisible()`.
+* **Far layer**: nothing on quiet fronts, flashes inside the band leaning to the side pushed back, ≤ 6 smoke columns
+  per front, puffs ≤ 0.2 opacity, tops < 3 km. **Plumes** `render/fx/plume.ts`: world 6 → 20 km, re-sized every
+  frame, min 22 px, ≤ 8 % of the screen height (`__fx.plumes()`). **Audio**: combat cues capped at 2/s per front
+  and 6/s in all (`__fuAudio.stats().combat`).
+* Tools: `npx tsx src/sim/test/w6-audit.mjs` (momentum reversal, garrisons, priority, T34 via the panel command,
+  retreat, key stability), `node tools/w6-verify.mjs` (browser: overlay, badge, panel, mobilization, front-600,
+  plume, ground battle, observation, animation clock, audio), shots `front-orbit`, `front-600`, `front-mobilization`,
+  `fronts-panel`, `front-ground-real`, `front-observation`, `plume-zoom` (`render/battle/shotsFronts.ts`).
+
 **Risks**
 * Front ids flicker today.
 * Fronts are only computed while an attack is running, so there is nothing for "at war but quiet" borders.

@@ -106,6 +106,9 @@ export interface BattleDebug {
   shown(): BattleShown | null;
   /** W6: animation clock (real seconds of battle time) — advances with real time, freezes on pause. */
   readonly clock: number;
+  /** W6 verifiers: far-layer stats, the overlay's stats, and hiding the whole battle layer (smoke coverage A/B). */
+  farStats(): ReturnType<FarLayer['stats']> | null;
+  setLayerVisible(on: boolean): void;
 }
 
 let currentDebug: BattleDebug | null = null;
@@ -832,6 +835,12 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     shown() {
       return shownState();
     },
+    farStats() {
+      return far ? far.stats() : null;
+    },
+    setLayerVisible(on) {
+      root.visible = on;
+    },
     get clock() {
       return clock;
     },
@@ -852,6 +861,11 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     },
   };
   currentDebug = debug;
+  try {
+    (window as unknown as { __battleDebug?: BattleDebug }).__battleDebug = debug;
+  } catch {
+    /* no window */
+  }
 
   const bannerL = new THREE.Vector3();
   const battleView: BattleView = { frontKey: 0, a: 0, b: 0, fade: 0, banners: [{ owner: 0, x: 0, y: 0, z: 0 }, { owner: 0, x: 0, y: 0, z: 0 }], lineLive: false };
@@ -976,7 +990,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       } else if (alt < NEAR_BUILD_ALT) {
         // Keep the battle while the camera stays over it and its front still exists: the line may move under it
         // (observation time) without the battle re-anchoring, until it has left the patch.
-        if (anchor && anchor.frontKey && view.frontByKey.has(anchor.frontKey) && !job
+        if (anchor && anchor.frontKey && view.frontByKey.has(anchor.frontKey)
           && gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM && Math.abs(front.drift) < LINE_LEAVE_M) {
           want = anchor;
           same = true;
@@ -991,7 +1005,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
               lat: ll.lat, lon: ll.lon, frontA: h.f.a, frontB: h.f.b, seed: hashString(`${(ll.lat * 20) | 0},${(ll.lon * 20) | 0},${h.f.a},${h.f.b}`),
               frontKey: h.f.key, camLat: camState.lat, camLon: camState.lon,
             };
-            same = !!anchor && anchor.frontKey === want.frontKey && !job
+            same = !!anchor && anchor.frontKey === want.frontKey
               && gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM && Math.abs(front.drift) < LINE_LEAVE_M;
             if (same) want = anchor;
           }
