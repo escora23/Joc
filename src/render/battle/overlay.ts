@@ -200,6 +200,7 @@ void main() {
 const ARROW_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uAlpha;
+uniform float uArrowFill;
 uniform float uPx;
 varying vec3 vCol;
 varying vec4 vInfo;
@@ -223,7 +224,10 @@ void main() {
     // Operational arrow: solid rim, lighter body so the territory under a corridor-wide arrow stays readable; the
     // tail fades in.
     float rim = 1.0 - smoothstep(0.62, 0.8, 1.0 - abs(vSide));
-    alpha = mix(0.26, 0.74, max(max(rim, outline), inner)) * smoothstep(0.0, 0.12, vU);
+    // Closer in, a corridor-wide arrow would cover the whole view: its body fades away below ~1,800 km and only the
+    // outline and the light stroke remain.
+    float edge = max(max(rim, outline), inner);
+    alpha = mix(0.26 * uArrowFill, 0.74, edge) * mix(0.35 + 0.65 * uArrowFill, 1.0, max(outline, inner)) * smoothstep(0.0, 0.12, vU);
   } else if (vInfo.x < 1.5) {
     alpha = 0.85 * smoothstep(0.0, 0.08, vU);
   } else {
@@ -309,6 +313,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     uPx: { value: 1 },
     uTime: { value: 0 },
     uAlpha: { value: 1 },
+    uArrowFill: { value: 1 },
   };
   const mk = (vs: string, fs: string, name: string) => new THREE.ShaderMaterial({
     name, uniforms, vertexShader: vs, fragmentShader: fs, transparent: true, depthTest: false, depthWrite: false,
@@ -647,13 +652,14 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
         // Unit direction from the aggressor into the target (tile space).
         const sgn = f.a === w.aggressor ? 1 : -1;
         const dx = f.dirX * sgn, dy = f.dirY * sgn;
-        const count = Math.max(1, Math.min(8, Math.round(n / 5)));
+        // One arrow every ~2.5 samples (~90 km of border), massing on the aggressor's side up to the border.
+        const count = Math.max(2, Math.min(12, Math.round(n / 2.5)));
         for (let c = 0; c < count; c++) {
           const v = Math.min(n - 1, Math.floor(((c + 0.5) / count) * n));
           // The border: half a tile from side a's contact tiles along dir.
           const bx = s[v * 2] + f.dirX * 0.5, by = s[v * 2 + 1] + f.dirY * 0.5;
-          const m = curve(bx - dx * 2.8, by - dy * 2.8, bx - dx * 0.7, by - dy * 0.7, 0, 3);
-          if (addArrow(m, 9, 3.5, 2, c * 1.3 + f.key, emph) > 0) st.mobilization++;
+          const m = curve(bx - dx * 3.6, by - dy * 3.6, bx - dx * 0.6, by - dy * 0.6, 0, 3);
+          if (addArrow(m, 13, 5, 2, c * 1.3 + f.key, emph) > 0) st.mobilization++;
         }
       }
     }
@@ -702,6 +708,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       uniforms.uPx.value = ctx.renderer.getPixelRatio();
       uniforms.uTime.value = time;
       uniforms.uAlpha.value = fade;
+      uniforms.uArrowFill.value = smoothstep(500, 1800, altKm);
     },
     clear() {
       bands.nv = bands.ni = arrows.nv = arrows.ni = 0;

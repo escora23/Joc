@@ -98,7 +98,15 @@ export function kmhText(v: number): string {
  * «‖ estancado», «contacto», «movilizando», «en calma». `arrow` false drops the leading symbol.
  */
 export function advanceText(view: GameView, f: FrontView, s: FrontSides, arrow = true): string {
-  if (s.quiet) return t('fr.adv.quiet');
+  if (s.quiet) {
+    // A war still in its aggressor's mobilization: the front is quiet, but not for long (§4.2, §11.2).
+    const w = view.warBetween(f.a, f.b);
+    if (w && view.tick < w.mobilizeUntilTick) {
+      const h = (w.mobilizeUntilTick - view.tick) / 10;
+      return t('fr.adv.mobilizingIn', { h: formatNumber(h, h < 10 ? 1 : 0) });
+    }
+    return t('fr.adv.quiet');
+  }
   const a = s.lead!;
   const sym = (g: number) => (arrow ? (g < 0 ? '◀ ' : '▶ ') : '');
   switch (a.state) {

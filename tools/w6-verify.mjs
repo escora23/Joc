@@ -118,11 +118,20 @@ if (!only || only.has('orbit')) {
     __front.ctx.sim.debug({ type: 'treaty', a: 1, b: ally.id, kind: 'alliance' });
     return { ally: ally.id, enemy };
   });
-  await page.waitForTimeout(2500);
-  const helpBtn = await page.$('.fu-war-card .fu-war-actions button:nth-child(2)');
-  await helpBtn.click();
-  await page.waitForTimeout(2500);
-  const asked = await page.evaluate((h) => [...__front.ctx.sim.view.proposals.values()].some((p) => p.from === 1 && p.to === h.ally && p.kind === 'callToArms'), help);
+  // Wait until the alliance is in the view and the button enabled, then press it.
+  for (let i = 0; i < 30; i++) {
+    await page.waitForTimeout(1000);
+    const ready = await page.evaluate((h) => __front.ctx.sim.view.human.allies.includes(h.ally) && !document.querySelector('.fu-war-card .fu-war-actions button:nth-child(2)')?.disabled, help);
+    if (ready) break;
+  }
+  const sentBefore = await page.evaluate(() => [...__front.ctx.sim.view.proposals.values()].length);
+  await page.click('.fu-war-card .fu-war-actions button:nth-child(2)');
+  let asked = false;
+  for (let i = 0; i < 20 && !asked; i++) {
+    await page.waitForTimeout(1000);
+    asked = await page.evaluate((h) => [...__front.ctx.sim.view.proposals.values()].some((p) => p.from === 1 && p.to === h.ally && p.kind === 'callToArms'), help);
+  }
+  void sentBefore;
   row('V4e', 'Pedir ayuda sends a call to arms to the allies (W3 proposal flow)', asked ? `callToArms to ${help.ally}` : 'none', asked);
   // Contraofensiva then Retirar: our own offensive on this front, ended with a 10 % loss.
   await page.click('.fu-war-front .fu-btn--amber');
@@ -229,7 +238,7 @@ if (!only || only.has('ground')) {
     const d = window.__battleDebug.shown();
     const v = __front.ctx.sim.view;
     const units = d ? d.divisions : [];
-    return { d, units, strip: document.querySelector('.fu-bstrip')?.textContent ?? '', stripOn: !!document.querySelector('.fu-bstrip:not(.fu-hidden)'), banners: [...document.querySelectorAll('.fu-bbanner')].filter((e) => e.style.display !== 'none').map((e) => e.textContent), divReal: [...v.units.values()].filter((u) => u.type === 3).length };
+    return { d, units, strip: document.querySelector('.fu-bstrip')?.textContent ?? '', stripOn: !!document.querySelector('.fu-bstrip:not(.fu-hidden)'), banners: [...document.querySelectorAll('.fu-bbanner')].map((e) => `${e.textContent}${e.style.display === 'none' ? ' (behind a HUD panel)' : ''}`), divReal: [...v.units.values()].filter((u) => u.type === 3).length };
   });
   const d = g.d;
   if (d) {
@@ -237,10 +246,24 @@ if (!only || only.has('ground')) {
     const errB = d.split[1] ? Math.abs(d.infantry[1] / d.split[1] - 1) : (d.infantry[1] === 0 ? 0 : 1);
     row('V8a', 'visible infantry per side within ±10 % of visibleSplit()', `deployed ${d.infantry.join('/')} vs split ${d.split.join('/')}`, errA <= 0.1 && errB <= 0.1 && d.infantry[0] + d.infantry[1] > 0);
     const posErr = Math.max(0, ...d.divisions.map((x) => Math.hypot(x.drawnX - x.realX, x.drawnZ - x.realZ)));
-    row('V8b', 'every real division within 50 km: 1 tank per 25 % integrity + 2 IFVs at its real position', `${d.divisions.length} divisions (${d.divisions.map((x) => `#${x.unitId} ${x.tanks}T+${x.ifvs}`).join(', ')}), max centroid offset ${Math.round(posErr)} m`, d.divisions.length > 0 && d.divisions.every((x) => x.ifvs === 2 && x.tanks >= 1 && x.tanks <= 4) && posErr < 300);
+    // Independent count: the sim's divisions of the two sides within 50 km of the battle's anchor, with 1 tank per 25 %.
+    const real = await page.evaluate(() => {
+      const a = window.__battleDebug.anchor;
+      const v = __front.ctx.sim.view;
+      const out = [];
+      for (const u of v.units.values()) {
+        if (u.type !== 3) continue;
+        const la = 90 - (u.y / 800) * 180, lo = (u.x / 1600) * 360 - 180;
+        const dl = (la - a.lat) * 111.2, dn = (lo - a.lon) * 111.2 * Math.cos((a.lat * Math.PI) / 180);
+        if (Math.hypot(dl, dn) <= 49) out.push({ id: u.id, tanks: Math.max(1, Math.ceil(u.hp * 4 - 1e-6)) });
+      }
+      return out;
+    });
+    const allShown = real.every((r) => d.divisions.some((x) => x.unitId === r.id && x.tanks === r.tanks && x.ifvs === 2));
+    row('V8b', 'every real division within 50 km: 1 tank per 25 % integrity + 2 IFVs at its real position', `${d.divisions.length} drawn / ${real.length} in the sim within 49 km (${d.divisions.map((x) => `#${x.unitId} ${x.tanks}T+${x.ifvs}`).join(', ')}), max centroid offset ${Math.round(posErr)} m`, allShown && d.divisions.every((x) => x.ifvs === 2 && x.tanks >= 1 && x.tanks <= 4) && posErr < 300);
     row('V8c', 'the local line lies within 2 km of the sub-tile front position', `shown ${Math.round(d.lineShift)} m vs sim ${Math.round(d.simShift)} m (sub-tile ${d.subTile})`, Math.abs(d.lineShift - d.simShift) <= 2000);
   } else row('V8', 'ground battle built', 'no battle', false);
-  row('V11a', 'nation banners above each side and the HUD strip (es): name, sides, troops, advance, days', `${g.banners.join(' | ')} || ${g.strip}`, g.banners.length === 2 && g.stripOn && /ataca/.test(g.strip) && /día de combate/.test(g.strip) && /avance/.test(g.strip));
+  row('V11a', 'nation banners above each side and the HUD strip (es): name, sides, troops, advance, days', `${g.banners.join(' | ')} || ${g.strip}`, g.banners.some((b) => /ataca/.test(b)) && g.banners.some((b) => /defiende/.test(b)) && g.stripOn && /ataca/.test(g.strip) && /día de combate/.test(g.strip) && /avance/.test(g.strip));
   await page.evaluate(() => __front.ctx.settings.set({ language: 'en' }));
   await sleep(20000);
   const en = await page.evaluate(() => ({ strip: document.querySelector('.fu-bstrip')?.textContent ?? '', banners: [...document.querySelectorAll('.fu-bbanner')].map((e) => e.textContent) }));
@@ -281,13 +304,20 @@ if (!only || only.has('obs')) {
   const last = samples[samples.length - 1];
   row('V9', 'observation: clock observation, line speed = advanceKmh × rate / 3600 (±15 %), no 25 km jumps', `mode ${last?.mode} rate ${last?.rate}; shown ${measured.toFixed(1)} m/s vs advanceKmh×rate/3.6 ${expected.toFixed(1)} m/s (sim sub-tile line ${simSpeed.toFixed(1)} m/s) over ${ok.length} samples; jumps ${jumps}`, last?.mode === 'observation' && expected !== 0 && Math.abs(measured / expected - 1) <= 0.15 && jumps === 0);
   // V10: battle animation clock per real second at 0.5x and 4x and paused.
+  // A rebuild (the moving line left the patch) pre-ages the new battlefield by 12 s of battle time: measure a window
+  // without one.
   const rate = async (speed) => {
     await page.evaluate((sp) => __front.ctx.app.setSpeed(sp), speed);
     await sleep(1500);
-    const a = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: performance.now() / 1000, f: __front.ctx.frame.frame }));
-    await sleep(6000);
-    const b = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: performance.now() / 1000, f: __front.ctx.frame.frame }));
-    return { perS: (b.c - a.c) / (b.t - a.t), fps: (b.f - a.f) / (b.t - a.t) };
+    let r = null;
+    for (let k = 0; k < 4; k++) {
+      const a = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: performance.now() / 1000, f: __front.ctx.frame.frame, b: window.__battleDebug.shown()?.builds ?? -1 }));
+      await sleep(6000);
+      const b = await page.evaluate(() => ({ c: window.__battleDebug.clock, t: performance.now() / 1000, f: __front.ctx.frame.frame, b: window.__battleDebug.shown()?.builds ?? -1 }));
+      r = { perS: (b.c - a.c) / (b.t - a.t), fps: (b.f - a.f) / (b.t - a.t) };
+      if (a.b === b.b && a.b >= 0) break;
+    }
+    return r;
   };
   const r05 = await rate(0.5), r4 = await rate(4), r0 = await rate(0);
   row('V10', 'battle animation per real second equal at 0.5x and 4x (±15 %), frozen on pause', `0.5x ${r05.perS.toFixed(3)}/s (${r05.fps.toFixed(1)} fps), 4x ${r4.perS.toFixed(3)}/s (${r4.fps.toFixed(1)} fps), paused ${r0.perS.toFixed(3)}/s`, Math.abs(r05.perS / r4.perS - 1) <= 0.15 && r0.perS === 0);

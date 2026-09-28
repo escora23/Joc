@@ -415,31 +415,26 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     return f ?? null;
   }
   /**
-   * Signed offset (m) of the local front's sub-tile line from the anchor along the battle's advance normal: where the
-   * line crosses the advance axis through the anchor (so an advance of d metres moves it by d, whatever the line's
-   * local slant); the nearest point's projection when the axis misses the local polyline.
+   * Signed offset (m) of the local front's sub-tile line from the anchor along the battle's advance normal: the MEDIAN
+   * of the offsets of the line's vertices within 45 km (the sim's line is a polyline of 1.5-tile bins; when one tile
+   * falls, one vertex jumps while the front as a whole moves on steadily, and the median follows the front, not the
+   * jump). The nearest point's offset when too few vertices are near.
    */
+  const offs: number[] = [];
   function lineOffsetM(f: LocalFront): number {
-    // Local km: east, north. The advance normal in (east, north): (nx, -nz).
     const ne = front.nx, nn = -front.nz;
     const L = f.lineKm;
-    let best = Infinity;
-    for (let i = 0; i + 3 < L.length; i += 2) {
-      const e0 = L[i], n0 = L[i + 1], de = L[i + 2] - e0, dn = L[i + 3] - n0;
-      // Solve t·N = p0 + u·d  →  2x2 system.
-      const det = ne * -dn - nn * -de;
-      if (Math.abs(det) < 1e-9) continue;
-      const t = (e0 * -dn - n0 * -de) / det;
-      const u = (ne * n0 - nn * e0) / det;
-      if (u < -1e-6 || u > 1 + 1e-6) continue;
-      if (Math.abs(t) < Math.abs(best)) best = t;
+    offs.length = 0;
+    for (let i = 0; i + 1 < L.length; i += 2) {
+      if (Math.hypot(L[i], L[i + 1]) > 45) continue;
+      offs.push((L[i] * ne + L[i + 1] * nn) * 1000);
     }
     const px = f.nearest.eastKm * 1000, pz = -f.nearest.northKm * 1000;
     const proj = px * front.nx + pz * front.nz;
-    // Trust the axis crossing only near the line's nearest point (a crossing of some far bend of the front is not the
-    // line in front of the anchor).
-    if (Number.isFinite(best) && Math.abs(best * 1000 - proj) < Math.max(3000, 2 * Math.hypot(px, pz))) return best * 1000;
-    return proj;
+    if (offs.length < 3) return proj;
+    offs.sort((a, b) => a - b);
+    const m = offs.length >> 1;
+    return offs.length % 2 ? offs[m] : (offs[m - 1] + offs[m]) / 2;
   }
   /** Soldiers per team (0 = side a) from visibleSplit() of the two sides' pools. */
   function splitFor(lf: LocalForces, a: number, b: number): [number, number] {
@@ -511,7 +506,13 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     }
     const prev = front.drift;
     const k = simSub ? 1 : realDt > 0 ? 1 - Math.exp(-realDt / LINE_FOLLOW_S) : 0;
-    const next = prev + (target - prev) * k;
+    let next = prev + (target - prev) * k;
+    if (simSub) {
+      // Never faster than 1.5x the measured advance (at least 15 m/s): a sudden re-binning of the sim's polyline is
+      // caught up at a believable pace instead of a slide.
+      const vMax = Math.max(15, (1.5 * simKmh * view.clock.rate) / 3.6) * realDt;
+      next = prev + Math.max(-vMax, Math.min(vMax, next - prev));
+    }
     const d = next - prev;
     lineSpeed = realDt > 0 ? lineSpeed * 0.8 + 0.2 * (d / realDt) : lineSpeed;
     if (Math.abs(d) < 1e-4) return;

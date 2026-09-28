@@ -25,6 +25,7 @@ export const esW6: Record<string, string> = {
   'fr.adv.landing': 'desembarco en la playa',
   'fr.adv.retreating': 'en retirada',
   'fr.adv.quiet': 'en calma',
+  'fr.adv.mobilizingIn': 'movilizando: ataque posible en {h} h',
   'fr.dayN': '{n} día de combate',
 
   // ---- badge tooltip -------------------------------------------------------------------------------------
@@ -146,6 +147,7 @@ export const enW6: Record<string, string> = {
   'fr.adv.landing': 'landing on the beach',
   'fr.adv.retreating': 'retreating',
   'fr.adv.quiet': 'quiet',
+  'fr.adv.mobilizingIn': 'mobilizing: attack possible in {h} h',
   'fr.dayN': '{n} day of fighting',
 
   'fr.tip.text': 'The bar is the balance of the front: the share of combat power each side has here. The chevrons on the line move toward the side that is losing ground.',
