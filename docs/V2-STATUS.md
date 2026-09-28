@@ -145,6 +145,53 @@ Stage 3, beside W6, after both W3 and W4. Read DESIGN_V2 §9 (all), §2.2 (sub-t
 15. Esc shows the debrief with synced numbers and climbs to 2500 km above the unit's new position; the view resyncs without artifacts and the occupied stipple is unchanged; tsc and build clean
 
 
+## W6-battle-clarity: close-out (2026-09-28)
+
+> Built in full by the W6 owner; commits 8379fc2 … (see `git log --grep W6`). CODEMAP §6 «W6 battle clarity» maps the code.
+> Verification: `npx tsx src/sim/test/w6-audit.mjs` (headless, 7/7) and `node tools/w6-verify.mjs` (browser, SwiftShader,
+> real staged wars), results in shots/W6-battle-clarity/verify/results.json. Summary per acceptance criterion:
+
+1. **front-orbit** (V1a-c): two-colour band, chevrons in the sign of `momentum`, operational arrow 295 km wide for a
+   295 km corridor, badge «CHE ▶ TÚ · ▶ 2,6 km/h · ▣2 ▣2» with the bar = Pa/(Pa+Pd) to 0.001. PASS.
+2. **Chevrons follow momentum** (A2): momentum is now the fast EMA of the per-tick pressure each side's offensive adds
+   (`sim/fronts.ts`, `Attack.pushThisTick`); a defender given 3 M troops that counter-attacks flips the chevrons in
+   10 ticks. PASS (headless; the overlay draws `sign(momentum)` beyond ±0.1, V1a checks that mapping in the browser).
+3. **Quiet dashed / mobilization arrows** (V3a-b): 2 pulsing arrows on the aggressor side during a 400-tick window, the
+   quiet front dashed; 0 arrows after `mobilizeUntilTick`. PASS.
+4. **Guerra panel** (V4a-f, A4a-e): G opens it; both garrisons on quiet fronts; Ir flies there; Prioridad alta sets
+   priority 2 and raises the target share (0.77 → 0.86 with two fronts; with a single front the tooltip explains it
+   already holds every field troop); Gf rises over ~60 ticks (A4c, 79 % of the 120-tick rise by tick 60); alta/baja
+   during an enemy mobilization gives 1.50× the passive garrison (T34 via the panel's own command); Proponer paz opens
+   W3's terms dialog; Pedir ayuda sends W3's call to arms; Contraofensiva launches ours and Retirar ends it (A4e:
+   11.1 % loss, the sim's 10 % + rounding). PASS.
+5. **Stable keys** (A5): 100 % of 120 samples over a 600-tick offensive. PASS.
+6. **front-600** (V6a-b): smoke/haze 0.1 % of the screen whiter than the same frame without the battle layer; 20
+   flashes, farthest 0.45 tiles from the line; ≤ 6 columns per front. PASS.
+7. **plume-zoom** (V7): 3.7 % of the screen height at 700 km, 7.6 % at 200 km; world 7.5-8.3 km (≤ 20). PASS.
+8. **front-ground-real** (V8a-c): infantry deployed = visibleSplit exactly (e.g. 1629/422); every real division within
+   50 km drawn as 4 tanks + 2 IFVs, centroid within 57 m of its real position; drawn line = sim line. PASS.
+9. **front-observation** (V9): see the note below.
+10. **Animation clock** (V10): runs on wall time, frozen on pause; equal at 0.5x and 4x within 15 % except when the
+    SwiftShader frame time itself exceeds 10 s (then one side is capped).
+11. **Banners and strip** (V11a-b): «Suiza · ataca» / «Comandante · defiende» and «Frente de Zaragoza · CHE Suiza (ataca)
+    506.100 ▶ TÚ 160.300 Comandante (defiende) · avance 1,5 km/h · 2.º día de combate»; English «Zaragoza front …
+    2nd day of fighting». PASS.
+12. **Audio** (V12): combat cues capped at 2/s per front and 6/s in all (`__fuAudio.stats().combat`: max 2/s, 1 dropped
+    in 60 s at 300 km, with `&audio=1`). PASS.
+13. **Overlay** 2 draw calls, preallocated buffers; localForces test 56/56; tsc and build clean for W6's files.
+
+**Note on T41 (criterion 9).** The ground battle's line is the sim's sub-tile line (`FrontView.progress`), read where it
+crosses the advance axis through the anchor and glided tick to tick (6 real s per tick in observation time): it moves
+continuously, never in tile jumps (0 jumps), one tick behind the sim. Its speed is the sim's LOCAL speed of that
+stretch of front: on the Ukrainian plains, on the offensive's axis, the drawn line moved at 47.1 m/s and the sim's
+sub-tile line at 40.6 m/s against advanceKmh × rate / 3.6 = 61.2 m/s (−23 %); off the axis 30.9 vs 38.6 m/s; on the
+rugged Pyrenees/Ebro front about half. So V9 FAILS the ±15 % literally. Cause: `advanceKmh` (W1, §4.5) is an EMA of
+fallen AREA over the corridor width, maxed over the front's offensives with a slow 0.98 decay; mop-up of notches and the
+tile caps add area that is not depth, so it reads higher than the line's real depth speed. The battle deliberately shows
+the real local line rather than extrapolating at that figure (which would run ahead of the sim and snap back each tick).
+Suggested follow-up for W1/W7: measure `advanceKmh` from the sub-tile line's depth progress along the axis (the same
+field the battle reads), then badge, panel, strip and battle agree by construction.
+
 ## W6-battle-clarity: brief
 
 **Landed (shared local forces):** `src/shared/localForces.ts` with `deriveLocalForces()` / `deriveLocalForcesAt()` /

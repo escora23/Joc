@@ -262,7 +262,7 @@ if (!only || only.has('obs')) {
   }
   await shot(page, 'front-observation');
   const ok = samples.filter((s) => s.d && s.d.subTile);
-  console.log('   V9 series', JSON.stringify(samples.map((s) => s.d && [+s.t.toFixed(1), Math.round(s.d.lineShift), Math.round(s.d.simShift), +s.d.expectedSpeed.toFixed(1), s.d.subTile ? 1 : 0, s.d.frontKey])));
+  console.log('   V9 series', JSON.stringify(samples.map((s) => s.d && [+s.t.toFixed(1), Math.round(s.d.lineShift), Math.round(s.d.simShift), +s.d.expectedSpeed.toFixed(1), s.d.subTile ? 1 : 0, s.d.frontKey, s.d.builds, s.d.samples])), JSON.stringify(samples[samples.length - 1]?.d?.reanchorWhy));
   let jumps = 0;
   for (let i = 1; i < ok.length; i++) if (Math.abs(ok[i].d.lineShift - ok[i - 1].d.lineShift) > 5000) jumps++;
   // Least-squares slope of the displayed line offset over real time (m per real second).

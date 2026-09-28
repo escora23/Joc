@@ -91,6 +91,8 @@ export interface BattleShown {
   clockMode: string;
   /** Line samples taken / with the front found. */
   samples: [number, number];
+  builds: number;
+  reanchorWhy: string;
 }
 
 export interface BattleDebug {
@@ -159,7 +161,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
    * observation time): continuous motion at the real local speed of the front, one tick behind the sim, never ahead.
    */
   let lineFrom = 0, lineTo = 0, lineTick = -1, lineElapsedMs = 0;
-  let sampleAcc = 0, divAcc = 0, lastWallMs = 0, samplesTaken = 0, samplesFound = 0;
+  let sampleAcc = 0, divAcc = 0, lastWallMs = 0, samplesTaken = 0, samplesFound = 0, builds = 0;
+  let reanchorWhy = '';
   let lineSpeed = 0;
   let splitWanted: [number, number] = [0, 0];
   const shownDivs: BattleShown['divisions'] = [];
@@ -431,9 +434,12 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       if (u < -1e-6 || u > 1 + 1e-6) continue;
       if (Math.abs(t) < Math.abs(best)) best = t;
     }
-    if (Number.isFinite(best)) return best * 1000;
     const px = f.nearest.eastKm * 1000, pz = -f.nearest.northKm * 1000;
-    return px * front.nx + pz * front.nz;
+    const proj = px * front.nx + pz * front.nz;
+    // Trust the axis crossing only near the line's nearest point (a crossing of some far bend of the front is not the
+    // line in front of the anchor).
+    if (Number.isFinite(best) && Math.abs(best * 1000 - proj) < Math.max(3000, 2 * Math.hypot(px, pz))) return best * 1000;
+    return proj;
   }
   /** Soldiers per team (0 = side a) from visibleSplit() of the two sides' pools. */
   function splitFor(lf: LocalForces, a: number, b: number): [number, number] {
@@ -880,7 +886,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       infantry: [infantry?.deployed(0) ?? 0, infantry?.deployed(1) ?? 0], split: [splitWanted[0], splitWanted[1]],
       divisions: shownDivs.map((d) => ({ ...d })),
       lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simDir * simKmh * view.clock.rate) / 3.6 : 0,
-      advanceKmh: simKmh, subTile: simSub, clockMode: view.clock.mode, samples: [samplesTaken, samplesFound],
+      advanceKmh: simKmh, subTile: simSub, clockMode: view.clock.mode, samples: [samplesTaken, samplesFound], builds, reanchorWhy,
     };
   }
 
@@ -1077,6 +1083,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       }
       if (want) {
         if (!same) {
+          if (anchor && !pendingAnchor) {
+            reanchorWhy = `key ${anchor.frontKey}->${want.frontKey} cam ${gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon).toFixed(2)} km drift ${Math.round(front.drift)} m`;
+          }
           pendingAnchor = want;
           pendingDir.x = dirX;
           pendingDir.z = dirZ;
@@ -1090,6 +1099,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         nearFade = Math.max(0, nearFade - frame.dt * 3);
         if (nearFade <= 0.001 || !anchor) {
           job = buildSteps(pendingAnchor, pendingDir.x, pendingDir.z);
+          builds++;
           pendingAnchor = null;
           nearFade = 0;
         }
