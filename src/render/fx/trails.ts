@@ -55,9 +55,9 @@ const S = (o: Partial<TrailStyle> & Pick<TrailStyle, 'life' | 'w0' | 'w1'>): Tra
 const ROUTE = { life: 1e9, w0: 0.05, w1: 0.05, fade: 0, releaseFade: 5, hold: 15, keepAll: true, maxPts: 256, minSeg: 20 } as const;
 
 export const TRAIL_STYLES = {
-  // Thin streaks that spread a little (0.04 -> 0.7 km): a wide 2.6 km fan behind each enlarged jet read as a white
-  // cone at 40-100 km, bigger than the aircraft themselves.
-  contrail: S({ life: 8, w0: 0.03, w1: 0.7, minPx: 1.1, color: [0.95, 0.96, 1.0], alpha: 0.5, minSeg: 1.5, maxPts: 40, fade: 1.4, noise: 0.25 }),
+  // Thin streaks that spread a little (0.03 -> 0.25 km): a wide 2.6 km fan behind each enlarged jet read as a white
+  // cone at 8-100 km, wider than the aircraft themselves.
+  contrail: S({ life: 7, w0: 0.03, w1: 0.25, minPx: 1.1, color: [0.95, 0.96, 1.0], alpha: 0.5, minSeg: 1.5, maxPts: 40, fade: 1.4, noise: 0.25 }),
   smoke: S({ life: 10, w0: 0.15, w1: 7, minPx: 1.8, color: [0.78, 0.77, 0.75], alpha: 0.65, minSeg: 3, maxPts: 48, fade: 1.2, noise: 0.6 }),
   samSmoke: S({ life: 5, w0: 0.1, w1: 3.5, minPx: 1.6, color: [0.92, 0.92, 0.93], alpha: 0.75, minSeg: 1.5, maxPts: 36, fade: 1.3, noise: 0.5 }),
   wake: S({ life: 7, w0: 0.12, w1: 2.6, minPx: 1.5, color: [0.75, 0.82, 0.9], alpha: 0.9, additive: true, flat: true, minSeg: 0.6, maxPts: 36, fade: 1.1 }),

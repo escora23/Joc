@@ -521,8 +521,8 @@ function cityBase(): THREE.BufferGeometry {
 
 const G = {
   gravel: 0x78725f,
-  dryGrass: 0x6b6a4f,
-  grassDark: 0x5f5f45,
+  dryGrass: 0x76704f,
+  grassDark: 0x686247,
   dirt: 0x7d6c52,
   concrete: 0x9d9b93,
   concreteDark: 0x75736b,

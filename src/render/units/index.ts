@@ -112,8 +112,8 @@ const BUILDING_COLORS = [0xc9c3b6, 0xa9b4bf, 0x8d9aa6, 0xd8d6d0, 0x6f7f8e, 0xb8a
  *   250-600 km       unit models with a 6 px owner pip above each; structures icons + models
  *   < 250 km         models only; structure level shown on hover/selection by the card
  * Minimum on-screen sizes grow as the camera descends (owner clarification to FEEDBACK-1: every model clearly
- * visible up close): units 34 px at 600 km, 46 at 300, 62 at 100, 80 at 30, 104 at 10 and 130 from 3 km (times their
- * UNIT_LOOK.pxK: a warship 176 px long at 3 km, one tank of a division 91 px);
+ * visible up close): units 34 px at 600 km, 46 at 300, 62 at 100, 80 at 30, 116 at 10 and 150 from 3 km (times their
+ * UNIT_LOOK.pxK: a warship 200 px long at 3 km, one tank of a division 105 px);
  * structures 22 px at 600 km, 38 at 250, 54 at 100, 58 from 40 km (times STRUCT_PX_K). Below ~40 km most structures
  * are drawn at their real footprint (2.5-6.6 km), which is larger than the minimum.
  */
@@ -137,7 +137,7 @@ export interface IconLod {
 export const WORLD_VIEW_KM = 8000;
 
 /** [altitude km, px] from high to low; linear in log-altitude between points, flat beyond the ends. */
-const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 34], [300, 46], [100, 62], [30, 80], [10, 104], [3, 130]];
+const UNIT_PX_CURVE: readonly [number, number][] = [[900, 12], [600, 34], [300, 46], [100, 62], [30, 80], [10, 116], [3, 150]];
 const STRUCT_PX_CURVE: readonly [number, number][] = [[1200, 12], [600, 22], [250, 38], [100, 54], [40, 58]];
 function pxCurve(altKm: number, c: readonly [number, number][]): number {
   if (altKm >= c[0][0]) return c[0][1];
@@ -1197,15 +1197,33 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   const MAX_TILT = (30 * Math.PI) / 180;
   const gP = new THREE.Vector3(), gN = new THREE.Vector3(), gC = new THREE.Vector3();
   const gll: LatLon = { lat: 0, lon: 0 };
-  /** The NASA water fraction (0 land .. 1 sea) at a point, bilinear over the tile grid (the drawn coast's position). */
+  /** The NASA water fraction (0 land .. 1 sea) at a point, as the globe draws the coast (cubic B-spline over the grid). */
+  const bwx = [0, 0, 0, 0], bwy = [0, 0, 0, 0];
+  /** Uniform cubic B-spline weights at fraction f. */
+  function bspline(f: number, w: number[]): void {
+    const f2 = f * f, f3 = f2 * f;
+    w[0] = (1 - 3 * f + 3 * f2 - f3) / 6;
+    w[1] = (4 - 6 * f2 + 3 * f3) / 6;
+    w[2] = (1 + 3 * f + 3 * f2 - 3 * f3) / 6;
+    w[3] = f3 / 6;
+  }
   function waterAt(lat: number, lon: number): number {
     const wf = getWorldAux(ctx.world)?.waterFrac;
     if (!wf) return 0;
+    // The same cubic B-spline of the water mask the globe shader draws the coastline with up close (earth.ts
+    // waterBicubic): the 0.5 isoline of a bilinear sample lies up to ~2 km off the drawn shore, which left quays on land.
     const fx = ((((lon + 180) / 360) * MAP_W - 0.5) % MAP_W + MAP_W) % MAP_W, fy = clamp(((90 - lat) / 180) * MAP_H - 0.5, 0, MAP_H - 1.001);
-    const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = (x0 + 1) % MAP_W, y1 = y0 + 1, tx = fx - x0, ty = fy - y0;
-    const a = wf[y0 * MAP_W + x0] * (1 - tx) + wf[y0 * MAP_W + x1] * tx;
-    const b = wf[y1 * MAP_W + x0] * (1 - tx) + wf[y1 * MAP_W + x1] * tx;
-    return (a * (1 - ty) + b * ty) / 255;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    bspline(tx, bwx);
+    bspline(ty, bwy);
+    let v = 0;
+    for (let j = 0; j < 4; j++) {
+      const y = clamp(y0 - 1 + j, 0, MAP_H - 1);
+      let row = 0;
+      for (let i = 0; i < 4; i++) row += bwx[i] * wf[y * MAP_W + ((x0 - 1 + i + MAP_W) % MAP_W)];
+      v += bwy[j] * row;
+    }
+    return v / 255;
   }
 
   /**

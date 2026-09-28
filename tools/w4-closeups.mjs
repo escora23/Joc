@@ -31,7 +31,7 @@ const browser = await chromium.launch({
 const GLYPH = {
   0: '111101101101111', 1: '010110010010111', 2: '111001111100111', 3: '111001111001111', 4: '101101111001001',
   5: '111100111001111', 6: '111100111101111', 7: '111001010010010', 8: '111101111101111', 9: '111101111001111',
-  K: '101110100110101', M: '101111111101101', ' ': '000000000000000',
+  K: '101110100110101', L: '100100100100111', M: '101111111101101', ' ': '000000000000000',
 };
 const W = Number(args.w || 1600), H = Number(args.h || 900);
 const page = await browser.newPage({ viewport: { width: W, height: H } });
@@ -49,11 +49,9 @@ const autoTilt = (alt) => {
 };
 
 const report = [];
-for (const s of subjects) {
-  if (ONLY && !ONLY.has(s.name)) continue;
-  const frames = [];
-  for (const alt of ALTS) {
-    const r = await page.evaluate(async ({ s, alt, tilt, heading }) => {
+/** Fly to one subject at one altitude and capture the frame (HUD hidden); null when the subject is gone. */
+async function capture(s, alt) {
+  const r = await page.evaluate(async ({ s, alt, tilt, heading }) => {
       const { ctx } = window.__front;
       const v = ctx.sim.view;
       let lat, lon, lift = 0;
@@ -91,13 +89,39 @@ for (const s of subjects) {
       const size = window.__units.sizeOf?.(s.kind, s.tile) ?? null;
       return { lat, lon, lift, size, stats: { unitMinPx: window.__units.stats().lod.unitMinPx, structMinPxScale: window.__units.stats().lod.structMinPxScale } };
     }, { s, alt, tilt: autoTilt(alt), heading: HEADING });
-    if (!r) { log(`${s.name}: gone`); break; }
-    const buf = await page.screenshot({ timeout: 180000 });
-    frames.push({ alt, buf });
-    report.push({ subject: s.name, alt, px: r.size?.px ?? null, box: r.size ?? null, lift: +r.lift.toFixed(1) });
-    log(`${s.name} @ ${alt} km: ${r.size ? `${r.size.px.toFixed(0)} px (${r.size.w}x${r.size.h})` : 'size n/a'}`);
+  if (!r) return null;
+  const buf = await page.screenshot({ timeout: 180000 });
+  report.push({ subject: s.name, alt, px: r.size?.px ?? null, box: r.size ?? null, lift: +r.lift.toFixed(1) });
+  log(`${s.name} @ ${alt} km: ${r.size ? `${r.size.px.toFixed(0)} px (${r.size.w}x${r.size.h})` : 'size n/a'}`);
+  return buf;
+}
+
+if (args.levels) {
+  // --levels [alt]: one sheet per structure type with its L1 / L2 / L3 side by side at the same altitude (default
+  // 12 km, the camera as close as a player inspecting one base), so the level differences are compared like for like.
+  const alt = Number(args.levels === 'true' ? 12 : args.levels);
+  const types = [...new Set(subjects.filter((x) => x.kind === 'struct').map((x) => x.name.replace(/\d+$/, '')))];
+  for (const type of types) {
+    if (ONLY && !ONLY.has(type)) continue;
+    const frames = [];
+    for (let L = 1; L <= 3; L++) {
+      const s = subjects.find((x) => x.name === `${type}${L}`);
+      const buf = s ? await capture(s, alt) : null;
+      if (buf) frames.push({ alt, buf, label: `L${L} ${alt} KM` });
+    }
+    if (frames.length) writeSheet(path.join(out, `${type}-levels.png`), frames);
   }
-  if (frames.length) writeSheet(path.join(out, `${s.name}.png`), frames);
+} else {
+  for (const s of subjects) {
+    if (ONLY && !ONLY.has(s.name)) continue;
+    const frames = [];
+    for (const alt of ALTS) {
+      const buf = await capture(s, alt);
+      if (!buf) { log(`${s.name}: gone`); break; }
+      frames.push({ alt, buf });
+    }
+    if (frames.length) writeSheet(path.join(out, `${s.name}.png`), frames);
+  }
 }
 fs.writeFileSync(path.join(out, 'closeups.json'), JSON.stringify({ report, errors }, null, 1));
 log(`done: ${report.length} frames, ${errors.length} page errors`);
@@ -105,7 +129,7 @@ await browser.close();
 
 /** 2 x 2 (or 1 x n) contact sheet of the frames, each downscaled 2x (box filter), with the altitude burnt in. */
 function writeSheet(file, frames) {
-  const cols = frames.length > 2 ? 2 : frames.length, rows = Math.ceil(frames.length / cols);
+  const cols = frames[0].label ? frames.length : frames.length > 2 ? 2 : frames.length, rows = Math.ceil(frames.length / cols);
   const cw = W / 2, ch = H / 2;
   const sheet = new PNG({ width: cw * cols, height: ch * rows });
   frames.forEach((f, i) => {
@@ -129,7 +153,7 @@ function writeSheet(file, frames) {
       sheet.data[o] = r / 4; sheet.data[o + 1] = g / 4; sheet.data[o + 2] = b / 4; sheet.data[o + 3] = 255;
     }
     // Altitude tag: a dark box with white bars (one bar per digit group is unreadable; draw the digits as 3x5 glyphs).
-    drawText(sheet, ox + 8, oy + 8, `${f.alt} KM`);
+    drawText(sheet, ox + 8, oy + 8, f.label ?? `${f.alt} KM`);
   });
   fs.writeFileSync(file, PNG.sync.write(sheet));
 }
