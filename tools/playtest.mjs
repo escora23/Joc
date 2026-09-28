@@ -476,10 +476,11 @@ try {
       for (const t of mine) for (const dir of [-1, 1, -1600, 1600]) {
         const n = t + dir;
         if (v.owner[n] !== 0 || !pt.playable(n)) continue;
-        // 3-4 tiles into the neutral land along the same direction: a running expansion takes the frontier tiles
-        // within seconds, and a click on land that has just become ours does nothing.
+        // Up to 8 tiles into the neutral land along the same direction: a running expansion takes the frontier tiles
+        // faster than the software renderer completes a click, and a click on land that has just become ours does
+        // nothing.
         let m = n;
-        for (let k = 1; k <= 4; k++) {
+        for (let k = 1; k <= 8; k++) {
           const q = n + k * dir;
           if (v.owner[q] !== 0 || !pt.playable(q)) break;
           m = q;
@@ -494,16 +495,17 @@ try {
     const misses = [];
     const started = Date.now();
     for (const [i, ratio] of [[0, '25'], [1, '60'], [2, '60'], [3, '60']]) {
-      // A slow software renderer: two pushes are enough when the clicks take long (the step is bounded to 240 s).
-      if (i >= 2 && Date.now() - started > 120_000) break;
+      // A slow software renderer: later pushes only while the step has time (it is bounded to 240 s).
+      if (i >= 1 && Date.now() - started > 100_000) break;
       if (ratio === '25') await page.locator('.fu-ar-tick', { hasText: /^25$/ }).click();
       else await page.locator('.fu-ar input[type=range]').fill(ratio);
       const cands = await findNeutral(2);
       if (!cands.length) break;
       let ev = null;
-      for (const target of cands.slice(0, i === 0 ? 5 : 3)) {
-        // Stay inside the step's budget: later pushes are optional once the first one started.
-        if (i > 0 && Date.now() - started > 170_000) break;
+      for (const target of cands.slice(0, i === 0 ? 5 : 2)) {
+        // Stay inside the step's budget (one click takes 30-60 s on the software renderer): later pushes are optional
+        // once the first one started.
+        if (i > 0 && Date.now() - started > 100_000) break;
         const ll = await tileLL(target);
         await lookAt(ll.lat, ll.lon, 2200);
         const n0 = await countEvents('attackStarted', 'e.attacker === 1');

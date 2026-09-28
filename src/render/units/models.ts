@@ -235,6 +235,7 @@ function trade(): THREE.BufferGeometry {
   const dz = (z: number) => deckY(z + 0.5);
   const cols = [0xb8452f, 0x2f6fb8, 0xd0a13a, 0x3d8f4f, 0x8f8f8f, 0xa0522d, 0x2a8a8a, 0xc0c0c0, 0x7c3f8f, 0xe07030];
   let k = 0;
+  // One block per stack (colour per stack, a darker top tier): the look of a loaded deck at a fraction of the vertices.
   for (let bay = 0; bay < 9; bay++) {
     const z = -0.33 + bay * 0.068;
     const bw = Math.min(beam(z + 0.5) * 1.8, 0.13);
@@ -242,7 +243,7 @@ function trade(): THREE.BufferGeometry {
     for (let c = 0; c < nx; c++) {
       const hgt = 1 + ((bay * 7 + c * 3 + 11) % 4);
       const x = (c - (nx - 1) / 2) * 0.022;
-      for (let h = 0; h < hgt; h++) m.block(0.02, 0.0135, 0.06, x, dz(z) + h * 0.0135, z, cols[k++ % cols.length]);
+      m.block(0.02, 0.0135 * hgt, 0.06, x, dz(z), z, cols[k++ % cols.length]);
     }
   }
   // Deckhouse aft with bridge wings, funnel in the owner's colour.
@@ -732,10 +733,8 @@ function port(L: number): THREE.BufferGeometry {
   let k = 0;
   for (let r = 0; r < L + 1; r++) for (let c = 0; c < 9; c++) {
     const hgt = 1 + ((r * 5 + c * 3 + 1) % 4);
-    for (let h = 0; h < hgt; h++) {
-      m.block(0.06, 0.016, 0.022, -0.4 + c * 0.07, 0.003 + h * 0.016, 0.04 + r * 0.07, cols[k++ % cols.length]);
-      m.block(0.06, 0.016, 0.022, -0.4 + c * 0.07, 0.003 + h * 0.016, 0.064 + r * 0.07, cols[(k + 4) % cols.length]);
-    }
+    m.block(0.06, 0.016 * hgt, 0.022, -0.4 + c * 0.07, 0.003, 0.04 + r * 0.07, cols[k++ % cols.length]);
+    m.block(0.06, 0.016 * Math.max(1, hgt - 1), 0.022, -0.4 + c * 0.07, 0.003, 0.064 + r * 0.07, cols[(k + 4) % cols.length]);
   }
   // Warehouses (1 / 2 / 3) and the port authority building.
   for (let i = 0; i < L; i++) building(m, 0.2, 0.1, 0.055, 0.34, 0.03 + i * 0.13, 0, G.wall, G.roof, 0.5, true);

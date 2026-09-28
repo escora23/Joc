@@ -220,31 +220,32 @@ registerShot('model-gallery', 'units', 'Every unit and structure model (levels 1
   }
   const spawn = (unit: UnitType, from: [number, number], to?: [number, number]) =>
     sim.debug({ type: 'spawnUnit', unit, owner: HUMAN_ID, tile: at(...from), targetTile: to ? at(...to) : -1 });
-  // Ships bound far away (so they are still under way when the frame is paused), a division, a fighter patrol, a train.
+  // A bomber and a drone swarm on a real sortie: war with the nation across the sea, strikes on its army base (a
+  // military target: escalation level 1).
+  const enemy = enemyNear(ctx, 36.6, 3.2);
+  sim.debug({ type: 'conquer', playerId: enemy, centerTile: at(36.4, 3.2), radius: 7 });
+  sim.debug({ type: 'spawnStructure', structure: S.ArmyBase, owner: enemy, tile: at(36.62, 2.95), level: 1 });
+  sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, mobilizeTicks: 0 });
+  sim.debug({ type: 'escalate', by: HUMAN_ID, against: enemy, level: 1 });
+  sim.setSpeed(1);
+  await until(() => [...sim.view.units.values()].some((u) => u.owner === HUMAN_ID && u.type === UnitType.DroneSwarm) && [...sim.view.structures.values()].some((x) => x.owner === enemy && x.type === S.ArmyBase), 30000, wait);
+  sim.setSpeed(0);
+  const target = [...sim.view.structures.values()].find((x) => x.owner === enemy && x.type === S.ArmyBase);
+  for (const ty of [UnitType.Bomber, UnitType.DroneSwarm]) {
+    const u = [...sim.view.units.values()].find((x) => x.owner === HUMAN_ID && x.type === ty);
+    if (u && target) sim.send({ type: 'unitOrder', unitIds: [u.id], order: 'strike', tile: target.tile, targetId: target.id });
+  }
+  // Ships bound far away (still under way when the frame is paused), a division, a fighter patrol, a train.
   spawn(UnitType.Warship, [39.2, 1.0], [38.9, 2.2]);
   spawn(UnitType.TransportShip, [39.7, 1.2], [37.6, 6.5]);
   spawn(UnitType.TradeShip, [38.6, 1.1], [37.4, 8.0]);
   spawn(UnitType.ArmoredDivision, [39.25, -1.2]);
   spawn(UnitType.FighterSquadron, [39.9, -1.4], [39.9, -1.4]);
   spawn(UnitType.Train, [40.3, -1.2], [39.4, -3.9]);
-  // A bomber and a drone swarm on a real sortie: war with the nation across the sea, strikes on its port city.
-  const enemy = enemyNear(ctx, 36.6, 3.2);
-  sim.debug({ type: 'conquer', playerId: enemy, centerTile: at(36.4, 3.2), radius: 7 });
-  sim.debug({ type: 'spawnStructure', structure: S.City, owner: enemy, tile: at(36.62, 2.95), level: 3 });
-  sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, mobilizeTicks: 0 });
-  sim.debug({ type: 'escalate', by: HUMAN_ID, against: enemy, level: 1 });
-  sim.setSpeed(1);
-  await until(() => [...sim.view.units.values()].some((u) => u.owner === HUMAN_ID && u.type === UnitType.Bomber) && [...sim.view.structures.values()].some((x) => x.owner === enemy && x.type === S.City), 30000, wait);
-  sim.setSpeed(0);
-  const target = [...sim.view.structures.values()].find((x) => x.owner === enemy && x.type === S.City);
-  for (const ty of [UnitType.Bomber, UnitType.DroneSwarm]) {
-    const u = [...sim.view.units.values()].find((x) => x.owner === HUMAN_ID && x.type === ty);
-    if (u && target) sim.send({ type: 'unitOrder', unitIds: [u.id], order: 'strike', tile: target.tile, targetId: target.id });
-  }
   sim.setSpeed(1);
   const want = [UnitType.Warship, UnitType.TransportShip, UnitType.TradeShip, UnitType.ArmoredDivision, UnitType.FighterSquadron, UnitType.Bomber, UnitType.DroneSwarm, UnitType.Train];
   const t0 = sim.view.tick;
-  await until(() => want.every((ty) => [...sim.view.units.values()].some((u) => u.type === ty && u.owner === HUMAN_ID && u.state !== UnitState.Docked)) && sim.view.tick >= t0 + 4, 20000, wait);
+  await until(() => want.every((ty) => [...sim.view.units.values()].some((u) => u.type === ty && u.owner === HUMAN_ID && u.state !== UnitState.Docked)) && sim.view.tick >= t0 + 4, 8000, wait);
   sim.setSpeed(0);
   await waitFrames(6);
   for (const ty of want) {
