@@ -129,7 +129,7 @@ export interface Vehicle {
   nextFire: number;
   nextMove: number;
   u: number; v: number;
-  role: number; // 0 line, 1 column, 2 static battery, 3 wreck
+  role: number; // 0 line, 1 column, 2 static battery, 3 wreck, 4 a real division's vehicle (follows the sim)
   hover: number;
   seed: number;
   pathId: number;
@@ -137,6 +137,21 @@ export interface Vehicle {
   bodyPitch: number;
   bodyRoll: number;
   aimX: number; aimZ: number; aimY: number;
+  /** Real-division vehicles (role 4): slot key, the division's unit id and the heading of its formation. */
+  key: number;
+  unitId: number;
+  wantYaw: number;
+}
+
+/** One vehicle of a real division (§11.5): its slot in the formation around the division's real position. */
+export interface FormationSlot {
+  key: number;
+  unitId: number;
+  team: number;
+  kind: VehicleKind;
+  x: number;
+  z: number;
+  yaw: number;
 }
 
 export interface Path {
@@ -189,6 +204,13 @@ export interface Vehicles {
   blast(x: number, z: number, radius: number, now: number, fx: Effects): void;
   warmup(on: boolean): void;
   setCapacity(n: number): void;
+  /**
+   * The real divisions (§11.5): vehicles created, moved and removed by slot key. Each drives to its slot (it snaps
+   * when the division jumped more than 800 m, a train ride or a re-anchor) and fights like the line vehicles when it is
+   * within 3 km of the contact line.
+   */
+  setFormation(slots: readonly FormationSlot[], now: number): void;
+  readonly formation: ReadonlyMap<number, Vehicle>;
 }
 
 export interface VehicleCounts {
@@ -271,6 +293,8 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
   const uv2 = new THREE.Vector2();
   let paths: Path[] = [];
   let warm = false;
+  const formation = new Map<number, Vehicle>();
+  const seenSlots = new Set<number>();
 
   function newVehicle(kind: VehicleKind, team: number, x: number, z: number, yaw: number, role: number): Vehicle {
     const v: Vehicle = {
@@ -278,6 +302,7 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
       maxSpeed: kind === VehicleKind.Tank ? 6.5 : kind === VehicleKind.Apc ? 8 : kind === VehicleKind.Truck ? 9 : kind === VehicleKind.Heli ? 18 : 5,
       tx: x, tz: z, turret: 0, pitch: 0.02, aimPitch: 0.02, burnt: false, alive: true, lastShot: -100, nextFire: 0, nextMove: 0,
       u: 0, v: 0, role, hover: 0, seed: rng.next(), pathId: -1, pathS: 0, bodyPitch: 0, bodyRoll: 0, aimX: 0, aimZ: 0, aimY: 0,
+      key: 0, unitId: 0, wantYaw: yaw,
     };
     list.push(v);
     return v;
@@ -595,8 +620,9 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
           terrainPose(v);
           continue;
         }
-        // Line vehicles (tanks, APCs): move between cover positions, duel across the line.
-        if (now > v.nextMove) {
+        // Line vehicles (tanks, APCs): move between cover positions, duel across the line. Real-division vehicles
+        // (role 4) take their slot from the sim instead.
+        if (v.role === 0 && now > v.nextMove) {
           v.nextMove = now + rng.range(10, 25);
           const push = v.team === 0 ? front.pushA : front.pushB;
           const minV = v.kind === VehicleKind.Tank ? 70 : 200;
@@ -615,6 +641,7 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
           v.speed += (v.maxSpeed * align * Math.min(1, d / 30) - v.speed) * Math.min(1, dt * 0.7);
         } else {
           v.speed *= Math.max(0, 1 - dt * 1.5);
+          if (v.role === 4) v.yaw += angDiff(v.yaw, v.wantYaw) * Math.min(1, dt * 0.4);
         }
         v.x += Math.sin(v.yaw) * v.speed * dt;
         v.z += Math.cos(v.yaw) * v.speed * dt;
@@ -630,7 +657,12 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
         v.turret += Math.sign(angDiff(v.turret, wantT)) * Math.min(Math.abs(angDiff(v.turret, wantT)), dt * 0.7);
         const dist = Math.hypot(v.aimX - v.x, v.aimZ - v.z);
         v.pitch += (Math.min(0.12, dist / 25000) - v.pitch) * Math.min(1, dt);
-        if (now > v.nextFire && Math.abs(angDiff(v.turret, wantT)) < 0.05) {
+        const engaged = v.role !== 4 || Math.abs(front.coords(v.x, v.z, uv2).y) < 3000;
+        if (!engaged) {
+          v.nextFire = Math.max(v.nextFire, now + 2);
+          v.aimY = 0;
+        }
+        if (engaged && now > v.nextFire && Math.abs(angDiff(v.turret, wantT)) < 0.05) {
           v.nextFire = now + (v.kind === VehicleKind.Tank ? rng.range(6, 14) : rng.range(3, 8)) / act;
           v.lastShot = now;
           v.aimY = 0;
@@ -655,7 +687,8 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
     blast(x, z, radius, now, fx) {
       let best: Vehicle | null = null, bd = radius * radius;
       for (const v of list) {
-        if (!v.alive || v.kind === VehicleKind.Heli) continue;
+        // Real divisions lose tanks only when the sim says so (their integrity), never to a random local blast.
+        if (!v.alive || v.kind === VehicleKind.Heli || v.role === 4) continue;
         const d = (v.x - x) * (v.x - x) + (v.z - z) * (v.z - z);
         if (d < bd) { bd = d; best = v; }
       }
@@ -670,7 +703,47 @@ export function createVehicles(uniforms: BattleUniforms, host: VehiclesHost, cap
     },
     clear() {
       list.length = 0;
+      formation.clear();
       upload();
+    },
+    formation,
+    setFormation(slots, now) {
+      seenSlots.clear();
+      for (const sl of slots) {
+        seenSlots.add(sl.key);
+        let v = formation.get(sl.key);
+        if (!v || !v.alive) {
+          if (v) {
+            const i = list.indexOf(v);
+            if (i >= 0) list.splice(i, 1);
+          }
+          v = newVehicle(sl.kind, sl.team, sl.x, sl.z, sl.yaw, 4);
+          v.key = sl.key;
+          v.unitId = sl.unitId;
+          v.nextFire = now + rng.range(1, 7);
+          v.turret = rng.range(-0.2, 0.2);
+          formation.set(sl.key, v);
+          terrainPose(v);
+        }
+        v.team = sl.team;
+        v.tx = sl.x;
+        v.tz = sl.z;
+        v.wantYaw = sl.yaw;
+        if (Math.hypot(sl.x - v.x, sl.z - v.z) > 800) {
+          v.x = sl.x;
+          v.z = sl.z;
+          v.yaw = sl.yaw;
+          v.speed = 0;
+          v.y = host.heightAt(v.x, v.z);
+          terrainPose(v);
+        }
+      }
+      for (const [k, v] of formation) {
+        if (seenSlots.has(k)) continue;
+        const i = list.indexOf(v);
+        if (i >= 0) list.splice(i, 1);
+        formation.delete(k);
+      }
     },
     warmup(on) {
       warm = on;

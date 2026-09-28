@@ -214,6 +214,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
   let rails: SurfaceRibbon | null = null;
   let overlays: Overlays | null = null;
   let icons: IconLayer | null = null;
+  /** v2 (W6): divisions the ground battle draws at battle scale (not drawn here). */
+  let battleOwned: ReadonlySet<number> | null = null;
   let built = false;
   const lod: IconLod = { unitModelFade: 0, structModelFade: 0, unitIconMode: 0, structIcons: true, unitMinPx: 12, structMinPx: 12, worldView: false };
   const relations = relationsFor(ctx);
@@ -1025,6 +1027,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         offerUnitIcon(u, P, sel === 1);
         continue;
       }
+      // v2 (W6): a division the visible ground battle draws at battle scale is not drawn twice.
+      if (battleOwned && battleOwned.has(u.id)) continue;
       resetPBox();
       pbox.on = true;
       const im = unitMeshes[key];
@@ -2079,6 +2083,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     },
     closeIconFan() {
       icons?.closeFan();
+    },
+    setBattleOwned(ids) {
+      battleOwned = ids;
     },
     unitsInRect(x0, y0, x1, y1) {
       const rect = ctx.canvas.getBoundingClientRect();

@@ -12,6 +12,7 @@ import { greatCircleKm, latLonToVec3, tileAtXY, tileToLatLon, tileXYToLatLon } f
 import type { NukeWeapon } from '../../shared/protocol';
 import { TerrainClass, TERRAIN_CLASS_MASK, UnitType, type LatLon } from '../../shared/types';
 import { airHeightKm, env, refreshEnv } from '../units/common';
+import { createLaunchPlumes, type PlumeStats } from './plume';
 import { NukeSystem, type NukeParams } from './nuke';
 import { PK, ParticleSystem } from './particles';
 import { createSpriteAtlas } from './sprites';
@@ -39,6 +40,8 @@ export interface FxInternal extends FxApi {
   advance(seconds: number): void;
   /** Shots that jump the effect clock skip the (real-time) whiteout and camera shake. */
   quietScreen: boolean;
+  /** v2 (W6, §10.12): launch plumes alive with their world size, drawn size and share of the screen height. */
+  plumes(): PlumeStats;
 }
 
 const registry = new WeakMap<object, FxInternal>();
@@ -106,6 +109,9 @@ export function createFx(ctx: GameContext): FxApi {
     },
   });
   root.add(nukes.group, particles.group, trails.group);
+  // v2 (W6, §10.12): launch plumes sized every frame (world 6 → 20 km, minimum pixels, ≤ 8 % of the screen height).
+  const plumes = createLaunchPlumes();
+  root.add(plumes.mesh);
 
   const projectiles: Projectile[] = [];
   for (let i = 0; i < MAX_PROJ; i++) {
@@ -266,21 +272,12 @@ export function createFx(ctx: GameContext): FxApi {
   }
 
   function launchPlume(p: THREE.Vector3, k: number): void {
-    const km = visKm(p, 6 * k, 14);
+    // v2 (W6): the plume is sized every frame from its world size and the camera (./plume); only a short ignition
+    // flash is a particle, capped like the plume.
+    plumes.launch(p, k);
+    const km = Math.min(visKm(p, 4 * k, 10), 12);
     const s = km / EARTH_RADIUS_KM;
-    up.copy(p).normalize();
-    particles.emit(PK.Flash, p.x, p.y, p.z, 0, 0, 0, 0.5, s * 0.8, s * 1.6);
-    for (let i = 0; i < Math.round(22 * particles.density * k + 6); i++) {
-      randDir(tmp, 0.0);
-      tmp.addScaledVector(up, -tmp.dot(up)).normalize();
-      const sp = s * (0.8 + particles.rand() * 1.6);
-      particles.emit(PK.White, p.x, p.y, p.z, tmp.x * sp + up.x * s * 0.2, tmp.y * sp + up.y * s * 0.2, tmp.z * sp + up.z * s * 0.2,
-        6 + particles.rand() * 6, s * 0.3, s * 1.6, 0.7, s * 0.03, particles.rand() * 0.6);
-    }
-    for (let i = 0; i < Math.round(10 * particles.density + 3); i++) {
-      const sp = s * (1.5 + particles.rand() * 2);
-      particles.emit(PK.Fire, p.x, p.y, p.z, up.x * sp, up.y * sp, up.z * sp, 0.6 + particles.rand() * 0.4, s * 0.25, s * 0.5, 2.0, 0, i * 0.04);
-    }
+    particles.emit(PK.Flash, p.x, p.y, p.z, 0, 0, 0, 0.4, s * 0.6, s);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -489,6 +486,7 @@ export function createFx(ctx: GameContext): FxApi {
     splash,
     visKm,
     latestNukeAge: () => nukes.latestAge(),
+    plumes: () => plumes.stats(),
     quietScreen: false,
     advance(seconds: number) {
       const step = 1 / 30;
@@ -516,6 +514,7 @@ export function createFx(ctx: GameContext): FxApi {
       particles.clear();
       trails.clear();
       nukes.clear();
+      plumes.clear();
       for (const p of projectiles) p.active = false;
       for (const b of burners) b.active = false;
       pending.length = 0;
@@ -529,6 +528,7 @@ export function createFx(ctx: GameContext): FxApi {
       particles.setTime(now);
       trails.setTime(now);
       const dt = env.fxDt;
+      plumes.update(dt, ctx.camera, ctx.canvas.clientHeight || window.innerHeight);
       // Lens ghosts belong to nuclear light only (a fireball of a conventional strike never earns them).
       const nukeAge = nukes.latestAge();
       ctx.post.setLensGhosts?.(nukeAge >= 0 && nukeAge < 25 ? 1 : 0);

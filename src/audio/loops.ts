@@ -18,12 +18,14 @@ export interface HeardFront {
   /** Nearness for small arms (tens of km). */
   near: number;
   intensity: number;
+  /** Stable key of the front (per-front combat cue cap, W6; 0 = none). */
+  key?: number;
   /** Continuous tile coordinates of the front point (for positional events). */
   lat: number;
   lon: number;
 }
 
-export type EventSink = (cue: string, lat: number, lon: number, gain: number) => void;
+export type EventSink = (cue: string, lat: number, lon: number, gain: number, frontKey?: number) => void;
 
 export class BattleAmbience {
   private readonly rumble: GainNode;
@@ -136,15 +138,15 @@ export class BattleAmbience {
     const r = this.e.rng;
     if (this.artT <= 0) {
       this.artT = r.range(0.4, 1.6);
-      sink('artillery', best.lat + r.range(-0.4, 0.4), best.lon + r.range(-0.4, 0.4), r.range(0.5, 1) * level);
+      sink('artillery', best.lat + r.range(-0.4, 0.4), best.lon + r.range(-0.4, 0.4), r.range(0.5, 1) * level, best.key);
     }
     if (this.gunT <= 0) {
       this.gunT = r.range(0.3, 1.2);
-      sink('gunfire', best.lat + r.range(-0.15, 0.15), best.lon + r.range(-0.15, 0.15), r.range(0.5, 1) * level);
+      sink('gunfire', best.lat + r.range(-0.15, 0.15), best.lon + r.range(-0.15, 0.15), r.range(0.5, 1) * level, best.key);
     }
     if (this.boomT <= 0) {
       this.boomT = r.range(0.8, 2.5);
-      sink(r.next() < 0.2 ? 'tankCannon' : 'explosionSmall', best.lat + r.range(-0.2, 0.2), best.lon + r.range(-0.2, 0.2), r.range(0.4, 0.9) * level);
+      sink(r.next() < 0.2 ? 'tankCannon' : 'explosionSmall', best.lat + r.range(-0.2, 0.2), best.lon + r.range(-0.2, 0.2), r.range(0.4, 0.9) * level, best.key);
     }
   }
 

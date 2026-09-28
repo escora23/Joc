@@ -13,6 +13,8 @@
 import { HUMAN_ID, MAP_W } from '../../shared/constants';
 import { latLonToTile, tileXYToLatLon } from '../../shared/geo';
 import { registerShot, type ShotContext } from '../../shared/shots';
+import { battleDebug } from './index';
+import { fxInternal } from '../fx/index';
 import { AUTO_PAUSE_KINDS, UnitType, type FrontView } from '../../shared/types';
 
 export interface StagedWar {
@@ -89,12 +91,32 @@ export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' |
   ctx.sim.setSpeed(4);
   await s.waitFrames(2);
   if (who !== 'none' && mob <= 0) ctx.sim.debug({ type: 'command', playerId: attacker, cmd: { type: 'attack', target: defender, ratio: 0.6, tile: aim } });
+  // Both sides attach their divisions to the front as soon as it exists (a real order: they drive there).
+  let attached = false;
+  const attach = (): void => {
+    const f = pairFront(s, attacker, defender, false);
+    if (!f || attached) return;
+    attached = true;
+    const n = f.samples.length >> 1;
+    for (const side of [enemy, HUMAN_ID]) {
+      const other = side === enemy ? HUMAN_ID : enemy;
+      const into = other === f.b ? 1 : -1;
+      const ids = [...view.units.values()].filter((u) => u.owner === side && u.type === UnitType.ArmoredDivision).map((u) => u.id);
+      ids.forEach((id, k) => {
+        const v = Math.min(n - 1, Math.floor(((k + 1) / (ids.length + 1)) * n));
+        const x = f.samples[v * 2] + f.dirX * (0.5 + into * 1.2), y = f.samples[v * 2 + 1] + f.dirY * (0.5 + into * 1.2);
+        const tile = Math.floor(y) * MAP_W + ((Math.floor(x) % MAP_W) + MAP_W) % MAP_W;
+        ctx.sim.debug({ type: 'command', playerId: side, cmd: { type: 'unitOrder', unitIds: [id], order: 'attach', tile, targetId: 0 } });
+      });
+    }
+  };
   // Run real ticks until the front has an offensive with a measured advance (or the requested ticks passed).
   const t0 = performance.now();
   const tick0 = view.tick;
   const runTicks = Number(params.get('run') ?? opts.run ?? (mob > 0 ? 20 : 160));
   const minKmh = opts.minKmh ?? (who === 'none' || mob > 0 ? 0 : 1);
   while (performance.now() - t0 < 90_000) {
+    attach();
     const f = pairFront(s, attacker, defender, who !== 'none' && mob <= 0);
     const ran = view.tick - tick0;
     if (f && ran >= runTicks && f.advanceKmh >= minKmh) break;
@@ -147,3 +169,59 @@ registerShot('fronts-panel', 'battle', 'W6: the Guerra y frentes panel (G) on a 
   if (st.front) s.ctx.bus.emit('frontSelected', { key: st.front.key, fly: false });
   await s.waitFrames(30);
 }, 10);
+
+/** Camera down on the front's contact line (the ground battle streams in by itself: nothing is staged in the layer). */
+async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number): Promise<void> {
+  const f = st.front;
+  if (!f) return;
+  const n = f.samples.length >> 1;
+  const m = Math.floor(n / 2);
+  const x = f.samples[m * 2] + f.dirX * 0.5, y = f.samples[m * 2 + 1] + f.dirY * 0.5;
+  const ll = tileXYToLatLon(x, y);
+  const cl = Math.cos((ll.lat * Math.PI) / 180);
+  const hdg = Math.atan2(f.dirX * cl, -f.dirY) + Number(s.params.get('hdg') ?? 1.1);
+  s.ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: Number(s.params.get('alt') ?? alt), tilt: Number(s.params.get('tilt') ?? tilt), heading: hdg });
+  for (let i = 0; i < 240 && !battleDebug()?.built; i++) await s.waitFrames(1);
+  await s.waitFrames(8);
+}
+
+registerShot('front-ground-real', 'battle', 'W6: the ground battle composed from the real front: infantry per side from the local forces, the real divisions as 1 tank per 25 % integrity + 2 IFVs at their positions, the sub-tile line, banners and the HUD strip', async (s) => {
+  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220 });
+  await descend(s, st, 7, 1.05);
+  battleDebug()?.prewarm(Number(s.params.get('warm') ?? 10));
+  await s.waitFrames(6);
+  console.info(`[w6] ground ${JSON.stringify(battleDebug()?.shown() ?? null)}`);
+}, 10);
+
+registerShot('front-observation', 'battle', 'W6: the ground battle under observation time (1 s = 1 min): the line and the armies move with the sim, continuously', async (s) => {
+  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220 });
+  await descend(s, st, 9, 0.95);
+  // Let the world run: below 60 km the app switches the clock to observation time (60 game s per real s).
+  s.ctx.sim.setSpeed(1);
+  await s.wait(Number(s.params.get('observe') ?? 20000));
+  console.info(`[w6] observation ${JSON.stringify(battleDebug()?.shown() ?? null)} clock=${s.ctx.sim.view.clock.mode}`);
+}, 10);
+
+registerShot('plume-zoom', 'battle', 'W6: a missile launched from Madrid seen at 700 km, then at 200 km: the plume keeps its world size (6 → 20 km) and never covers more than 8 % of the screen height', async (s) => {
+  const { ctx, params } = s;
+  await ctx.app.startScriptedGame({ ticks: 200, speed: 0, headStart: 10, autopilot: false });
+  const fx = fxInternal(ctx);
+  const from = latLonToTile(40.42, -3.7), target = latLonToTile(48.85, 2.35);
+  const samples: { alt: number; plumes: unknown }[] = [];
+  ctx.cameraRig.setState({ lat: 40.42, lon: -3.7, altitudeKm: 700, tilt: Number(params.get('tilt') ?? 0.6), heading: 0.3 });
+  ctx.sim.setSpeed(1);
+  ctx.sim.debug({ type: 'launchNuke', weapon: UnitType.AtomBomb, owner: 2, fromTile: from, targetTile: target });
+  const t0 = performance.now();
+  while (performance.now() - t0 < 20_000 && !(fx?.plumes().alive)) await s.wait(100);
+  ctx.sim.setSpeed(0);
+  for (const alt of [700, 200]) {
+    ctx.cameraRig.setState({ lat: 40.42, lon: -3.7, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.6), heading: 0.3 });
+    await s.waitFrames(6);
+    samples.push({ alt, plumes: fx?.plumes().plumes.map((p) => ({ ...p })) ?? [] });
+  }
+  const at = Number(params.get('alt') ?? 200);
+  ctx.cameraRig.setState({ lat: 40.42, lon: -3.7, altitudeKm: at, tilt: Number(params.get('tilt') ?? 0.6), heading: 0.3 });
+  await s.waitFrames(6);
+  (window as unknown as { __plumeZoom?: unknown }).__plumeZoom = samples;
+  console.info(`[w6] plume-zoom ${JSON.stringify(samples)}`);
+}, 6);

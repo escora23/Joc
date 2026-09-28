@@ -18,14 +18,15 @@
 // The layer crossfades with altitude (screen-door dissolve) and never pops.
 
 import * as THREE from 'three';
-import type { BattleApi, CameraState, FrameInfo, GameContext } from '../../shared/api';
+import type { BattleApi, BattleView, CameraState, FrameInfo, GameContext } from '../../shared/api';
 import { BATTLE_LAYER_ALT_KM, HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../../shared/constants';
 import { latLonToTile, latLonToVec3, tangentFrame, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { smoothstep } from '../../shared/math';
 import { territoryFillAmount } from '../globe/glsl';
 import type { QualityProfile } from '../../shared/quality';
 import { hashString } from '../../shared/rng';
-import { UnitType, type FrontView, type LatLon } from '../../shared/types';
+import { UnitMode, UnitType, type FrontView, type LatLon } from '../../shared/types';
+import { deriveLocalForcesAt, visibleSplit, type LocalForces, type LocalFront } from '../../shared/localForces';
 import { Biome, getWorldAux } from '../../data';
 import { updateAir, type AirState } from './atmo';
 import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, separateTeamColors } from './common';
@@ -40,7 +41,7 @@ import { buildProps, createPropsShared, type PropsResult, type PropsShared } fro
 import { buildTerrain, createTerrainShared, type TerrainPatch, type TerrainShared } from './terrain';
 import { createShadowPass, shadowStats, type ShadowPass } from './shadow';
 import { makeDetailTexture, makePuffTexture } from './textures';
-import { createVehicles, type Vehicles, type VehicleCounts } from './vehicles';
+import { createVehicles, type FormationSlot, type Vehicles, type VehicleCounts } from './vehicles';
 
 /** Altitude (km) below which the local battlefield is built / starts fading in / is fully visible. */
 const NEAR_BUILD_ALT = 70;
@@ -48,6 +49,13 @@ const NEAR_FADE_START = 42;
 const NEAR_FADE_FULL = 24;
 /** Re-anchor when the view slides this far along the front (km). */
 const REANCHOR_KM = 3.2;
+/** Re-anchor when the moving front line has left this far from the patch centre (m): the battle follows it. */
+const LINE_LEAVE_M = 4500;
+/** Radius (km) of the local forces the infantry is composed from (the battle patch), and of the real divisions shown. */
+const FORCES_RADIUS_KM = 6;
+const DIVISIONS_RADIUS_KM = 50;
+/** Time constant (real s) of the displayed line following the sim line (extrapolated at the measured km/h). */
+const LINE_FOLLOW_S = 1.2;
 
 interface Anchor {
   lat: number;
@@ -55,11 +63,37 @@ interface Anchor {
   frontA: number;
   frontB: number;
   seed: number;
+  /** Stable key of the front it shows (0 = staged without one). */
+  frontKey: number;
+  /** Camera target when it was chosen: the battle stays while the camera stays near it (the line may move). */
+  camLat: number;
+  camLon: number;
+}
+
+/** What the ground battle shows (debug / verifiers, and the HUD strip through BattleApi.view). */
+export interface BattleShown {
+  frontKey: number;
+  a: number;
+  b: number;
+  /** Soldiers deployed per side (team 0 = side a) and what visibleSplit() asked for. */
+  infantry: [number, number];
+  split: [number, number];
+  /** Real divisions drawn: unit id, tanks + IFVs, their real local position (m) and the drawn centroid. */
+  divisions: { unitId: number; owner: number; tanks: number; ifvs: number; realX: number; realZ: number; drawnX: number; drawnZ: number; team: number }[];
+  /** Displayed line offset (m along the advance normal) and the sim's sub-tile line at the last sample. */
+  lineShift: number;
+  simShift: number;
+  /** Line speed shown (m per real s) and expected advanceKmh × rate / 3.6. */
+  lineSpeed: number;
+  expectedSpeed: number;
+  advanceKmh: number;
+  subTile: boolean;
+  clockMode: string;
 }
 
 export interface BattleDebug {
   /** Force the battle at a place (shots): anchors the near layer there for the given front pair and direction. */
-  stageAt(lat: number, lon: number, a: number, b: number, dirX: number, dirY: number): void;
+  stageAt(lat: number, lon: number, a: number, b: number, dirX: number, dirY: number, frontKey?: number): void;
   /** Run the battle logic for `seconds` of battle time right now (shells in the air, smoke drifting...). */
   prewarm(seconds: number): void;
   readonly anchor: LatLon | null;
@@ -68,6 +102,10 @@ export interface BattleDebug {
   shadowCoverage(): number;
   /** True once the battlefield is fully streamed in. */
   readonly built: boolean;
+  /** W6: what the battle shows (forces, divisions, line) — null when no battle is built. */
+  shown(): BattleShown | null;
+  /** W6: animation clock (real seconds of battle time) — advances with real time, freezes on pause. */
+  readonly clock: number;
 }
 
 let currentDebug: BattleDebug | null = null;
@@ -107,7 +145,17 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   let anchor: Anchor | null = null;
   let pendingAnchor: Anchor | null = null;
   const pendingDir = { x: 0, z: 1 };
-  let forced: { lat: number; lon: number; a: number; b: number; dirX: number; dirY: number } | null = null;
+  let forced: { lat: number; lon: number; a: number; b: number; dirX: number; dirY: number; key: number } | null = null;
+  // ---- the line from the sim (§11.5): displayed offset along the advance normal, following the sub-tile line ----
+  /** Sim line offset (m along N from the anchor) at the last sample, the game hour of that sample, the extrapolation. */
+  let simShift = 0, simHours = 0, simSpeedMs = 0, simDir = 0, simKmh = 0, simSub = false;
+  let sampleAcc = 0, divAcc = 0;
+  let lineSpeed = 0;
+  let splitWanted: [number, number] = [0, 0];
+  const shownDivs: BattleShown['divisions'] = [];
+  const formationSlots: FormationSlot[] = [];
+  const battleOwned = new Set<number>();
+  let lastLF: LocalForces | null = null;
   let nearFade = 0;
   let clock = 1000;
   let active = false;
@@ -305,6 +353,12 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     vehicles?.clear();
     effects?.clear();
     anchor = null;
+    shownDivs.length = 0;
+    lastLF = null;
+    if (battleOwned.size) {
+      battleOwned.clear();
+      ctx.units.setBattleOwned?.(null);
+    }
   }
 
   function setAnchorFrame(lat: number, lon: number): void {
@@ -337,6 +391,158 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     return { tA, tB, intensity: best ? best.intensity : 0.5, armorA, armorB };
   }
 
+  // ---------------------------------------------------------------------------------------------------------
+  // The battle from the real simulation (§11.5): local forces, the sub-tile line, the real divisions
+  // ---------------------------------------------------------------------------------------------------------
+  /** The anchor's front in the local forces (by stable key; else the pair; else the nearest). */
+  function pickLocalFront(lf: LocalForces, an: Anchor): LocalFront | null {
+    let f = an.frontKey ? lf.fronts.find((q) => q.key === an.frontKey) : undefined;
+    if (!f) f = lf.fronts.find((q) => (q.a === an.frontA && q.b === an.frontB) || (q.a === an.frontB && q.b === an.frontA));
+    return f ?? null;
+  }
+  /** Signed offset (m) of the local front's sub-tile line from the anchor, along the battle's advance normal. */
+  function lineOffsetM(f: LocalFront): number {
+    // Local frame: x = east, z = south; the line passes through its nearest point.
+    const px = f.nearest.eastKm * 1000, pz = -f.nearest.northKm * 1000;
+    return px * front.nx + pz * front.nz;
+  }
+  /** Soldiers per team (0 = side a) from visibleSplit() of the two sides' pools. */
+  function splitFor(lf: LocalForces, a: number, b: number): [number, number] {
+    const sa = lf.sides.find((q) => q.owner === a), sb = lf.sides.find((q) => q.owner === b);
+    const two = { ...lf, sides: [sa, sb].filter((q): q is NonNullable<typeof q> => !!q) };
+    const split = visibleSplit(two, quality.battleInfantry);
+    let ia = 0, ib = 0, k = 0;
+    if (sa) ia = split[k++];
+    if (sb) ib = split[k++];
+    return [ia, ib];
+  }
+  /** Who is pushing, from the front's momentum (+ = side a gaining). */
+  function setPush(m: number): void {
+    if (m > 0.1) {
+      front.pushA = 1;
+      front.pushB = -0.2;
+    } else if (m < -0.1) {
+      front.pushA = -0.2;
+      front.pushB = 1;
+    } else {
+      front.pushA = 0.3;
+      front.pushB = 0.3;
+    }
+  }
+  /** Re-read the sim line (every 0.25 real s): its sub-tile offset, the measured speed and which way it moves. */
+  function sampleLine(): void {
+    if (!anchor) return;
+    const view = ctx.sim.view;
+    const lf = deriveLocalForcesAt(view, anchor.lat, anchor.lon, FORCES_RADIUS_KM, HUMAN_ID);
+    lastLF = lf;
+    const f = pickLocalFront(lf, anchor);
+    if (!f) {
+      simSpeedMs = 0;
+      simDir = 0;
+      return;
+    }
+    simShift = lineOffsetM(f);
+    simHours = view.gameHours;
+    simKmh = f.advanceKmh;
+    simSub = f.subTile;
+    simDir = f.momentum > 0.1 ? 1 : f.momentum < -0.1 ? -1 : 0;
+    // The line moves continuously only when the sim publishes the sub-tile progress (observation time near the focus):
+    // then it is extrapolated between ticks at the measured advance. Otherwise it waits for the next tile.
+    simSpeedMs = simSub && simDir !== 0 ? (f.advanceKmh * 1000) / 3600 : 0;
+    frontIntensity += (f.intensity - frontIntensity) * 0.3;
+    activity = Math.min(1, 0.45 + frontIntensity * 0.7);
+    setPush(f.momentum);
+  }
+  /** Move the displayed line toward the sim line (extrapolated), and the armies with it. */
+  function followLine(realDt: number): void {
+    const view = ctx.sim.view;
+    const gameSec = Math.max(0, Math.min(3600, (view.gameHours - simHours) * 3600));
+    const target = simShift + simDir * simSpeedMs * gameSec;
+    const prev = front.drift;
+    const k = realDt > 0 ? 1 - Math.exp(-realDt / LINE_FOLLOW_S) : 0;
+    const next = prev + (target - prev) * k;
+    const d = next - prev;
+    lineSpeed = realDt > 0 ? lineSpeed * 0.9 + 0.1 * (d / realDt) : lineSpeed;
+    if (Math.abs(d) < 1e-4) return;
+    front.drift = next;
+    front.rebuild();
+    front.apply(uniforms);
+    infantry?.translate(front.nx * d, front.nz * d);
+  }
+  /**
+   * The real divisions within 50 km (§11.5): 1 tank per 25 % integrity + 2 IFVs at the division's real position and
+   * heading relative to the anchor, driving with it. Divisions of third parties fight on the side they are allied
+   * with or at war against.
+   */
+  function updateDivisions(alpha: number): void {
+    if (!anchor || !vehicles) return;
+    const view = ctx.sim.view;
+    const lf = deriveLocalForcesAt(view, anchor.lat, anchor.lon, DIVISIONS_RADIUS_KM, HUMAN_ID, { alpha });
+    formationSlots.length = 0;
+    shownDivs.length = 0;
+    battleOwned.clear();
+    const a = anchor.frontA, b = anchor.frontB;
+    for (const u of lf.units) {
+      if (u.type !== UnitType.ArmoredDivision) continue;
+      let team = u.owner === a ? 0 : u.owner === b ? 1 : -1;
+      if (team < 0) {
+        if (view.hasTreaty(u.owner, a, 'alliance') || view.pairState(u.owner, b) === 'war') team = 0;
+        else if (view.hasTreaty(u.owner, b, 'alliance') || view.pairState(u.owner, a) === 'war') team = 1;
+        else continue;
+      }
+      const cx = u.eastKm * 1000, cz = -u.northKm * 1000;
+      const fx = Math.sin(u.heading), fz = -Math.cos(u.heading);
+      const rx = -fz, rz = fx;
+      const yaw = Math.atan2(fx, fz);
+      let sx = 0, sz = 0;
+      const n = u.tanks;
+      for (let j = 0; j < n + u.ifvs; j++) {
+        const tank = j < n;
+        const lat = tank ? (j - (n - 1) / 2) * 70 : (j - n - 0.5) * 80;
+        const back = tank ? -Math.abs(j - (n - 1) / 2) * 25 : -120;
+        const x = cx + rx * lat + fx * back, z = cz + rz * lat + fz * back;
+        formationSlots.push({ key: u.unitId * 8 + j, unitId: u.unitId, team, kind: tank ? VehicleKind.Tank : VehicleKind.Apc, x, z, yaw });
+        sx += x;
+        sz += z;
+      }
+      shownDivs.push({ unitId: u.unitId, owner: u.owner, tanks: n, ifvs: u.ifvs, realX: cx, realZ: cz, drawnX: sx / (n + u.ifvs), drawnZ: sz / (n + u.ifvs), team });
+      battleOwned.add(u.unitId);
+    }
+    vehicles.setFormation(formationSlots, clock);
+    ctx.units.setBattleOwned?.(nearFade > 0.05 ? battleOwned : null);
+  }
+  /** Real aircraft and warships over the front act on it: strafing and bombs, naval gunfire (visual; the sim counts). */
+  let airAcc = 0, navalAcc = 0;
+  function supportFire(dt: number): void {
+    if (!effects || !lastLF || !anchor) return;
+    const lf = lastLF;
+    let air = 0, naval = 0;
+    for (const u of lf.units) {
+      const team = u.owner === anchor.frontA ? 0 : u.owner === anchor.frontB ? 1 : -1;
+      if (team < 0) continue;
+      if (u.airborne && (u.type === UnitType.FighterSquadron || u.type === UnitType.Bomber || u.type === UnitType.DroneSwarm)
+        && (u.mode === UnitMode.Strike || u.mode === UnitMode.Support || u.mode === UnitMode.Patrol || u.mode === UnitMode.Engaged)) air++;
+      if (u.type === UnitType.Warship && u.mode === UnitMode.Bombard) naval++;
+    }
+    airAcc += dt * air * 0.35;
+    navalAcc += dt * naval * 0.6;
+    while (airAcc >= 1) {
+      airAcc -= 1;
+      const team = rng.int(2);
+      const uu = focusU + rng.gauss() * 900;
+      for (let k = 0; k < 3; k++) {
+        front.toXZ(uu + k * rng.range(25, 45), (team === 0 ? 1 : -1) * rng.range(120, 700), tmp);
+        effects.schedule(clock + k * 0.22, tmp.x, tmp.z, 2);
+      }
+    }
+    while (navalAcc >= 1) {
+      navalAcc -= 1;
+      const team = rng.int(2);
+      front.toXZ(focusU + rng.gauss() * 1200, (team === 0 ? 1 : -1) * rng.range(200, 1400), tmp);
+      effects.schedule(clock + rng.range(0.2, 1.2), tmp.x, tmp.z, 3);
+    }
+  }
+
   /**
    * Stream a battlefield in over several frames (terrain, props, armies, scars, a few seconds of battle), so the
    * descent never stalls on one long frame. The near layer stays hidden until the job is done.
@@ -363,22 +569,32 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     near.add(patch.group);
     yield;
 
-    // Front line through the anchor, oriented by the sim's advance direction.
-    front.setup(dirLocalX, dirLocalZ, an.seed % 1000, 6000);
-    front.apply(uniforms);
+    // Front line through the anchor, oriented by the sim's advance direction (a → b). The real contact line at
+    // sub-tile precision comes from the shared local forces (§14.11): the same derivation command mode uses.
     const view = ctx.sim.view;
+    const lf = deriveLocalForcesAt(view, an.lat, an.lon, FORCES_RADIUS_KM, HUMAN_ID);
+    lastLF = lf;
+    const lfFront = pickLocalFront(lf, an);
+    let nX = dirLocalX, nZ = dirLocalZ;
+    if (lfFront) {
+      nX = Math.sin(lfFront.advanceBearing);
+      nZ = -Math.cos(lfFront.advanceBearing);
+    }
+    front.setup(nX, nZ, an.seed % 1000, 6000);
+    simShift = lfFront ? lineOffsetM(lfFront) : 0;
+    simHours = view.gameHours;
+    front.drift = simShift;
+    front.rebuild();
+    front.apply(uniforms);
     const pa = view.players[an.frontA], pb = view.players[an.frontB];
     const colA = pa?.color ?? 0x3d7eff, colB = separateTeamColors(colA, pb?.color ?? 0xe04040);
     infantry.setColors(colA, colB);
     vehicles.setColors(colA, colB);
     const st = frontStats(an.frontA, an.frontB);
-    frontIntensity = st.intensity;
-    activity = Math.min(1, 0.45 + st.intensity * 0.7);
-    // Who pushes, and how big each side's presence is (troops on the front).
-    const share = Math.min(0.7, Math.max(0.3, st.tA / Math.max(1, st.tA + st.tB)));
-    front.pushA = share >= 0.45 ? 1 : 0.3;
-    front.pushB = share < 0.45 ? 0.8 : -0.1;
-    uniforms.uBelt.value = 45 + 45 * st.intensity;
+    frontIntensity = lfFront ? lfFront.intensity : st.intensity;
+    activity = Math.min(1, 0.45 + frontIntensity * 0.7);
+    setPush(lfFront ? lfFront.momentum : 0);
+    uniforms.uBelt.value = 45 + 45 * frontIntensity;
     patch.setWarScar(1);
     const conifer = tileBiome === Biome.Taiga || tileBiome === Biome.Tundra || tileBiome === Biome.Snow ? 0.9 : tileBiome === Biome.Rainforest || tileBiome === Biome.Savanna ? 0 : 0.35;
     // Farmland grid: roughly aligned with the front (fields run toward it), a little off-axis.
@@ -394,23 +610,18 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const wa = wind.range(0, Math.PI * 2), ws = wind.range(1.5, 4);
     uniforms.uWind.value.set(Math.cos(wa) * ws, Math.sin(wa) * ws);
 
-    // Armies.
-    const nInf = Math.round(quality.battleInfantry * (0.55 + 0.45 * activity));
-    const iA = Math.round(nInf * share), iB = nInf - iA;
-    infantry.deploy(front, [iA, iB], an.seed + 11, clock, heightAt, blocked);
-    const V = quality.battleVehicles * (0.6 + 0.4 * activity);
-    const side = (k: number, t: number) => Math.max(1, Math.round(V * k * (t === 0 ? share : 1 - share)));
-    const counts: VehicleCounts = {
-      tanks: [side(0.09, 0), side(0.09, 1)],
-      apcs: [side(0.05, 0), side(0.05, 1)],
-      artillery: [Math.max(4, side(0.03, 0)), Math.max(4, side(0.03, 1))],
-      aa: [side(0.012, 0), side(0.012, 1)],
-      helis: [side(0.012, 0), side(0.012, 1)],
-      trucks: [side(0.02, 0), side(0.02, 1)],
-      columns: [(st.armorA ? 2 : 0) + (share > 0.5 ? 1 : 0), (st.armorB ? 2 : 0) + (share <= 0.5 ? 1 : 0)],
-      wrecks: Math.round(V * 0.05),
+    // Armies from the real pools (§11.5): soldiers per side = visibleSplit() of the two sides' infantry (front
+    // garrison + offensive + rear + posts, 1 soldier = 25 troops) under the quality budget, clamped 0.2–0.8.
+    const counts = splitFor(lf, an.frontA, an.frontB);
+    splitWanted = counts;
+    infantry.deploy(front, counts, an.seed + 11, clock, heightAt, blocked);
+    // No generic vehicles: the only armour on the field is the real divisions (placed by updateDivisions()).
+    const none: VehicleCounts = {
+      tanks: [0, 0], apcs: [0, 0], artillery: [0, 0], aa: [0, 0], helis: [0, 0], trucks: [0, 0], columns: [0, 0], wrecks: 0,
     };
-    vehicles.deploy(front, counts, props.paths, an.seed + 23, clock);
+    vehicles.deploy(front, none, props.paths, an.seed + 23, clock);
+    divAcc = 1e9;
+    updateDivisions(1);
     yield;
 
     // The scars of the fighting so far: craters, burning villages and wrecks.
@@ -425,9 +636,6 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     }
     for (const b of props.buildings) {
       if (b.burning) effects.addFire(b.x, b.y + b.h * 0.6, b.z, Math.max(2.5, Math.min(b.w, b.d) * 0.35), 1.1, 1e12, 1.5, true);
-    }
-    for (const v of vehicles.list) {
-      if (v.burnt && r.chance(0.7)) effects.addFire(v.x, v.y + 1.4, v.z, 2, 1, 1e12, 1.6, true);
     }
     // Let the battle develop a little before anyone sees it (shells in the air, smoke drifting).
     for (let k = 0; k < 4; k++) {
@@ -595,15 +803,37 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   }
 
   function deactivate(): void {
+    if (battleOwned.size) {
+      battleOwned.clear();
+      ctx.units.setBattleOwned?.(null);
+    }
     active = false;
     nearFade = 0;
     near.visible = false;
     intensity = 0;
   }
 
+  function shownState(): BattleShown | null {
+    if (!anchor || job) return null;
+    const view = ctx.sim.view;
+    return {
+      frontKey: anchor.frontKey, a: anchor.frontA, b: anchor.frontB,
+      infantry: [infantry?.deployed(0) ?? 0, infantry?.deployed(1) ?? 0], split: [splitWanted[0], splitWanted[1]],
+      divisions: shownDivs.map((d) => ({ ...d })),
+      lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simDir * simKmh * view.clock.rate) / 3.6 : 0,
+      advanceKmh: simKmh, subTile: simSub, clockMode: view.clock.mode,
+    };
+  }
+
   const debug: BattleDebug = {
-    stageAt(lat, lon, a, b, dirX, dirY) {
-      forced = { lat, lon, a, b, dirX, dirY };
+    stageAt(lat, lon, a, b, dirX, dirY, frontKey = 0) {
+      forced = { lat, lon, a, b, dirX, dirY, key: frontKey };
+    },
+    shown() {
+      return shownState();
+    },
+    get clock() {
+      return clock;
     },
     prewarm(seconds) {
       prewarm(seconds);
@@ -623,9 +853,39 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   };
   currentDebug = debug;
 
+  const bannerL = new THREE.Vector3();
+  const battleView: BattleView = { frontKey: 0, a: 0, b: 0, fade: 0, banners: [{ owner: 0, x: 0, y: 0, z: 0 }, { owner: 0, x: 0, y: 0, z: 0 }], lineLive: false };
   const api: BattleApi = {
     get active() {
       return active;
+    },
+    handoff() {
+      if (!anchor || job || !active) return null;
+      return {
+        lat: anchor.lat, lon: anchor.lon,
+        infantry: [{ owner: anchor.frontA, count: infantry?.deployed(0) ?? 0 }, { owner: anchor.frontB, count: infantry?.deployed(1) ?? 0 }],
+        divisions: shownDivs.map((d) => ({ unitId: d.unitId, tanks: d.tanks, ifvs: d.ifvs })),
+      };
+    },
+    view() {
+      if (!anchor || job || !active) return null;
+      battleView.frontKey = anchor.frontKey;
+      battleView.a = anchor.frontA;
+      battleView.b = anchor.frontB;
+      battleView.fade = nearFade;
+      battleView.lineLive = simSub && simDir !== 0;
+      // Each side's banner stands 1.1 km behind its own line where the camera looks, 180 m above the ground.
+      for (let t = 0; t < 2; t++) {
+        front.toXZ(focusU, t === 0 ? -1100 : 1100, bannerL);
+        bannerL.y = heightAt(bannerL.x, bannerL.z) + 180;
+        bannerL.applyMatrix4(near.matrixWorld);
+        const bn = battleView.banners[t];
+        bn.owner = t === 0 ? anchor.frontA : anchor.frontB;
+        bn.x = bannerL.x;
+        bn.y = bannerL.y;
+        bn.z = bannerL.z;
+      }
+      return battleView;
     },
     get intensity() {
       return intensity;
@@ -690,34 +950,54 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         if (far) far.group.visible = false;
         return;
       }
-      const bdt = Math.min(frame.simDt, 0.1);
+      // Battle animation runs on real time (§11.6): the same at every speed, frozen on pause. The line and the real
+      // units move with the sim clock instead (followLine, updateDivisions).
+      const bdt = Math.min(frame.visualDt, 0.1);
       clock += bdt;
       uniforms.uTime.value = clock;
       ctx.cameraRig.getState(camState);
       const alt = camState.altitudeKm;
       updateFar(bdt);
 
-      // ---- choose / stream the local battlefield ----
+      // ---- choose / stream the local battlefield (anchored by the front's stable key) ----
       let want: Anchor | null = null;
       let dirX = 0, dirZ = 1;
+      let same = false;
       if (forced) {
-        want = { lat: forced.lat, lon: forced.lon, frontA: forced.a, frontB: forced.b, seed: hashString(`${forced.lat.toFixed(3)},${forced.lon.toFixed(3)}`) };
+        want = {
+          lat: forced.lat, lon: forced.lon, frontA: forced.a, frontB: forced.b, seed: hashString(`${forced.lat.toFixed(3)},${forced.lon.toFixed(3)}`),
+          frontKey: forced.key, camLat: forced.lat, camLon: forced.lon,
+        };
         const cl = Math.cos((forced.lat * Math.PI) / 180);
         dirX = forced.dirX * cl;
         dirZ = forced.dirY;
+        same = !!anchor && anchor.frontA === want.frontA && anchor.frontB === want.frontB &&
+          Math.hypot((want.lat - anchor.lat) * M_PER_DEG, (want.lon - anchor.lon) * M_PER_DEG * Math.cos((want.lat * Math.PI) / 180)) < REANCHOR_KM * 1000;
       } else if (alt < NEAR_BUILD_ALT) {
-        const h = nearestFront(camState.lat, camState.lon, view.fronts);
-        if (h && h.f && h.dist < 30 + alt * 1.2) {
-          tileXYToLatLon(h.px, h.py, ll);
-          const cl = Math.cos((ll.lat * Math.PI) / 180);
-          dirX = h.f.dirX * cl;
-          dirZ = h.f.dirY;
-          want = { lat: ll.lat, lon: ll.lon, frontA: h.f.a, frontB: h.f.b, seed: hashString(`${(ll.lat * 20) | 0},${(ll.lon * 20) | 0},${h.f.a},${h.f.b}`) };
+        // Keep the battle while the camera stays over it and its front still exists: the line may move under it
+        // (observation time) without the battle re-anchoring, until it has left the patch.
+        if (anchor && anchor.frontKey && view.frontByKey.has(anchor.frontKey) && !job
+          && gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM && Math.abs(front.drift) < LINE_LEAVE_M) {
+          want = anchor;
+          same = true;
+        } else {
+          const h = nearestFront(camState.lat, camState.lon, view.fronts);
+          if (h && h.f && h.dist < 30 + alt * 1.2) {
+            tileXYToLatLon(h.px, h.py, ll);
+            const cl = Math.cos((ll.lat * Math.PI) / 180);
+            dirX = h.f.dirX * cl;
+            dirZ = h.f.dirY;
+            want = {
+              lat: ll.lat, lon: ll.lon, frontA: h.f.a, frontB: h.f.b, seed: hashString(`${(ll.lat * 20) | 0},${(ll.lon * 20) | 0},${h.f.a},${h.f.b}`),
+              frontKey: h.f.key, camLat: camState.lat, camLon: camState.lon,
+            };
+            same = !!anchor && anchor.frontKey === want.frontKey && !job
+              && gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM && Math.abs(front.drift) < LINE_LEAVE_M;
+            if (same) want = anchor;
+          }
         }
       }
       if (want) {
-        const same = !!anchor && anchor.frontA === want.frontA && anchor.frontB === want.frontB &&
-          Math.hypot((want.lat - anchor.lat) * M_PER_DEG, (want.lon - anchor.lon) * M_PER_DEG * Math.cos((want.lat * Math.PI) / 180)) < REANCHOR_KM * 1000;
         if (!same) {
           pendingAnchor = want;
           pendingDir.x = dirX;
@@ -771,23 +1051,20 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       updateLighting(alt);
       props?.updateLod(camL.x, camL.z);
       renderShadows();
-      // The fight follows the sim: intensity and who is winning.
-      if (frame.frame % 30 === 0) {
-        const st = frontStats(anchor.frontA, anchor.frontB);
-        frontIntensity += (st.intensity - frontIntensity) * 0.3;
-        activity = Math.min(1, 0.45 + frontIntensity * 0.7);
-        const share = st.tA / Math.max(1, st.tA + st.tB);
-        front.pushA = share >= 0.45 ? 1 : 0.3;
-        front.pushB = share < 0.45 ? 0.8 : -0.1;
+      // The fight follows the sim: the sub-tile line, who is winning, the real divisions (§11.5).
+      sampleAcc += frame.dt;
+      if (sampleAcc >= 0.25) {
+        sampleAcc = 0;
+        sampleLine();
       }
+      divAcc += frame.dt;
+      if (divAcc >= 0.5) {
+        divAcc = 0;
+        updateDivisions(frame.simAlpha);
+      }
+      followLine(frame.visualDt);
       if (bdt > 0) {
-        // The line creeps toward whoever is losing.
-        const creep = (front.pushA - Math.max(0, front.pushB)) * 0.25 * activity * bdt;
-        if (Math.abs(front.drift + creep) < 400) {
-          front.drift += creep;
-          front.rebuild();
-          front.apply(uniforms);
-        }
+        supportFire(bdt);
         battleStep(bdt);
       } else if (effects) {
         effects.update(clock, 0, uniforms, camL.x, camL.y, camL.z);

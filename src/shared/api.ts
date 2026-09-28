@@ -289,6 +289,11 @@ export interface UnitsApi extends Subsystem {
   closeIconFan?(): void;
   /** v2 (W4): ids of the units drawn (icon or model) inside a client-px rectangle (box selection, double click). */
   unitsInRect?(x0: number, y0: number, x1: number, y1: number): number[];
+  /**
+   * v2 (W6, §11.5): divisions the visible ground battle draws itself, at battle scale (1 tank per 25 % integrity +
+   * 2 IFVs, fighting in the battle): their strategic models are not drawn (they stay pickable). null = none.
+   */
+  setBattleOwned?(ids: ReadonlySet<number> | null): void;
 }
 
 export interface IconPick {
@@ -313,6 +318,27 @@ export interface BattleApi extends Subsystem {
   readonly active: boolean;
   /** 0..1 loudness/violence of what is on screen (audio uses it for the battle ambience). */
   readonly intensity: number;
+  /**
+   * v2 (W5/W6, §9.6): what the visible ground battle shows right now (soldiers per side, real divisions), so taking
+   * control of a division from it keeps the same entities; null when no battle is visible. Optional: W6 provides it.
+   */
+  handoff?(): BattleHandoff | null;
+  /** v2 (W6, §11.7): what the visible ground battle shows, for its HUD strip and nation banners; null when none. */
+  view?(): BattleView | null;
+}
+
+/** v2 (W6, §11.7): the visible ground battle as the HUD strip and the nation banners read it. */
+export interface BattleView {
+  frontKey: number;
+  /** Side a (behind the line, the war's aggressor side of the front) and side b. */
+  a: number;
+  b: number;
+  /** 0..1 visibility of the battle layer. */
+  fade: number;
+  /** Banner anchors above each side's line (world coordinates of the strategic scene). */
+  banners: { owner: number; x: number; y: number; z: number }[];
+  /** True while the line moves continuously (observation time with the sub-tile progress), false when it waits for tiles. */
+  lineLive: boolean;
 }
 
 // =================================================================================================
@@ -327,7 +353,11 @@ export interface CommandEnterParams {
   lon: number;
   tile: number;
   owner: number;
-  /** Enemy player fought there (0 = none found: a training skirmish vs. nobody is not allowed; app picks one). */
+  /**
+   * v2 (W5): the main foreign nation of the place (the enemy of the local front, or the owner of the land or waters
+   * the unit stands in); 0 = none, the normal case at peace in your own land. Informative only: everything local is
+   * derived from the simulation (localForces), never from this.
+   */
   enemy: number;
   friendlyColor: number;
   enemyColor: number;
@@ -337,6 +367,32 @@ export interface CommandEnterParams {
   seed: number;
   worldTimeSec: number;
   difficulty: Difficulty;
+  // --- v2 (W5, DESIGN_V2 §9.2) ---
+  /** Compass heading of the unit (rad, 0 north, clockwise), interpolated. */
+  heading?: number;
+  /** Continuous tile coords of the unit (interpolated): the local scene is built around exactly this point. */
+  x?: number;
+  y?: number;
+  /** Integrity 0..1 (the formation: 1 tank per 25 %, 1 jet per third). */
+  integrity?: number;
+  /** Vehicles of the formation alive on entry. */
+  formation?: number;
+  /** Aircraft: altitude as a fraction of the flight ceiling (UnitView.alt); docked = 0. */
+  alt?: number;
+  /** What the place is: own land at peace, near a border, at a front, in enemy land, at sea, in the air. */
+  context?: 'peace' | 'border' | 'front' | 'enemyLand' | 'sea' | 'air';
+  /** Entered from a visible ground battle: the entities the battle layer was showing (§9.6), to keep them. */
+  battleHandoff?: BattleHandoff;
+}
+
+/** v2 (W5/W6, §9.6): what the ground battle layer was showing when the player took control from it. */
+export interface BattleHandoff {
+  /** Anchor (lat/lon) of the battle view. */
+  lat: number;
+  lon: number;
+  /** Soldiers shown per side (owner → count) and vehicles (real division ids with their tank counts). */
+  infantry: { owner: number; count: number }[];
+  divisions: { unitId: number; tanks: number; ifvs: number }[];
 }
 
 export interface CommandResult {

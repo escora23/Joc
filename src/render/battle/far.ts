@@ -47,7 +47,9 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
   const w = new THREE.Vector3();
   const ll: LatLon = { lat: 0, lon: 0 };
   let activity = 0;
-  const acc = new Map<number, { flash: number; smoke: number }>();
+  const acc = new Map<number, { flash: number; smoke: number; cols: number[] }>();
+  /** §11.4: at most this many smoke columns alive per front (they last 40-70 s). */
+  const MAX_COLUMNS = 6;
 
   function setAnchor(lat: number, lon: number): void {
     anchor = { lat, lon };
@@ -97,23 +99,30 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
         const lenKm = Math.max(25, f.length * TILE_KM);
         const heat = 0.25 + 0.75 * f.intensity;
         act = Math.max(act, heat * Math.max(0, 1 - dk / (range * 1.5)));
-        let a = acc.get(f.id);
+        const fk = f.key || f.id;
+        let a = acc.get(fk);
         if (!a) {
-          a = { flash: 0, smoke: 0 };
-          acc.set(f.id, a);
+          a = { flash: 0, smoke: 0, cols: [] };
+          acc.set(fk, a);
         }
+        // Columns still standing (expiry times).
+        for (let c = a.cols.length - 1; c >= 0; c--) if (a.cols[c] <= now) a.cols.splice(c, 1);
+        // Quiet fronts have no fighting: nothing burns or flashes along them.
+        if (f.quiet) continue;
         a.flash += dt * fade * heat * (3 + Math.sqrt(lenKm) * 1.6);
         a.smoke += dt * fade * heat * (0.03 + Math.sqrt(lenKm) * 0.008);
-        // Border normal (tile space): the advance direction.
+        // Border normal (tile space): the advance direction. Most shells fall on the side losing ground.
         const nx = f.dirX, ny = f.dirY;
+        const lean = Math.max(-1, Math.min(1, f.momentum));
         let guard = 0;
         while ((a.flash >= 1 || a.smoke >= 1) && guard++ < 40) {
           const k = rng.int(n - 1);
           const t = rng.next();
           const tx = s[k * 2] + (s[k * 2 + 2] - s[k * 2]) * t;
           const ty = s[k * 2 + 1] + (s[k * 2 + 3] - s[k * 2 + 1]) * t;
-          // Contact line is ~half a tile ahead of the attacker samples; spread shells over both sides.
-          const side = rng.range(-0.55, 0.9) + rng.gauss() * 0.15;
+          // Contact line is ~half a tile ahead of the attacker samples; shells spread over both sides of it, inside the
+          // band (at most ~0.9 tile from the line), leaning toward the side being pushed.
+          const side = Math.max(-1.6, Math.min(1.6, rng.range(-0.9, 0.9) + lean * 0.45 + rng.gauss() * 0.15));
           let fx = tx + nx * (0.5 + side * 0.5) + rng.gauss() * 0.15;
           const fy = Math.min(MAP_H - 1, Math.max(0, ty + ny * (0.5 + side * 0.5) + rng.gauss() * 0.15));
           fx = ((fx % MAP_W) + MAP_W) % MAP_W;
@@ -135,12 +144,16 @@ export function createFarLayer(puff: THREE.Texture, budget: number): FarLayer {
             }
           } else {
             a.smoke -= 1;
+            if (a.cols.length >= MAX_COLUMNS) continue;
             // A burning town or depot: a thin smoke column leaning downwind, a fire glowing at its foot.
             local(ll.lat, ll.lon, 300, surf, p);
             const g = rng.range(0.2, 0.3);
             const life = rng.range(40, 70);
+            a.cols.push(now + life + 3);
+            // Three puffs stacked (0.3-1 km), rising 8-14 m/s: the column tops out under 3 km; each puff ≤ 0.22 so a
+            // column's summed opacity stays ≤ 0.35 (§11.4).
             for (let k = 0; k < 3; k++) {
-              alpha.emit(p.x, p.y + k * 350, p.z, rng.range(-3, 3), rng.range(14, 26), rng.range(-3, 3), life, 450 + k * 150, rng.range(1100, 1700), 0.02, 0.2, g, g * 0.96, g * 0.9, 0.32, PK.Smoke, rng.range(0, 6), rng.range(-0.01, 0.01), now + k * 1.5);
+              alpha.emit(p.x, p.y + k * 350, p.z, rng.range(-3, 3), rng.range(8, 14), rng.range(-3, 3), life, 450 + k * 150, rng.range(900, 1300), 0.02, 0.2, g, g * 0.96, g * 0.9, 0.2, PK.Smoke, rng.range(0, 6), rng.range(-0.01, 0.01), now + k * 1.5);
             }
             add.emit(p.x, p.y - 200, p.z, 0, 0, 0, rng.range(20, 40), 500 * sizeK, 700 * sizeK, 0, 0, 1, 0.45, 0.14, 3.5, PK.Glow, 0, 0, now);
           }

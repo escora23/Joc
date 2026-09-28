@@ -14,6 +14,7 @@ import { createTicker } from './feed';
 import { createNations } from './nations';
 import { createForces } from './forces';
 import { createFrontBadges } from './frontBadges';
+import { createBattleStrip } from './battleStrip';
 import { createFrontsPanel } from './fronts';
 import { createLeaderboard } from './leaderboard';
 import { createMinimap } from './minimap';
@@ -73,6 +74,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
   // v2 (W6): the Guerra y frentes panel (G) shares the right-hand drawer slot, and the front badges on the globe.
   const frontsPanel = createFrontsPanel(hs);
   const badges = createFrontBadges(hs);
+  const strip = createBattleStrip(hs);
   hs.openNations = (id) => {
     forces.close();
     frontsPanel.close();
@@ -230,7 +232,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     spawn.el,
     crisis.edge,
   );
-  const el = h('div', { class: 'fu-hud-root' }, badges.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
+  const el = h('div', { class: 'fu-hud-root' }, badges.el, strip.banners, strip.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
 
   let state: AppState = 'boot';
   let acc10 = 0, acc4 = 0;
@@ -297,6 +299,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
       alerts.update(dt);
       mm.frame();
       badges.update();
+      strip.update();
       if (acc10 >= 0.1) {
         acc10 = 0;
         crisis.update();

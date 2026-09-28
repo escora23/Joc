@@ -47,7 +47,7 @@ export function createAudio(ctx: GameContext): AudioApi {
   const flybyAt = new Map<number, number>();
   const sirenFor = new Set<number>();
   const fronts: HeardFront[] = [];
-  for (let i = 0; i < MAX_FRONTS; i++) fronts.push({ pan: 0, far: 0, near: 0, intensity: 0, lat: 0, lon: 0 });
+  for (let i = 0; i < MAX_FRONTS; i++) fronts.push({ pan: 0, far: 0, near: 0, intensity: 0, key: 0, lat: 0, lon: 0 });
 
   // Command-mode vehicle tracking.
   const prevCamPos = new THREE.Vector3();
@@ -70,6 +70,51 @@ export function createAudio(ctx: GameContext): AudioApi {
     cueCounts[name] = (cueCounts[name] ?? 0) + 1;
     snd?.play(name, gain);
   }
+  // v2 (W6, §13): combat-cue density. However busy the war, at most 2 combat cues per real second per front and 6 in
+  // all (a readable battle soundscape, not a wall of explosions); the rest are dropped, and counted.
+  const COMBAT_CUES = new Set(['artillery', 'gunfire', 'explosionSmall', 'explosionLarge', 'tankCannon', 'navalGun', 'samLaunch', 'jetCannon']);
+  const COMBAT_TOTAL_PER_S = 6, COMBAT_FRONT_PER_S = 2;
+  const combatAt: number[] = [];
+  const combatFrontAt = new Map<number, number[]>();
+  const combat = { played: 0, dropped: 0, maxPerSecond: 0, maxFrontPerSecond: 0 };
+  function allowCombat(frontKey: number): boolean {
+    const t = performance.now() / 1000;
+    while (combatAt.length && t - combatAt[0] >= 1) combatAt.shift();
+    let list: number[] | undefined;
+    if (frontKey) {
+      list = combatFrontAt.get(frontKey);
+      if (!list) combatFrontAt.set(frontKey, (list = []));
+      while (list.length && t - list[0] >= 1) list.shift();
+    }
+    if (combatAt.length >= COMBAT_TOTAL_PER_S || (list && list.length >= COMBAT_FRONT_PER_S)) {
+      combat.dropped++;
+      return false;
+    }
+    combatAt.push(t);
+    list?.push(t);
+    combat.played++;
+    combat.maxPerSecond = Math.max(combat.maxPerSecond, combatAt.length);
+    if (list) combat.maxFrontPerSecond = Math.max(combat.maxFrontPerSecond, list.length);
+    if (combatFrontAt.size > 64) for (const [k, l] of combatFrontAt) if (!l.length || t - l[l.length - 1] > 5) combatFrontAt.delete(k);
+    return true;
+  }
+  /** The front nearest to a point (within ~6 tiles of its centre line), for the per-front cap; 0 = none. */
+  function frontAt(x: number, y: number): number {
+    let best = 0, bd = 36;
+    for (const f of ctx.sim.view.fronts) {
+      const s = f.samples;
+      for (let k = 0; k + 1 < s.length; k += 4) {
+        let dx = Math.abs(s[k] - x);
+        if (dx > 800) dx = 1600 - dx;
+        const d = dx * dx + (s[k + 1] - y) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = f.key;
+        }
+      }
+    }
+    return best;
+  }
   // Read-only diagnostics for playtests and automation (window.__fuAudio.stats()).
   (window as unknown as { __fuAudio: unknown }).__fuAudio = {
     stats() {
@@ -85,6 +130,7 @@ export function createAudio(ctx: GameContext): AudioApi {
         state: ac?.state ?? 'none', unlocked, appState, mood, family: snd?.music.family ?? 'none',
         intensity: Math.round(intensity * 1000) / 1000, voices: snd?.eng.voices.length ?? 0,
         vehicle: commandKind, sirens: sirenFor.size, rmsDb, cues: { ...cueCounts }, crisis: crisisOn,
+        combat: { ...combat, lastSecond: combatAt.length },
       };
     },
   };
@@ -148,6 +194,8 @@ export function createAudio(ctx: GameContext): AudioApi {
   }
 
   function playXY(cue: string, x: number, y: number, gain = 1, minGain = 0, delay = 0): void {
+    // Combat cues obey the density caps (per front and in all).
+    if (COMBAT_CUES.has(cue) && inGame() && !allowCombat(frontAt(x, y))) return;
     tileXYToLatLon(x, y, ll);
     playAt(cue, ll.lat, ll.lon, gain, minGain, delay);
   }
@@ -469,13 +517,17 @@ export function createAudio(ctx: GameContext): AudioApi {
         h.near = 1 / (1 + (heard.km / 35) ** 2);
         h.pan = heard.pan;
         h.intensity = f.intensity;
+        h.key = f.key;
         h.lat = ll.lat;
         h.lon = ll.lon;
       }
     }
     snd.amb.update(dt, fronts, n, cam.altitudeKm, level, ambSink);
   }
-  const ambSink = (cue: string, lat: number, lon: number, g: number) => playAt(cue, lat, lon, g);
+  const ambSink = (cue: string, lat: number, lon: number, g: number, frontKey = 0) => {
+    if (COMBAT_CUES.has(cue) && !allowCombat(frontKey)) return;
+    playAt(cue, lat, lon, g);
+  };
 
   function updateFlybys(): void {
     if (!snd || cam.altitudeKm > 500 || appState !== 'playing') return;

@@ -229,6 +229,13 @@ export interface Infantry {
   setColors(a: number, b: number): void;
   alive(team: number): number;
   setCapacity(n: number): void;
+  /**
+   * Move every living soldier by (dx, dz) metres: the front line moved (observation time, §11.5) and the armies move
+   * with it, advancing or giving ground. The fallen stay where they fell.
+   */
+  translate(dx: number, dz: number): void;
+  /** Soldiers deployed per team (alive or waiting as reinforcements). */
+  deployed(team: number): number;
 }
 
 export function createInfantry(uniforms: BattleUniforms, capacity: number): Infantry {
@@ -609,6 +616,24 @@ export function createInfantry(uniforms: BattleUniforms, capacity: number): Infa
       let c = 0;
       for (const s of bySide[team]) c += s.count;
       return c;
+    },
+    deployed(team) {
+      let c = 0;
+      for (const s of bySide[team]) c += s.count;
+      return c;
+    },
+    translate(dx, dz) {
+      if (n === 0 || (dx === 0 && dz === 0)) return;
+      for (let i = 0; i < n; i++) {
+        const o = i * 4;
+        if (X[o + 2] > 0) continue;
+        M[o] += dx; M[o + 1] += dz; M[o + 2] += dx; M[o + 3] += dz;
+      }
+      for (const a of [iMove]) {
+        a.clearUpdateRanges();
+        a.addUpdateRange(0, n * 4);
+        a.needsUpdate = true;
+      }
     },
   };
   return api;
