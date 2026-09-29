@@ -358,6 +358,18 @@ and the brief's overlay bullet): the arrow must not hide the front. Built and ve
    V14c the pointer's button. Soldiers counted on screen by projecting 200 per side with the game camera
    (`__battleDebug.soldiersOnScreen()`), banners by the HUD state.
 
+**Results** (`node tools/w6-verify.mjs`, SwiftShader, no-HMR server; `npx tsx src/sim/test/w6-audit.mjs` 13/13;
+`pace-audit depth` 7/7 and `attrition --mult 2` 1/1 with the corridor cap):
+* orbit **15/15** (shots/W6-battle-clarity-fix2/v7o): V1b shaft 5 px = 11 km for a 375 km corridor on a 375 km front,
+  drawn tip 6.8 px / 16 km from the projected axis point, arrow 0.05 % of the screen, arrows 42 < bands 43; V1d arrow
+  alpha 0.000 at 1,000 km; V4g the dialog (ratio, km/h, casualties per day, verdict); V4f1 offensive 121 still running 40
+  ticks later with no click; V4h intensity 0 set from the row; V4f Retirar: 65,742 in the offensive, 59,084 home = 10.1 %.
+* ground + descent **8/8** (v7d): V8a-c, V11a-b unchanged; V14a battle 0.0 km from the view target after Ir + wheel,
+  143/200 and 142/200 soldiers on screen, both banners clear; V14b pointer «Frente de Zaragoza · la batalla está a 32 km»,
+  no battle built there; V14c after «Ir a la batalla»: 176/167 soldiers on screen, both banners clear.
+* observation **4/4** (v8a, V9 −6.5 %, 0 jumps), mobilization / front-600 / plume **5/5** (v8b), 0 page errors.
+* `tools/playtest.mjs` now confirms the offensive dialog after a click on enemy land (not re-run in full here).
+
 ## W6-battle-clarity: brief
 
 **Landed (shared local forces):** `src/shared/localForces.ts` with `deriveLocalForces()` / `deriveLocalForcesAt()` /
