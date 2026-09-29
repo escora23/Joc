@@ -1,6 +1,6 @@
 // W6 browser verifier (DESIGN_V2 §16.7 acceptance). Drives the real game in Chromium (SwiftShader) on staged but REAL
 // wars (the ?shot= stagers only issue sim commands and run real ticks) and measures each criterion.
-//   node tools/w6-verify.mjs [--url http://127.0.0.1:5440/] [--out shots/W6-battle-clarity/verify] [--only orbit,mob,600,plume,ground,descent,obs]
+//   node tools/w6-verify.mjs [--url http://127.0.0.1:5440/] [--out shots/W6-battle-clarity/verify] [--only orbit,mob,600,plume,ground,night,descent,obs,advance]
 // Headless sim criteria (A2 momentum reversal, A4 priority/T34/retreat, A5 key stability) are in src/sim/test/w6-audit.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,7 +33,29 @@ async function open(shot, params = '') {
   await page.waitForTimeout(1500);
   return page;
 }
-const shot = (page, name) => page.screenshot({ path: path.join(out, `${name}.png`), timeout: 300000 });
+const shot = (page, name) => page.screenshot({ path: path.join(out, `${name}.png`), timeout: 300000 }).catch((e) => console.log(`   (screenshot ${name} failed: ${String(e?.message ?? e).split('\n')[0]})`));
+const errText = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 220);
+/**
+ * A click that cannot abort the run (W6 final, reproducibility): a missing or covered element (a war that ended, a slow
+ * frame) is recorded as a failed row for that step and the run goes on.
+ */
+async function safeClick(page, sel, id, what, timeout = 20000) {
+  try {
+    await page.click(sel, { timeout });
+    return true;
+  } catch (e) {
+    row(id, what, `step failed: could not click ${sel}: ${errText(e)}`, false);
+    return false;
+  }
+}
+/** A whole section guarded: an exception is recorded as a failed row and the next section runs. */
+async function section(name, fn) {
+  try {
+    await fn();
+  } catch (e) {
+    row(`${name}!`, `section '${name}' aborted`, errText(e), false);
+  }
+}
 
 // Banners and strip as the player sees them: each banner 'clear' only when displayed, inside the viewport and not
 // overlapping any HUD panel (the rects the HUD itself reports) or the strip.
@@ -101,6 +123,8 @@ function simLineAtAnchor() {
   return Number.isFinite(shift) ? { source: f.progress ? 'per-vertex progress' : 'tile-level line', shiftM: shift * 1000, note: '' } : null;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Night readability floor (V17), set from the measured frames (see V2-STATUS, W6 final fix pass). */
+const NIGHT_MIN_MEAN = 30, NIGHT_MIN_LIT = 0.12;
 
 /** Screen position (px) of lat/lon on the ground, as the game's camera projects it. */
 function projectFn() {
@@ -233,8 +257,8 @@ async function measureArrow(page, arrow) {
 // ---------------------------------------------------------------------------------------------------------------
 // V1 / V13 / V4 / V12: orbit overlay, badge, Guerra panel, audio caps
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('orbit')) {
-  const page = await open('front-orbit', '&audio=1');
+if (!only || only.has('orbit')) await section('orbit', async () => {
+  let page = await open('front-orbit', '&audio=1');
   await shot(page, 'front-orbit');
   const o = await page.evaluate(() => {
     const v = __front.ctx.sim.view;
@@ -285,42 +309,95 @@ if (!only || only.has('orbit')) {
   row('V4a', 'G opens the Guerra panel listing the war and its fronts with both garrisons, km/h, divisions, tiles, time', `${panel.rows.length} front rows; ${panel.text.slice(0, 260)}`, panel.open && panel.rows.length > 0 && /Guarnición: tú/.test(panel.text) && /km\/h/.test(panel.text) && /Divisiones/.test(panel.text) && /casillas/.test(panel.text));
   await shot(page, 'fronts-panel');
   const cam0 = await page.evaluate(() => __front.ctx.cameraRig.getState());
-  await page.click('.fu-war-front .fu-war-actions button:first-child');
   let cam1 = cam0;
-  for (let i = 0; i < 40; i++) {
-    await page.waitForTimeout(1000);
-    cam1 = await page.evaluate(() => __front.ctx.cameraRig.getState());
-    if (cam1.altitudeKm < 1500) break;
+  if (await safeClick(page, '.fu-war-front .fu-war-actions button:first-child', 'V4b', 'Ir flies to the front')) {
+    // The glide runs on the frame clock (slow under SwiftShader, slower still with another browser on the machine):
+    // poll until the camera is down (below 1,500 km) or at rest across rendered frames after moving, up to 4 minutes.
+    let prev = null, same = 0;
+    const tIr = Date.now();
+    while (Date.now() - tIr < 240000) {
+      await sleep(1500);
+      const c = await page.evaluate(() => ({ s: __front.ctx.cameraRig.getState(), f: __front.ctx.frame.frame }));
+      cam1 = c.s;
+      if (cam1.altitudeKm < 1500) break;
+      if (prev && c.f < prev.f + 2) continue;
+      same = prev && Math.abs(c.s.altitudeKm - prev.s.altitudeKm) < 0.5 ? same + 1 : 0;
+      prev = c;
+      if (same >= 3 && Math.abs(cam1.altitudeKm - cam0.altitudeKm) > 200) break;
+    }
+    row('V4b', 'Ir flies to the front', `alt ${Math.round(cam0.altitudeKm)} -> ${Math.round(cam1.altitudeKm)} km (${((Date.now() - tIr) / 1000).toFixed(0)} s to land)`, Math.abs(cam1.altitudeKm - cam0.altitudeKm) > 200);
   }
-  row('V4b', 'Ir flies to the front', `alt ${Math.round(cam0.altitudeKm)} -> ${Math.round(cam1.altitudeKm)} km`, Math.abs(cam1.altitudeKm - cam0.altitudeKm) > 200);
-  // A second front (a landing-sized pocket of the enemy on our southern coast), so priority has troops to move.
-  await page.evaluate(() => {
-    const v = __front.ctx.sim.view;
-    const w = v.wars.find((x) => x.aggressor === 1 || x.target === 1);
-    const enemy = w.aggressor === 1 ? w.target : w.aggressor;
-    __front.ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: Math.floor((90 - 38.2) / 180 * 800) * 1600 + Math.floor((-3.2 + 180) / 360 * 1600), radius: 3 });
-    __front.ctx.app.setSpeed(4);
-  });
-  for (let i = 0; i < 60; i++) {
-    await sleep(1000);
-    if (await page.evaluate(() => __front.ctx.sim.view.fronts.filter((f) => f.a === 1 || f.b === 1).length >= 2)) break;
+  // V4c: Prioridad alta raises the front's target share and its garrison Gf over ~60 ticks. Measured on a front of ours
+  // that no enemy offensive is draining (a landing-sized pocket of the enemy on our southern coast, added here), and
+  // against a no-priority baseline: the same front's Gf trend over the 30 ticks before the click, extrapolated.
+  // If the staged war ends (another browser slowing the frames lets the AI make peace) the war is staged again.
+  const ourFronts = () => page.evaluate(() => { const v = __front.ctx.sim.view; return v.wars.some((x) => x.aggressor === 1 || x.target === 1) ? v.fronts.filter((f) => f.a === 1 || f.b === 1).length : 0; });
+  let v4c = null;
+  for (let attempt = 1; attempt <= 3 && !v4c; attempt++) {
+    if (!(await ourFronts())) {
+      console.log(`   V4c: no war front of ours (attempt ${attempt}): staging the war again`);
+      await page.close();
+      page = await open('front-orbit', '&audio=1');
+      await page.evaluate(() => __front.ctx.app.setSpeed(0));
+    }
+    await page.evaluate(() => {
+      const v = __front.ctx.sim.view;
+      const w = v.wars.find((x) => x.aggressor === 1 || x.target === 1);
+      const enemy = w.aggressor === 1 ? w.target : w.aggressor;
+      __front.ctx.sim.debug({ type: 'conquer', playerId: enemy, centerTile: Math.floor((90 - 38.2) / 180 * 800) * 1600 + Math.floor((-3.2 + 180) / 360 * 1600), radius: 3 });
+    });
+    for (let i = 0; i < 12; i++) {
+      await page.evaluate(() => __front.ctx.sim.fastForward(5));
+      await sleep(1500);
+      if (await page.evaluate(() => __front.ctx.sim.view.fronts.filter((f) => f.a === 1 || f.b === 1).length >= 2)) break;
+    }
+    if ((await ourFronts()) < 1) continue;
+    // Opens the Guerra panel if it closed with a re-stage.
+    const readG = (k) => page.evaluate((k) => { const v = __front.ctx.sim.view; const f = v.frontByKey.get(k); if (!f) return null; const s = f.a === 1 ? 'A' : 'B'; return { tick: v.tick, t: f['targetShare' + s], p: f['priority' + s], g: f['garrison' + s], troops: v.human.troops, off: f.a === 1 ? f.offensiveB : f.offensiveA }; }, k);
+    const pick = await page.evaluate(() => {
+      const v = __front.ctx.sim.view;
+      const ours = v.fronts.filter((f) => f.a === 1 || f.b === 1);
+      const free = ours.filter((f) => (f.a === 1 ? f.offensiveB : f.offensiveA) === 0);
+      const f = (free.length ? free : ours).sort((p, q) => p.length - q.length)[0];
+      return { k: f.key, n: ours.length, free: free.length > 0 };
+    });
+    const g0 = await readG(pick.k);
+    await page.evaluate(() => __front.ctx.sim.fastForward(30));
+    await sleep(2500);
+    const g1 = await readG(pick.k);
+    if (!g0 || !g1) continue;
+    // The panel row's «Alta» button (the row of that front).
+    await page.evaluate(() => { const el = document.querySelector('.fu-warpanel'); if (!el || el.classList.contains('fu-hidden')) window.__fuFronts.panel.open(); });
+    await sleep(2500);
+    if (!(await safeClick(page, `.fu-war-front[data-key="${pick.k}"] .fu-war-prio button[data-prio="2"]`, 'V4c', 'Prioridad alta button'))) break;
+    await sleep(1500);
+    let g2 = null;
+    for (let i = 0; i < 12; i++) {
+      await page.evaluate(() => __front.ctx.sim.fastForward(5));
+      await sleep(1200);
+      g2 = await readG(pick.k);
+      if (!g2 || g2.tick - g1.tick >= 60) break;
+    }
+    if (!g2) continue;
+    const dt = g2.tick - g1.tick;
+    // No-priority projection: Gf's own trend before the click (troop losses, redeployment toward the old target),
+    // carried over the same number of ticks.
+    const base = g1.g + ((g1.g - g0.g) / Math.max(1, g1.tick - g0.tick)) * dt;
+    v4c = { pick, g0, g1, g2, dt, base };
   }
-  await page.evaluate(() => __front.ctx.app.setSpeed(0));
-  await sleep(2000);
-  const before = await page.evaluate(() => { const k = window.__fuFronts.rows()[0]; const f = __front.ctx.sim.view.frontByKey.get(k); const s = f.a === 1 ? 'A' : 'B'; return { k, s, t: f['targetShare' + s], p: f['priority' + s], g: f['garrison' + s] }; });
-  await page.click('.fu-war-front .fu-war-prio button[data-prio="2"]');
-  await page.evaluate(() => __front.ctx.app.setSpeed(1));
-  const t0 = await page.evaluate(() => __front.ctx.sim.view.tick);
-  let after = null;
-  for (let i = 0; i < 120; i++) {
-    await sleep(1000);
-    after = await page.evaluate((b) => { const v = __front.ctx.sim.view; const f = v.frontByKey.get(b.k); return f ? { tick: v.tick, t: f['targetShare' + b.s], p: f['priority' + b.s], g: f['garrison' + b.s] } : null; }, before);
-    if (after && after.tick - t0 >= 60) break;
+  if (v4c) {
+    const { pick, g0, g1, g2, dt, base } = v4c;
+    row('V4c', `Prioridad alta raises the target share and Gf over ~60 ticks (front ${pick.k} of ${pick.n}, ${pick.free ? 'no enemy offensive on it' : 'UNDER an enemy offensive'})`,
+      `priority ${g1.p} -> ${g2.p}; target ${g1.t} -> ${g2.t}; Gf ${Math.round(g1.g)} -> ${Math.round(g2.g)} after ${dt} ticks (no-priority baseline: ${Math.round(g0.g)} -> ${Math.round(g1.g)} over the 30 ticks before, projected ${Math.round(base)}); our troops ${Math.round(g1.troops)} -> ${Math.round(g2.troops)}`,
+      g2.p === 2 && dt >= 50 && (pick.n < 2 || g2.t > g1.t) && g2.g > g1.g * 1.05 && g2.g > base * 1.05);
+  } else row('V4c', 'Prioridad alta raises the target share and Gf over ~60 ticks', 'front gone in every attempt', false);
+  if (!(await ourFronts())) {
+    await page.close();
+    page = await open('front-orbit', '&audio=1');
+    await page.evaluate(() => { __front.ctx.app.setSpeed(0); window.__fuFronts.panel.open(); });
+    await sleep(1500);
   }
-  await page.evaluate(() => __front.ctx.app.setSpeed(0));
-  const nFronts = await page.evaluate(() => __front.ctx.sim.view.fronts.filter((f) => f.a === 1 || f.b === 1).length);
-  row('V4c', `Prioridad alta raises the target share and Gf over ~60 ticks (${nFronts} fronts of ours)`, after ? `priority ${before.p} -> ${after.p}, target ${before.t} -> ${after.t}, Gf ${before.g} -> ${after.g} after ${after.tick - t0} ticks` : 'front gone', !!after && after.p === 2 && (nFronts < 2 ? true : after.t > before.t));
-  await page.click('.fu-war-card .fu-war-actions .fu-btn--success');
+  await safeClick(page, '.fu-war-card .fu-war-actions .fu-btn--success', 'V4d', 'Proponer paz');
   await page.waitForTimeout(1500);
   const peace = await page.evaluate(() => !!document.querySelector('.fu-peace-modal'));
   row('V4d', 'Proponer paz opens the W3 peace-terms dialog', peace ? 'dialog open' : 'no dialog', peace);
@@ -341,7 +418,7 @@ if (!only || only.has('orbit')) {
     if (ready) break;
   }
   const sentBefore = await page.evaluate(() => [...__front.ctx.sim.view.proposals.values()].length);
-  await page.click('.fu-war-card .fu-war-actions button:nth-child(2)');
+  await safeClick(page, '.fu-war-card .fu-war-actions button:nth-child(2)', 'V4e', 'Pedir ayuda');
   let asked = false;
   for (let i = 0; i < 20 && !asked; i++) {
     await page.waitForTimeout(1000);
@@ -353,7 +430,7 @@ if (!only || only.has('orbit')) {
   // still be running 40 ticks later with no further click; then «Retirar» brings the troops home with a 10 % loss,
   // measured in the browser on the tick they arrive.
   await page.evaluate(() => { window.__w6msgs = []; __front.ctx.bus.on('message', (e) => window.__w6msgs.push(e.key)); });
-  await page.click('.fu-war-front .fu-btn--amber');
+  await safeClick(page, '.fu-war-front .fu-btn--amber', 'V4g', 'Ofensiva… opens the dialog');
   const dlg = await page.waitForSelector('.fu-offdlg', { timeout: 15000 }).catch(() => null);
   await sleep(6000);
   const dlgText = dlg ? await page.evaluate(() => document.querySelector('.fu-offdlg')?.textContent ?? '') : '';
@@ -368,7 +445,7 @@ if (!only || only.has('orbit')) {
   console.log(`   V4g dialog: ${dlgDiag}`);
   await shot(page, 'offensive-dialog');
   row('V4g', 'the offensive dialog (#23): troops, intensity, ratio, km/h, casualties per day and a verdict before launching', dlg ? dlgText.slice(0, 300) : 'no dialog', !!dlg && /Relación de fuerzas/.test(dlgText) && /km\/h|sin avance/.test(dlgText) && /Bajas propias por día/.test(dlgText) && /Intensidad/.test(dlgText));
-  if (dlg) await page.click('.fu-offdlg .fu-offdlg-go');
+  if (dlg) await safeClick(page, '.fu-offdlg .fu-offdlg-go', 'V4f1', 'Lanzar ofensiva');
   await sleep(1500);
   // (Paused: the order is carried out on the next tick.)
   await page.evaluate(() => __front.ctx.sim.fastForward(2));
@@ -394,7 +471,7 @@ if (!only || only.has('orbit')) {
   const retreatVisible = await page.evaluate(() => { const b = document.querySelector('.fu-war-front .fu-btn--danger'); return !!b && !b.classList.contains('fu-hidden'); });
   let back = null;
   if (retreatVisible && own) {
-    await page.click('.fu-war-front .fu-btn--danger');
+    await safeClick(page, '.fu-war-front .fu-btn--danger', 'V4f', 'Retirar');
     await sleep(1500);
     // (Paused: the order is carried out on the next tick.)
     await page.evaluate(() => __front.ctx.sim.fastForward(1));
@@ -428,12 +505,12 @@ if (!only || only.has('orbit')) {
   const a1 = await page.evaluate(() => window.__fuAudio.stats().combat);
   row('V12', 'combat cues over 60 s near a busy front: <= 2/s per front, <= 6/s in total', `played ${a1.played - a0.played}, dropped ${a1.dropped - a0.dropped}, max ${a1.maxPerSecond}/s total, ${a1.maxFrontPerSecond}/s per front`, a1.played - a0.played > 0 && a1.maxPerSecond <= 6 && a1.maxFrontPerSecond <= 2);
   await page.close();
-}
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // V3: mobilization arrows and dashed quiet fronts
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('mob')) {
+if (!only || only.has('mob')) await section('mob', async () => {
   const page = await open('front-mobilization');
   await shot(page, 'front-mobilization');
   const m = await page.evaluate(() => { const v = __front.ctx.sim.view; const w = v.wars.find((x) => x.target === 1 || x.aggressor === 1); return { st: window.__frontOverlay.stats(), tick: v.tick, until: w?.mobilizeUntilTick, quiet: v.fronts.filter((f) => f.quiet && (f.a === 1 || f.b === 1)).length }; });
@@ -449,12 +526,12 @@ if (!only || only.has('mob')) {
   const m2 = await page.evaluate(() => ({ st: window.__frontOverlay.stats(), tick: __front.ctx.sim.view.tick }));
   row('V3b', 'the mobilization arrows disappear at mobilizeUntilTick', `${m2.st.mobilization} arrows at tick ${m2.tick}`, m2.st.mobilization === 0);
   await page.close();
-}
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // V6: front-600 smoke coverage and flashes inside the band
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('600')) {
+if (!only || only.has('600')) await section('600', async () => {
   const page = await open('front-600', '&clouds=hidden&freeze=1&hud=0');
   await page.evaluate(() => __front.ctx.app.setSpeed(1));
   await sleep(20000);
@@ -487,24 +564,24 @@ if (!only || only.has('600')) {
   row('V6a', 'front-600 (clouds hidden, frozen): smoke and haze cover <= 25 % of the screen', `${(cov * 100).toFixed(1)} % whiter pixels; columns per front ${JSON.stringify(far?.columns)}`, cov <= 0.25 && Object.values(far?.columns ?? {}).every((c) => c <= 6));
   row('V6b', 'flashes only within 1.5 tiles of the front line', `${far?.flashes} flashes, farthest ${far?.maxLineDistTiles.toFixed(2)} tiles`, (far?.flashes ?? 0) > 0 && far.maxLineDistTiles <= 1.5);
   await page.close();
-}
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // V7: plume-zoom
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('plume')) {
+if (!only || only.has('plume')) await section('plume', async () => {
   const page = await open('plume-zoom');
   await shot(page, 'plume-zoom');
   const z = await page.evaluate(() => window.__plumeZoom);
   const all = (z ?? []).flatMap((s) => s.plumes.map((p) => ({ alt: s.alt, ...p })));
   row('V7', 'plume at 700 km and 200 km: <= 8 % of the screen height, world size <= 20 km', all.map((p) => `${p.alt} km: ${(p.screenFrac * 100).toFixed(1)} % (${p.heightPx} px), world ${p.worldKm} km drawn ${p.drawnKm}`).join('; ') || 'no plume', all.length >= 2 && all.every((p) => p.screenFrac <= 0.08 && p.worldKm <= 20));
   await page.close();
-}
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // V8 / V11: the ground battle from real data, banners and the strip (es and en)
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('ground')) {
+if (!only || only.has('ground')) await section('ground', async () => {
   const page = await open('front-ground-real', '&quality=medium');
   await shot(page, 'front-ground-real');
   const g = await page.evaluate(bannerState);
@@ -544,7 +621,64 @@ if (!only || only.has('ground')) {
   row('V11b', 'the strip, banners and the clock in English after the language switch', `${en.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')} || ${en.strip} || clock «${clock}»`, /attacking/.test(en.strip) && /day of fighting/.test(en.strip) && /advance/.test(en.strip) && en.banners.every((b) => /attacking|defending/.test(b.text) && b.state === 'clear') && /day/i.test(clock) && !/día/i.test(clock));
   await shot(page, 'front-ground-real-en');
   await page.close();
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// V17 (W6 final fix pass, FEEDBACK #11 at night): the ground battle staged in the middle of the night (&night=1: the sun
+// on the far side of the planet) must read as well as by day: the moonlit scene, flares, fire and tracers light the
+// line; soldiers of both sides and both banners on screen; measured on the frame's brightness where the battle is (the
+// HUD panels excluded), at the shot's framing and again at 450 m.
+// ---------------------------------------------------------------------------------------------------------------
+async function frameLight(page) {
+  const b64 = (await page.screenshot({ timeout: 300000 })).toString('base64');
+  return page.evaluate(async (src) => {
+    const im = await new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + src; });
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+    const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const sx = c.width / window.innerWidth;
+    const rects = [...__front.ctx.ui.getOccludedRects()].map((r) => ({ l: r.left * sx, r: r.right * sx, t: r.top * sx, b: r.bottom * sx }));
+    let n = 0, sum = 0, lit = 0;
+    const lum = [];
+    for (let y = Math.floor(c.height * 0.2); y < c.height * 0.85; y += 2) for (let x = 0; x < c.width; x += 2) {
+      if (rects.some((q) => x >= q.l && x < q.r && y >= q.t && y < q.b)) continue;
+      const k = (y * c.width + x) * 4;
+      const L = 0.2126 * d[k] + 0.7152 * d[k + 1] + 0.0722 * d[k + 2];
+      sum += L; n++;
+      if (L > 45) lit++;
+      lum.push(L);
+    }
+    lum.sort((p, q) => p - q);
+    return { mean: sum / Math.max(1, n), lit: lit / Math.max(1, n), p90: lum[Math.floor(lum.length * 0.9)] ?? 0 };
+  }, b64);
 }
+if (!only || only.has('night')) await section('night', async () => {
+  const page = await open('front-ground-real', '&night=1&quality=medium');
+  await sleep(3000);
+  const read = async (tag) => {
+    const g = await page.evaluate(bannerState);
+    const o = await page.evaluate(() => ({ soldiers: window.__battleDebug.soldiersOnScreen(200), d: window.__battleDebug.shown() }));
+    const light = await frameLight(page);
+    await shot(page, `night-${tag}`);
+    return { g, o, light };
+  };
+  const verdict = (r) => {
+    const both = !!r.o.soldiers && r.o.soldiers.length === 2 && r.o.soldiers.every((x) => x.onScreen >= 10);
+    const banners = r.g.banners.length === 2 && r.g.banners.every((b) => b.state === 'clear');
+    return { both, banners, text: `night ${r.o.d ? r.o.d.night.toFixed(2) : '-'}, flares ${r.o.d?.flares ?? '-'}; frame mean luma ${r.light.mean.toFixed(1)}, lit (>45) ${(r.light.lit * 100).toFixed(1)} %, p90 ${r.light.p90.toFixed(0)}; soldiers ${r.o.soldiers ? r.o.soldiers.map((x) => `${x.onScreen}/${x.sampled} (${x.medianPx} px)`).join(' vs ') : 'none'}; banners ${r.g.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')}` };
+  };
+  const lightOk = (r) => r.light.mean >= NIGHT_MIN_MEAN && r.light.lit >= NIGHT_MIN_LIT;
+  const r1 = await read('ground');
+  const v1 = verdict(r1);
+  row('V17a', 'night battle at the shot framing: really night, lit enough to read (moon, flares, fire), both sides and both banners on screen', v1.text, !!r1.o.d && r1.o.d.night >= 0.9 && r1.o.d.flares >= 1 && lightOk(r1) && v1.both && v1.banners);
+  // Down to 450 m over the battle (the iter-3 evidence was a black frame here).
+  await page.evaluate(() => { const c = __front.ctx.cameraRig.getState(); __front.ctx.cameraRig.setState({ ...c, altitudeKm: 0.45 }); });
+  await sleep(25000);
+  const r2 = await read('450');
+  const v2 = verdict(r2);
+  row('V17b', 'night battle at 450 m: lit enough to read, both sides and both banners on screen', v2.text, !!r2.o.d && lightOk(r2) && v2.both && v2.banners);
+  await page.close();
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // V14: the ground battle where the player looks, WITHOUT the shot's framing (FEEDBACK #11 «where they are»):
@@ -554,7 +688,7 @@ if (!only || only.has('ground')) {
 //        far outside the view; the battle pointer says where it is; «Ir a la batalla» glides there and the soldiers
 //        and both banners are on screen.
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('descent')) {
+if (!only || only.has('descent')) await section('descent', async () => {
   const page = await open('front-orbit', '&quality=medium');
   await page.evaluate(() => __front.ctx.app.setSpeed(0));
   const waitBattle = async (ms) => {
@@ -663,12 +797,12 @@ if (!only || only.has('descent')) {
     row('V14c', '«Ir a la batalla» glides down to the line: soldiers of both sides and both banners on screen', `${builtC ? 'built' : 'NOT built'}; ${vC.text}`, builtC && vC.both && vC.banners);
   } else row('V14c', '«Ir a la batalla» glides down to the line', 'no pointer', false);
   await page.close();
-}
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // V9 / V10: observation time moves the line continuously at advanceKmh × rate / 3600; animation clock on real time
 // ---------------------------------------------------------------------------------------------------------------
-if (!only || only.has('obs')) {
+if (!only || only.has('obs')) await section('obs', async () => {
   const obsRuns = Math.max(1, Number(args.obsRuns ?? 1));
   let page = null;
   for (let run = 1; run <= obsRuns; run++) {
@@ -760,7 +894,166 @@ if (!only || only.has('obs')) {
   const r05 = await rate(0.5), r4 = await rate(4), r0 = await rate(0);
   row('V10', 'battle animation per real second equal at 0.5x and 4x (±15 %), frozen on pause', `0.5x ${r05.perS.toFixed(3)}/s (${r05.fps.toFixed(1)} fps), 4x ${r4.perS.toFixed(3)}/s (${r4.fps.toFixed(1)} fps), paused ${r0.perS.toFixed(3)}/s`, Math.abs(r05.perS / r4.perS - 1) <= 0.15 && r0.perS === 0);
   await page.close();
-}
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// V15 / V16 (W6 final fix pass): real play on a war the player starts, driven through the UI.
+//   V16 «Enviar divisiones»: a division 400 km from the front is listed with its ETA and an enabled ENVIAR; the click
+//       gives it the order 'attach' and it later carries that front's key.
+//   V15 an offensive launched from the dialog runs >= 300 ticks and advances far past its first axis point: the arrow
+//       stays on the front where it fights, its tip on enemy land ahead of the line, the measured km/h > 0 and in line
+//       with the rate tiles fall, and the ground battle at its contact shows the offensive's troops.
+// ---------------------------------------------------------------------------------------------------------------
+if (!only || only.has('advance')) await section('advance', async () => {
+  const page = await open('front-orbit', '&attacker=none&humanTroops=1400000&enemyTroops=150000&run=30');
+  await page.evaluate(() => {
+    __front.ctx.app.setSpeed(0);
+    window.__w6msgs = [];
+    __front.ctx.bus.on('message', (e) => window.__w6msgs.push({ key: e.key, tick: __front.ctx.sim.view.tick }));
+    // A division of ours near Madrid, far from the Pyrenees front.
+    const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + Math.floor(((lon + 180) / 360) * 1600);
+    __front.ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: tile(40.2, -3.7), targetTile: -1 });
+  });
+  await page.evaluate(() => __front.ctx.sim.fastForward(2));
+  await sleep(2500);
+  const st0 = await page.evaluate(() => {
+    const v = __front.ctx.sim.view;
+    const f = v.fronts.filter((q) => q.a === 1 || q.b === 1).sort((p, q) => q.length - p.length)[0];
+    const us = [...v.units.values()].filter((u) => u.owner === 1 && u.type === 3);
+    const far = us.filter((u) => u.frontKey !== f?.key).sort((p, q) => q.id - p.id)[0];
+    return { k: f?.key ?? 0, enemy: f ? (f.a === 1 ? f.b : f.a) : 0, unit: far ? { id: far.id, order: far.order, frontKey: far.frontKey } : null };
+  });
+  if (!st0.k || !st0.unit) {
+    row('V16', 'Enviar divisiones', `staging failed: front ${st0.k}, far division ${JSON.stringify(st0.unit)}`, false);
+    await page.close();
+    return;
+  }
+  await page.evaluate(() => window.__fuFronts.panel.open());
+  await sleep(2000);
+  const rowSel = `.fu-war-front[data-key="${st0.k}"]`;
+  let v16 = null;
+  try {
+    await page.locator(`${rowSel} .fu-war-actions > button`, { hasText: /Enviar divisiones/ }).first().click({ timeout: 20000 });
+    await sleep(3500);
+    v16 = await page.evaluate((sel) => [...document.querySelectorAll(`${sel} .fu-war-send`)].map((e) => ({ text: e.textContent, eta: e.querySelector('.fu-war-send-eta')?.textContent ?? '', enabled: !e.querySelector('button').disabled })), rowSel);
+  } catch (e) {
+    row('V16a', 'Enviar divisiones lists the division with its ETA', `step failed: ${errText(e)}`, false);
+  }
+  if (v16) {
+    const first = v16[0];
+    row('V16a', 'Enviar divisiones lists a division far from the front with its ETA and an enabled ENVIAR', v16.map((r) => `${r.text} [${r.enabled ? 'enabled' : 'DISABLED'}]`).join(' | ') || 'empty list', !!first && /\d/.test(first.eta) && first.enabled);
+    if (first && first.enabled) {
+      await safeClick(page, `${rowSel} .fu-war-send button`, 'V16b', 'ENVIAR');
+      await sleep(1500);
+      await page.evaluate(() => __front.ctx.sim.fastForward(2));
+      await sleep(2500);
+      const u1 = await page.evaluate((id) => { const u = __front.ctx.sim.view.units.get(id); return u ? { order: u.order, frontKey: u.frontKey, tick: __front.ctx.sim.view.tick } : null; }, st0.unit.id);
+      let u2 = u1;
+      for (let i = 0; i < 30 && u2 && u2.frontKey !== st0.k; i++) {
+        await page.evaluate(() => __front.ctx.sim.fastForward(10));
+        await sleep(1500);
+        u2 = await page.evaluate((id) => { const u = __front.ctx.sim.view.units.get(id); return u ? { order: u.order, frontKey: u.frontKey, tick: __front.ctx.sim.view.tick } : null; }, st0.unit.id);
+      }
+      row('V16b', 'the click orders the division to attach (UnitView.order = attach) and it later joins that front (frontKey)', `before: order ${st0.unit.order}, key ${st0.unit.frontKey}; after the click: order ${u1?.order}; joined key ${u2?.frontKey} of front ${st0.k} after ${u2 && u1 ? u2.tick - u1.tick : '-'} ticks (listed ETA ${first.eta})`, !!u1 && u1.order === 1 && !!u2 && u2.frontKey === st0.k);
+    }
+  }
+  // V15: the offensive from the dialog.
+  await page.evaluate(() => { const el = document.querySelector('.fu-warpanel'); if (!el || el.classList.contains('fu-hidden')) window.__fuFronts.panel.open(); });
+  await sleep(1500);
+  if (!(await safeClick(page, `${rowSel} .fu-btn--amber`, 'V15', 'Ofensiva… opens the dialog'))) { await page.close(); return; }
+  await page.waitForSelector('.fu-offdlg', { timeout: 20000 });
+  await sleep(4000);
+  if (!(await safeClick(page, '.fu-offdlg .fu-offdlg-go', 'V15', 'Lanzar ofensiva'))) { await page.close(); return; }
+  await sleep(1500);
+  await page.evaluate(() => __front.ctx.sim.fastForward(2));
+  await sleep(2500);
+  const a0 = await page.evaluate(() => { const v = __front.ctx.sim.view; const a = v.attacks.find((x) => x.attacker === 1 && x.defender > 0); return a ? { id: a.id, x: a.x, y: a.y, ox: a.originX, oy: a.originY, key: a.frontKey, tick: v.tick, troops: a.troops } : null; });
+  if (!a0) {
+    row('V15', 'offensive launched from the dialog', 'no offensive of ours', false);
+    await page.close();
+    return;
+  }
+  const sample = () => page.evaluate((id) => {
+    const v = __front.ctx.sim.view;
+    const a = v.attacks.find((x) => x.id === id);
+    if (!a) return null;
+    const wdx = (d) => (d > 800 ? d - 1600 : d < -800 ? d + 1600 : d);
+    const pair = v.fronts.filter((q) => (q.a === 1 && q.b === a.defender) || (q.b === 1 && q.a === a.defender));
+    // Independent: the pair's front whose contact line is nearest to the offensive's live contact.
+    let near = 0, nd = Infinity;
+    if (a.contactX >= 0) for (const f of pair) for (let k = 0; k < f.samples.length; k += 2) {
+      const d = Math.hypot(wdx(f.samples[k] - a.contactX), f.samples[k + 1] - a.contactY);
+      if (d < nd) { nd = d; near = f.key; }
+    }
+    let ux = wdx(a.x - a.originX), uy = a.y - a.originY;
+    const ul = Math.hypot(ux, uy) || 1;
+    ux /= ul; uy /= ul;
+    const along = (x, y) => wdx(x - a.originX) * ux + (y - a.originY) * uy;
+    const ar = window.__frontOverlay.stats().arrows.find((r) => r.attackId === id);
+    const tileOf = (ll) => { const y = Math.floor(((90 - ll[0]) / 180) * 800), x = Math.floor(((ll[1] + 180) / 360) * 1600) % 1600; return y * 1600 + x; };
+    const tipXY = ar ? { x: ((ar.tip[1] + 180) / 360) * 1600, y: ((90 - ar.tip[0]) / 180) * 800 } : null;
+    const f = v.frontByKey.get(a.frontKey);
+    const badge = document.querySelector(`.fu-fb[data-key="${a.frontKey}"]`);
+    return {
+      tick: v.tick, state: a.state, key: a.frontKey, near, nd, arrowKey: ar ? ar.frontKey : -1,
+      tipOwner: ar ? v.owner[tileOf(ar.tip)] : -1, tipAlong: tipXY ? along(tipXY.x, tipXY.y) : NaN,
+      axisOwner: v.owner[Math.floor(a.y) * 1600 + Math.floor(a.x)], axisAlong: along(a.x, a.y),
+      contactAlong: a.contactX >= 0 ? along(a.contactX, a.contactY) : NaN, contact: [a.contactX, a.contactY],
+      kmh: f ? f.advanceKmh : -1, tiles: a.tilesTaken, frontage: a.frontageTiles, defender: a.defender, ux, uy, oy: a.originY,
+      badge: badge && badge.style.display !== 'none' ? badge.textContent : '',
+    };
+  }, a0.id);
+  const S = [];
+  for (let i = 0; i < 24; i++) {
+    await page.evaluate(() => __front.ctx.sim.fastForward(20));
+    await sleep(2500);
+    const s1 = await sample();
+    if (!s1) break;
+    if (s1.tick - a0.tick >= 40) S.push(s1);
+    if (s1.tick - a0.tick >= 420) break;
+  }
+  const last = S[S.length - 1];
+  const ran = last ? last.tick - a0.tick : 0;
+  const firstAxis = S.length ? (() => { const s0 = S[0]; return (a0.x - a0.ox) * s0.ux + (a0.y - a0.oy) * s0.uy; })() : 0;
+  const maxContact = Math.max(0, ...S.map((q) => q.contactAlong).filter(Number.isFinite));
+  const keyOk = S.filter((q) => q.key === q.near && q.arrowKey === q.key).length;
+  const moved = await page.evaluate(() => window.__w6msgs.filter((m) => m.key === 'msg.offensiveObjective').length);
+  const badKey = S.filter((q) => !(q.key === q.near && q.arrowKey === q.key)).slice(0, 2).map((q) => `tick ${q.tick}: key ${q.key}, arrow ${q.arrowKey}, contact nearest ${q.near}`);
+  row('V15a', 'offensive from the dialog, >= 300 ticks, far past its first axis point: attack and arrow on the front where it fights', `${ran} ticks, contact ${(maxContact * 25).toFixed(0)} km from the origin (first axis point ${(firstAxis * 25).toFixed(0)} km); key and arrow key = nearest front to the contact ${keyOk}/${S.length}${badKey.length ? ` [${badKey.join('; ')}]` : ''}`, ran >= 300 && maxContact > firstAxis + 4 && S.length > 0 && keyOk === S.length);
+  const tipOk = S.filter((q) => q.tipOwner === q.defender && q.tipAlong >= q.contactAlong - 0.5 && q.axisOwner === q.defender).length;
+  const badTip = S.filter((q) => !(q.tipOwner === q.defender && q.tipAlong >= q.contactAlong - 0.5 && q.axisOwner === q.defender)).slice(0, 2).map((q) => `tick ${q.tick}: tip owner ${q.tipOwner} along ${q.tipAlong.toFixed(1)} vs contact ${q.contactAlong.toFixed(1)}, axis owner ${q.axisOwner}`);
+  row('V15b', 'the arrow\'s tip and the axis point stay on enemy land ahead of the line (the axis moved forward, the player told)', `${tipOk}/${S.length} samples; axis moved ${moved} times${badTip.length ? ` [${badTip.join('; ')}]` : ''}`, S.length > 0 && tipOk === S.length && moved > 0);
+  const adv = S.filter((q) => q.state === 'advancing');
+  const zero = adv.filter((q) => q.kmh < 0.05 || /(^|\D)0 km\/h/.test(q.badge)).length;
+  let rateKmh = 0, meanKmh = 0;
+  if (adv.length >= 2) {
+    const A = adv[0], B = adv[adv.length - 1];
+    const W0 = 25.02 * Math.cos(((90 - (A.oy / 800) * 180) * Math.PI) / 180);
+    const widthKm = A.frontage * Math.sqrt((A.uy * W0) ** 2 + (A.ux * 25.02) ** 2);
+    rateKmh = ((B.tiles - A.tiles) * 25.02 * W0) / widthKm / Math.max(0.1, (B.tick - A.tick) / 10);
+    meanKmh = adv.slice(1).reduce((s2, q) => s2 + q.kmh, 0) / Math.max(1, adv.length - 1);
+  }
+  row('V15c', 'while it takes ground the front never reads 0 km/h (panel data and badge), and the km/h matches the rate tiles fall', `${zero} zero readings of ${adv.length} advancing samples; mean ${meanKmh.toFixed(2)} km/h vs tile rate ${rateKmh.toFixed(2)} km/h; badge «${last?.badge ?? ''}»`, adv.length >= 5 && zero === 0 && rateKmh > 0 && meanKmh / rateKmh >= 0.5 && meanKmh / rateKmh <= 1.6);
+  // The ground battle where the offensive fights now: the camera down at the live contact.
+  if (last && last.contact[0] >= 0) {
+    await page.evaluate((c) => { const lat = 90 - (c[1] / 800) * 180, lon = (c[0] / 1600) * 360 - 180; __front.ctx.cameraRig.setState({ lat, lon, altitudeKm: 3, tilt: 0.9, heading: 0 }); }, last.contact);
+    let g = null;
+    for (let i = 0; i < 120; i++) {
+      await sleep(2500);
+      g = await page.evaluate(() => { const d = window.__battleDebug?.shown(); if (!d || !__front.ctx.battle.active) return null; const f = __front.ctx.sim.view.frontByKey.get(d.frontKey); return { key: d.frontKey, a: d.a, b: d.b, split: d.split, trA: f?.troopsA ?? 0, trB: f?.troopsB ?? 0, fa: f?.a, fb: f?.b }; });
+      if (g) break;
+    }
+    await shot(page, 'advance-ground');
+    if (g) {
+      const us = g.a === 1 ? 0 : 1;
+      const shareUs = g.split[us] / Math.max(1, g.split[0] + g.split[1]);
+      const trUs = g.fa === 1 ? g.trA : g.trB, trThem = g.fa === 1 ? g.trB : g.trA;
+      const want = Math.min(0.8, Math.max(0.2, trUs / Math.max(1, trUs + trThem)));
+      row('V15d', 'the ground battle at the contact is on the offensive\'s front and its soldiers reflect the offensive (split vs the front\'s troops)', `battle front ${g.key} (offensive's ${last.key}); split ${g.split.join('/')} = our share ${shareUs.toFixed(2)} vs front troops ${Math.round(trUs)} : ${Math.round(trThem)} (share ${want.toFixed(2)} after the 0.2-0.8 clamp)`, g.key === last.key && Math.abs(shareUs - want) <= 0.15 && shareUs > 0.5);
+    } else row('V15d', 'the ground battle at the contact', 'no battle built', false);
+  }
+  await page.close();
+});
 
 await browser.close();
 const failed = results.filter((r) => !r.pass).length;

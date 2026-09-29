@@ -106,6 +106,9 @@ export interface BattleShown {
   reanchorWhy: string;
   /** Biome of the anchor tile and the farmland share the ground was built with. */
   ground: { biome: number; farmland: number };
+  /** 0 by day .. 1 in full night at the anchor, and the illumination flares burning (W6 final, night readability). */
+  night: number;
+  flares: number;
 }
 
 export interface BattleDebug {
@@ -1120,6 +1123,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       lineShift: front.drift, simShift, lineSpeed, expectedSpeed: simSub ? (simKmh * view.clock.rate) / 3.6 : 0,
       advanceKmh: simKmh, subTile: simSub, lineSnaps, anchorX: anchorTX, anchorY: anchorTY, normalBearing: normalBearing(),
       clockMode: view.clock.mode, samples: [samplesTaken, samplesFound], builds, reanchorWhy, ground: { ...groundInfo },
+      night: air.night, flares: effects ? effects.flares : 0,
     };
   }
 
