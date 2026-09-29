@@ -249,8 +249,8 @@ rebase can make the texture noise pop; enemy aircraft in the jet front shot depe
    Verified in real play (front-ground-real, live, T pressed in the battle view): **H0** T enters command mode;
    **H1** battle 2,627 Swiss / 599 own soldiers → command mode 2,627 / 599 (0 %), side centroids 0 m apart;
    **H2** division 90 with its 4 tanks; **H3** the vehicle faces the battle (0°), notice shown;
-   **H4** (vehicle put 600 m from the line) the nearby soldiers wake with the AI, the rest stay in the crowd, totals
-   kept — see the latest verify.json. The division itself is 15 km from the battle's centre in the sim (its real
+   **H4** (vehicle put 600 m from the soldiers' centre) 265 Swiss and 195 own soldiers woke with the AI, 2,362 and 404
+   stayed in the crowd, totals unchanged. The division itself is 15 km from the battle's centre in the sim (its real
    position; a teleport would break the move clamp and the strategic map), which is why the entry frames the battle
    and points the vehicle at it instead of moving the unit. Shots h0-battle / h1-first-view / h2-command / h3-near-line
    in shots/W5-command-v2.
