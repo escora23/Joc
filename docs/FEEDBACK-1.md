@@ -98,6 +98,7 @@ What it means (each is a hard requirement; the owner-proxy critic checks them as
 24. **Polish pass on "detallitos"**: while fixing the above, fix the small inconsistencies you meet in command mode
     and fronts. Keep scope tight: finish current work first, then do 18–25 well, without an endless loop.
     Item 25 below is part of this same round (the Feedback 2 fix and verify agents must do and check it too).
+    Items 26–29 (owner feedback #3, at the end of this file) are handled right after, in their own "Feedback 3" round.
 
 Added by the owner (verbatim):
 
@@ -117,3 +118,66 @@ Added by the owner (verbatim):
     effect, make it work or remove it. Verify end-to-end in real play: order a CAP over a border, watch it intercept an
     AI raid; order CAS on a front and measure the change in advance speed; order a strike and see the damage.
 
+
+## Owner feedback #3 (after playing artifact version 5: W5 fix pass 2 WIP + W6 offensives) — MANDATORY, items 26–29
+
+The owner played without knowing which changes had landed or were in progress. Agents: check each item against the
+current code; if it is already done, prove it in real play and move on; if it is partial or missing, finish it.
+
+Verbatim (Spanish):
+
+> Todavia no mola mucho lo de controlar, es decir si que está guapo pero es dificil llegar a donde está el enemigo. Tendrias que poder destruir ciudades y otras estructuras cuando controlar un vehiculo o sin controlarlo. los vehiculos se tendria que poder usar por ejemplo para atacar x zona durante una guerra o para defender la frontera o para avanzar con X ataque etc.. Y la verdad que el resto está bien, añade cosas tu que crees que hacen falta tambien.
+
+What it means (each is a hard requirement; the owner-proxy critic checks them as items 26–29):
+
+26. **Command mode must get you to the action quickly.** It looks good, but reaching the enemy is hard today. Fix it:
+    - Taking control from a front badge, the Guerra panel, a battle or an alert drops you right at the action. That
+      means the unit engaged there, or the chosen unit at its real position with a one-key **"Ir al combate"**
+      travel/autopilot to the nearest contact. Travel mode drops to 1:1 on contact.
+    - Always show a clear on-screen marker, distance and bearing to the nearest enemy / active battle / mission
+      target, plus a map (M) where you click a destination.
+    - A unit that is far from any fight offers "Ir al frente más cercano" instead of leaving you driving for minutes.
+    - Time from pressing take-control on a unit at a front to being in contact with the enemy: under ~60 real
+      seconds.
+27. **Cities and structures can be damaged and destroyed, both in command mode and from the strategic map.**
+    - **In command mode:** tank shells, jet bombs/missiles and naval guns damage the real structures and city blocks
+      you see (the same sim structures). You see hit effects, fire and smoke, partial collapse and rubble. The result
+      goes back to the simulation: the level drops, function is lost, population and troop losses, and the owner
+      is notified.
+    - **Without command mode:** bomber strikes, artillery/warship bombardment, missiles, and ground divisions
+      ordered to attack or raze a target do the same.
+    - **Structures have a health/damage state** shown in their card and in their 3D model (damaged, heavily damaged,
+      destroyed/rubble). A damaged structure works at reduced capacity and can be repaired for gold over time.
+      Captured structures change owner rather than vanishing, unless razed.
+    - **Consequences:** destroying civilian targets has diplomatic consequences (opinion, war escalation, casus
+      belli) that the dialog/tooltip warns about before confirming.
+28. **Every combat unit can be given real war missions, not just moved around.** Divisions, fighters/bombers and
+    warships get missions from one clear action: select → mission, from the Fuerzas panel, right-click, the front
+    badge or the Guerra panel. Missions:
+    - attack zone X;
+    - defend this border sector or city;
+    - join / support offensive X, which visibly adds its strength to that offensive and changes its preview and
+      km/h;
+    - hold / garrison;
+    - blockade a port or coast (naval);
+    - escort;
+    - strike a target (see 27).
+
+    Each mission shows a preview (effect, risk, ETA) and runs by itself until done or cancelled, visible on the map
+    with the unit's icon/route/zone. It has measurable effects in the sim, shown in the front badge, the Guerra panel
+    and the unit card. The AI uses the same missions against the player. This generalizes item 25 (air missions) to
+    all units; a mission that exists but has no real effect must be made to work or removed.
+29. **Improvements proposed by the team (the owner asked us to add what we think is missing):**
+    - a. **Consistent numbers:** an offensive shown as "avanzando" must never sit next to a front at "0 km/h". Every
+      figure about the same front (badge, Guerra panel, battle strip, dialog preview) comes from the same source and
+      agrees.
+    - b. **Night readability:** ground, battle and command views at night must stay readable (moonlight, fires,
+      flares, tracers, vehicle lights, a night-vision/thermal toggle in command mode). A near-black screen is a
+      defect.
+    - c. **Operations overview:** the Fuerzas panel lists every unit with its current mission, status, ETA and
+      health. The advisor points out idle units ("3 escuadrones sin misión") with a one-click way to give them one.
+    - d. **After-action reports:** when an offensive, strike or mission ends, a short report appears in the alert feed
+      and log, clickable to locate it on the map. It shows the result, losses on both sides, ground gained or lost,
+      and damage done.
+    - e. **Take control from anywhere it makes sense:** a unit card, a mission, a battle strip, an alert. You enter
+      at the action (see 26), and on exit you return to the strategic camera looking at that place.

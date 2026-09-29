@@ -504,3 +504,17 @@ matches the enemies visible on the strategic/battle view; slimmer attack arrows 
 non-click-spam attack flow; small polish). Whoever works on command mode, fronts, integration or gauntlet fixes MUST
 treat these as blockers. Order of work requested by the owner: finish the in-flight task, then fix 18–24 properly,
 without another endless cycle.
+
+## Owner feedback #3 (added while W5 fix pass 2 was running)
+
+See docs/FEEDBACK-1.md, section "Owner feedback #3", items 26–29:
+- 26: reach the action quickly in command mode ("Ir al combate", contact in under ~60 s from a front).
+- 27: destroy cities and structures, in command mode and from the strategic map, with damage states, repair and
+  consequences.
+- 28: real war missions for every unit type (attack zone, defend sector, support offensive X, hold, blockade,
+  escort, strike), with previews and measurable effects, also used by the AI.
+- 29: team proposals: consistent front numbers, night readability, operations overview with idle-unit advisor,
+  after-action reports, take control from anywhere.
+
+The owner played without knowing what was in progress: check each item against the current code, prove what is
+already done, and finish what is not. These are handled in the "Feedback 3" round, after Feedback 2 (18–25).
