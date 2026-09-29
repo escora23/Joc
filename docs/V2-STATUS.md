@@ -292,6 +292,10 @@ soldiers are exactly that (`dormant` marks the far ones), so the same script now
 > `git log --grep "W5 fix pass 2"`. CODEMAP §17 «W5 fix pass 2». Browser: `node tools/w5-verify.mjs --only
 > release,releaseout|border|handoff` (merged into shots/W5-command-v2/verify.json); headless
 > `npx tsx src/sim/test/command-audit.mjs` 35/35 (new I1b, I5, I6).
+>
+> Final runs on HEAD (SwiftShader, one section per session): release + releaseout **9/9** (X3, X4, R0, R1, R1b, R2, R4),
+> border **12/12** (B1-B9 with B7, B7b, B8b), handoff **7/7** (H0-H5), peace **11/11** (E1-E4, K1-K2, D1, D2, X1-X2);
+> audit 35/35; `npx tsc --noEmit` and `npm run build` clean; i18n-check 1117 keys, none missing.
 
 1. **FEEDBACK #18 — a unit left inside foreign land.** Three causes, three fixes. (a) *Proportional fire*: the flat 5 %
    per game minute is gone; a released unit under `engage` loses `1/90 × firepower ÷ its full strength` per game
