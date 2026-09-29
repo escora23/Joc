@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import type { CommandApi, CommandEnterParams, CommandResult, FrameInfo, GameContext, SfxCue } from '../shared/api';
-import { HUMAN_ID, MAP_H, MAP_W, TRAVEL_RATES, UNIT_DEFS } from '../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, TILE_KM, TRAVEL_RATES, UNIT_DEFS } from '../shared/constants';
 import { subsolarPoint, sunDirection, tangentFrame } from '../shared/geo';
 import { formatNumber, playerName, t } from '../shared/i18n';
 import type { QualityProfile } from '../shared/quality';
@@ -44,10 +44,10 @@ import { JetController } from './player/jet';
 import { ShipController } from './player/ship';
 import { LocalFrame } from './frame';
 import { Ground } from './stream';
-import { Civil } from './civil';
+import { Civil, type CivilLabel } from './civil';
 import { FLIGHT_CEILING_M, Forces } from './forces';
 import { TacMap } from './tacmap';
-import { wireIncursionAlerts } from './alerts';
+import { fmtDur, releasedInsideAlert, wireIncursionAlerts } from './alerts';
 
 registerCommandStrings();
 
@@ -462,6 +462,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       overlay?.showNotice(t('command.travel.noContact'), 3);
       return false;
     }
+    const inc = myIncursion();
+    if (inc && !inc.left && inc.response !== 'war') {
+      // The victim's warnings run in real seconds (owner feedback #19): no compression while they run.
+      overlay?.showNotice(t('command.travel.incursion'), 3);
+      return false;
+    }
     if (performance.now() / 1000 - 0 < 0 || localSec - lastFiredSec < 30) {
       overlay?.showNotice(t('command.travel.noContact'), 3);
       return false;
@@ -574,6 +580,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         c.unitHits.set(s.id, (c.unitHits.get(s.id) ?? 0) + s.share);
         unitHitN++;
         unitHitShare += s.share;
+      } else if (s.kind === 'qrf') {
+        // A quick-reaction vehicle takes its crew and the soldiers riding in it (the sim's force loses them).
+        const troops = Math.max(1, Math.round(s.share)) * 25;
+        c.troops += troops;
+        killsBy.set(s.owner, (killsBy.get(s.owner) ?? 0) + troops);
       } else if (s.kind === 'sam') {
         c.structureHits.set(s.id, (c.structureHits.get(s.id) ?? 0) + s.share);
         structHitN++;
@@ -584,7 +595,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         unitHitN++;
         unitHitShare += 1 - sent;
       }
-      const troops = victim.kind === 'soldier' || victim.kind === 'at' ? 25 : Math.round(s.share * 100);
+      const troops = victim.kind === 'soldier' || victim.kind === 'at' ? 25 : s.kind === 'qrf' ? Math.max(1, Math.round(s.share)) * 25 : Math.round(s.share * 100);
       hud.feedEntry('you', victim.kind, troops, '#ffb53d');
       if (victim.kind !== 'soldier' && victim.kind !== 'at') hud.killConfirm(victim.kind, troops);
       ctx.bus.emit('uiSound', { kind: 'notify' });
@@ -904,8 +915,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     if (phase === 'dying' || phase === 'intro') return;
     const inc = myIncursion();
-    const extra = inc && !inc.left ? t('command.exit.foreign', { nation: nationName(inc.victim) }) : '';
-    const i = await decide(t('command.exit.title'), t('command.exit.body'), extra, [
+    const extra = inc && !inc.left && inc.response !== 'war' ? t('command.exit.foreign', { nation: nationName(inc.victim) }) : '';
+    const i = await decide(t('command.exit.title'), t(kind === 'jet' ? 'command.exit.bodyJet' : 'command.exit.body'), extra, [
       { label: t('command.exit.yes'), cls: 'pri', key: 'Enter' },
       { label: t('command.exit.no'), key: 'Esc' },
     ]);
@@ -928,6 +939,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // Everything goes back now (the report shows applied numbers).
     sendMove(performance.now(), true);
     flushCasualties(performance.now(), true);
+    const incOut = myIncursion();
+    const Pout = player();
+    if (!lost && incOut && !incOut.left && incOut.response !== 'war' && params && Pout) {
+      const ll = frame.latLonOfScene(Pout.pos.x, Pout.pos.z, { lat: 0, lon: 0 });
+      releasedInsideAlert(ctx, params.unitId, incOut.victim, ll.lat, ll.lon);
+    }
     const rows: DebriefRow[] = [];
     rows.push({ label: t('command.debrief2.distance'), value: `${formatNumber(distanceM / 1000, distanceM < 10_000 ? 1 : 0)} km` });
     const gsec = Math.max(0, localSec - startSec);
@@ -1212,15 +1229,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const time = hours >= 1 ? `${formatNumber(hours, 1)} h` : `${Math.round(hours * 60)} min`;
       travel = `${autopilot ? `${t('command.travel.autopilot')} · ` : ''}${t('command.travel.eta', { km: formatNumber(d / 1000, d < 10_000 ? 1 : 0), time })}`;
     }
-    if (inc && !inc.left) {
-      const name = nationName(inc.victim);
-      const cv = view.command;
-      const sec = cv?.sec ?? 0;
-      const line = inc.response === 'protest' ? t('command.incursion.protest', { nation: name, h: formatNumber(Math.max(0, (inc.deadlineSec - sec) / 3600), 1) })
-        : inc.response === 'intercept' ? (inc.qrf && !inc.qrf.arrived ? t('command.incursion.intercept', { nation: name, min: Math.max(1, Math.round((inc.qrf.arriveSec - sec) / 60)) }) : t('command.incursion.escort', { nation: name }))
-          : inc.response === 'war' ? t('command.incursion.war', { nation: name }) : t('command.incursion.active', { nation: name });
-      travel = travel ? `${line} · ${travel}` : line;
-    }
+    updateRadio(inc, P);
     const uv = unitView();
     overlay.setInfo({
       unit: unitLabel(params.unitType, uv?.serial ?? 0), place, land, landColor: o ? colorCss(o) : '#6f8aa3',
@@ -1232,6 +1241,116 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     overlay.setFormation(kind, pips, integrity);
     overlay.setHelpText(kind, effRate > 1);
     void now;
+  }
+
+  /** The nearest way out of the victim's land (km and compass word), refreshed once a second. */
+  let exitCache: { at: number; victim: number; text: string } = { at: 0, victim: 0, text: '' };
+  function nearestExitText(victim: number, P: Ent): string {
+    const now = performance.now();
+    if (exitCache.victim === victim && now - exitCache.at < 1000) return exitCache.text;
+    const tp = tileOf(P.pos.x, P.pos.z);
+    const cx = Math.floor(tp.x), cy = Math.floor(tp.y);
+    const a = { x: 0, z: 0 }, b = { x: 0, z: 0 };
+    let best = Infinity, bx = 0, bz = 0;
+    for (let r = 1; r <= 10 && best === Infinity; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const ty = cy + dy;
+          if (ty < 0 || ty >= MAP_H) continue;
+          const tile = tileIndex(cx + dx, ty);
+          const water = ctx.world ? isWaterTerrain(ctx.world.terrain[tile]) : false;
+          if (kind === 'tank' && water) continue;
+          if (kind === 'ship' && !water) continue;
+          if (ownerOfTile(tile) === victim) continue;
+          frame.sceneOfTile(cx + dx, ty, a);
+          frame.sceneOfTile(cx + dx + 1, ty + 1, b);
+          const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), z0 = Math.min(a.z, b.z), z1 = Math.max(a.z, b.z);
+          const nx = Math.max(x0, Math.min(x1, P.pos.x)), nz = Math.max(z0, Math.min(z1, P.pos.z));
+          const d = Math.hypot(nx - P.pos.x, nz - P.pos.z);
+          if (d < best) {
+            best = d;
+            bx = nx - P.pos.x;
+            bz = nz - P.pos.z;
+          }
+        }
+      }
+    }
+    let text = '';
+    if (best < Infinity) {
+      const km = Math.max(0.1, best / 1000);
+      const brg = (Math.atan2(bx, -bz) * 180 / Math.PI + 360) % 360;
+      text = t('command.radio.exit', { km: formatNumber(km, km < 10 ? 1 : 0), dir: t(`command.dir.${Math.round(brg / 45) % 8}`) });
+    }
+    exitCache = { at: now, victim, text };
+    return text;
+  }
+
+  let radioStage = '';
+  /** The victim's radio (owner feedback #19): the warning with its countdown, the interception, the last warning. */
+  function updateRadio(inc: ReturnType<typeof myIncursion>, P: Ent): void {
+    if (!overlay) return;
+    if (!inc || inc.left) {
+      overlay.setRadio(null);
+      radioStage = '';
+      return;
+    }
+    const name = nationName(inc.victim);
+    const sec = simSecNow();
+    const nearCapital = inc.capitalKm >= 0 && inc.capitalKm <= 80;
+    const from = t(`command.radio.from.${inc.kind}`, { nation: name });
+    const exit = inc.response === 'war' ? '' : nearestExitText(inc.victim, P);
+    const q = inc.qrf;
+    const stage = `${inc.id}:${inc.response}:${q?.arrived ? 1 : 0}`;
+    if (stage !== radioStage) {
+      radioStage = stage;
+      ctx.bus.emit('uiSound', { kind: 'alert' });
+    }
+    if (inc.response === 'none') {
+      const remain = Math.max(0, inc.decideAtSec - sec);
+      overlay.setRadio({
+        severity: 'warning', from, message: t(`command.radio.warn.${inc.kind}`, { nation: name }), sub: nearCapital ? t('command.radio.capital') : undefined,
+        countLabel: t('command.radio.count.grace'), remain, total: Math.max(1, inc.decideAtSec - inc.enteredSec), remainText: fmtDur(remain), exit,
+      });
+    } else if (inc.response === 'intercept' && q && !q.arrived) {
+      const remain = Math.max(0, q.arriveSec - sec);
+      const km = Math.round(Math.max(1, tileKmBetween(q.fromX, q.fromY, inc) ));
+      const source = t(`command.qrf.src.${q.source}`, { km: formatNumber(km) });
+      const what = q.mode === 'sea' ? t(q.unitId ? 'command.qrf.what.warship' : 'command.qrf.what.boat')
+        : t(q.heavy ? 'command.qrf.what.heavy' : 'command.qrf.what.patrol', { n: q.heavy ? q.vehicles - 1 : q.vehicles });
+      const msg = q.mode === 'air' ? t('command.radio.intercept.air', { nation: name, source, t: fmtDur(remain) })
+        : t(`command.radio.intercept.${inc.kind === 'ship' ? 'ship' : 'tank'}`, { nation: name, source, what, t: fmtDur(remain) });
+      overlay.setRadio({
+        severity: 'danger', from, message: msg, sub: t('command.radio.nofire'), countLabel: t('command.radio.count.eta'), remain,
+        total: Math.max(1, q.arriveSec - q.dispatchSec), remainText: fmtDur(remain), exit,
+      });
+    } else if (inc.response === 'intercept' || (inc.response === 'protest' && inc.deadlineSec > 0)) {
+      const remain = Math.max(0, inc.deadlineSec - sec);
+      const escort = inc.response === 'intercept';
+      const total = escort ? (q?.arrived ? Math.max(1, inc.deadlineSec - q.arriveSec) : 60) : Math.max(1, inc.deadlineSec - inc.respondedSec);
+      overlay.setRadio({
+        severity: 'danger', from,
+        message: escort ? t(`command.radio.escort.${q?.mode === 'air' ? 'air' : inc.kind === 'ship' ? 'ship' : 'tank'}`, { nation: name }) : t('command.radio.protest', { nation: name }),
+        sub: escort ? t('command.radio.nofire') : undefined,
+        countLabel: t(escort ? 'command.radio.count.last' : 'command.radio.count.protest'), remain: inc.deadlineSec > 0 ? remain : undefined, total, remainText: fmtDur(remain), exit,
+      });
+    } else if (inc.response === 'engage') {
+      overlay.setRadio({ severity: 'critical', from, message: t('command.radio.engage', { nation: name }), exit });
+    } else if (inc.response === 'war') {
+      overlay.setRadio({ severity: 'critical', from, message: t('command.radio.war', { nation: name }) });
+    } else overlay.setRadio(null);
+  }
+
+  /** Km from the force's origin to the incursion's entry point (for «una base aérea a 180 km»). */
+  function tileKmBetween(x: number, y: number, inc: NonNullable<ReturnType<typeof myIncursion>>): number {
+    const u = unitView();
+    const ux = u ? u.x : x, uy = u ? u.y : y;
+    const lat = 90 - (((y + uy) / 2) / MAP_H) * 180;
+    let dx = ux - x;
+    if (dx > MAP_W / 2) dx -= MAP_W;
+    else if (dx < -MAP_W / 2) dx += MAP_W;
+    void inc;
+    return Math.hypot(dx * TILE_KM * Math.cos((lat * Math.PI) / 180), (uy - y) * TILE_KM);
   }
 
   /** «Guarnición del frente de Lyon · 1.840 tropas en la zona» for the force under the cursor (or the crosshair). */
@@ -1594,7 +1713,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       // --- Clock: rate, throttle, local game time locked to the sim's ---
       const contact = contactNow();
       if (requested > 1 || effRate > 1) {
+        const incNow = myIncursion();
         if (contact) dropToTactical('command.travel.contact');
+        else if (incNow && !incNow.left && incNow.response !== 'war') dropToTactical('command.travel.incursion');
         else if (!inOwnOrFriendlyLand() && requested > 60) {
           requested = 60;
           overlay.showNotice(t('command.travel.foreignMax'), 3);
@@ -1724,12 +1845,23 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         updateHover();
       }
       const wpText = waypoint && P ? `${t('command.map.waypoint')} · ${formatNumber(Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z) / 1000, 1)} km` : '';
-      const labels = borderNear && borderNear.distM < 4000 && P
+      const labels: CivilLabel[] = borderNear && borderNear.distM < 4000 && P
         ? [...civil.labels, {
           x: borderNear.x, y: ground.surfaceAt(borderNear.x, borderNear.z) + 12, z: borderNear.z, text: t('command.label.border', { nation: nationName(borderNear.owner) }),
           sub: stateWord(borderNear.owner), kind: 'border' as const, color: colorCss(borderNear.owner), owner: borderNear.owner,
         }]
-        : civil.labels;
+        : [...civil.labels];
+      // The real units around you, named where they stand (the ones seen on the strategic map, owner feedback #21).
+      for (const a of forces.realUnitAnchors()) {
+        const uv = a.unitId ? view.units.get(a.unitId) : undefined;
+        const name = a.qrf && !uv ? t('command.src.qrf', { nation: nationName(a.owner) }) : uv ? unitLabel(uv.type, uv.serial) : '';
+        if (!name) continue;
+        const tone = a.team === 0 ? 'own' as const : a.hostile ? 'hostile' as const : 'neutral' as const;
+        labels.push({
+          x: a.pos.x, y: a.pos.y + (kind === 'jet' ? 40 : 14), z: a.pos.z, text: name, sub: a.owner === HUMAN_ID ? '' : `${nationName(a.owner)} · ${stateWord(a.owner)}`,
+          kind: 'force', tone, color: colorCss(a.owner), owner: a.owner,
+        });
+      }
       overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);
       if (tacmap?.isOpen && now - lastMapWall > 500 && P) {
         lastMapWall = now;
@@ -1751,7 +1883,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           localSec, simSec: view.command?.sec ?? -1, tick: view.tick, distanceM, waypointKm: waypoint ? Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z) / 1000 : -1,
           autopilot, lastDrop, landOwner, border: borderNear, incursion: inc, integrity, formationAlive: formation.filter((m) => m.alive).length,
           vehiclesLost, moves: view.command?.moves ?? null, rebases: rebaseN, towns: civil.stats.towns, labels: civil.labels.length, civil: civil.stats,
-          notice: overlay.noticeText, info: overlay.infoText, dialog: overlay.dialogOpen, offX: frame.offX, offZ: frame.offZ,
+          notice: overlay.noticeText, radio: overlay.radioText, info: overlay.infoText, dialog: overlay.dialogOpen, offX: frame.offX, offZ: frame.offZ,
           kills: world.stats.kills, killsBy: Object.fromEntries(killsBy), unitHitN, structHitN,
         };
       }
@@ -1778,7 +1910,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!active || !overlay) return;
     const a = e.input;
     if (a.severity !== 'warning' && a.severity !== 'danger' && a.severity !== 'critical') return;
-    overlay.pushAlert(a.severity, a.title, a.body ?? '');
+    // The incursion of the unit you drive speaks on the radio panel instead (updateRadio).
+    const own = a.kind === 'incursionResponse' && params && (a as { unitId?: number }).unitId === params.unitId;
+    if (!own) overlay.pushAlert(a.severity, a.title, a.body ?? '');
     if (a.severity !== 'warning') dropToTactical('command.travel.alert');
   });
   void ENT_DEFS;

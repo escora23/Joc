@@ -164,7 +164,7 @@ export type SimEvent =
    * v2 (W5, §9.7): a controlled unit entered (or left) foreign land at peace; the victim's answer; its quick-reaction
    * force arrived. sec = CommandView.sec game seconds; etaSec = the force's arrival from now; deadlineSec = protest.
    */
-  | { type: 'borderIncursion'; tick: number; intruder: number; victim: number; unitId: number; tile: number; stage: 'entered' | 'left' | 'response' | 'arrived'; response?: 'protest' | 'intercept' | 'war'; escalated?: boolean; kind: CommandKind; sec: number; etaSec?: number; deadlineSec?: number }
+  | { type: 'borderIncursion'; tick: number; intruder: number; victim: number; unitId: number; tile: number; stage: 'entered' | 'left' | 'response' | 'arrived'; response?: 'protest' | 'intercept' | 'engage' | 'war'; escalated?: boolean; kind: CommandKind; sec: number; etaSec?: number; deadlineSec?: number; graceSec?: number; qrfMode?: 'ground' | 'air' | 'sea'; nearCapital?: boolean }
   | { type: 'hegemony'; tick: number; leader: number; stage: 'start' | 'broken' | 'won'; untilTick: number }
   | { type: 'capitulation'; tick: number; loser: number; winner: number; tiles: number; war: number }
   // --- v2 (W4): units ---

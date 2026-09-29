@@ -12,8 +12,12 @@
 //   real ships (40 km)       → the ship; SAM sites (15 km / their range for a jet) → 1 launcher per level;
 //   real squadrons           → 1 jet per third of integrity when their patrol covers the place; docked fighters of
 //                              an airbase at war within 150 km scramble once toward an intruding jet;
-//   incursion responses      → the quick-reaction force of view.command: trucks on the road, then its soldiers.
-// Forces of a nation at peace are `neutral`: they block and escort, never fire, and are never fired at by the AI.
+//   incursion responses      → the quick-reaction force of view.command (owner feedback #19/#20): patrol APCs (a tank
+//                              from an army base) on the road from their post, town or base, then escorting you;
+//                              fighters scrambled from a real airbase flying up to your wing; a real warship (or a
+//                              patrol boat from a port) shadowing you abeam.
+// Forces of a nation at peace are `neutral`: they block and escort, never fire, and are never fired at by the AI —
+// until the victim of an incursion opens fire (`engage`) or war is declared.
 
 import * as THREE from 'three';
 import { HUMAN_ID, MAP_H, MAP_W } from '../shared/constants';
@@ -92,6 +96,14 @@ export class Forces {
     return view.pairState(HUMAN_ID, owner);
   }
 
+  /** Nations whose forces fire on you now: at war, or answering your incursion with fire (`engage`). */
+  private engaged = new Set<number>();
+  /** Where the sim's quick-reaction force is, for its vehicles while they are far (scene coords). */
+  private readonly qrfPoint = new WeakMap<Ent, THREE.Vector3>();
+  private hostile(rel: LocalRelation, owner: number): boolean {
+    return rel === 'war' || this.engaged.has(owner);
+  }
+
   private team(rel: LocalRelation): 0 | 1 {
     return rel === 'own' || rel === 'allied' ? 0 : 1;
   }
@@ -113,6 +125,14 @@ export class Forces {
       return g;
     };
     const logSides: ForcesLog['sides'] = [];
+    // Incursions answered with fire, and the real units carrying a quick-reaction force (drawn by reconcileQrf).
+    this.engaged.clear();
+    const carriers = new Set<number>();
+    for (const inc of view.command?.incursions ?? []) {
+      if (inc.intruder !== HUMAN_ID || inc.left) continue;
+      if (inc.response === 'engage') this.engaged.add(inc.victim);
+      if (inc.qrf?.unitId) carriers.add(inc.qrf.unitId);
+    }
     // --- Infantry pools near the front, rear patrols, posts (ground vehicles only) ---
     const front = lf.fronts[0];
     const frontKm = front ? front.nearest.distKm : -1;
@@ -129,7 +149,9 @@ export class Forces {
       if (this.kind !== 'tank') continue;
       if (hostile || friendly) {
         // Front and offensive pools stand along the local contact line (when it is within 6 km).
-        if (front && frontKm < 6 && (side.owner === front.a || side.owner === front.b || friendly)) {
+        // Entered from the ground battle view: its whole window (30 km) is the scene it showed, so its soldiers are here.
+        const reach = this.handoff ? 30 : 6;
+        if (front && frontKm < reach && (side.owner === front.a || side.owner === front.b || friendly)) {
           const pool = side.pools.front + side.pools.offensive;
           const cap = this.handoff?.get(side.owner) ?? (hostile ? INFANTRY_CAP : INFANTRY_CAP / 2);
           const shown = Math.min(cap, Math.round(pool));
@@ -137,7 +159,7 @@ export class Forces {
           if (hostile) enemyShown += shown;
           this.reconcileInfantry(want(`front:${side.owner}`), shown, side.owner, rel, lf, player, 'front', initial);
         }
-        if (hostile && (!front || frontKm >= 6)) {
+        if (hostile && (!front || frontKm >= (this.handoff ? 30 : 6))) {
           const shown = Math.min(REAR_CAP, Math.round(side.pools.rear));
           entry.shownInfantry += shown;
           this.reconcileInfantry(want(`rear:${side.owner}`), shown, side.owner, rel, lf, player, 'rear', initial);
@@ -161,7 +183,7 @@ export class Forces {
     }
     // Real units.
     for (const u of lf.units) {
-      if (u.unitId === this.controlledId) continue;
+      if (u.unitId === this.controlledId || carriers.has(u.unitId)) continue;
       const rel = this.relationOf(view, u.owner);
       if (u.type === UnitType.ArmoredDivision && this.kind === 'tank' && u.distKm <= DIVISION_KM) {
         this.reconcileDivision(want(`div:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.tanks, u.ifvs, u.mode, initial, player);
@@ -186,9 +208,8 @@ export class Forces {
     }
     // Quick-reaction forces of incursions (view.command).
     for (const inc of view.command?.incursions ?? []) {
-      if (inc.left || !inc.qrf || inc.intruder !== HUMAN_ID || inc.kind === 'jet') continue;
-      const rel = this.relationOf(view, inc.victim);
-      this.reconcileQrf(want(`qrf:${inc.id}`), inc.victim, rel, inc.qrf.x, inc.qrf.y, inc.qrf.arrived, inc.qrf.soldiers, player);
+      if (inc.left || !inc.qrf || inc.intruder !== HUMAN_ID) continue;
+      this.reconcileQrf(want(`qrf:${inc.id}`), view, inc, player);
     }
     // Groups nobody wants any more: their living members leave once out of sight; bodies are cleared later.
     for (const [k, g] of this.groups) {
@@ -211,8 +232,9 @@ export class Forces {
       for (const e of g.ents) {
         if (!e.alive || e.formation || !e.nation) continue;
         const rel = this.relationOf(view, e.nation);
-        e.neutral = rel !== 'war' && this.team(rel) === 1;
-        if (e.order === 'escort' && rel === 'war') {
+        const hot = this.hostile(rel, e.nation);
+        e.neutral = !hot && this.team(rel) === 1;
+        if (e.order === 'escort' && hot) {
           e.order = 'front';
           e.goal.copy(player.pos);
         }
@@ -252,7 +274,7 @@ export class Forces {
   private mk(kind: EntKind, team: 0 | 1, x: number, z: number, yaw: number, owner: number, rel: LocalRelation, src: EntSource, y?: number): Ent {
     const e = this.world.spawn(kind, team, x, z, yaw, y);
     e.nation = owner;
-    e.neutral = team === 1 && rel !== 'war';
+    e.neutral = team === 1 && !this.hostile(rel, owner);
     e.src = src;
     return e;
   }
@@ -409,8 +431,8 @@ export class Forces {
     const near = Math.hypot(c.x - player.pos.x, c.z - player.pos.z) < 5000;
     for (const e of g.ents) {
       if (!e.alive) continue;
-      e.neutral = team === 1 && rel !== 'war';
-      if (team === 1 && rel === 'war' && near) {
+      e.neutral = team === 1 && !this.hostile(rel, owner);
+      if (team === 1 && this.hostile(rel, owner) && near) {
         e.order = 'front';
         e.goal.copy(player.pos);
       } else {
@@ -454,36 +476,103 @@ export class Forces {
     }
   }
 
-  private reconcileQrf(g: Group, owner: number, rel: LocalRelation, tx: number, ty: number, arrived: boolean, soldiers: number, player: Ent): void {
-    const f = this.frame;
-    const c = f.sceneOfTile(tx, ty, P2);
+  /**
+   * The quick-reaction force of an incursion (owner feedback #20). It exists in the sim as a point moving on its
+   * schedule toward you (and, for fighters and warships, as the real unit carrying it); here it is real vehicles:
+   *   ground → patrol APCs (a tank ahead of them from an army base) that come up the road from where the sim's force
+   *            is, then take station around you: one ahead blocking the way, the others beside you;
+   *   air    → the scrambled fighters, appearing on their track toward you and forming up on your wings;
+   *   sea    → the warship (or a patrol boat) steaming up and shadowing you abeam.
+   * They drive under the Brain's physics (road speeds, no ramming) and hold fire while the victim does.
+   */
+  private reconcileQrf(g: Group, view: GameView, inc: NonNullable<GameView['command']>['incursions'][number], player: Ent): void {
+    const q = inc.qrf!;
+    const owner = inc.victim;
+    const rel = this.relationOf(view, owner);
     const team = this.team(rel);
-    const trucks = g.ents.filter((e) => e.kind === 'truck');
-    const inf = g.ents.filter((e) => e.kind !== 'truck');
-    if (trucks.length === 0) {
-      // Two trucks on the road (the force travels at 120 km/h between updates; tracked in track()).
-      for (let k = 0; k < 2; k++) {
-        const x = c.x + k * 25, z = c.z + k * 25;
-        const e = this.mk('truck', team, x, z, Math.atan2(-(player.pos.x - x), -(player.pos.z - z)), owner, rel, { kind: 'qrf', id: 0, owner, share: 0 });
-        e.order = 'goto';
-        e.goal.set(c.x, 0, c.z);
-        e.slot.set(k * 12, 0, k * 20);
-        g.ents.push(e);
-      }
-    }
-    for (const e of g.ents) if (e.kind === 'truck' && e.alive) e.goal.set(c.x, 0, c.z);
-    if (arrived) {
-      const liveInf = inf.filter((e) => e.alive).length;
-      const lead = trucks.find((e) => e.alive) ?? trucks[0];
-      const base = lead ? lead.pos : new THREE.Vector3(c.x, 0, c.z);
-      for (let k = liveInf; k < soldiers && inf.length + (k - liveInf) < soldiers + 4; k++) {
-        const x = base.x + (this.world.rng.next() - 0.5) * 30, z = base.z + (this.world.rng.next() - 0.5) * 30;
-        if (this.ground.heightAt(x, z) < 0.8) continue;
-        const e = this.mk(k % 6 === 0 ? 'at' : 'soldier', team, x, z, 0, owner, rel, { kind: 'qrf', id: 0, owner, share: 0 });
-        e.order = rel === 'war' ? 'front' : 'escort';
+    const hot = this.hostile(rel, owner);
+    const sim = this.frame.sceneOfTile(q.x, q.y, { x: 0, z: 0 });
+    const from = this.frame.sceneOfTile(q.fromX, q.fromY, { x: 0, z: 0 });
+    // Direction the force comes from (its base toward you), for placing it on its track.
+    let dx = player.pos.x - from.x, dz = player.pos.z - from.z;
+    const dl = Math.hypot(dx, dz) || 1;
+    dx /= dl;
+    dz /= dl;
+    const simD = Math.hypot(sim.x - player.pos.x, sim.z - player.pos.z);
+    const sec = view.command?.sec ?? 0;
+    const remain = Math.max(0, q.arriveSec - sec);
+    if (g.ents.length === 0) {
+      if (q.mode === 'air') {
+        // Only once they are near enough to matter (≤ 40 km, i.e. ~2 min out at 330 m/s).
+        const d = Math.min(40_000, Math.max(6000, remain * 330));
+        if (!q.arrived && d >= 40_000 && simD > 40_000) return;
+        const alt = Math.max(player.pos.y, this.ground.surfaceAt(player.pos.x, player.pos.z) + 1200);
+        const c = Math.cos(player.yaw), sn = Math.sin(player.yaw);
+        for (let k = 0; k < Math.max(1, q.vehicles); k++) {
+          // Already escorting in the sim: on your wings now; else on their track toward you.
+          const sx = k % 2 === 0 ? 260 : -260, sz = 70 + k * 40;
+          const x = q.arrived ? player.pos.x + sx * c + sz * sn : player.pos.x - dx * d + k * 160;
+          const z = q.arrived ? player.pos.z - sx * sn + sz * c : player.pos.z - dz * d + k * 120;
+          const e = this.mk('jet', team, x, z, q.arrived ? player.yaw : Math.atan2(-dx, -dz), owner, rel,
+            q.unitId ? { kind: 'squadron', id: q.unitId, owner, share: 1 / 3 } : { kind: 'qrf', id: inc.id, owner, share: 0 }, alt + k * 20);
+          e.order = hot ? 'front' : 'escort';
+          e.slot.set(k % 2 === 0 ? 260 : -260, 25, 70 + k * 40);
+          e.goal.copy(player.pos);
+          e.speed = q.arrived ? Math.max(150, player.speed) : 330;
+          if (q.arrived) e.state = 1;
+          g.ents.push(e);
+        }
+      } else if (q.mode === 'sea') {
+        const d = Math.max(4000, Math.min(22_000, simD));
+        const c = Math.cos(player.yaw), sn = Math.sin(player.yaw);
+        const ax = q.unitId ? 900 : 450;
+        let x = q.arrived ? player.pos.x + ax * c + 150 * sn : player.pos.x - dx * d;
+        let z = q.arrived ? player.pos.z - ax * sn + 150 * c : player.pos.z - dz * d;
+        if (this.ground.heightAt(x, z) > -3) {
+          x = sim.x;
+          z = sim.z;
+        }
+        if (this.ground.heightAt(x, z) > -3) return;
+        const kind: EntKind = q.unitId ? 'ship' : 'boat';
+        const e = this.mk(kind, team, x, z, Math.atan2(-dx, -dz), owner, rel,
+          q.unitId ? { kind: 'ship', id: q.unitId, owner, share: 0.25 } : { kind: 'qrf', id: inc.id, owner, share: 0 });
+        e.order = hot ? 'front' : 'escort';
+        e.slot.set(kind === 'ship' ? 900 : 450, 0, 150);
         e.goal.copy(player.pos);
         g.ents.push(e);
+      } else {
+        // On the road from the force's sim position; if that is already next to you, from 1.5 km back along its track.
+        const d = Math.max(1500, simD);
+        const cx = simD >= 1500 ? sim.x : player.pos.x - dx * d, cz = simD >= 1500 ? sim.z : player.pos.z - dz * d;
+        const kinds: EntKind[] = q.heavy ? ['tank', 'ifv', 'ifv'] : ['ifv', 'ifv', 'ifv'].slice(0, Math.max(1, q.vehicles)) as EntKind[];
+        // Stations around the intruder (x right, z back): ahead blocking, then beside it.
+        const slots = [[0, -90], [55, 25], [-55, 25]];
+        const c = Math.cos(player.yaw), sn = Math.sin(player.yaw);
+        kinds.forEach((kind, k) => {
+          // Already there in the sim: at its station around you; else coming up the road in column.
+          let x = cx - dx * k * 30, z = cz - dz * k * 30;
+          if (q.arrived) {
+            x = player.pos.x + slots[k][0] * c + slots[k][1] * sn;
+            z = player.pos.z - slots[k][0] * sn + slots[k][1] * c;
+          }
+          if (this.ground.heightAt(x, z) < 0.8) return;
+          const yaw = q.arrived ? Math.atan2(-(player.pos.x - x), -(player.pos.z - z)) : Math.atan2(-dx, -dz);
+          const e = this.mk(kind, team, x, z, yaw, owner, rel, { kind: 'qrf', id: inc.id, owner, share: q.soldiers / Math.max(1, q.vehicles) });
+          e.order = hot ? 'front' : 'escort';
+          e.slot.set(slots[k][0], 0, slots[k][1]);
+          e.goal.copy(player.pos);
+          g.ents.push(e);
+        });
       }
+    }
+    for (const e of g.ents) {
+      if (!e.alive) continue;
+      if (hot && e.order === 'escort') e.order = 'front';
+      if (e.order === 'front') e.goal.copy(player.pos);
+      // While far, ground vehicles follow the force's position (see track()).
+      let pt = this.qrfPoint.get(e);
+      if (!pt) this.qrfPoint.set(e, (pt = new THREE.Vector3()));
+      pt.set(sim.x, 0, sim.z);
     }
   }
 
@@ -500,15 +589,19 @@ export class Forces {
       const div = g.key.startsWith('div:');
       if (!qrf && !div) continue;
       for (const e of g.ents) {
-        if (!e.alive || !ENT_DEFS[e.kind].vehicle) continue;
-        const far = e.pos.distanceTo(player.pos) > 2500 || rate > 1;
-        if (!far && !qrf) continue;
-        const gx = e.goal.x, gz = e.goal.z;
+        if (!e.alive || !ENT_DEFS[e.kind].vehicle || ENT_DEFS[e.kind].air || ENT_DEFS[e.kind].naval) continue;
+        const dist = e.pos.distanceTo(player.pos);
+        // Far away (or with time compressed) a vehicle follows its sim position on the road; within 2.5 km at ×1 the
+        // Brain drives it (escort stations, fighting) with real vehicle physics.
+        const far = dist > 2500 || rate > 1;
+        if (!far) continue;
+        const qp = qrf ? this.qrfPoint.get(e) : undefined;
+        const gx = qp ? qp.x : e.goal.x, gz = qp ? qp.z : e.goal.z;
         const dx = gx - e.pos.x, dz = gz - e.pos.z;
         const d = Math.hypot(dx, dz);
         if (d < 5) continue;
-        // Up to 1.5× the unit's road speed (catching up with the sim sample), never a jump.
-        const vmax = (qrf ? 120 : 40) / 3.6 * 1.5;
+        // Road speed (the force's 80 km/h, a division's 40 km/h), up to 1.3× to catch up with the sim sample.
+        const vmax = (qrf ? 80 : 40) / 3.6 * 1.3;
         const step = Math.min(d, vmax * dtGame);
         e.pos.x += (dx / d) * step;
         e.pos.z += (dz / d) * step;
@@ -518,6 +611,23 @@ export class Forces {
       }
     }
     void view;
+  }
+
+  /**
+   * One anchor per real unit and quick-reaction force drawn here (its lead living vehicle), for the world labels:
+   * the divisions, ships and squadrons you saw on the strategic map are named where they stand (owner feedback #21).
+   */
+  realUnitAnchors(): { key: string; unitId: number; owner: number; pos: THREE.Vector3; hostile: boolean; team: 0 | 1; qrf: boolean }[] {
+    const out: { key: string; unitId: number; owner: number; pos: THREE.Vector3; hostile: boolean; team: 0 | 1; qrf: boolean }[] = [];
+    for (const g of this.groups.values()) {
+      const div = g.key.startsWith('div:'), ship = g.key.startsWith('ship:'), sq = g.key.startsWith('sq:'), qrf = g.key.startsWith('qrf:');
+      if (!div && !ship && !sq && !qrf) continue;
+      const lead = g.ents.find((e) => e.alive && ENT_DEFS[e.kind].vehicle);
+      if (!lead) continue;
+      const unitId = qrf ? (lead.src?.kind === 'squadron' || lead.src?.kind === 'ship' ? lead.src.id : 0) : Number(g.key.split(':')[1]);
+      out.push({ key: g.key, unitId, owner: lead.nation, pos: lead.pos, hostile: lead.team === 1 && !lead.neutral, team: lead.team, qrf });
+    }
+    return out;
   }
 
   /** Where the player's formation should stand (slot offsets in the leader's frame: x right, z back). */

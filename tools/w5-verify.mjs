@@ -12,7 +12,8 @@
 //   T  travel ×900 toward a waypoint 300 km away: ticks ≈ game seconds / 360 (±15 %), no chunk missing ahead,
 //      throttled or dropped when the terrain lags, chunk main-thread p95;
 //   B  near a border at peace: the warning, the confirmation when the autopilot reaches it, after crossing the
-//      sim's borderIncursion and the victim's decision 30–90 game s later;
+//      sim's borderIncursion, the radio warning with its countdown, the interception when the grace ends, the escort's
+//      driving (speeds, distance, no ramming) and, ignoring the last warning, fire or war (owner feedback #19/#20);
 //   F  at a front: the forces equal deriveLocalForces (infantry shown = min(40, pool)), a kill of an enemy soldier
 //      removes 25 troops, of an enemy tank 25 % of its division; losing the own tank costs 25 % and the next
 //      vehicle takes over;
@@ -224,18 +225,48 @@ if (ONLY.includes('border')) {
   });
   rec('B3 incursion raised by the sim after the confirmation', !!inc && !!clicked && !inc.left, { clicked, incursion: inc, ...(inc ? {} : { dbg }) });
   if (inc) {
-    const t0 = await page.evaluate(() => window.__cmd.ctx.sim.view.command.sec);
+    // Owner feedback #19: the warning at once, with its countdown, a short grace in real seconds, then the interception.
+    await wait(1500);
+    let radio = (await stats(page)).radio ?? '';
+    rec('B4 radio warning at once with a countdown', /\d+\s*s/.test(radio) && inc.graceSec > 0 && inc.graceSec <= 40, { graceSec: inc.graceSec, radio: radio.slice(0, 220) });
+    // Hold still inside (never touch the controls): the grace runs out.
     let r = inc;
-    for (let i = 0; i < 300 && !(r && r.response !== 'none'); i++) {
+    for (let i = 0; i < 200 && !(r && r.response !== 'none'); i++) {
       await wait(1000);
       r = await page.evaluate(() => window.__cmd.ctx.sim.view.command?.incursions?.[0] ?? null);
     }
-    const t1 = await page.evaluate(() => window.__cmd.ctx.sim.view.command.sec);
-    const decided = r && r.response !== 'none' ? r.response : null;
-    const since = decided ? r.respondedSec - r.enteredSec : t1 - t0;
-    rec('B4 AI decision 30–90 game s after entering', !!decided && since >= 25 && since <= 100, { response: decided, gameS: Math.round(since), incursion: r });
-    const alerts = await page.evaluate(() => document.querySelector('.fu-cmdx-alerts, [class*="alert"]')?.textContent?.slice(0, 200) ?? '');
-    rec('B5 alert in the command HUD', null, alerts);
+    const since = r && r.response !== 'none' ? r.respondedSec - r.enteredSec : -1;
+    rec('B5 the victim answers when the grace ends (game s = real s at ×1)', !!r && r.response !== 'none' && Math.abs(since - r.graceSec) <= 2, { response: r?.response, gameS: +since.toFixed(1), graceSec: r?.graceSec, qrf: r?.qrf && { mode: r.qrf.mode, source: r.qrf.source, vehicles: r.qrf.vehicles, etaS: Math.round(r.qrf.arriveSec - r.qrf.dispatchSec) } });
+    if (r?.qrf) {
+      const eta = r.qrf.arriveSec - r.qrf.dispatchSec;
+      rec('B6 interception arrives in 1.5–5 game min (ground)', eta >= 90 && eta <= 300, { etaS: Math.round(eta), source: r.qrf.source });
+      // Watch the escort: speeds, distance to the intruder, turning; until the last warning runs out.
+      const samples = [];
+      let arrivedAt = -1, fired = null;
+      for (let i = 0; i < 520 && !fired; i++) {
+        await wait(1000);
+        const o = await page.evaluate(() => {
+          const I = window.__cmd, v = I.ctx.sim.view, P = I.controller.ent;
+          const inc = v.command?.incursions?.[0] ?? null;
+          const q = I.world.ents.filter((e) => e.alive && e.src?.kind === 'qrf' && !['soldier', 'at'].includes(e.kind));
+          return {
+            sec: v.command?.sec ?? 0, response: inc?.response, arrived: !!inc?.qrf?.arrived, deadline: inc?.deadlineSec ?? 0, radio: window.__cmdStats?.radio ?? '',
+            q: q.map((e) => ({ id: e.id, kind: e.kind, d: Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z), v: e.speed, yaw: e.yaw, neutral: e.neutral })),
+          };
+        });
+        samples.push(o);
+        if (o.arrived && arrivedAt < 0) arrivedAt = o.sec;
+        if (o.response === 'engage' || o.response === 'war') fired = o;
+      }
+      const near = samples.flatMap((o) => o.q.filter((e) => e.d < 2500));
+      const minD = near.length ? Math.min(...near.map((e) => e.d)) : -1;
+      const maxV = near.length ? Math.max(...near.map((e) => e.v)) : -1;
+      rec('B7 escort vehicles: APCs/tanks, road speeds (≤ 16 m/s near you), never closer than 25 m, neutral until told', near.length > 0 && minD >= 25 && maxV <= 16.5 && near.every((e) => e.neutral) && samples.some((o) => o.q.every((e) => e.kind === 'ifv' || e.kind === 'tank')),
+        { samplesNear: near.length, minDistM: Math.round(minD), maxSpeedMs: +maxV.toFixed(1), kinds: [...new Set(samples.flatMap((o) => o.q.map((e) => e.kind)))] });
+      const lastRadio = samples.find((o) => o.arrived)?.radio ?? '';
+      rec('B8 on arrival: the last warning on the radio', arrivedAt > 0 && /\d/.test(lastRadio), { radio: lastRadio.slice(0, 200) });
+      rec('B9 ignoring it: the victim opens fire or declares war', !!fired, fired ? { response: fired.response, afterArrivalS: Math.round(fired.sec - arrivedAt) } : { last: samples.at(-1)?.response });
+    }
   }
   rec('border page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();

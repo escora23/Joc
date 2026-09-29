@@ -1535,20 +1535,31 @@ If every pool is empty, the scene is peaceful. There is no fallback "strongest n
 2. **Confirm.** Crossing asks once per border per session: «Entrar en Francia sin permiso es una incursión. Francia
    recibirá una alerta y podrá protestar, enviar fuerzas o declararte la guerra.» [Cruzar] [Volver]. With an alliance or
    open borders there is no incursion, only a notice.
-3. **Event.** The first `controlledMove` into a foreign tile makes the sim emit `borderIncursion {stage: 'entered'}` to
-   both sides. The victim's AI (`aiDirector.onIncursion`, run by the sub-step of §9.3) decides after 30–90 game
-   seconds (30–90 real seconds at ×1):
-   * **Protest** (opinion ≥ −10, or turtle or trader): a message demanding withdrawal within 6 game hours; −15 opinion.
-   * **Intercept** (opinion < −10, or the unit is ≥ 20 km inside, or conqueror or nuker): a quick-reaction force from
-     the garrison moves in (arrives 5–15 game minutes after dispatch, moved by the sub-step), real divisions within
-     30 km are ordered to the unit, fighters on patrol within 150 km vector to an intruding jet. They block and escort;
-     they only fire if the victim also declares war.
-   * **War** (opinion ≤ −50 and an aggressive personality): the victim declares war with reason `incursion`.
+3. **Event and warning** (reworked after owner feedback #19). The first `controlledMove` into a foreign tile makes the
+   sim emit `borderIncursion {stage: 'entered', graceSec}` to both sides, and the victim warns at once on the radio
+   («Estás violando el espacio aéreo de X. Da la vuelta o serás interceptada») with a visible countdown: a grace of
+   **30 s on land, 25 s in the air, 40 s at sea, 15 s within 80 km of its capital** (game seconds, which are real
+   seconds at ×1; time compression is blocked while an incursion runs). Turning back within the grace ends it with a
+   formal protest and a small grudge.
+4. **Interception.** Still inside when the grace ends: the victim (via the sub-step of §9.3) sends real forces from its
+   real nearest bases, arriving in a short, believable time: **fighters** (an airborne squadron within 300 km, else the
+   ready one of the nearest airbase within 800 km, moved along the force's track) in **1–3 min**; a **ground patrol**
+   (2 APCs, or a tank and 2 APCs from an army base) from the nearest post, town or base within 150 km in **1.5–5 min**;
+   a **warship** within 150 km (or a patrol boat from a port within 400 km) in **2–7 min**. Real divisions within 30 km
+   are ordered in too. An aggressive victim that already hates the intruder (opinion ≤ −50) declares war instead. With
+   nothing to send, it protests with a deadline.
+5. **Escort and last warning.** On arrival the force escorts the intruder (fighters on its wing rocking their wings, a
+   vehicle ahead blocking the way and two beside, a ship abeam; road speeds, never closer than 35 m, no fire) and gives
+   a last warning: **60 s on land, 45 s in the air, 90 s at sea, 30 s near the capital**. Ignored: an aggressive victim,
+   or one that hates the intruder (opinion ≤ −40), declares war; the others open fire on the intruding unit only
+   (`engage`: its forces and SAM sites fire at it; firing back is self-defence). An armed incident that lasts 30 game
+   minutes ends in war. A capital is never ignored. Every step is an `incursionResponse` alert (§8.2).
    Firing first on a nation at peace asks for confirmation and is a declaration of war by you.
-4. The answer arrives as an `incursionResponse` alert (§8.2).
-5. **Leaving** the foreign land ends it (`stage: 'left'`). Exiting command mode inside foreign land at peace gives the
-   division an automatic order back to the nearest own tile; the incursion lasts until it has left. Ignoring a protest
-   past its deadline escalates (intercept, then war, by personality).
+5b. **Release** (owner feedback #18). Exiting command mode never sends the unit back: it holds exactly where it was left
+   (a division on its war front goes back on the line there; a warship keeps station; a jet flies a combat air patrol
+   over the spot until given another order). Inside foreign land the incursion goes on with the same timings on the
+   strategic map (under fire, a unit left there loses 5 % integrity per game minute), and an alert says so.
+   Leaving the foreign land ends it (`stage: 'left'`).
 6. **Jets** violate airspace (the land ownership below), with the same flow. **Ships** violate territorial waters: water
    tiles adjacent to a foreign coast; open sea never counts.
 

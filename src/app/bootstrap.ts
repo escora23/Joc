@@ -164,8 +164,8 @@ export async function bootstrap(): Promise<void> {
       // The speed chosen before command mode comes back (tactical time was only a clock mode).
       ctx.sim.setClock('strategic');
       const result = ctx.command.exit();
-      // v2 (§9.8): kills, damage, losses and the position were synced while playing; release the unit (inside
-      // foreign land at peace the sim first walks it back home).
+      // v2 (§9.8): kills, damage, losses and the position were synced while playing; release the unit. It stays
+      // exactly where it was left, holding (a jet orbits the spot): owner feedback #18. An incursion goes on.
       if (!result.unitLost) ctx.sim.send({ type: 'unitControl', unitId: result.unitId, controlled: false });
       setState('playing');
       bus.emit('commandExit', { result });

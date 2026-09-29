@@ -130,10 +130,7 @@ export class Brain {
       case 'escort': {
         const P = this.w.player;
         if (P && P.alive) {
-          // Stand off ~150 m from the intruder, on the side it came from.
-          T1.subVectors(e.pos, P.pos).setY(0);
-          const l = T1.length() || 1;
-          e.moveT.set(P.pos.x + (T1.x / l) * 150, 0, P.pos.z + (T1.z / l) * 150);
+          this.escortPoint(e, P, e.moveT);
           return;
         }
         break;
@@ -161,28 +158,61 @@ export class Brain {
     );
   }
 
-  /** Forces of a nation at peace (quick-reaction force, border guards): move, block and escort; never fire. */
+  /** An escort's point: its `slot` in the intruder's frame (x right, z back; negative z = ahead of it). */
+  private escortPoint(e: Ent, P: Ent, out: THREE.Vector3): THREE.Vector3 {
+    const c = Math.cos(P.yaw), sn = Math.sin(P.yaw);
+    return out.set(P.pos.x + e.slot.x * c + e.slot.z * sn, P.pos.y + e.slot.y, P.pos.z - e.slot.x * sn + e.slot.z * c);
+  }
+
+  /**
+   * Forces of a nation at peace (quick-reaction force, border guards, a neighbour's units): move, block and escort;
+   * never fire (owner feedback #20). Escorts drive and fly like real crews: they close in at a road speed, take their
+   * place around the intruder (a vehicle ahead blocking the way, others beside it; fighters on its wing; a ship
+   * abeam), match its speed there and keep a safe distance — no ramming, no circling at crazy speed.
+   */
   private neutral(e: Ent, dt: number): void {
     e.target = null;
     const d = ENT_DEFS[e.kind];
+    const P = this.w.player;
+    const escort = e.order === 'escort' && !!P && P.alive;
     if (d.air) {
-      const P = this.w.player;
-      if (P && P.alive && e.order === 'escort') {
-        // Formate on the intruder at ~400 m to its side.
-        T3.set(P.pos.x + Math.cos(P.yaw) * 400, P.pos.y + 30, P.pos.z - Math.sin(P.yaw) * 400).sub(e.pos);
-        this.fly(e, T3.normalize(), dt, 0.5, Math.max(160, Math.min(320, P.speed + (T3.length() > 600 ? 40 : 0))));
+      if (escort) {
+        // Formate on the intruder's wing; dash while far, then match its speed; rock the wings on arrival (the
+        // international «follow me» signal).
+        this.escortPoint(e, P!, T4);
+        T3.subVectors(T4, e.pos);
+        const dist = T3.length();
+        const speed = dist > 3000 ? Math.max(340, P!.speed + 60) : Math.max(140, Math.min(420, P!.speed + Math.min(90, dist * 0.06) - (dist < 120 ? 15 : 0)));
+        this.fly(e, T3.normalize(), dt, dist > 3000 ? 0.45 : 0.7, speed);
+        if (dist < 700 && e.state === 0) {
+          e.state = 1;
+          e.stateT = 7;
+        }
+        if (e.stateT > 0) {
+          e.stateT -= dt;
+          Q.setFromAxisAngle(T1.set(0, 0, 1), Math.sin(this.w.time * 4.5) * 0.55 * Math.min(1, e.stateT));
+          e.quat.multiply(Q);
+        }
       } else {
-        T3.subVectors(e.goal, e.pos).setY((1500 - e.pos.y) * 0.001);
+        T3.subVectors(e.goal, e.pos).setY((Math.max(1500, e.goal.y) - e.pos.y) * 0.001);
         this.fly(e, T3.normalize(), dt, 0.4, 230);
       }
       return;
     }
     if (d.naval) {
-      const P = this.w.player;
-      const tgt = e.order === 'escort' && P ? P.pos : e.goal;
-      T1.subVectors(tgt, e.pos);
-      const dist = Math.hypot(T1.x, T1.z);
-      this.steerShip(e, dt, dist > 800 ? Math.atan2(-T1.x, -T1.z) : e.yaw + 0.2, dist > 800 ? 12 : 4, 0.1);
+      if (escort) {
+        // Shadow abeam: steer for the station off the intruder's side, then hold its course and speed.
+        this.escortPoint(e, P!, T4);
+        T1.subVectors(T4, e.pos);
+        const dist = Math.hypot(T1.x, T1.z);
+        const top = e.kind === 'boat' ? 18 : 15;
+        if (dist > 250) this.steerShip(e, dt, Math.atan2(-T1.x, -T1.z), Math.min(top, Math.abs(P!.speed) + 2 + dist * 0.004), 0.12);
+        else this.steerShip(e, dt, P!.yaw, Math.max(0, Math.abs(P!.speed) + (dist - 120) * 0.01), 0.12);
+      } else {
+        T1.subVectors(e.goal, e.pos);
+        const dist = Math.hypot(T1.x, T1.z);
+        this.steerShip(e, dt, dist > 300 ? Math.atan2(-T1.x, -T1.z) : e.yaw, dist > 300 ? 8 : 0, 0.1);
+      }
       return;
     }
     if (e.kind === 'soldier' || e.kind === 'at') {
@@ -209,13 +239,31 @@ export class Brain {
       e.pos.y = this.w.ground.heightAt(e.pos.x, e.pos.z);
       return;
     }
-    // Vehicles: drive to their point, turret level.
-    e.stateT -= dt;
-    if (e.stateT <= 0 && (e.order === 'escort' || e.order === 'follow')) {
-      this.nextMoveTarget(e, 60);
-      e.stateT = 2;
+    // Vehicles.
+    if (escort) {
+      this.escortPoint(e, P!, e.moveT);
+      const lag = Math.hypot(e.moveT.x - e.pos.x, e.moveT.z - e.pos.z);
+      const toP = Math.hypot(P!.pos.x - e.pos.x, P!.pos.z - e.pos.z);
+      // Never closer than 35 m to the intruder: back off to the side instead.
+      if (toP < 35) {
+        T1.set(e.pos.x - P!.pos.x, 0, e.pos.z - P!.pos.z).normalize();
+        e.moveT.set(e.pos.x + T1.x * 40, 0, e.pos.z + T1.z * 40);
+      }
+      // Up to 55 km/h while closing in; at the station, the intruder's speed.
+      const vmax = Math.max(2.5, Math.min(15, Math.abs(P!.speed) + lag * 0.06));
+      if (lag < 10 && Math.abs(P!.speed) < 0.8 && toP >= 35) {
+        // In place and the intruder stopped: stop and face it.
+        e.yaw += angleDelta(e.yaw, Math.atan2(-(P!.pos.x - e.pos.x), -(P!.pos.z - e.pos.z))) * Math.min(1, dt * 0.4);
+        this.drive(e, dt, 0, 0.5, true);
+      } else this.drive(e, dt, vmax, 0.55, false);
+    } else {
+      e.stateT -= dt;
+      if (e.stateT <= 0 && e.order === 'follow') {
+        this.nextMoveTarget(e, 60);
+        e.stateT = 2;
+      }
+      this.drive(e, dt, 9, 0.6, false);
     }
-    this.drive(e, dt, 9, 0.6, false);
     e.turretYaw += angleDelta(e.turretYaw, 0) * Math.min(1, dt * 0.8);
   }
 

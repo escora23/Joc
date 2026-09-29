@@ -104,6 +104,22 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
 .fu-cmdx-loading { position: absolute; left: 50%; top: 55%; transform: translateX(-50%); font: 700 0.8rem/1 var(--fu-font-cond, sans-serif);
   letter-spacing: 0.24em; text-transform: uppercase; color: var(--fu-text-dim, #7d91a8); display: none; }
 .fu-cmdx-loading.show { display: block; }
+.fu-cmdx-radio { position: absolute; top: 6.6rem; left: 50%; transform: translateX(-50%); width: min(36rem, 56vw); padding: 0.55rem 0.8rem 0.6rem;
+  background: rgba(10,8,4,0.86); border: 1px solid rgba(255,181,61,0.55); border-left: 4px solid #ffb53d; border-radius: 3px; display: none; }
+.fu-cmdx-radio.show { display: block; animation: fu-cmdx-in 0.3s ease both; }
+.fu-cmdx-radio.danger { border-color: rgba(255,106,74,0.6); border-left-color: #ff6a4a; }
+.fu-cmdx-radio.critical { border-color: rgba(255,42,42,0.7); border-left-color: #ff2a2a; background: rgba(36,6,6,0.9); }
+.fu-cmdx-radio .hd { display: flex; align-items: center; gap: 0.5rem; font: 700 0.7rem/1 var(--fu-font-cond, sans-serif); letter-spacing: 0.18em; text-transform: uppercase; color: #ffd58a; }
+.fu-cmdx-radio .hd .tag { color: #1a0e00; background: #ffb53d; padding: 0.14rem 0.35rem; border-radius: 2px; animation: fu-cmdx-blink 1.2s ease-in-out infinite; }
+.fu-cmdx-radio.danger .hd .tag { background: #ff6a4a; } .fu-cmdx-radio.critical .hd .tag { background: #ff2a2a; color: #fff; }
+.fu-cmdx-radio .m { font: 600 0.9rem/1.4 var(--fu-font, sans-serif); color: var(--fu-text, #e8f2ff); margin-top: 0.35rem; }
+.fu-cmdx-radio .s { font: 500 0.78rem/1.35 var(--fu-font, sans-serif); color: var(--fu-text-2, #b3c4d6); margin-top: 0.25rem; }
+.fu-cmdx-radio .cd { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.45rem; font: 700 0.74rem/1 var(--fu-font-mono, monospace); letter-spacing: 0.08em; color: #ffd58a; }
+.fu-cmdx-radio .cd .bar { flex: 1; height: 5px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+.fu-cmdx-radio .cd .bar i { display: block; height: 100%; background: #ffb53d; transition: width 0.25s linear; }
+.fu-cmdx-radio.danger .cd .bar i, .fu-cmdx-radio.critical .cd .bar i { background: #ff6a4a; }
+.fu-cmdx-radio .cd .n { min-width: 4.5rem; text-align: right; font-size: 0.9rem; }
+.fu-cmdx-radio .x { font: 700 0.72rem/1.2 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #aee9ff; margin-top: 0.4rem; }
 @keyframes fu-cmdx-in { from { opacity: 0; transform: translateY(-0.4rem); } to { opacity: 1; transform: none; } }
 @keyframes fu-cmdx-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 `;
@@ -121,6 +137,21 @@ export interface InfoState {
   clockKind: 'tactical' | 'travel' | 'throttled' | 'decision';
   localTime: string;
   travel: string;
+}
+
+/** The victim's radio during an incursion (owner feedback #19): who speaks, what, and the running countdown. */
+export interface RadioState {
+  severity: 'warning' | 'danger' | 'critical';
+  from: string;
+  message: string;
+  sub?: string;
+  countLabel?: string;
+  /** Seconds left (game s = real s at ×1) and the whole span, for the bar. */
+  remain?: number;
+  total?: number;
+  /** Already formatted remaining time. */
+  remainText?: string;
+  exit?: string;
 }
 
 export interface DebriefRow {
@@ -150,6 +181,8 @@ export class CommandOverlay {
   private readonly title: HTMLDivElement;
   private readonly debrief: HTMLDivElement;
   private readonly loading: HTMLDivElement;
+  private readonly radio: HTMLDivElement;
+  private lastRadio = '';
   private noticeT = 0;
   private titleT = 0;
   private helpT = 0;
@@ -185,7 +218,8 @@ export class CommandOverlay {
     this.title = el('div', 'fu-cmdx-title');
     this.debrief = el('div', 'fu-cmdx-debrief');
     this.loading = el('div', 'fu-cmdx-loading', '');
-    this.root.append(this.canvas, this.info, this.alerts, this.notice, this.form, this.help, this.title, this.loading, this.dialog, this.debrief);
+    this.radio = el('div', 'fu-cmdx-radio');
+    this.root.append(this.canvas, this.info, this.alerts, this.radio, this.notice, this.form, this.help, this.title, this.loading, this.dialog, this.debrief);
     parent.appendChild(this.root);
   }
 
@@ -196,6 +230,7 @@ export class CommandOverlay {
     this.alertList = [];
     this.debrief.classList.remove('show');
     this.dialog.classList.remove('show');
+    this.setRadio(null);
     this.lastInfo = this.lastForm = '';
     this.helpOn = true;
     this.helpT = 0;
@@ -319,6 +354,28 @@ export class CommandOverlay {
       <div class="tm">${esc(s.localTime)}</div>`;
   }
 
+  /** The incursion radio panel, or null to hide it. */
+  setRadio(r: RadioState | null): void {
+    const key = r ? JSON.stringify({ ...r, remain: r.remain !== undefined ? Math.ceil(r.remain) : undefined }) : '';
+    if (key === this.lastRadio) return;
+    this.lastRadio = key;
+    if (!r) {
+      this.radio.classList.remove('show');
+      this.radio.innerHTML = '';
+      return;
+    }
+    this.radio.className = `fu-cmdx-radio show ${r.severity === 'warning' ? '' : r.severity}`;
+    const pct = r.remain !== undefined && r.total ? Math.max(0, Math.min(100, (r.remain / r.total) * 100)) : -1;
+    this.radio.innerHTML = `<div class="hd"><span class="tag">${esc(t('command.radio.tag'))}</span><span>${esc(r.from)}</span></div>
+      <div class="m">${esc(r.message)}</div>${r.sub ? `<div class="s">${esc(r.sub)}</div>` : ''}
+      ${pct >= 0 ? `<div class="cd"><span>${esc(r.countLabel ?? '')}</span><div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div><span class="n">${esc(r.remainText ?? '')}</span></div>` : ''}
+      ${r.exit ? `<div class="x">${esc(r.exit)}</div>` : ''}`;
+  }
+
+  get radioText(): string {
+    return this.radio.classList.contains('show') ? this.radio.textContent?.replace(/\s+/g, ' ').trim() ?? '' : '';
+  }
+
   setFormation(kind: CommandKind, pips: ('me' | 'ok' | 'lost' | 'ifv' | 'ifvLost')[], integrity: number): void {
     const key = `${kind}${pips.join()}${Math.round(integrity * 100)}`;
     if (key === this.lastForm) return;
@@ -353,7 +410,7 @@ export class CommandOverlay {
     const g = this.g, W = this.w, H = this.h;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    const maxD = kind === 'jet' ? 120_000 : kind === 'ship' ? 60_000 : 30_000;
+    const maxD = kind === 'jet' ? 120_000 : kind === 'ship' ? 60_000 : 32_000;
     const placed: { x: number; y: number; w: number }[] = [];
     const sorted = [...labels].map((l) => ({ l, d: camera.position.distanceTo(P.set(l.x, l.y, l.z)) })).filter((o) => o.d < maxD).sort((a, b) => rankOf(a.l) - rankOf(b.l) || a.d - b.d);
     for (const { l, d } of sorted) {
@@ -370,7 +427,8 @@ export class CommandOverlay {
       g.textAlign = 'center';
       g.fillStyle = 'rgba(0,0,0,0.55)';
       g.fillText(txt, x + 1, y + 1);
-      g.fillStyle = l.kind === 'border' ? '#ffd58a' : l.kind === 'base' ? '#e8f2ff' : '#fff6e0';
+      g.fillStyle = l.kind === 'force' ? (l.tone === 'hostile' ? '#ff8a7a' : l.tone === 'neutral' ? '#ffc44a' : '#8fd8ff')
+        : l.kind === 'border' ? '#ffd58a' : l.kind === 'base' ? '#e8f2ff' : '#fff6e0';
       g.fillText(txt, x, y);
       g.fillStyle = l.color;
       g.fillRect(x - 5, y + 5, 10, 3);
@@ -435,7 +493,7 @@ export class CommandOverlay {
 }
 
 function rankOf(l: CivilLabel): number {
-  return l.kind === 'border' ? -1 : l.kind === 'capital' ? 0 : l.kind === 'city' ? 1 : l.kind === 'base' ? 2 : 3;
+  return l.kind === 'border' ? -2 : l.kind === 'force' ? -1 : l.kind === 'capital' ? 0 : l.kind === 'city' ? 1 : l.kind === 'base' ? 2 : 3;
 }
 
 function bold(s: string): string {

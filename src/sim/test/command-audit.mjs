@@ -6,10 +6,13 @@
 //   M1  controlledMove within the speed limit is applied at once (between ticks) and the unit really moves;
 //   M2  a move beyond maxKmh × elapsed × 1.1 is snapped to the limit (logged), a jump (> 5 km and > 2× the allowed distance) is rejected;
 //   M3  travel time checks against the strategic speed (40 km/h), tactical time against the tank's 65 km/h;
-//   I1  crossing into a nation at peace emits borderIncursion 'entered'; the victim decides 30–90 game s later via
-//       sub-steps; an interception's quick-reaction force arrives 5–15 game minutes after dispatch;
+//   I1  crossing into a nation at peace emits borderIncursion 'entered' with the warning's grace (30 game s on land,
+//       15 near the capital); staying past it brings the interception at once via sub-steps; the ground force
+//       arrives 1.5–5 game minutes after dispatch; its last warning (60 s) ignored → the victim opens fire or declares war;
+//   I4  turning back within the grace ends it with a protest and no force;
 //   I2  with an alliance / open borders no incursion is raised;
-//   I3  releasing the unit inside foreign land walks it back home and ends the incursion ('left');
+//   I3  releasing the unit inside foreign land leaves it exactly there (no walk back) and the incursion goes on;
+//   J2  a fighter staying in foreign airspace is intercepted by fighters scrambled from a real airbase in 1–3 min;
 //   C1  commandCasualties: N×25 troops leave the victim; a unit hit of 0.25 takes 25 % integrity; a structure hit 0.35;
 //   C2  controlledDamage lowers the unit's integrity; 0 destroys it;
 //   S1  a warship in open sea raises nothing; in water next to a foreign coast at peace it raises an incursion (ship);
@@ -145,30 +148,35 @@ function spawnDivision(g, x, y) {
   }
   ok(!!entered && entered.victim === spot.victim, `I1 borderIncursion 'entered' on ${V?.name} (${spot.victim})`);
   const t0 = g.command.sec;
-  // Stay inside, sub-stepping 1 game s at a time (×1 between ticks), until the decision.
+  const grace = entered.graceSec;
+  ok(grace === 30 || grace === 15, `I1 the warning gives ${grace} game s to turn back (30 on land, 15 near the capital)`);
+  // Stay inside, sub-stepping 1 game s at a time (×1 between ticks), until the answer.
   let resp = null;
   for (let i = 0; i < 200 && !resp; i++) {
     g.subStep(1);
     resp = events.find((e) => e.type === 'borderIncursion' && e.stage === 'response');
   }
   const dt = resp ? resp.sec - entered.sec : -1;
-  ok(!!resp && dt >= 30 && dt <= 90, `I1 the victim decides ${resp?.response} ${dt.toFixed(1)} game s after entry (30–90, via sub-steps, no tick ran: ${g.command.sec - t0 < 360})`);
-  if (resp && resp.response === 'protest') {
-    // Ignore the protest: after 6 game hours it escalates to an interception.
-    for (let i = 0; i < 7 * 60; i++) g.subStep(60);
-  }
+  ok(!!resp && dt >= grace - 0.01 && dt <= grace + 1.01, `I1 the victim answers ${resp?.response} ${dt.toFixed(1)} game s after entry (= the grace, via sub-steps, no tick ran: ${g.command.sec - t0 < 360})`);
   const icpt = events.find((e) => e.type === 'borderIncursion' && e.stage === 'response' && e.response === 'intercept');
-  ok(!!icpt, `I1 an interception was dispatched (${icpt?.escalated ? 'after the ignored protest' : 'directly'})`);
+  ok(!!icpt && icpt.qrfMode === 'ground', `I1 an interception was dispatched (${icpt?.qrfMode} force, eta ${icpt?.etaSec?.toFixed(0)} s)`);
   const inc = g.command.view(true).incursions.find((i) => i.unitId === u.id);
   const q = inc?.qrf;
-  ok(!!q && q.soldiers >= 8 && q.soldiers <= 24, `I1 quick-reaction force of ${q?.soldiers} soldiers from ${q?.source}`);
+  ok(!!q && q.soldiers >= 8 && q.soldiers <= 24 && q.vehicles >= 2, `I1 quick-reaction force of ${q?.vehicles} vehicles with ${q?.soldiers} soldiers from ${q?.source}`);
   let arrived = null;
   for (let i = 0; i < 2000 && !arrived; i++) {
     g.subStep(1);
     arrived = events.find((e) => e.type === 'borderIncursion' && e.stage === 'arrived');
   }
   const travel = arrived && q ? arrived.sec - q.dispatchSec : -1;
-  ok(travel >= 300 && travel <= 900, `I1 it arrives ${(travel / 60).toFixed(1)} game min after dispatch (5–15)`);
+  ok(travel >= 90 && travel <= 300, `I1 it arrives ${(travel / 60).toFixed(1)} game min after dispatch (1.5–5)`);
+  ok(arrived?.deadlineSec === 60 || arrived?.deadlineSec === 30, `I1 on arrival, the last warning: ${arrived?.deadlineSec} s to leave`);
+  let fire = null;
+  for (let i = 0; i < 200 && !fire; i++) {
+    g.subStep(1);
+    fire = events.find((e) => e.type === 'borderIncursion' && e.stage === 'response' && (e.response === 'engage' || e.response === 'war'));
+  }
+  ok(!!fire && Math.abs(fire.sec - arrived.sec - arrived.deadlineSec) <= 1.01, `I1 the warning ignored: ${fire?.response} ${(fire ? fire.sec - arrived.sec : -1).toFixed(1)} s after arrival`);
   // C1: casualties.
   const troops0 = V.troops;
   g.issue(HUMAN_ID, { type: 'commandCasualties', unitId: u.id, victim: spot.victim, troops: 12 * 25, unitHits: [], structureHits: [] });
@@ -189,15 +197,13 @@ function spawnDivision(g, x, y) {
     g.issue(HUMAN_ID, { type: 'commandCasualties', unitId: u.id, victim: spot.victim, troops: 0, unitHits: [], structureHits: [{ structureId: st.id, dmg: 0.35 }] });
     ok(Math.abs(h0 - st.hp - 0.35) < 1e-6 || !g.structureMap.has(st.id), `C1 a launcher hit takes 0.35 of the structure's hp (${h0.toFixed(2)} → ${st.hp.toFixed(2)})`);
   }
-  // I3: release inside → walks back and the incursion ends.
+  // I3: release inside → the unit stays exactly there, holding, and the incursion goes on.
+  const rx = u.x, ry = u.y;
   g.issue(HUMAN_ID, { type: 'unitControl', unitId: u.id, controlled: false });
-  ok(u.state === UnitState.Controlled && g.command.keepsControl(u.id), 'I3 released inside foreign land: the division walks back home first');
-  let left = null;
-  for (let i = 0; i < 400 && !left; i++) {
-    g.tick1();
-    left = events.find((e) => e.type === 'borderIncursion' && e.stage === 'left');
-  }
-  ok(!!left && g.owner[Math.floor(u.y) * MAP_W + Math.floor(u.x)] === HUMAN_ID && u.state !== UnitState.Controlled, 'I3 it is back on own land, released, and the incursion ended');
+  for (let i = 0; i < 3; i++) g.tick1();
+  const stillIn = g.command.view(true).incursions.find((i) => i.unitId === u.id && !i.left);
+  ok(u.state !== UnitState.Controlled && Math.hypot(u.x - rx, u.y - ry) < 1e-6 && (!!stillIn || g.war.atWar(spot.victim, HUMAN_ID)),
+    `I3 released inside foreign land: it holds where it was left (moved ${(Math.hypot(u.x - rx, u.y - ry) * TILE_KM).toFixed(3)} km), the incursion goes on (${stillIn ? stillIn.response : 'war'})`);
   // C2: controlled damage.
   g.issue(HUMAN_ID, { type: 'unitControl', unitId: u.id, controlled: true });
   const i0 = u.hp / u.maxHp;
@@ -205,6 +211,31 @@ function spawnDivision(g, x, y) {
   ok(Math.abs(u.hp / u.maxHp - (i0 - 0.25)) < 1e-6, `C2 losing a tank lowers the division to ${(u.hp / u.maxHp * 100).toFixed(0)} %`);
   g.issue(HUMAN_ID, { type: 'controlledDamage', unitId: u.id, integrity: 0 });
   ok(u.dead, 'C2 losing the last tank destroys the division');
+}
+
+// ------------------------------------------------------------------------------------------------ I4
+{
+  const { g, events } = makeGame(17);
+  const spot = borderSpot(g);
+  const u = spawnDivision(g, spot.x, spot.y);
+  u.x = spot.x;
+  u.y = spot.y;
+  g.issue(HUMAN_ID, { type: 'unitControl', unitId: u.id, controlled: true });
+  const kx = kmX(u.y);
+  let entered = null;
+  let lastOwn = { x: u.x, y: u.y };
+  for (let i = 0; i < 2000 && !entered; i++) {
+    lastOwn = { x: u.x, y: u.y };
+    g.subStep(6);
+    g.issue(HUMAN_ID, { type: 'controlledMove', unitId: u.id, x: u.x + spot.dir * (0.1 / kx), y: u.y, heading: 0 });
+    entered = events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered');
+  }
+  for (let i = 0; i < 10; i++) g.subStep(1);
+  g.issue(HUMAN_ID, { type: 'controlledMove', unitId: u.id, x: lastOwn.x, y: lastOwn.y, heading: 0 });
+  ok(Math.abs(u.x - lastOwn.x) < 1e-9, 'I4 the unit turns back 10 s after the warning');
+  for (let i = 0; i < 60; i++) g.subStep(1);
+  const kinds = events.filter((e) => e.type === 'borderIncursion').map((e) => e.stage + (e.response ? ':' + e.response : ''));
+  ok(!!entered && kinds.includes('response:protest') && kinds.includes('left') && !kinds.includes('response:intercept'), `I4 back within the grace: a protest, no force (${kinds.join(', ')})`);
 }
 
 // ------------------------------------------------------------------------------------------------ I2
@@ -304,6 +335,26 @@ function spawnDivision(g, x, y) {
         entered = events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered' && e.unitId === jet.id) ?? null;
       }
       ok(!!entered && entered.kind === 'jet' && entered.victim === b.victim, `J1 a fighter over ${b.victim}'s land at peace raises an airspace incursion (${entered ? entered.kind : 'none'})`);
+      // J2: stay: fighters come from a real airbase of the victim (give it one with a ready squadron if it has none).
+      const V = g.playerById[b.victim];
+      let hasFighter = [...(g.unitsByOwner.get(b.victim) ?? [])].some((x) => !x.dead && x.type === UnitType.FighterSquadron);
+      if (!hasFighter) {
+        let t = -1;
+        for (let k = 0; k < g.owner.length && t < 0; k++) if (g.owner[k] === b.victim && !isWaterTerrain(g.terrain[k]) && Math.hypot((k % MAP_W) - jet.x, ((k / MAP_W) | 0) - jet.y) < 12) t = k;
+        g.applyDebug({ type: 'spawnStructure', owner: b.victim, structure: StructureType.Airbase, tile: t, level: 1 });
+        g.applyDebug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: b.victim, tile: t, targetTile: -1 });
+        hasFighter = [...(g.unitsByOwner.get(b.victim) ?? [])].some((x) => !x.dead && x.type === UnitType.FighterSquadron);
+      }
+      let resp = null, arr = null;
+      for (let i = 0; i < 400 && !arr; i++) {
+        g.subStep(1);
+        resp ??= events.find((e) => e.type === 'borderIncursion' && e.stage === 'response' && e.unitId === jet.id) ?? null;
+        arr = events.find((e) => e.type === 'borderIncursion' && e.stage === 'arrived' && e.unitId === jet.id) ?? null;
+      }
+      const inc = g.command.view(true).incursions.find((i) => i.unitId === jet.id);
+      const tt = inc?.qrf ? inc.qrf.arriveSec - inc.qrf.dispatchSec : -1;
+      ok(hasFighter && resp?.response === 'intercept' && resp.qrfMode === 'air' && !!inc?.qrf?.unitId && tt >= 60 && tt <= 180 && !!arr,
+        `J2 fighters (${V?.name}, unit ${inc?.qrf?.unitId}, from ${inc?.qrf?.source}) intercept ${(entered ? resp?.sec - entered.sec : -1).toFixed(0)} s after entry and arrive in ${(tt / 60).toFixed(1)} min (1–3)`);
     } else ok(false, 'J1 fighter spawned');
   }
 }

@@ -10,6 +10,9 @@
 //   command-travel      autopilot toward a destination 300 km away at ×300: the travel camera and the terrain stream
 //   command-jet-cap     fighter squadron on patrol at its real altitude
 //   command-ship-coast  warship at sea off the Spanish coast, at peace
+//   command-escort      tank that crossed into a neighbour at peace and stayed: the patrol APCs at their stations
+//                       around it (one ahead blocking, two beside) and the radio's last warning (owner feedback #20)
+//   command-jet-intercept  fighter in a neighbour's airspace: the neighbour's scrambled fighters on its wings
 //   command-tank / -jet / -ship   the same at war (updated v1 names), command-intro, command-debrief, command-garage
 
 import * as THREE from 'three';
@@ -355,6 +358,71 @@ registerShot('command-ship-coast', 'command', 'Warship at sea off the Spanish co
   if (live(s)) return;
   const I = internalsOrThrow();
   await settle(s, I, 2);
+  await freezeAndWait(s, I);
+});
+
+/**
+ * Walk the controlled unit `km` into the neighbour's land across the shared edge (a real incursion in the sim), then
+ * let `ticks` strategic ticks run: the warning's grace, the interception and its arrival happen in them.
+ */
+async function crossAndWait(s: ShotContext, id: number, b: { hx: number; hy: number; fx: number; fy: number }, km: number, ticks: number): Promise<void> {
+  const { ctx } = s;
+  const ex = b.fx + 0.5 + (b.fx - b.hx) * 0.4, ey = b.fy + 0.5 + (b.fy - b.hy) * 0.4;
+  const u = ctx.sim.view.units.get(id);
+  if (!u) return;
+  const lat = 90 - (u.y / MAP_H) * 180;
+  const d = Math.hypot((ex - u.x) * TILE_KM * Math.cos((lat * Math.PI) / 180), (ey - u.y) * TILE_KM);
+  await walkToward(s, id, ex, ey, Math.max(0, d - km));
+  await waitView(s, () => !!ctx.sim.view.command?.incursions.some((i) => i.unitId === id), 30_000);
+  for (let i = 0; i < ticks; i++) await ctx.sim.fastForward(1);
+  await waitView(s, () => !!ctx.sim.view.command?.incursions.some((i) => i.unitId === id && !!i.qrf?.arrived), 30_000);
+}
+
+registerShot('command-escort', 'command', 'Incursion ignored: the neighbour\'s patrol APCs at their stations around the tank, the radio\'s last warning', async (s) => {
+  const { ctx } = s;
+  await startSession(s, -0.5, 15.5);
+  const foe0 = nearestNation(s, 44.7, -0.5);
+  if (foe0) connectNation(s, foe0, 43.25, -0.5);
+  await waitView(s, () => !!humanBorder(s, 42.7, -0.5, foe0), 90_000);
+  const b = humanBorder(s, 42.7, -0.5, foe0);
+  if (!b) throw new Error('no border near the staging point');
+  ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.DefensePost, owner: b.foe, tile: b.fy * MAP_W + b.fx, level: 1 });
+  const id = await spawnNearEdge(s, UnitType.ArmoredDivision, b, 1);
+  await crossAndWait(s, id, b, 3, 2);
+  await ctx.app.enterCommandMode(id);
+  ctx.sim.setSpeed(0);
+  if (live(s)) return;
+  const I = internalsOrThrow();
+  await settle(s, I, Number(s.params.get('settle') ?? 6));
+  // Look at the vehicle blocking the way.
+  const p = I.controller!.ent;
+  const q = I.world.ents.find((e) => e.alive && e.src?.kind === 'qrf' && e.slot.z < 0) ?? I.world.ents.find((e) => e.alive && e.src?.kind === 'qrf');
+  if (q) I.controller!.aimAt(q.pos.clone().setY(q.pos.y + 1.5));
+  I.simulate(20, 1 / 30);
+  void p;
+  await freezeAndWait(s, I);
+});
+
+registerShot('command-jet-intercept', 'command', 'Fighter in a neighbour\'s airspace at peace: its scrambled fighters on your wings, rocking theirs', async (s) => {
+  const { ctx } = s;
+  await startSession(s, -0.5, 16.5);
+  const foe0 = nearestNation(s, 44.7, -0.5);
+  if (foe0) connectNation(s, foe0, 43.25, -0.5);
+  await waitView(s, () => !!humanBorder(s, 42.7, -0.5, foe0), 90_000);
+  const b = humanBorder(s, 42.7, -0.5, foe0);
+  if (!b) throw new Error('no border near the staging point');
+  const ab = latLonToTile(43.6, -0.4);
+  ctx.sim.debug({ type: 'conquer', playerId: b.foe, centerTile: ab, radius: 2 });
+  ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.Airbase, owner: b.foe, tile: ab, level: 2 });
+  ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: b.foe, tile: ab, targetTile: -1 });
+  await ctx.sim.fastForward(2);
+  const id = await spawnNearEdge(s, UnitType.FighterSquadron, b, 1);
+  await crossAndWait(s, id, b, 6, 2);
+  await ctx.app.enterCommandMode(id);
+  ctx.sim.setSpeed(0);
+  if (live(s)) return;
+  const I = internalsOrThrow();
+  await settle(s, I, Number(s.params.get('settle') ?? 3));
   await freezeAndWait(s, I);
 });
 

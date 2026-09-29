@@ -758,23 +758,41 @@ export interface ProductionView {
 }
 
 // --- v2 (W5): command mode (DESIGN_V2 §9.7, §9.8) ---
-/** A quick-reaction force a victim sends against an incursion (continuous tile coords; moved between ticks). */
+/**
+ * A quick-reaction force a victim sends against an incursion (continuous tile coords; moved between ticks). Ground:
+ * patrol vehicles and APCs of the nearest post, town or base (a tank with them from an army base). Air: a pair of
+ * fighters scrambled from the nearest airbase (or a real squadron already airborne). Sea: a real warship of the
+ * victim, else a patrol boat from its nearest port or naval yard.
+ */
 export interface QrfView {
   x: number;
   y: number;
   fromX: number;
   fromY: number;
-  /** Local soldiers (1 = 25 troops of the victim's garrison). */
+  /** 'ground' | 'air' | 'sea' (owner feedback #19). */
+  mode: 'ground' | 'air' | 'sea';
+  /** Vehicles in the force (APCs / tanks, fighters, ships). */
+  vehicles: number;
+  /** A tank leads it (a force from an army base). */
+  heavy: boolean;
+  /** Soldiers riding in the vehicles (1 = 25 troops of the victim's garrison); 0 for air and sea. */
   soldiers: number;
   dispatchSec: number;
   arriveSec: number;
   arrived: boolean;
-  source: 'city' | 'post' | 'base' | 'border';
+  source: 'city' | 'post' | 'base' | 'airbase' | 'port' | 'unit' | 'border';
+  /** The real unit carrying the force (a fighter squadron or a warship moved along the force's path), 0 = garrison. */
+  unitId: number;
   /** Real divisions ordered toward the intruder, fighters vectored to an intruding jet. */
   divisions: number[];
   fighters: number[];
 }
-/** An incursion involving the human (as intruder or victim). Times are CommandView.sec game seconds. */
+/**
+ * An incursion involving the human (as intruder or victim). Times are CommandView.sec game seconds (= real seconds
+ * at ×1 in command mode). Stages (owner feedback #19): the warning at entry with a short grace to turn back
+ * (`decideAtSec`); staying past it brings the interception (the force's `arriveSec`); once it is there, a last
+ * warning (`deadlineSec`); ignoring it makes the victim open fire on the intruder (`engage`) or declare war.
+ */
 export interface IncursionView {
   id: number;
   intruder: number;
@@ -782,12 +800,17 @@ export interface IncursionView {
   unitId: number;
   kind: CommandKind;
   enteredSec: number;
+  /** End of the grace to turn back (game s). */
   decideAtSec: number;
-  response: 'none' | 'protest' | 'intercept' | 'war';
+  /** Length of that grace (game s). */
+  graceSec: number;
+  response: 'none' | 'protest' | 'intercept' | 'engage' | 'war';
   respondedSec: number;
-  /** Protest: withdraw by this time (game s); 0 = none. */
+  /** The last warning after the interception arrived: leave before this (game s); 0 = none running. */
   deadlineSec: number;
   depthKm: number;
+  /** Distance to the victim's capital at its closest (km), -1 = no capital. Near it (≤ 80 km) every step is faster. */
+  capitalKm: number;
   left: boolean;
   qrf: QrfView | null;
 }
@@ -797,7 +820,7 @@ export interface CommandView {
   sec: number;
   /** The worker runs travel time (the move check uses the strategic speed). */
   travel: boolean;
-  controlled: { unitId: number; x: number; y: number; sec: number; returning: boolean }[];
+  controlled: { unitId: number; x: number; y: number; sec: number }[];
   incursions: IncursionView[];
   /** Move-check tallies (§9.8). */
   moves: { accepted: number; snapped: number; rejected: number; lastSnapKm: number; lastRejectKm: number };

@@ -8,15 +8,19 @@
 // that is also more than twice the allowed distance is rejected outright (travel at ×900 legitimately covers several km
 // between two messages).
 //
-// Incursions (§9.7): the first accepted move onto a foreign tile of a nation the owner is at peace (or truce) with,
-// without an alliance or open borders, starts an incursion (`borderIncursion` entered, both sides hear of it). The
-// victim decides 30–90 GAME seconds later (the sub-step advances this system between ticks, so the decision comes
-// after 30–90 real seconds at ×1 and 0.5–1.5 s at ×60): protest (withdraw within 6 game hours, −15 opinion),
-// intercept (a quick-reaction force from its nearest town, post or base arrives 5–15 game minutes after dispatch and
-// real divisions within 30 km are ordered toward the intruder) or war (the victim declares, reason `incursion`).
-// Ignoring a protest past its deadline escalates to an interception, and an ignored interception to war, by
-// personality. Leaving the land ends it (`left`). Releasing the unit inside foreign land at peace walks it back to the
-// nearest own tile first; the incursion lasts until it is out.
+// Incursions (§9.7, reworked after owner feedback #18-#20): the first accepted move onto a foreign tile of a nation the
+// owner is at peace (or truce) with, without an alliance or open borders, starts an incursion. The victim warns at once
+// ("turn back or you will be intercepted") and gives a short grace, counted in game seconds that are real seconds at
+// ×1 in command mode: 30 s on land, 25 s in the air, 40 s at sea, 15 s within 80 km of its capital. Turning back in
+// time ends it with a formal protest. Staying brings the interception: the victim sends real forces from its nearest
+// bases that arrive in a believable, short time (fighters scrambled from the nearest airbase in 1-3 min, patrol
+// vehicles and APCs from the nearest post, town or base in 1.5-5 min, a warship in 2-7 min); real divisions within
+// 30 km are ordered in too. When the force is there it escorts the intruder and gives a last warning (60 s on land,
+// 45 s in the air, 90 s at sea, 30 s near the capital); ignoring it makes the victim open fire on the intruder
+// (`engage`: its forces and SAM sites fire at that unit only) or, by personality or when it already hates the
+// intruder, declare war. An armed incident that lasts 30 game minutes ends in war. A capital is never ignored.
+// Releasing the unit never sends it home (owner feedback #18): it holds where it was left and the incursion keeps
+// running on the strategic map with the same timings, until it is out.
 //
 // Casualties (§9.8): `commandCasualties` removes the enemy soldiers killed (1 local soldier = 25 troops, sent as
 // troops), damages real units and structures by the local hits; `controlledDamage` sets the controlled unit's
@@ -30,24 +34,38 @@ import type { PlayerCommand } from '../shared/protocol';
 import { isWaterTerrain } from '../shared/terrain';
 import { StructureType, UnitState, UnitType, type CommandView, type IncursionView } from '../shared/types';
 import type { Game } from './game';
-import type { Player, Unit } from './state';
+import { Mode, type Player, type Unit } from './state';
 
 /** Tactical top speed of each command vehicle at ×1 (km/h): tank 61, jet 2,016, destroyer 63 (§9.8). */
 export const TACTICAL_KMH: Record<'tank' | 'jet' | 'ship', number> = { tank: 65, jet: 2100, ship: 66 };
 export const MOVE_TOLERANCE = 1.1;
 export const MOVE_REJECT_KM = 5;
-/** Victim decision delay window and the quick-reaction force's travel window (game seconds). */
-export const DECIDE_MIN_SEC = 30, DECIDE_MAX_SEC = 90;
-export const QRF_MIN_SEC = 300, QRF_MAX_SEC = 900;
-/** QRF road speed (km/h): trucks and helicopters from the garrison. */
-export const QRF_KMH = 120;
-export const PROTEST_DEADLINE_SEC = 6 * 3600;
-/** An interception that is ignored this long escalates to war (aggressive personalities). */
-export const INTERCEPT_ESCALATE_SEC = 6 * 3600;
+/** Grace to turn back after the warning (game s = real s at ×1), per vehicle; near the victim's capital. */
+export const GRACE_SEC: Record<'tank' | 'jet' | 'ship', number> = { tank: 30, jet: 25, ship: 40 };
+export const GRACE_CAPITAL_SEC = 15;
+/** Within this distance of the victim's capital every step is faster (a capital is never ignored). */
+export const CAPITAL_KM = 80;
+/** Travel time windows of the quick-reaction force (game s), per force. */
+export const QRF_WINDOW: Record<'ground' | 'air' | 'sea', [number, number]> = { ground: [90, 300], air: [60, 180], sea: [120, 420] };
+/** Road speed of the ground force (km/h), dash speed of scrambled fighters (km/s), sea speed (km/h). */
+export const QRF_ROAD_KMH = 80;
+export const QRF_AIR_KMS = 0.5;
+export const QRF_SEA_KMH = 70;
+/** The last warning once the force is there (game s), per vehicle; near the capital. */
+export const ESCORT_WARN_SEC: Record<'tank' | 'jet' | 'ship', number> = { tank: 60, jet: 45, ship: 90 };
+export const ESCORT_WARN_CAPITAL_SEC = 30;
+/** An armed incident (engage) that goes on this long becomes a war. */
+export const ENGAGE_WAR_SEC = 1800;
+/** A unit left inside under fire (released, strategic time) loses this share of its integrity per game minute. */
+export const ENGAGE_DAMAGE_PER_MIN = 0.05;
 /** Real divisions of the victim within this distance are sent toward the intruder. */
 export const QRF_DIVISION_KM = 30;
-/** Fighters on patrol within this distance vector to an intruding jet. */
-export const QRF_FIGHTER_KM = 150;
+/** Airborne fighters within this distance, else docked fighters at an airbase within the scramble reach, intercept. */
+export const QRF_FIGHTER_KM = 300;
+export const QRF_SCRAMBLE_KM = 800;
+/** Warships within this distance shadow an intruding ship; else a patrol boat from a port or naval yard in reach. */
+export const QRF_SHIP_KM = 150;
+export const QRF_PORT_KM = 400;
 
 interface Controlled {
   unitId: number;
@@ -56,10 +74,24 @@ interface Controlled {
   x: number;
   y: number;
   sec: number;
-  /** Released by the player inside foreign land at peace: walking back to `homeTile`. */
-  returning: boolean;
-  homeX: number;
-  homeY: number;
+}
+
+interface Qrf {
+  mode: 'ground' | 'air' | 'sea';
+  fromX: number;
+  fromY: number;
+  x: number;
+  y: number;
+  vehicles: number;
+  heavy: boolean;
+  soldiers: number;
+  dispatchSec: number;
+  arriveSec: number;
+  arrived: boolean;
+  source: 'city' | 'post' | 'base' | 'airbase' | 'port' | 'unit' | 'border';
+  unitId: number;
+  divisions: number[];
+  fighters: number[];
 }
 
 interface Incursion {
@@ -72,15 +104,17 @@ interface Incursion {
   entryX: number;
   entryY: number;
   enteredSec: number;
+  graceSec: number;
   decideAtSec: number;
-  response: 'none' | 'protest' | 'intercept' | 'war';
+  response: 'none' | 'protest' | 'intercept' | 'engage' | 'war';
   respondedSec: number;
+  /** Running warning deadline after the force arrived (or a protest's, when nothing can be sent); ∞ = none. */
   deadlineSec: number;
   depthKm: number;
-  qrf: {
-    fromX: number; fromY: number; x: number; y: number; soldiers: number; dispatchSec: number; arriveSec: number;
-    arrived: boolean; source: 'city' | 'post' | 'base' | 'border'; divisions: number[]; fighters: number[];
-  } | null;
+  capitalKm: number;
+  qrf: Qrf | null;
+  /** Game seconds of fire taken while engaged and not controlled (strategic damage accumulator). */
+  fireSec: number;
   left: boolean;
   leftSec: number;
 }
@@ -92,6 +126,7 @@ const wdx = (ax: number, bx: number): number => {
   return d;
 };
 const wrapX = (x: number): number => ((x % MAP_W) + MAP_W) % MAP_W;
+const tileOfXY = (x: number, y: number): number => Math.min(MAP_H - 1, Math.max(0, Math.floor(y))) * MAP_W + (Math.floor(wrapX(x)) % MAP_W);
 const DEG = Math.PI / 180;
 function kmPerTileX(y: number): number {
   const lat = 90 - (y / MAP_H) * 180;
@@ -143,7 +178,6 @@ export class CommandSystem {
   private advance(dt: number): void {
     this.sec += dt;
     if (this.incursions.length === 0 && this.controlled.size === 0) return;
-    for (const c of this.controlled.values()) if (c.returning) this.walkBack(c, dt);
     for (const inc of this.incursions) this.stepIncursion(inc, dt);
     // Forget incursions that ended a while ago (the client has seen them).
     for (let i = this.incursions.length - 1; i >= 0; i--) {
@@ -168,92 +202,16 @@ export class CommandSystem {
     const kind = UNIT_DEFS[u.type].command;
     if (!kind) return;
     if (controlled) {
-      this.controlled.set(unitId, { unitId, owner: p.id, kind, x: u.x, y: u.y, sec: this.sec, returning: false, homeX: 0, homeY: 0 });
+      this.controlled.set(unitId, { unitId, owner: p.id, kind, x: u.x, y: u.y, sec: this.sec });
       this.dirty = true;
       return;
     }
-    const c = this.controlled.get(unitId);
-    if (!c) return;
+    // Owner feedback #18: the unit holds where it was left (units.ts holdAfterControl). An incursion keeps running:
+    // stepIncursion follows the unit on the strategic map until it is out.
     const inc = this.incursions.find((i) => i.unitId === unitId && !i.left);
-    // §9.7.5: released inside foreign land at peace → walk back to the nearest own tile first (ground and sea); a jet
-    // simply returns to its base, which ends the violation of the airspace.
-    if (inc && kind !== 'jet' && this.g.war.pairState(p.id, inc.victim) !== 'war') {
-      const home = this.nearestOwn(p.id, u, kind === 'ship');
-      if (home) {
-        c.returning = true;
-        c.homeX = home.x;
-        c.homeY = home.y;
-        u.state = UnitState.Controlled;
-        this.dirty = true;
-        return;
-      }
-    }
-    if (inc) this.leave(inc);
+    if (inc) this.log(`[command] unit ${unitId} released inside ${inc.victim}: it holds there and incursion #${inc.id} goes on`);
     this.controlled.delete(unitId);
     this.dirty = true;
-  }
-
-  /** The unit's control ended in the unit system: returns false while this system still walks it home. */
-  keepsControl(unitId: number): boolean {
-    return !!this.controlled.get(unitId)?.returning;
-  }
-
-  private nearestOwn(owner: number, u: Unit, water: boolean): { x: number; y: number } | null {
-    const g = this.g;
-    const x0 = Math.floor(u.x), y0 = Math.floor(u.y);
-    for (let r = 1; r <= 60; r++) {
-      let best: { x: number; y: number } | null = null, bestD = Infinity;
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const y = y0 + dy;
-          if (y < 0 || y >= MAP_H) continue;
-          const t = y * MAP_W + wrapX(x0 + dx);
-          const ok = water ? isWaterTerrain(g.terrain[t]) && this.territorialOwner(t) !== this.incursionVictim(u.id) : g.owner[t] === owner;
-          if (!ok) continue;
-          const d = dx * dx + dy * dy;
-          if (d < bestD) {
-            bestD = d;
-            best = { x: x0 + dx + 0.5, y: y + 0.5 };
-          }
-        }
-      }
-      if (best) return best;
-    }
-    return null;
-  }
-
-  private incursionVictim(unitId: number): number {
-    return this.incursions.find((i) => i.unitId === unitId && !i.left)?.victim ?? 0;
-  }
-
-  private walkBack(c: Controlled, dt: number): void {
-    const g = this.g;
-    const u = g.unitMap.get(c.unitId);
-    if (!u || u.dead) {
-      this.controlled.delete(c.unitId);
-      return;
-    }
-    const km = (UNIT_DEFS[u.type].speedKmh * dt) / 3600;
-    const d = tileDistKm(u.x, u.y, c.homeX, c.homeY);
-    if (d <= km + 0.01) {
-      u.x = wrapX(c.homeX);
-      u.y = c.homeY;
-    } else {
-      const f = km / d;
-      u.heading = Math.atan2(wdx(u.x, c.homeX) * kmPerTileX(u.y), -(c.homeY - u.y) * TILE_KM);
-      u.x = wrapX(u.x + wdx(u.x, c.homeX) * f);
-      u.y += (c.homeY - u.y) * f;
-    }
-    this.checkTerritory(c, u);
-    const home = c.kind === 'ship' ? this.groundOwner(u, 'ship') !== this.incursionVictim(u.id) : this.groundOwner(u, c.kind) === c.owner;
-    if (d <= km + 0.01 || home) {
-      const inc = this.incursions.find((i) => i.unitId === c.unitId && !i.left);
-      if (inc) this.leave(inc);
-      this.controlled.delete(c.unitId);
-      u.state = u.savedState === UnitState.Controlled ? UnitState.Idle : u.savedState;
-      this.dirty = true;
-    }
   }
 
   // =================================================================================================
@@ -267,10 +225,9 @@ export class CommandSystem {
     if (!c) {
       const kind = UNIT_DEFS[u.type].command;
       if (!kind) return false;
-      c = { unitId: u.id, owner: p.id, kind, x: u.x, y: u.y, sec: this.sec, returning: false, homeX: 0, homeY: 0 };
+      c = { unitId: u.id, owner: p.id, kind, x: u.x, y: u.y, sec: this.sec };
       this.controlled.set(u.id, c);
     }
-    if (c.returning) return false;
     if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.y)) return false;
     const tx = wrapX(cmd.x), ty = Math.max(0, Math.min(MAP_H - 1e-3, cmd.y));
     const dist = tileDistKm(c.x, c.y, tx, ty);
@@ -310,7 +267,6 @@ export class CommandSystem {
   private territorialOwner(tile: number): number {
     const g = this.g;
     const x = tile % MAP_W, y = (tile / MAP_W) | 0;
-    let best = 0;
     for (let dy = -1; dy <= 1; dy++) {
       const yy = y + dy;
       if (yy < 0 || yy >= MAP_H) continue;
@@ -319,7 +275,7 @@ export class CommandSystem {
         if (o > 0) return o;
       }
     }
-    return best;
+    return 0;
   }
 
   /** Whose land (or territorial water, for ships) the unit is on. */
@@ -330,6 +286,7 @@ export class CommandSystem {
     if (kind === 'ship' || (kind !== 'jet' && isWaterTerrain(g.terrain[t]))) {
       return isWaterTerrain(g.terrain[t]) ? this.territorialOwner(t) : o;
     }
+    if (kind === 'jet' && isWaterTerrain(g.terrain[t])) return 0;
     return o;
   }
 
@@ -344,6 +301,12 @@ export class CommandSystem {
     return true;
   }
 
+  private capitalKmOf(victim: number, u: Unit): number {
+    const P = this.g.playerById[victim];
+    if (!P || P.capitalTile < 0) return -1;
+    return tileDistKm((P.capitalTile % MAP_W) + 0.5, ((P.capitalTile / MAP_W) | 0) + 0.5, u.x, u.y);
+  }
+
   private checkTerritory(c: Controlled, u: Unit): void {
     const o = this.groundOwner(u, c.kind);
     const open = this.incursions.find((i) => i.unitId === u.id && !i.left);
@@ -356,32 +319,52 @@ export class CommandSystem {
     if (!this.isIncursion(c.owner, o)) return;
     const g = this.g;
     const t = Math.min(MAP_H - 1, Math.max(0, Math.floor(u.y))) * MAP_W + (Math.floor(wrapX(u.x)) % MAP_W);
-    // Deterministic decision delay from the ids involved (no rng stream: headless runs never get here).
-    const h = ((u.id * 2654435761) ^ (o * 40503) ^ (this.nextIncursion * 69069)) >>> 0;
-    const delay = DECIDE_MIN_SEC + (h % 1000) / 1000 * (DECIDE_MAX_SEC - DECIDE_MIN_SEC);
+    const capKm = this.capitalKmOf(o, u);
+    const nearCapital = capKm >= 0 && capKm <= CAPITAL_KM;
+    const grace = nearCapital ? GRACE_CAPITAL_SEC : GRACE_SEC[c.kind];
     const inc: Incursion = {
       id: this.nextIncursion++, intruder: c.owner, victim: o, unitId: u.id, kind: c.kind, tile: t, entryX: u.x, entryY: u.y,
-      enteredSec: this.sec, decideAtSec: this.sec + delay, response: 'none', respondedSec: 0, deadlineSec: 0, depthKm: 0,
-      qrf: null, left: false, leftSec: 0,
+      enteredSec: this.sec, graceSec: grace, decideAtSec: this.sec + grace, response: 'none', respondedSec: 0,
+      deadlineSec: Number.POSITIVE_INFINITY, depthKm: 0, capitalKm: capKm, qrf: null, fireSec: 0, left: false, leftSec: 0,
     };
     this.incursions.push(inc);
-    g.emit({ type: 'borderIncursion', tick: g.tick, intruder: c.owner, victim: o, unitId: u.id, tile: t, stage: 'entered', kind: c.kind, sec: this.sec });
-    this.log(`[command] incursion #${inc.id}: unit ${u.id} of ${c.owner} entered ${o} at ${this.sec.toFixed(1)} game s; decision at ${inc.decideAtSec.toFixed(1)}`);
+    g.emit({ type: 'borderIncursion', tick: g.tick, intruder: c.owner, victim: o, unitId: u.id, tile: t, stage: 'entered', kind: c.kind, sec: this.sec, graceSec: grace, nearCapital });
+    this.log(`[command] incursion #${inc.id}: unit ${u.id} of ${c.owner} entered ${o} at ${this.sec.toFixed(1)} game s; warned, ${grace} s to turn back${nearCapital ? ` (capital ${capKm.toFixed(0)} km)` : ''}`);
     this.dirty = true;
   }
 
   private leave(inc: Incursion): void {
     if (inc.left) return;
     const g = this.g;
+    // Turned back within the grace: a formal protest and a small grudge, nothing else.
+    if (inc.response === 'none' && this.sec - inc.enteredSec >= 2 && g.war.pairState(inc.intruder, inc.victim) !== 'war') {
+      inc.response = 'protest';
+      inc.respondedSec = this.sec;
+      g.diplomacy.addReason(inc.victim, inc.intruder, 'incursion', -6);
+      g.emit({ type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile, stage: 'response', response: 'protest', kind: inc.kind, sec: this.sec });
+      this.log(`[command] incursion #${inc.id}: left after ${(this.sec - inc.enteredSec).toFixed(1)} s, within the grace: ${inc.victim} protests`);
+    }
     inc.left = true;
     inc.leftSec = this.sec;
+    // The force goes home: scrambled fighters return to base, a warship keeps its station where it is.
+    const q = inc.qrf;
+    if (q && q.unitId) {
+      const r = g.unitMap.get(q.unitId);
+      const V = g.playerById[inc.victim];
+      if (r && !r.dead && V) g.unitSys.order(V, [r.id], r.type === UnitType.Warship ? 'hold' : 'return', tileOfXY(r.x, r.y), 0);
+    }
     g.emit({ type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile, stage: 'left', kind: inc.kind, sec: this.sec });
     this.dirty = true;
   }
 
   // =================================================================================================
-  // The victim's decision and the quick-reaction force
+  // The victim's answer: warning, interception, last warning, fire or war (owner feedback #19)
   // =================================================================================================
+  private aggressive(victim: number): boolean {
+    const pers = this.g.playerById[victim]?.personality ?? null;
+    return pers === 'conqueror' || pers === 'nuker' || pers === 'opportunist';
+  }
+
   private stepIncursion(inc: Incursion, dt: number): void {
     if (inc.left) return;
     const g = this.g;
@@ -395,13 +378,51 @@ export class CommandSystem {
       this.leave(inc);
       return;
     }
+    // A released unit is followed on the strategic map (it holds, or the player moves it with orders).
+    if (!this.controlled.has(u.id)) {
+      if (this.groundOwner(u, inc.kind) !== inc.victim || !this.isIncursion(inc.intruder, inc.victim)) {
+        this.leave(inc);
+        return;
+      }
+    }
+    inc.depthKm = Math.max(inc.depthKm, tileDistKm(inc.entryX, inc.entryY, u.x, u.y));
+    const capKm = this.capitalKmOf(inc.victim, u);
+    if (capKm >= 0 && (inc.capitalKm < 0 || capKm < inc.capitalKm)) {
+      inc.capitalKm = capKm;
+      // Heading for the capital: the grace shrinks (never ignored).
+      if (capKm <= CAPITAL_KM && inc.response === 'none') inc.decideAtSec = Math.min(inc.decideAtSec, this.sec + GRACE_CAPITAL_SEC);
+    }
+    const nearCapital = inc.capitalKm >= 0 && inc.capitalKm <= CAPITAL_KM;
     if (inc.response === 'none' && this.sec >= inc.decideAtSec) this.decide(inc, u);
-    else if (inc.response === 'protest' && this.sec >= inc.deadlineSec) this.respond(inc, u, 'intercept', true);
-    else if (inc.response === 'intercept' && this.sec >= inc.deadlineSec) {
-      const P = g.playerById[inc.victim];
-      const aggressive = P?.personality === 'conqueror' || P?.personality === 'nuker' || P?.personality === 'opportunist';
-      if (aggressive) this.respond(inc, u, 'war', true);
-      else inc.deadlineSec = Number.POSITIVE_INFINITY;
+    else if ((inc.response === 'intercept' || inc.response === 'protest') && this.sec >= inc.deadlineSec) {
+      // The last warning was ignored.
+      const hates = g.diplomacy.opinion(inc.victim, inc.intruder) <= -40;
+      const canFire = inc.qrf !== null || (inc.kind === 'jet' && this.samCovers(inc.victim, u)) || inc.kind === 'tank';
+      if ((this.aggressive(inc.victim) || hates || (nearCapital && !canFire)) && g.war.declareError(inc.victim, inc.intruder, { force: true }) === null) {
+        this.respond(inc, u, 'war', true);
+      } else if (canFire) this.respond(inc, u, 'engage', true);
+      else {
+        // Nothing to send and no will for war: another protest, another grudge.
+        g.diplomacy.addReason(inc.victim, inc.intruder, 'incursion');
+        inc.deadlineSec = this.sec + 600;
+        this.log(`[command] incursion #${inc.id}: ${inc.victim} cannot intercept; protests again`);
+      }
+    } else if (inc.response === 'engage') {
+      if (this.sec - inc.respondedSec >= ENGAGE_WAR_SEC && g.war.declareError(inc.victim, inc.intruder, { force: true }) === null) {
+        this.respond(inc, u, 'war', true);
+      } else if (!this.controlled.has(u.id)) {
+        // Left inside under fire on the strategic map: the escort and the air defences wear it down.
+        inc.fireSec += dt;
+        if (inc.fireSec >= 60) {
+          const mins = Math.floor(inc.fireSec / 60);
+          inc.fireSec -= mins * 60;
+          g.unitSys.damage(u, u.maxHp * ENGAGE_DAMAGE_PER_MIN * mins, inc.victim);
+          if (u.dead) {
+            this.leave(inc);
+            return;
+          }
+        }
+      }
     }
     const q = inc.qrf;
     if (q && !q.arrived) {
@@ -409,18 +430,63 @@ export class CommandSystem {
       const k = Math.min(1, (this.sec - q.dispatchSec) / Math.max(1, q.arriveSec - q.dispatchSec));
       q.x = wrapX(q.fromX + wdx(q.fromX, u.x) * k);
       q.y = q.fromY + (u.y - q.fromY) * k;
+      this.carry(q, u, false);
       if (k >= 1) {
         q.arrived = true;
-        g.emit({ type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile, stage: 'arrived', response: 'intercept', kind: inc.kind, sec: this.sec });
-        this.log(`[command] incursion #${inc.id}: quick-reaction force arrived ${(this.sec - q.dispatchSec).toFixed(0)} game s after dispatch`);
+        const warn = nearCapital ? ESCORT_WARN_CAPITAL_SEC : ESCORT_WARN_SEC[inc.kind];
+        if (inc.response === 'intercept') inc.deadlineSec = this.sec + warn;
+        g.emit({
+          type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile, stage: 'arrived',
+          response: inc.response === 'none' ? 'intercept' : inc.response, kind: inc.kind, sec: this.sec, deadlineSec: warn, qrfMode: q.mode, nearCapital,
+        });
+        this.log(`[command] incursion #${inc.id}: the ${q.mode} force arrived ${(this.sec - q.dispatchSec).toFixed(0)} game s after dispatch; last warning ${warn} s`);
       }
       this.dirty = true;
     } else if (q && q.arrived) {
       // Escort: stays with the intruder.
       q.x = u.x;
       q.y = u.y;
+      this.carry(q, u, true);
     }
-    void dt;
+  }
+
+  /** The real unit carrying the force (fighters, a warship) flies / sails along the force's path, then escorts. */
+  private carry(q: Qrf, u: Unit, escorting: boolean): void {
+    if (!q.unitId) return;
+    const r = this.g.unitMap.get(q.unitId);
+    if (!r || r.dead) {
+      q.unitId = 0;
+      return;
+    }
+    const px = r.x, py = r.y;
+    if (escorting) {
+      // Station on the intruder: fighters orbit it, the warship keeps company (its own step moves it).
+      r.stationX = u.x;
+      r.stationY = u.y;
+      r.toX = u.x;
+      r.toY = u.y;
+      if (r.type !== UnitType.Warship) {
+        r.x = u.x;
+        r.y = u.y;
+      }
+    } else {
+      r.x = q.x;
+      r.y = q.y;
+      r.stationX = u.x;
+      r.stationY = u.y;
+      r.toX = u.x;
+      r.toY = u.y;
+    }
+    const ex = wdx(px, r.x) * kmPerTileX(r.y), ny = -(r.y - py) * TILE_KM;
+    if (Math.hypot(ex, ny) > 0.05) r.heading = Math.atan2(ex, ny);
+  }
+
+  private samCovers(victim: number, u: Unit): boolean {
+    for (const s of this.g.structByOwner.get(victim) ?? []) {
+      if (s.type !== StructureType.SamSite || s.built < 1) continue;
+      if (tileDistKm((s.tile % MAP_W) + 0.5, ((s.tile / MAP_W) | 0) + 0.5, u.x, u.y) <= 150) return true;
+    }
+    return false;
   }
 
   private decide(inc: Incursion, u: Unit): void {
@@ -428,38 +494,44 @@ export class CommandSystem {
     const P = g.playerById[inc.victim];
     const op = g.diplomacy.opinion(inc.victim, inc.intruder);
     const pers = P?.personality ?? null;
-    const aggressive = pers === 'conqueror' || pers === 'nuker' || pers === 'opportunist';
-    let r: 'protest' | 'intercept' | 'war';
-    if (op <= -50 && aggressive && g.war.declareError(inc.victim, inc.intruder, { force: true }) === null) r = 'war';
-    else if (inc.depthKm >= 20 || pers === 'conqueror' || pers === 'nuker' || (op < -10 && pers !== 'turtle' && pers !== 'trader')) r = 'intercept';
-    else r = 'protest';
+    let r: 'intercept' | 'war' = 'intercept';
+    if (op <= -50 && this.aggressive(inc.victim) && g.war.declareError(inc.victim, inc.intruder, { force: true }) === null) r = 'war';
     g.diplomacy.addReason(inc.victim, inc.intruder, 'incursion');
-    this.log(`[command] incursion #${inc.id}: ${inc.victim} decides ${r} at ${this.sec.toFixed(1)} game s (${(this.sec - inc.enteredSec).toFixed(1)} s after entry, opinion ${op.toFixed(0)}, ${pers ?? '-'})`);
+    this.log(`[command] incursion #${inc.id}: ${inc.victim} answers ${r} at ${this.sec.toFixed(1)} game s (${(this.sec - inc.enteredSec).toFixed(1)} s after the warning, opinion ${op.toFixed(0)}, ${pers ?? '-'})`);
     this.respond(inc, u, r, false);
   }
 
-  private respond(inc: Incursion, u: Unit, r: 'protest' | 'intercept' | 'war', escalated: boolean): void {
+  private respond(inc: Incursion, u: Unit, r: 'intercept' | 'engage' | 'war', escalated: boolean): void {
     const g = this.g;
     inc.response = r;
     inc.respondedSec = this.sec;
     this.dirty = true;
-    if (r === 'protest') inc.deadlineSec = this.sec + PROTEST_DEADLINE_SEC;
     if (r === 'intercept') {
-      inc.deadlineSec = this.sec + INTERCEPT_ESCALATE_SEC;
       this.dispatch(inc, u);
+      if (!inc.qrf) {
+        // Nothing to send (no airbase or fleet in reach): a protest with a deadline instead.
+        inc.response = 'protest';
+        inc.deadlineSec = this.sec + (inc.capitalKm >= 0 && inc.capitalKm <= CAPITAL_KM ? ESCORT_WARN_CAPITAL_SEC : ESCORT_WARN_SEC[inc.kind]) * 2;
+      } else inc.deadlineSec = Number.POSITIVE_INFINITY;
+    }
+    if (r === 'engage') {
+      inc.deadlineSec = Number.POSITIVE_INFINITY;
+      this.log(`[command] incursion #${inc.id}: last warning ignored: ${inc.victim} opens fire on unit ${inc.unitId}`);
     }
     if (r === 'war') {
       g.war.recordTension(inc.victim, inc.intruder);
       const w = g.war.declare(inc.victim, inc.intruder, 'incursion', 'war.reason.incursion', { force: true });
       if (!w) {
-        inc.response = 'intercept';
+        inc.response = inc.qrf ? 'engage' : 'intercept';
         if (!inc.qrf) this.dispatch(inc, u);
       }
     }
     g.emit({
       type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile,
-      stage: 'response', response: inc.response as 'protest' | 'intercept' | 'war', escalated, kind: inc.kind, sec: this.sec,
-      etaSec: inc.qrf ? Math.max(0, inc.qrf.arriveSec - this.sec) : undefined, deadlineSec: inc.response === 'protest' ? PROTEST_DEADLINE_SEC : undefined,
+      stage: 'response', response: inc.response as 'protest' | 'intercept' | 'engage' | 'war', escalated, kind: inc.kind, sec: this.sec,
+      etaSec: inc.qrf && !inc.qrf.arrived ? Math.max(0, inc.qrf.arriveSec - this.sec) : undefined,
+      deadlineSec: Number.isFinite(inc.deadlineSec) ? inc.deadlineSec - this.sec : undefined, qrfMode: inc.qrf?.mode,
+      nearCapital: inc.capitalKm >= 0 && inc.capitalKm <= CAPITAL_KM,
     });
   }
 
@@ -467,54 +539,101 @@ export class CommandSystem {
     const g = this.g;
     const V = g.playerById[inc.victim];
     if (!V) return;
-    // Origin: the nearest town, defense post or base of the victim within 150 km; else the nearest victim tile.
-    let best: { x: number; y: number; source: 'city' | 'post' | 'base' } | null = null, bestD = 150;
-    for (const s of g.structByOwner.get(inc.victim) ?? []) {
-      if (s.built < 1) continue;
-      const source = s.type === StructureType.City ? 'city' : s.type === StructureType.DefensePost ? 'post'
-        : s.type === StructureType.ArmyBase || s.type === StructureType.Airbase || s.type === StructureType.NavalYard ? 'base' : null;
-      if (!source) continue;
-      const sx = (s.tile % MAP_W) + 0.5, sy = ((s.tile / MAP_W) | 0) + 0.5;
-      const d = tileDistKm(sx, sy, u.x, u.y);
-      if (d < bestD) {
-        bestD = d;
-        best = { x: sx, y: sy, source };
-      }
-    }
-    let fromX: number, fromY: number, source: 'city' | 'post' | 'base' | 'border';
-    if (best) {
-      fromX = best.x;
-      fromY = best.y;
-      source = best.source;
-    } else {
-      // The garrison of the land itself: a point 12 km deeper inside the victim's land from the intruder.
-      const ang = Math.atan2(u.y - inc.entryY, wdx(inc.entryX, u.x));
-      fromX = wrapX(u.x + Math.cos(ang) * 12 / kmPerTileX(u.y));
-      fromY = u.y + Math.sin(ang) * 12 / TILE_KM;
-      source = 'border';
-      bestD = 12;
-    }
-    // 8–24 soldiers from the garrison (1 = 25 troops), more for a big army; jets meet fighters, not infantry.
-    const soldiers = inc.kind === 'jet' ? 0 : Math.round(Math.max(8, Math.min(24, 8 + 16 * Math.min(1, V.troops / 400_000))));
-    const travel = Math.max(QRF_MIN_SEC, Math.min(QRF_MAX_SEC, (bestD / QRF_KMH) * 3600));
-    const divisions: number[] = [];
-    const fighters: number[] = [];
-    for (const d of g.unitsByOwner.get(inc.victim) ?? []) {
-      if (d.dead || d.state === UnitState.Controlled) continue;
-      const km = tileDistKm(d.x, d.y, u.x, u.y);
-      if (d.type === UnitType.ArmoredDivision && inc.kind !== 'jet' && km <= QRF_DIVISION_KM) {
-        const tile = Math.floor(u.y) * MAP_W + (Math.floor(wrapX(u.x)) % MAP_W);
-        if (g.unitSys.order(V, [d.id], 'move', tile, 0)) divisions.push(d.id);
-      } else if (d.type === UnitType.FighterSquadron && inc.kind === 'jet' && km <= QRF_FIGHTER_KM && d.alt > 0) {
-        const tile = Math.floor(u.y) * MAP_W + (Math.floor(wrapX(u.x)) % MAP_W);
-        if (g.unitSys.order(V, [d.id], 'cap', tile, 0)) fighters.push(d.id);
-      }
-    }
-    inc.qrf = {
-      fromX, fromY, x: fromX, y: fromY, soldiers, dispatchSec: this.sec, arriveSec: this.sec + travel, arrived: false, source,
-      divisions, fighters,
+    const here = tileOfXY(u.x, u.y);
+    const structs = g.structByOwner.get(inc.victim) ?? [];
+    const sxy = (s: { tile: number }) => ({ x: (s.tile % MAP_W) + 0.5, y: ((s.tile / MAP_W) | 0) + 0.5 });
+    let q: Qrf | null = null;
+    const make = (mode: Qrf['mode'], fromX: number, fromY: number, km: number, source: Qrf['source'], vehicles: number, heavy: boolean, soldiers: number, unitId: number): Qrf => {
+      const [lo, hi] = QRF_WINDOW[mode];
+      const raw = mode === 'air' ? 45 + km / QRF_AIR_KMS : mode === 'sea' ? (km / QRF_SEA_KMH) * 3600 : (km / QRF_ROAD_KMH) * 3600;
+      const travel = Math.max(lo, Math.min(hi, raw));
+      return { mode, fromX, fromY, x: fromX, y: fromY, vehicles, heavy, soldiers, dispatchSec: this.sec, arriveSec: this.sec + travel, arrived: false, source, unitId, divisions: [], fighters: [] };
     };
-    this.log(`[command] incursion #${inc.id}: quick-reaction force of ${soldiers} soldiers from ${source} ${bestD.toFixed(1)} km away, arrival in ${(travel / 60).toFixed(1)} game min; divisions [${divisions}] fighters [${fighters}]`);
+    if (inc.kind === 'jet') {
+      // Fighters: a squadron already airborne within 300 km, else the ready one of the nearest airbase in reach.
+      let best: Unit | null = null, bestD = QRF_FIGHTER_KM;
+      for (const d of g.unitsByOwner.get(inc.victim) ?? []) {
+        if (d.dead || d.type !== UnitType.FighterSquadron || d.state === UnitState.Controlled || d.alt <= 0 || d.mode === Mode.Docked) continue;
+        const km = tileDistKm(d.x, d.y, u.x, u.y);
+        if (km < bestD) {
+          bestD = km;
+          best = d;
+        }
+      }
+      let source: Qrf['source'] = 'unit';
+      if (!best) {
+        bestD = QRF_SCRAMBLE_KM;
+        for (const d of g.unitsByOwner.get(inc.victim) ?? []) {
+          if (d.dead || d.type !== UnitType.FighterSquadron || d.mode !== Mode.Docked || d.readyTick > g.tick) continue;
+          const km = tileDistKm(d.x, d.y, u.x, u.y);
+          if (km < bestD) {
+            bestD = km;
+            best = d;
+          }
+        }
+        source = 'airbase';
+      }
+      if (best && g.unitSys.order(V, [best.id], 'cap', here, 0)) {
+        q = make('air', best.x, best.y, bestD, source, Math.max(1, Math.min(2, Math.round(best.hp / best.maxHp * 3))), false, 0, best.id);
+        q.fighters.push(best.id);
+      }
+    } else if (inc.kind === 'ship') {
+      let best: Unit | null = null, bestD = QRF_SHIP_KM;
+      for (const d of g.unitsByOwner.get(inc.victim) ?? []) {
+        if (d.dead || d.type !== UnitType.Warship || d.state === UnitState.Controlled) continue;
+        const km = tileDistKm(d.x, d.y, u.x, u.y);
+        if (km < bestD) {
+          bestD = km;
+          best = d;
+        }
+      }
+      if (best && g.unitSys.order(V, [best.id], 'escort', here, u.id)) {
+        q = make('sea', best.x, best.y, bestD, 'unit', 1, true, 0, best.id);
+      } else {
+        let port: { x: number; y: number } | null = null, pd = QRF_PORT_KM;
+        for (const s of structs) {
+          if (s.built < 1 || (s.type !== StructureType.Port && s.type !== StructureType.NavalYard)) continue;
+          const c = sxy(s);
+          const km = tileDistKm(c.x, c.y, u.x, u.y);
+          if (km < pd) {
+            pd = km;
+            port = c;
+          }
+        }
+        if (port) q = make('sea', port.x, port.y, pd, 'port', 1, false, 0, 0);
+      }
+    } else {
+      // Ground: patrol vehicles and APCs of the nearest post, town or base within 150 km (a tank leads a force from
+      // an army base); else the garrison of the land itself, 12 km deeper inside.
+      let best: { x: number; y: number; source: 'city' | 'post' | 'base' } | null = null, bestD = 150;
+      for (const s of structs) {
+        if (s.built < 1) continue;
+        const source = s.type === StructureType.City ? 'city' : s.type === StructureType.DefensePost ? 'post' : s.type === StructureType.ArmyBase ? 'base' : null;
+        if (!source) continue;
+        const c = sxy(s);
+        const d = tileDistKm(c.x, c.y, u.x, u.y);
+        if (d < bestD) {
+          bestD = d;
+          best = { x: c.x, y: c.y, source };
+        }
+      }
+      const soldiers = Math.round(Math.max(8, Math.min(24, 8 + 16 * Math.min(1, V.troops / 400_000))));
+      if (best) q = make('ground', best.x, best.y, bestD, best.source, best.source === 'base' ? 3 : 2, best.source === 'base', soldiers, 0);
+      else {
+        const ang = Math.atan2(u.y - inc.entryY, wdx(inc.entryX, u.x));
+        const fx = wrapX(u.x + Math.cos(ang) * 12 / kmPerTileX(u.y)), fy = u.y + Math.sin(ang) * 12 / TILE_KM;
+        q = make('ground', fx, fy, 12, 'border', 2, false, soldiers, 0);
+      }
+      for (const d of g.unitsByOwner.get(inc.victim) ?? []) {
+        if (d.dead || d.state === UnitState.Controlled || d.type !== UnitType.ArmoredDivision) continue;
+        if (tileDistKm(d.x, d.y, u.x, u.y) > QRF_DIVISION_KM) continue;
+        if (g.unitSys.order(V, [d.id], 'move', here, 0)) q.divisions.push(d.id);
+      }
+    }
+    inc.qrf = q;
+    if (q) {
+      this.log(`[command] incursion #${inc.id}: ${q.mode} force (${q.vehicles} vehicles${q.unitId ? `, unit ${q.unitId}` : ''}) from ${q.source}, arrival in ${((q.arriveSec - q.dispatchSec) / 60).toFixed(1)} game min; divisions [${q.divisions}]`);
+    } else this.log(`[command] incursion #${inc.id}: ${inc.victim} has nothing in reach to intercept with`);
   }
 
   // =================================================================================================
@@ -578,14 +697,11 @@ export class CommandSystem {
     this.dirty = false;
     const incursions: IncursionView[] = this.incursions.filter((i) => i.intruder === HUMAN_ID || i.victim === HUMAN_ID).map((i) => ({
       id: i.id, intruder: i.intruder, victim: i.victim, unitId: i.unitId, kind: i.kind, enteredSec: i.enteredSec,
-      decideAtSec: i.decideAtSec, response: i.response, respondedSec: i.respondedSec,
-      deadlineSec: Number.isFinite(i.deadlineSec) ? i.deadlineSec : 0, depthKm: i.depthKm, left: i.left,
-      qrf: i.qrf ? {
-        x: i.qrf.x, y: i.qrf.y, fromX: i.qrf.fromX, fromY: i.qrf.fromY, soldiers: i.qrf.soldiers, dispatchSec: i.qrf.dispatchSec,
-        arriveSec: i.qrf.arriveSec, arrived: i.qrf.arrived, source: i.qrf.source, divisions: i.qrf.divisions, fighters: i.qrf.fighters,
-      } : null,
+      decideAtSec: i.decideAtSec, graceSec: i.graceSec, response: i.response, respondedSec: i.respondedSec,
+      deadlineSec: Number.isFinite(i.deadlineSec) ? i.deadlineSec : 0, depthKm: i.depthKm, capitalKm: i.capitalKm, left: i.left,
+      qrf: i.qrf ? { ...i.qrf, divisions: [...i.qrf.divisions], fighters: [...i.qrf.fighters] } : null,
     }));
-    const controlled = [...this.controlled.values()].map((c) => ({ unitId: c.unitId, x: c.x, y: c.y, sec: c.sec, returning: c.returning }));
+    const controlled = [...this.controlled.values()].map((c) => ({ unitId: c.unitId, x: c.x, y: c.y, sec: c.sec }));
     return {
       sec: this.sec, travel: this.g.commandTravel, controlled, incursions, log: this.logs.slice(-12),
       moves: { accepted: this.stats.accepted, snapped: this.stats.snapped, rejected: this.stats.rejected, lastSnapKm: this.stats.lastSnapKm, lastRejectKm: this.stats.lastRejectKm },

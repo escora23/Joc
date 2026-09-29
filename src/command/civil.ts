@@ -28,8 +28,11 @@ export interface CivilLabel {
   z: number;
   text: string;
   sub: string;
-  kind: 'capital' | 'town' | 'city' | 'base' | 'border';
+  /** 'force': a real unit of the simulation (division, ship, squadron, quick-reaction force), added by command/index.ts. */
+  kind: 'capital' | 'town' | 'city' | 'base' | 'border' | 'force';
   color: string;
+  /** 'force' only: hostile (red), at peace (amber) or own/allied (blue). */
+  tone?: 'hostile' | 'neutral' | 'own';
   owner: number;
 }
 

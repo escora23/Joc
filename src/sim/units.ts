@@ -1139,10 +1139,62 @@ export class UnitSystem {
       if (u.state !== UnitState.Controlled) u.savedState = u.state;
       u.state = UnitState.Controlled;
     } else if (u.state === UnitState.Controlled) {
-      u.state = u.savedState === UnitState.Controlled ? UnitState.Idle : u.savedState;
-      if (AIR_TYPES.has(u.type) && u.mode !== Mode.Docked) u.mode = Mode.Return;
+      this.holdAfterControl(u);
     }
     return true;
+  }
+
+  /**
+   * v2 (W5, owner feedback #18): released from command mode, the unit stays exactly where the player left it, with
+   * the same heading — never a walk back or a return to base. A division standing on its war front goes back on
+   * the line there; any other division holds. A warship keeps station on the spot. An aircraft flies a holding
+   * orbit (combat air patrol) over the spot until it is given another order.
+   */
+  holdAfterControl(u: Unit): void {
+    const g = this.g;
+    u.path = null;
+    u.pathRail = null;
+    u.eta = -1;
+    u.targetUnit = 0;
+    const heading = u.heading;
+    if (u.type === UnitType.ArmoredDivision) {
+      if (u.enemy > 0 && g.war.atWar(u.owner, u.enemy)) {
+        const rally = this.rallyTile(u.owner, u.enemy, tileOf(u.x, u.y));
+        if (rally >= 0 && dist2(u.x, u.y, tileCx(rally), tileCy(rally)) <= DIVISION_ATTACH_TILES ** 2) {
+          this.attach(u, u.enemy);
+          u.order = orderCode('attach');
+          u.heading = heading;
+          return;
+        }
+      }
+      this.stopDivision(u);
+      u.enemy = 0;
+      u.frontKey = 0;
+      u.order = orderCode('hold');
+    } else if (u.type === UnitType.Warship) {
+      u.enemy = 0;
+      u.stationX = u.x;
+      u.stationY = u.y;
+      u.toX = u.x;
+      u.toY = u.y;
+      u.anchorTile = tileOf(u.x, u.y);
+      u.mode = Mode.Patrol;
+      u.state = UnitState.Idle;
+      u.order = orderCode('hold');
+    } else if (AIR_TYPES.has(u.type) && u.mode !== Mode.Docked) {
+      u.alt = Math.max(u.alt, 0.5);
+      u.mode = Mode.Cap;
+      u.state = UnitState.Moving;
+      u.stationX = u.x;
+      u.stationY = u.y;
+      u.toX = u.x;
+      u.toY = u.y;
+      u.targetTile = tileOf(u.x, u.y);
+      u.order = orderCode('cap');
+    } else {
+      u.state = u.savedState === UnitState.Controlled ? UnitState.Idle : u.savedState;
+    }
+    u.heading = heading;
   }
 
   /** The nearest playable tile within `radius` tiles of `tile` (itself when playable; `tile` when none). */
