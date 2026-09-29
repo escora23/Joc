@@ -82,6 +82,7 @@ export class Forces {
     this.divPos.clear();
     this.scrambled.clear();
     this.refreshN = 0;
+    this.lastTrackSec = -1;
     this.last = null;
     this.kind = kind;
     this.controlledId = controlledId;
@@ -100,6 +101,8 @@ export class Forces {
   private engaged = new Set<number>();
   /** Where the sim's quick-reaction force is, for its vehicles while they are far (scene coords). */
   private readonly qrfPoint = new WeakMap<Ent, THREE.Vector3>();
+  /** Scrambled fighters: the direction they come from and when the sim has them on your wing. */
+  private readonly qrfAir = new WeakMap<Ent, { dx: number; dz: number; arriveSec: number }>();
   private hostile(rel: LocalRelation, owner: number): boolean {
     return rel === 'war' || this.engaged.has(owner);
   }
@@ -510,13 +513,14 @@ export class Forces {
         const c = Math.cos(player.yaw), sn = Math.sin(player.yaw);
         for (let k = 0; k < Math.max(1, q.vehicles); k++) {
           // Already escorting in the sim: on your wings now; else on their track toward you.
-          const sx = k % 2 === 0 ? 260 : -260, sz = 70 + k * 40;
+          // ICAO interception: the leader slightly ahead on your left where you can see it, the wingman back on the right.
+          const sx = k % 2 === 0 ? -95 : 160, sz = k % 2 === 0 ? -140 : 160;
           const x = q.arrived ? player.pos.x + sx * c + sz * sn : player.pos.x - dx * d + k * 160;
           const z = q.arrived ? player.pos.z - sx * sn + sz * c : player.pos.z - dz * d + k * 120;
           const e = this.mk('jet', team, x, z, q.arrived ? player.yaw : Math.atan2(-dx, -dz), owner, rel,
             q.unitId ? { kind: 'squadron', id: q.unitId, owner, share: 1 / 3 } : { kind: 'qrf', id: inc.id, owner, share: 0 }, alt + k * 20);
           e.order = hot ? 'front' : 'escort';
-          e.slot.set(k % 2 === 0 ? 260 : -260, 25, 70 + k * 40);
+          e.slot.set(sx, k % 2 === 0 ? 15 : 45, sz);
           e.goal.copy(player.pos);
           e.speed = q.arrived ? Math.max(150, player.speed) : 330;
           if (q.arrived) e.state = 1;
@@ -569,6 +573,7 @@ export class Forces {
       if (!e.alive) continue;
       if (hot && e.order === 'escort') e.order = 'front';
       if (e.order === 'front') e.goal.copy(player.pos);
+      if (q.mode === 'air') this.qrfAir.set(e, { dx, dz, arriveSec: q.arrived ? 0 : q.arriveSec });
       // While far, ground vehicles follow the force's position (see track()).
       let pt = this.qrfPoint.get(e);
       if (!pt) this.qrfPoint.set(e, (pt = new THREE.Vector3()));
@@ -583,13 +588,38 @@ export class Forces {
    * Quick-reaction trucks follow the force's sim position; divisions far from the player (or while time is
    * compressed) glide to their strategic position; near the player at ×1 the AI drives them.
    */
+  private lastTrackSec = -1;
   track(view: GameView, player: Ent, dtGame: number, rate: number): void {
+    // Far vehicles follow the sim's schedule: on a slow frame (local step clamped) they still move by the sim's time.
+    const sec = view.command?.sec ?? -1;
+    const dtSim = this.lastTrackSec >= 0 && sec >= this.lastTrackSec ? Math.min(30, sec - this.lastTrackSec) : 0;
+    this.lastTrackSec = sec;
+    const dtFar = Math.max(dtGame, dtSim);
     for (const g of this.groups.values()) {
       const qrf = g.key.startsWith('qrf:');
       const div = g.key.startsWith('div:');
       if (!qrf && !div) continue;
       for (const e of g.ents) {
-        if (!e.alive || !ENT_DEFS[e.kind].vehicle || ENT_DEFS[e.kind].air || ENT_DEFS[e.kind].naval) continue;
+        if (!e.alive) continue;
+        const air = this.qrfAir.get(e);
+        if (air && e.neutral) {
+          // Scrambled fighters keep the sim's schedule while more than 3 km out (at 330 m/s along their track):
+          // on your wing when the sim says they are there, whatever the frame rate.
+          const out = Math.max(1500, (air.arriveSec > 0 ? Math.max(0, air.arriveSec - sec) : 0) * 330);
+          const tx = player.pos.x - air.dx * out, tz = player.pos.z - air.dz * out;
+          const d0 = Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
+          if (d0 > 3000) {
+            const ddx = tx - e.pos.x, ddz = tz - e.pos.z, dd = Math.hypot(ddx, ddz);
+            const st = Math.min(dd, 700 * dtFar);
+            if (dd > 1) {
+              e.pos.x += (ddx / dd) * st;
+              e.pos.z += (ddz / dd) * st;
+            }
+            e.pos.y += (player.pos.y + 30 - e.pos.y) * Math.min(1, dtFar * 0.5);
+          }
+          continue;
+        }
+        if (!ENT_DEFS[e.kind].vehicle || ENT_DEFS[e.kind].air || ENT_DEFS[e.kind].naval) continue;
         const dist = e.pos.distanceTo(player.pos);
         // Far away (or with time compressed) a vehicle follows its sim position on the road; within 2.5 km at ×1 the
         // Brain drives it (escort stations, fighting) with real vehicle physics.
@@ -602,11 +632,11 @@ export class Forces {
         if (d < 5) continue;
         // Road speed (the force's 80 km/h, a division's 40 km/h), up to 1.3× to catch up with the sim sample.
         const vmax = (qrf ? 80 : 40) / 3.6 * 1.3;
-        const step = Math.min(d, vmax * dtGame);
+        const step = Math.min(d, vmax * dtFar);
         e.pos.x += (dx / d) * step;
         e.pos.z += (dz / d) * step;
         e.yaw = Math.atan2(-dx, -dz);
-        e.speed = dtGame > 0 ? step / dtGame : 0;
+        e.speed = dtFar > 0 ? Math.min(vmax, step / dtFar) : 0;
         e.pos.y = this.ground.heightAt(e.pos.x, e.pos.z);
       }
     }

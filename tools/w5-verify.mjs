@@ -227,7 +227,7 @@ if (ONLY.includes('border')) {
   if (inc) {
     // Owner feedback #19: the warning at once, with its countdown, a short grace in real seconds, then the interception.
     await wait(1500);
-    let radio = (await stats(page)).radio ?? '';
+    const radio = await page.evaluate(() => window.__cmd.overlay.radioText);
     rec('B4 radio warning at once with a countdown', /\d+\s*s/.test(radio) && inc.graceSec > 0 && inc.graceSec <= 40, { graceSec: inc.graceSec, radio: radio.slice(0, 220) });
     // Hold still inside (never touch the controls): the grace runs out.
     let r = inc;
@@ -250,7 +250,7 @@ if (ONLY.includes('border')) {
           const inc = v.command?.incursions?.[0] ?? null;
           const q = I.world.ents.filter((e) => e.alive && e.src?.kind === 'qrf' && !['soldier', 'at'].includes(e.kind));
           return {
-            sec: v.command?.sec ?? 0, response: inc?.response, arrived: !!inc?.qrf?.arrived, deadline: inc?.deadlineSec ?? 0, radio: window.__cmdStats?.radio ?? '',
+            sec: v.command?.sec ?? 0, response: inc?.response, arrived: !!inc?.qrf?.arrived, deadline: inc?.deadlineSec ?? 0, radio: I.overlay.radioText,
             q: q.map((e) => ({ id: e.id, kind: e.kind, d: Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z), v: e.speed, yaw: e.yaw, neutral: e.neutral })),
           };
         });

@@ -182,7 +182,7 @@ export class Brain {
         this.escortPoint(e, P!, T4);
         T3.subVectors(T4, e.pos);
         const dist = T3.length();
-        const speed = dist > 3000 ? Math.max(340, P!.speed + 60) : Math.max(140, Math.min(420, P!.speed + Math.min(90, dist * 0.06) - (dist < 120 ? 15 : 0)));
+        const speed = dist > 3000 ? Math.max(340, P!.speed + 60) : Math.max(140, Math.min(420, P!.speed + Math.min(120, dist * 0.25) - (dist < 40 ? 5 : 0)));
         this.fly(e, T3.normalize(), dt, dist > 3000 ? 0.45 : 0.7, speed);
         if (dist < 700 && e.state === 0) {
           e.state = 1;

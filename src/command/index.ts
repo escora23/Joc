@@ -79,8 +79,10 @@ export interface CommandInternals {
   controller: Controller | null;
   brain: Brain | null;
   readonly camera: THREE.PerspectiveCamera;
-  /** Freeze local simulation time (renders keep going): shots. */
+  /** Freeze local simulation time (renders keep going) and hold the sim's command clock: shots. */
   freeze: boolean;
+  /** Shots: the next entry starts frozen. */
+  freezeOnEnter: boolean;
   hold: boolean;
   readonly phase: string;
   skipIntro(): void;
@@ -159,6 +161,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let controller: Controller | null = null;
   let brain: Brain | null = null;
   let freeze = false;
+  /** Shots: enter already frozen (the sim's clock held from the first frame). */
+  let freezeOnEnter = false;
   let exitRequested = false;
   let shakeAmt = 0;
   let lockBeepT = 0;
@@ -401,8 +405,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   function sendClock(now: number, force = false): void {
-    const mode = decision ? 'tactical' : effRate > 1 ? 'travel' : 'tactical';
-    const rate = decision ? 0 : effRate;
+    // A decision dialog (and a frozen shot) holds the world still.
+    const hold = decision || freeze;
+    const mode = hold ? 'tactical' : effRate > 1 ? 'travel' : 'tactical';
+    const rate = hold ? 0 : effRate;
     const changed = mode !== sentClock.mode || Math.abs(rate - sentClock.rate) > Math.max(0.5, sentClock.rate * 0.08) || throttled !== sentClock.throttled;
     if (!force && !changed && now - sentClock.at < 1000) return;
     ctx.sim.setClock(mode, rate, focusTile(), mode === 'travel' && throttled);
@@ -833,7 +839,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     lastFiredSec = -1e9;
     localSec = startSec = ctx.sim.view.command?.sec ?? 0;
     startWall = performance.now();
-    landOwner = prevLandOwner = ownerOfTile(tileIndex(tileOf(0, 0).x, tileOf(0, 0).y));
+    landOwner = prevLandOwner = ownerOfTile(tileIndex(tileOf(me.pos.x, me.pos.z).x, tileOf(me.pos.x, me.pos.z).y));
+    // Taking control inside foreign land (a unit left there, an incursion running): that border is already crossed.
+    if (incursionOwner(landOwner)) confirmed.add(landOwner);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1488,6 +1496,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         set freeze(v: boolean) {
           freeze = v;
         },
+        get freezeOnEnter() {
+          return freezeOnEnter;
+        },
+        set freezeOnEnter(v: boolean) {
+          freezeOnEnter = v;
+        },
         simulate(steps, dt, before) {
           for (let i = 0; i < steps; i++) {
             before?.(i);
@@ -1559,7 +1573,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       phaseT = 0;
       shakeAmt = 0;
       exitRequested = false;
-      freeze = false;
+      freeze = freezeOnEnter;
+      freezeOnEnter = false;
       decision = false;
       nextVehicleT = -1;
       const w = ctx.canvas.clientWidth || window.innerWidth, h = ctx.canvas.clientHeight || window.innerHeight;

@@ -171,7 +171,12 @@ export class CommandSystem {
 
   /** Called at the end of every tick. */
   tick(): void {
-    if (!this.subSteppedThisTick) this.advance(GAME_SECONDS_PER_TICK);
+    if (!this.subSteppedThisTick) {
+      // Strategic time: the tick's game time in 10 s steps while an incursion runs, so its warning, answer and
+      // arrival land on the same game second as in command mode (owner feedback #19: same timings on the map).
+      if (this.incursions.some((i) => !i.left)) for (let t = 0; t < GAME_SECONDS_PER_TICK; t += 10) this.advance(Math.min(10, GAME_SECONDS_PER_TICK - t));
+      else this.advance(GAME_SECONDS_PER_TICK);
+    }
     this.subSteppedThisTick = false;
   }
 

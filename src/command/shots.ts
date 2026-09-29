@@ -367,15 +367,15 @@ registerShot('command-ship-coast', 'command', 'Warship at sea off the Spanish co
  */
 async function crossAndWait(s: ShotContext, id: number, b: { hx: number; hy: number; fx: number; fy: number }, km: number, ticks: number): Promise<void> {
   const { ctx } = s;
-  const ex = b.fx + 0.5 + (b.fx - b.hx) * 0.4, ey = b.fy + 0.5 + (b.fy - b.hy) * 0.4;
-  const u = ctx.sim.view.units.get(id);
-  if (!u) return;
-  const lat = 90 - (u.y / MAP_H) * 180;
-  const d = Math.hypot((ex - u.x) * TILE_KM * Math.cos((lat * Math.PI) / 180), (ey - u.y) * TILE_KM);
-  await walkToward(s, id, ex, ey, Math.max(0, d - km));
+  // `km` past the middle of the shared edge, straight across it (one legal step from 1 km short of the edge).
+  const mx = (b.hx + b.fx) / 2 + 0.5, my = (b.hy + b.fy) / 2 + 0.5;
+  const lat = 90 - (my / MAP_H) * 180;
+  const kmX = TILE_KM * Math.cos((lat * Math.PI) / 180);
+  const ex = mx + ((b.fx - b.hx) * km) / kmX, ey = my + ((b.fy - b.hy) * km) / TILE_KM;
+  await walkToward(s, id, ex, ey, 0);
   await waitView(s, () => !!ctx.sim.view.command?.incursions.some((i) => i.unitId === id), 30_000);
   for (let i = 0; i < ticks; i++) await ctx.sim.fastForward(1);
-  await waitView(s, () => !!ctx.sim.view.command?.incursions.some((i) => i.unitId === id && !!i.qrf?.arrived), 30_000);
+  if (ticks > 0) await waitView(s, () => !!ctx.sim.view.command?.incursions.some((i) => i.unitId === id && !!i.qrf?.arrived), 30_000);
 }
 
 registerShot('command-escort', 'command', 'Incursion ignored: the neighbour\'s patrol APCs at their stations around the tank, the radio\'s last warning', async (s) => {
@@ -388,11 +388,16 @@ registerShot('command-escort', 'command', 'Incursion ignored: the neighbour\'s p
   if (!b) throw new Error('no border near the staging point');
   ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.DefensePost, owner: b.foe, tile: b.fy * MAP_W + b.fx, level: 1 });
   const id = await spawnNearEdge(s, UnitType.ArmoredDivision, b, 1);
-  await crossAndWait(s, id, b, 3, 2);
+  // One strategic tick (in 10 s steps): the 30 s grace, the patrol's ≤ 5 min drive, 30 s left of its last warning.
+  await crossAndWait(s, id, b, 3, 1);
+  // Hold the sim's clock from the first frame (the last warning is running) unless it is a live session.
+  const I0 = commandInternals();
+  if (I0 && !live(s)) I0.freezeOnEnter = true;
   await ctx.app.enterCommandMode(id);
   ctx.sim.setSpeed(0);
   if (live(s)) return;
   const I = internalsOrThrow();
+
   await settle(s, I, Number(s.params.get('settle') ?? 6));
   // Look at the vehicle blocking the way.
   const p = I.controller!.ent;
@@ -417,13 +422,18 @@ registerShot('command-jet-intercept', 'command', 'Fighter in a neighbour\'s airs
   ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: b.foe, tile: ab, targetTile: -1 });
   await ctx.sim.fastForward(2);
   const id = await spawnNearEdge(s, UnitType.FighterSquadron, b, 1);
-  await crossAndWait(s, id, b, 6, 2);
+  // Cross, take control at once and let the real clock run: the 25 s grace, then the fighters' 1-3 min scramble.
+  await crossAndWait(s, id, b, 3, 0);
   await ctx.app.enterCommandMode(id);
   ctx.sim.setSpeed(0);
   if (live(s)) return;
   const I = internalsOrThrow();
-  await settle(s, I, Number(s.params.get('settle') ?? 3));
-  await freezeAndWait(s, I);
+  await waitView(s, () => !!ctx.sim.view.command?.incursions.some((i) => i.unitId === id && !!i.qrf?.arrived), 400_000);
+  I.freeze = true;
+  // Let them form up on the wings (local time only; the sim's clock is held).
+  I.skipIntro();
+  I.simulate(Math.round(Number(s.params.get('settle') ?? 20) * 30), 1 / 30);
+  await s.waitFrames(6);
 });
 
 registerShot('command-tank', 'command', 'Tank at a real front (the command-front staging, facing the nearest enemy)', async (s) => {
