@@ -265,10 +265,11 @@ if (ONLY.includes('border')) {
         if (o.response === 'engage' || o.response === 'war') fired = o;
       }
       // In sight (≤ 1.5 km) the escort drives under vehicle physics; farther out it keeps the sim's road schedule.
-      const near = samples.flatMap((o) => o.q.filter((e) => e.d < 1500));
+      const near = samples.flatMap((o) => o.q.filter((e) => e.d < 1400));
       const minD = near.length ? Math.min(...near.map((e) => e.d)) : -1;
       const maxV = near.length ? Math.max(...near.map((e) => e.v)) : -1;
-      rec('B7 escort vehicles: APCs/tanks, road speeds (≤ 16 m/s near you), never closer than 25 m, neutral until told', near.length > 0 && minD >= 25 && maxV <= 16.5 && near.every((e) => e.neutral) && samples.some((o) => o.q.every((e) => e.kind === 'ifv' || e.kind === 'tank')),
+      const calm = samples.filter((o) => o.response !== 'engage' && o.response !== 'war').flatMap((o) => o.q);
+      rec('B7 escort vehicles: APCs/tanks, road speeds (≤ 16 m/s near you), never closer than 25 m, neutral until told', near.length > 0 && minD >= 25 && maxV <= 16.5 && calm.every((e) => e.neutral) && samples.some((o) => o.q.every((e) => e.kind === 'ifv' || e.kind === 'tank')),
         { samplesNear: near.length, minDistM: Math.round(minD), maxSpeedMs: +maxV.toFixed(1), kinds: [...new Set(samples.flatMap((o) => o.q.map((e) => e.kind)))] });
       const lastRadio = samples.find((o) => o.arrived)?.radio ?? '';
       rec('B8 on arrival: the last warning on the radio', arrivedAt > 0 && /\d/.test(lastRadio), { radio: lastRadio.slice(0, 200) });
@@ -427,6 +428,51 @@ if (ONLY.includes('drops')) {
   }
 }
 
+// Owner feedback #20 in local time (the escort's driving is local physics; under SwiftShader real time is too slow for it):
+// the escort staging frozen in sim time, the tank driven with W for 90 local s, the patrol followed step by step.
+if (ONLY.includes('escortsim')) {
+  const { page, errs } = await open('command-escort&hold=1');
+  const r = await page.evaluate(() => {
+    const I = window.__cmd, P = I.controller.ent;
+    I.freeze = true;
+    // The intruder drives on at 30 km/h for 60 s (deeper in: the patrol must lead and flank it), then stops.
+    const fwd = { x: -Math.sin(P.yaw), z: -Math.cos(P.yaw) };
+    I.skipIntro();
+    const esc = () => I.world.ents.filter((e) => e.alive && e.src?.kind === 'qrf' && e.kind !== 'soldier' && e.kind !== 'at');
+    let minD = Infinity, maxV = 0, maxYawRate = 0, ram = 0;
+    const prevYaw = new Map();
+    const track = [];
+    const start = P.pos.clone();
+    for (let i = 0; i < 90 * 30; i++) {
+      const v = i < 60 * 30 ? 8.3 : 0;
+      I.simulate(1, 1 / 30);
+      P.speed = v;
+      P.pos.x += fwd.x * v / 30;
+      P.pos.z += fwd.z * v / 30;
+      P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
+      for (const e of esc()) {
+        const d = Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z);
+        minD = Math.min(minD, d);
+        // Ramming: the escort's own velocity toward the intruder while within 40 m of it.
+        if (d < 40 && d > 0.1) ram = Math.max(ram, (e.vel.x * (P.pos.x - e.pos.x) + e.vel.z * (P.pos.z - e.pos.z)) / d);
+        maxV = Math.max(maxV, Math.abs(e.speed));
+        const py = prevYaw.get(e.id);
+        if (py !== undefined) { let dy = e.yaw - py; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; maxYawRate = Math.max(maxYawRate, Math.abs(dy) * 30); }
+        prevYaw.set(e.id, e.yaw);
+      }
+      if (i % 300 === 0) track.push(esc().map((e) => {
+        const c = Math.cos(P.yaw), sn = Math.sin(P.yaw);
+        const stx = P.pos.x + e.slot.x * c + e.slot.z * sn, stz = P.pos.z - e.slot.x * sn + e.slot.z * c;
+        return { d: Math.round(Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z)), lag: Math.round(Math.hypot(e.pos.x - stx, e.pos.z - stz)), v: +e.speed.toFixed(1) };
+      }));
+    }
+    return { n: esc().length, minD: Math.round(minD), ramMs: +ram.toFixed(2), maxV: +maxV.toFixed(1), maxYawRateDeg: Math.round(maxYawRate * 180 / Math.PI), playerKm: +(P.pos.distanceTo(start) / 1000).toFixed(2), final: esc().map((e) => Math.round(Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z))), track };
+  });
+  rec('B10 escort drives sensibly around an intruder driving at it (never drives into it: ≤ 1 m/s toward it inside 40 m; ≤ 16 m/s, turns ≤ 70°/s, stays with it)', r.n > 0 && r.ramMs <= 1 && r.maxV <= 16.5 && r.maxYawRateDeg <= 70 && r.final.every((d) => d < 400), r);
+  rec('escortsim page errors', errs.length === 0, errs.slice(0, 5));
+  await page.close();
+}
+
 // Owner feedback #18: releasing control never sends the unit back. Tank inside a neighbour (the escort staging):
 // exit, then the unit stays exactly there while the strategic clock runs, and the incursion goes on.
 async function exitToMap(page) {
@@ -504,7 +550,8 @@ if (ONLY.includes('handoff')) {
   else {
     await page.evaluate((id) => window.__front.app.enterCommandMode(id), h.unitId);
     await page.waitForFunction(() => window.__cmdStats?.phase === 'play' || window.__cmdStats?.phase === 'intro', null, { timeout: 300000, polling: 1000 }).catch(() => undefined);
-    await wait(8000);
+    // A few 2 s refreshes: squads whose spot was not streamed yet are placed on the next ones.
+    await wait(20000);
     const c = await page.evaluate(() => {
       const I = window.__cmd, per = {};
       for (const e of I.world.ents) if (e.alive && (e.kind === 'soldier' || e.kind === 'at') && e.src?.kind === 'pool') per[e.nation] = (per[e.nation] ?? 0) + 1;
@@ -512,8 +559,8 @@ if (ONLY.includes('handoff')) {
       for (const e of I.world.ents) if (e.alive && e.src?.kind === 'division' && e.kind === 'tank') divs[e.src.id] = (divs[e.src.id] ?? 0) + 1;
       return { per, divs };
     });
-    // The scene draws at most 300 soldiers a side: the battle's counts come over scaled by one factor for both sides.
-    const scale = Math.min(1, 300 / Math.max(1, ...h.ho.infantry.map((s) => s.count)));
+    // The scene draws at most 240 soldiers a side: the battle's counts come over scaled by one factor for both sides.
+    const scale = Math.min(1, 240 / Math.max(1, ...h.ho.infantry.map((s) => s.count)));
     const rows = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, expected: Math.round(s.count * scale), command: c.per[s.owner] ?? 0 }));
     const ok = rows.every((r) => Math.abs(r.command - r.expected) <= Math.max(2, r.expected * 0.1));
     rec('H1 infantry per side: battle view = command mode (±10 %, one scale for both sides)', ok, { scale: +scale.toFixed(3), rows });

@@ -32,8 +32,8 @@ import { ENT_DEFS, type Ent, type EntKind, type EntSource, type World } from './
 export const FORCES_RADIUS_KM: Record<CommandKind, number> = { tank: 30, jet: 150, ship: 40 };
 export const INFANTRY_CAP = 40;
 export const REAR_CAP = 12;
-/** Soldiers per side at most when the ground battle view hands its infantry over (the scene draws 320 per team). */
-export const HANDOFF_BUDGET = 300;
+/** Soldiers per side at most when the ground battle view hands its infantry over (the scene draws 2 × 160 per team, split at random between two soldier models). */
+export const HANDOFF_BUDGET = 240;
 const DIVISION_KM = 30;
 const SHIP_KM = 40;
 const POST_KM = 10;
@@ -165,7 +165,7 @@ export class Forces {
         if (front && frontKm < reach && (side.owner === front.a || side.owner === front.b || friendly)) {
           const pool = side.pools.front + side.pools.offensive;
           // From the battle view: its count for this side, scaled into the scene's soldier budget with the sides'
-          // balance kept (a 1,600 v 500 battle becomes 300 v 94 here).
+          // balance kept (a 1,600 v 500 battle becomes 240 v 75 here).
           const ho = this.handoff?.get(side.owner);
           const cap = ho !== undefined ? Math.round(ho * this.handoffScale()) : (hostile ? INFANTRY_CAP : INFANTRY_CAP / 2);
           const shown = Math.min(cap, Math.round(pool));
@@ -249,6 +249,7 @@ export class Forces {
         const hot = this.hostile(rel, e.nation);
         e.neutral = !hot && this.team(rel) === 1;
         if (e.order === 'escort' && hot) {
+          e.state = 0;
           e.order = 'front';
           e.goal.copy(player.pos);
         }
@@ -335,20 +336,23 @@ export class Forces {
     let squad = 0;
     while (missing > 0) {
       const size = Math.min(missing, 5 + Math.floor(rng.next() * 3));
-      // Squad anchor.
+      // Squad anchor: on dry, loaded ground (a few tries along the line before giving the squad up this round).
       const c = new THREE.Vector3();
-      if (where === 'front' && fr) {
-        const lateral = (rng.next() - 0.5) * 2 * Math.min(1400, Math.max(400, fr.windowKm * 150));
-        const depth = team === 1 ? 140 + rng.next() * 420 : 90 + rng.next() * 300;
-        c.copy(N).addScaledVector(L, lateral).addScaledVector(S, depth);
-        // Replacements come up from behind their line.
-        if (!initial) c.addScaledVector(S, 500 + rng.next() * 400);
-      } else {
-        const a = rng.next() * Math.PI * 2, r = 900 + rng.next() * 2200;
-        c.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
+      let found = false;
+      for (let attempt = 0; attempt < 5 && !found; attempt++) {
+        if (where === 'front' && fr) {
+          const lateral = (rng.next() - 0.5) * 2 * Math.min(1400, Math.max(400, fr.windowKm * 150)) * (attempt > 2 ? 0.5 : 1);
+          const depth = team === 1 ? 140 + rng.next() * 420 : 90 + rng.next() * 300;
+          c.copy(N).addScaledVector(L, lateral).addScaledVector(S, depth);
+          // Replacements come up from behind their line.
+          if (!initial) c.addScaledVector(S, 500 + rng.next() * 400);
+        } else {
+          const a = rng.next() * Math.PI * 2, r = 900 + rng.next() * 2200;
+          c.set(player.pos.x + Math.cos(a) * r, 0, player.pos.z + Math.sin(a) * r);
+        }
+        found = this.ground.heightAt(c.x, c.z) >= 1;
       }
-      // Stay on land of the right owner where possible.
-      if (this.ground.heightAt(c.x, c.z) < 1) {
+      if (!found) {
         missing -= size;
         continue;
       }
@@ -582,7 +586,10 @@ export class Forces {
     }
     for (const e of g.ents) {
       if (!e.alive) continue;
-      if (hot && e.order === 'escort') e.order = 'front';
+      if (hot && e.order === 'escort') {
+        e.order = 'front';
+        e.state = 0;
+      }
       if (e.order === 'front') e.goal.copy(player.pos);
       if (q.mode === 'air') this.qrfAir.set(e, { dx, dz, arriveSec: q.arrived ? 0 : q.arriveSec });
       // While far, ground vehicles follow the force's position (see track()).

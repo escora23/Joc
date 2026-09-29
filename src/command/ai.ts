@@ -244,17 +244,38 @@ export class Brain {
       this.escortPoint(e, P!, e.moveT);
       const lag = Math.hypot(e.moveT.x - e.pos.x, e.moveT.z - e.pos.z);
       const toP = Math.hypot(P!.pos.x - e.pos.x, P!.pos.z - e.pos.z);
+      // The way to the station must not run over the intruder: if the straight line passes within 45 m of it, go
+      // round it on one side (chosen once, remembered in `state`) through a point 75 m abeam and 40 m ahead of it.
+      const sx = e.moveT.x - e.pos.x, sz = e.moveT.z - e.pos.z, sl = Math.hypot(sx, sz) || 1;
+      const px = P!.pos.x - e.pos.x, pz = P!.pos.z - e.pos.z;
+      const along = (px * sx + pz * sz) / sl;
+      const off = Math.abs(px * sz - pz * sx) / sl;
+      if (along > 0 && along < sl && off < 45) {
+        if (e.state === 0) e.state = px * sz - pz * sx > 0 ? -1 : 1;
+        const c = Math.cos(P!.yaw), sn = Math.sin(P!.yaw);
+        const rx = 75 * e.state, rz = -40;
+        e.moveT.set(P!.pos.x + rx * c + rz * sn, 0, P!.pos.z - rx * sn + rz * c);
+      } else e.state = 0;
       // Never closer than 35 m to the intruder: back off to the side instead.
-      if (toP < 35) {
+      if (toP < 50) {
+        // Too close (the intruder may be driving at it): pull aside, off the intruder's path, never toward it.
         T1.set(e.pos.x - P!.pos.x, 0, e.pos.z - P!.pos.z).normalize();
-        e.moveT.set(e.pos.x + T1.x * 40, 0, e.pos.z + T1.z * 40);
+        const fx = -Math.sin(P!.yaw), fz = -Math.cos(P!.yaw);
+        const side = T1.x * -fz + T1.z * fx >= 0 ? 1 : -1;
+        e.moveT.set(e.pos.x + (T1.x + -fz * side * 1.5) * 40, 0, e.pos.z + (T1.z + fx * side * 1.5) * 40);
       }
-      // Up to 55 km/h while closing in; at the station, the intruder's speed.
-      const vmax = Math.max(2.5, Math.min(15, Math.abs(P!.speed) + lag * 0.06));
+      // Up to 55 km/h while closing in; at the station, the intruder's speed; slow right next to it.
+      let vmax = Math.max(2.5, Math.min(15, Math.abs(P!.speed) + 2 + lag * 0.08));
+      if (toP < 60) vmax = Math.min(vmax, Math.max(3, Math.abs(P!.speed) + 1));
+      const toSt = Math.atan2(-(e.moveT.x - e.pos.x), -(e.moveT.z - e.pos.z));
       if (lag < 10 && Math.abs(P!.speed) < 0.8 && toP >= 35) {
         // In place and the intruder stopped: stop and face it.
         e.yaw += angleDelta(e.yaw, Math.atan2(-(P!.pos.x - e.pos.x), -(P!.pos.z - e.pos.z))) * Math.min(1, dt * 0.4);
         this.drive(e, dt, 0, 0.5, true);
+      } else if (lag < 300 && Math.abs(angleDelta(e.yaw, toSt)) > 2.0) {
+        // The station is behind it (the blocker facing an intruder that moves on): back up, as a crew would, rather
+        // than turning round in front of it.
+        this.reverse(e, dt, e.moveT.x, e.moveT.z, Math.min(vmax, 8));
       } else this.drive(e, dt, vmax, 0.55, false);
     } else {
       e.stateT -= dt;
@@ -265,6 +286,25 @@ export class Brain {
       this.drive(e, dt, 9, 0.6, false);
     }
     e.turretYaw += angleDelta(e.turretYaw, 0) * Math.min(1, dt * 0.8);
+  }
+
+  /** Reverse toward a point (the rear leads), with the same acceleration limits and terrain seating as drive(). */
+  private reverse(e: Ent, dt: number, tx: number, tz: number, vmax: number): void {
+    const dx = tx - e.pos.x, dz = tz - e.pos.z;
+    const dist = Math.hypot(dx, dz);
+    // Facing away from the point: forward = −(dx, dz) / dist.
+    const err = angleDelta(e.yaw, Math.atan2(dx, dz));
+    e.yaw += Math.max(-0.4 * dt, Math.min(0.4 * dt, err));
+    const want = dist > 8 ? -vmax * Math.max(0.3, 1 - Math.abs(err) / 1.2) : 0;
+    e.speed += Math.max(-3 * dt, Math.min(3 * dt, want - e.speed));
+    forwardOf(e.yaw, T1);
+    e.vel.copy(T1).multiplyScalar(e.speed);
+    const nx = e.pos.x + e.vel.x * dt, nz = e.pos.z + e.vel.z * dt;
+    if (this.w.ground.heightAt(nx, nz) > 0.6) {
+      e.pos.x = nx;
+      e.pos.z = nz;
+    } else e.speed = 0;
+    this.settle(e, dt);
   }
 
   private drive(e: Ent, dt: number, maxSpeed: number, turnRate: number, stop: boolean): void {

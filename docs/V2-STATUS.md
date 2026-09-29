@@ -194,6 +194,42 @@ Stage 3, beside W6, after both W3 and W4. Read DESIGN_V2 §9 (all), §2.2 (sub-t
 Known limits: trains are simple boxes on view.rail; a docked squadron starts just after take-off; a floating-origin
 rebase can make the texture noise pop; enemy aircraft in the jet front shot depend on real airborne squadrons.
 
+## W5-command-v2: owner feedback #18-#21 (2026-09-29)
+
+> `git log --grep "W5"` from b1d4e79 on. Headless `npx tsx src/sim/test/command-audit.mjs` 29/29; browser
+> `node tools/w5-verify.mjs` (sections peace, travel, border, front, jet, ship, drops, escortsim, release, jetrelease,
+> handoff; results in shots/W5-command-v2/verify.json); shots `command-escort`, `command-jet-intercept`.
+
+* **#18 release keeps position** (`units.ts holdAfterControl`): no walk back, no return to base. A division holds (or
+  goes back on the line if it stands on its war front), a warship keeps station, a jet flies a CAP over the spot
+  (orbit ≈ 90 km, the game's CAP radius). Inside foreign land the incursion keeps running on the strategic map with
+  the same game-second timings (strategic ticks advance it in 10 s steps) and an alert says the unit is still there.
+  Verified: R1 (0.000 km moved after 20 s of strategic time, incursion still running), R2 (alert), R3 (CAP, alt > 0).
+* **#19 fast, sensible response**: radio warning at the moment of entry with a countdown (grace 30 s land / 25 s air /
+  40 s sea / 15 s within 80 km of the capital; time compression blocked during an incursion), then real forces from
+  real bases: fighters (an airborne squadron within 300 km or the ready squadron of the nearest airbase within 800 km,
+  moved along the track) in 1-3 min, a ground patrol from the nearest post / town / base in 1.5-5 min, a warship or a
+  port's patrol boat in 2-7 min; then a last warning (90 s land, 45 s air, 90 s sea, 30 s at the capital) and fire
+  (`engage`: its forces and SAMs fire at the intruder; 30 min of it = war) or war by personality / opinion. Verified:
+  B4 radio at once, B5 answer at 30.1 game s, B6 5 min, B8/B9 last warning then engage; audit I1-I4, J2 (fighters
+  from a real airbase in 3.0 min), S2 (sea: protest when nothing is in reach).
+* **#20 escorts**: 2 APCs (or a tank and 2 APCs from an army base), fighters in ICAO positions (leader ahead-left,
+  wingman back-right, wing rock on arrival), a ship abeam; the Brain drives them to stations around the intruder at
+  ≤ 55 km/h with a 35 m keep-out; far away they follow the sim's road schedule; they never fire until `engage`/war;
+  firing on them first stays an act of war; a blocker backs up or pulls aside rather than turning in front of the
+  intruder, and goes round it (75 m abeam) to reach a station ahead. Verified: B7 (≤ 15 m/s in sight, neutral until
+  told) and B10 (90 local s with the intruder driving straight at the blocker: 0 m/s of escort motion toward it inside
+  40 m, ≤ 15 m/s, turns ≤ 64°/s, both at their stations 50-66 m away when it stops). Under SwiftShader local physics runs ~10× slower than real time, so
+  the close-in approach is verified in local time (B10), not wall time.
+* **#21 entry matches the world**: every real division, ship, squadron and quick-reaction force in the scene is named
+  where it stands (world labels, red/amber/blue by relation), so the units seen on the map are findable; from a
+  visible ground battle the hand-off keeps both sides' infantry with one scale into the scene's 240-a-side budget
+  (H1) and the battle's real divisions with the same tanks (H2).
+* Other criteria re-run: E1-E4, K1-K2, D1, X1-X2, T1-T4, B1-B3, F1-F5, J1-J2, S1 pass; T5a (drop to ×1 at 2 km from a
+  peaceful border) and T5b (no compression with contact) now verified. Not verified: the occupied stipple after exit
+  (criterion 15), a 5-minute tactical sample (30 s sampled). D2 logs snapped moves during ×60 autopilot under
+  SwiftShader (the catch-up step); the sim ends 0 km from the local unit.
+
 ## W6-battle-clarity: close-out (2026-09-28)
 
 > Built in full by the W6 owner; commits 8379fc2 … (see `git log --grep W6`). CODEMAP §6 «W6 battle clarity» maps the code.

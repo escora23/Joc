@@ -392,7 +392,7 @@ registerShot('command-escort', 'command', 'Incursion ignored: the neighbour\'s p
   await crossAndWait(s, id, b, 3, 1);
   // Hold the sim's clock from the first frame (the last warning is running) unless it is a live session.
   const I0 = commandInternals();
-  if (I0 && !live(s)) I0.freezeOnEnter = true;
+  if (I0 && (!live(s) || s.params.get('hold') === '1')) I0.freezeOnEnter = true;
   await ctx.app.enterCommandMode(id);
   ctx.sim.setSpeed(0);
   if (live(s)) return;
