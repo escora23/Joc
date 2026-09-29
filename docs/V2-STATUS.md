@@ -484,6 +484,76 @@ and the brief's overlay bullet): the arrow must not hide the front. Built and ve
 * observation **4/4** (v8a, V9 −6.5 %, 0 jumps), mobilization / front-600 / plume **5/5** (v8b), 0 page errors.
 * `tools/playtest.mjs` now confirms the offensive dialog after a click on enemy land (not re-run in full here).
 
+## W6 final fix pass (2026-09-29) — W6-battle-clarity, verifier iteration 3 (score 5)
+
+Every open failure of the third verification is fixed and re-verified in the real game (commits 7e8e06a … 24d7ebc,
+`git log --grep "W6 final fix pass"`). Results on a no-HMR server (tools/vite.nowatch.config.mjs) with another
+agent's browser running beside it: **`node tools/w6-verify.mjs` 40/40, 0 page errors** (shots/W6-fix-final/verify);
+**`w6-audit` 20/20**; **`w4-audit --only save` 2/2** (both rows identical); localForces test 71/71; `tsc --noEmit` and
+`npm run build` clean.
+
+1. **Save regression (blocker)**: `FrontTracker.lines` (the `FrontLines` published-line state) is view data, skipped by
+   the save (FrontTracker skip set, append-only order kept) and re-measured after a load (`focusChanged` + the next
+   measurement publishes the line again). `w4-audit --only save` 2/2 identical; new **w6-audit A8** saves in the middle of
+   an offensive with a published line: A8a saved (57 KB), A8b the restored game identical right after the load and for
+   120 ticks (ownership, offensive, fronts, garrisons, troops), A8c the restored front publishes its line again
+   (5.87 / 5.57 km/h). The playtest's save / Continuar step: see the last bullet.
+2. **Arrow, axis and km/h while an offensive advances** (`sim/attacks.ts`, `sim/frontLine.ts`, `sim/fronts.ts`,
+   `render/battle/overlay.ts`): the offensive's LIVE contact (where its axis ray meets its frontier now,
+   `AttackView.contactX/Y`) drives its front key (the front its frontier is on), and its axis point moves forward along
+   the advance once the line reaches or passes it (6 tiles ahead on the defender's land, the player told with
+   `msg.offensiveObjective` «el objetivo avanza a …»). Each front with a live offensive measures ONE line on that live
+   axis (window as wide as the corridor), so `advanceKmh` is the speed of the line the offensive is pushing: a front
+   taking tiles never reads 0 km/h. Local forces count the offensive's pool on the front it fights. The arrow's tip
+   lands on the axis point whenever it is ahead of the line; while the line stands on it the tip points at most 2 tiles
+   ahead and only as far as the enemy's land goes (never onto sea or neutral ground). Headless **A9a-d**: 439 km past
+   the origin, key right 67/67, axis on enemy land 67/67 (moved 3 times, told each time), 0 zero readings, 5.25 km/h vs
+   4.17 km/h from the fallen area, line at the live contact 67/67, local offensive pool 14/14. **Real play V15**
+   (offensive launched from the dialog on the plains theatre, 420 ticks): V15a contact 259 km from the origin (first
+   axis point 66 km), key and arrow key = the front nearest the contact 20/20; V15b arrow tip and axis point on enemy
+   land ahead of the line 20/20, axis moved forward twice; V15c 0 zero readings of 20, 4.67 km/h vs 4.29 km/h from the
+   tiles, badge «TÚ▶GBR ▶ 2,2 km/h»; V15d the ground battle at the contact is on the offensive's front, split 304/1215 =
+   our share 0.80 vs the front's troops (0.80 after the clamp). (fastForward drops per-tick messages by design, so the
+   browser counts the axis moves from the samples; A9b checks the message.)
+3. **Enviar divisiones** (`ui/hud/fronts.ts`): the target is a tile on the ENEMY side of the contact (along the running
+   offensive's axis, else the middle of the front outward), which passes `divisionCheck`'s attach rules; a division
+   already ordered there is listed «En camino» instead of offered again; the list updates ETAs in place so a row never
+   changes under the pointer. **V16a** «3.ª División acorazada · a 710 km al NE de Madrid · 14 h · Enviar [enabled]»;
+   **V16b** the click gives order attach (1) and the unit carries front key 1.
+4. **i18n of the offensive messages**: the sim sends the player id and the raw ratio (`msg.offensiveNoContact`,
+   `…Halted`, `…NoContactEnded`, `…EndedPeace`, `…Retreating`, `…Objective`); the alert feed names the player in the
+   language (playerName) and writes the ratio with the locale decimal. Checked in the browser in both languages: «Nuestra
+   ofensiva contra Suiza está rota (relación 0,4 : 1)…» / «Our offensive against Switzerland is broken (ratio 0.4 : 1)…».
+5. **Ground battle at night** (`render/battle/*`): a moonlight fill with a minimum ambient, illumination flares over the
+   line, brighter tracers and fires; both banners always on screen (a side out of view waits at the screen edge with an
+   arrow toward it). New **V17** night staging (`&night=1`, the sun on the far side): V17a at the shot framing mean luma
+   31, 12 % lit, 151/200 and 158/200 soldiers on screen, both banners clear; V17b at 450 m luma 40, 36 % lit, both banners
+   clear (iteration 3's frame: luma 5, < 1 % lit, one banner).
+6. **Prioridad alta in the browser**: V4c picks a front no enemy offensive drains and asserts the Gf rise against a
+   no-priority baseline: Gf 18,388 → 60,190 after 60 ticks vs 53,868 projected from the 30 ticks before, target share
+   0.244 → 0.419.
+7. **Verifier robustness** (`tools/w6-verify.mjs`): every section is guarded (an exception is a failed row, the next
+   section runs), every click goes through `uiClick` (normal click; on a starved renderer — one frame every 5-10 s with
+   another browser busy, where a panel never passes Playwright's stability wait — a hit-tested mouse click on the
+   element that is topmost at its centre), Ir polls for the camera to land, V4c re-stages when the front disappears.
+   The full run passed with another agent's browser at ~200 % CPU beside it.
+8. **Badge and chips** (`ui/hud/frontBadges.ts`, `render/units`): the badge stands off the band's whole screen
+   polyline (not only the midpoint normal), clear of the mobilization arrows, the operational arrow, HUD panels and the
+   nation names on the map, with a short leader line to the front; division icons from orbit stand beside the band on
+   their own side. The reinforce-mode offensive dialog re-reads the running offensive on sim ticks while open.
+9. **One source of truth for who holds the ground** (`shared/localForces.ts holderAt`, used by the ground battle, local
+   forces and command mode): near our own fronts, inside the published line's window and within 1.5 tiles of it, the
+   side of the drawn sub-tile line the point is on; elsewhere the tile's owner. A tank behind our drawn line reads our
+   ground in the command HUD even while the sim still counts that 25 km tile as the enemy's (localForces test §6).
+
+**Playtest** (`node tools/playtest.mjs --stage2`, real UI, two wars running at the save): **19/19 steps**, 0 console
+errors; «Guardar» from the pause menu, quit, «Continuar»: «Guardado · día 35», tick 8214, 2,277 tiles, 30 treaties,
+6 proposals, 24 opinions and 2 wars identical before and after (no worker error). Screens in shots/W6-fix-final/playtest.
+
+**Not done / notes**: nothing open from iteration 3. The objective message is checked headless (A9b) because the
+browser verifier steps exact ticks with fastForward, which by design drops per-tick messages; in normal play it reaches
+the alert feed (the playtest's offensive logged `msg.offensiveObjective`).
+
 ## W6-battle-clarity: brief
 
 **Landed (shared local forces):** `src/shared/localForces.ts` with `deriveLocalForces()` / `deriveLocalForcesAt()` /
