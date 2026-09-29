@@ -123,8 +123,8 @@ function simLineAtAnchor() {
   return Number.isFinite(shift) ? { source: f.progress ? 'per-vertex progress' : 'tile-level line', shiftM: shift * 1000, note: '' } : null;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** Night readability floor (V17), set from the measured frames (see V2-STATUS, W6 final fix pass). */
-const NIGHT_MIN_MEAN = 30, NIGHT_MIN_LIT = 0.12;
+/** Night readability floor (V17): the iter-3 black frame measured mean luma 5 with <1 % lit; the fixed frames 32-42 with 14-38 %. */
+const NIGHT_MIN_MEAN = 20, NIGHT_MIN_LIT = 0.08;
 
 /** Screen position (px) of lat/lon on the ground, as the game's camera projects it. */
 function projectFn() {
