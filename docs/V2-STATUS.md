@@ -645,3 +645,64 @@ See docs/FEEDBACK-1.md, section "Owner feedback #3", items 26–29:
 
 The owner played without knowing what was in progress: check each item against the current code, prove what is
 already done, and finish what is not. These are handled in the "Feedback 3" round, after Feedback 2 (18–25).
+
+## Feedback #2 results (2026-09-29) — owner items 18-25
+
+> `git log --grep "Feedback #2"`. Headless `npx tsx src/sim/test/air-audit.mjs` **21/21**; browser (real UI, SwiftShader,
+> no-HMR server) `node tools/f2-verify.mjs` **air 6/6, chip 2/2**, 0 page errors (shots/feedback2/verify); regression
+> audits after the changes: `w4-audit` 43/43, `w6-audit` 20/20, `command-audit` 35/35; `npx tsc --noEmit`, `npm run build`
+> and `i18n-check` (0 missing) clean. Browser regressions: see the last bullet.
+
+Items 18-23 were built and verified in real play by W5 fix pass 2 and the W6 final fix pass just before this round
+(sections above); this round checked them against the code and re-ran what its changes could touch:
+
+* **18 release keeps the unit where it was left** — `units.ts holdAfterControl`: no walk back, no return to base in
+  any case (`sim/command.ts` has no walkBack/returning left); a division holds (or stays on the line of its war
+  front), a warship keeps station, an aircraft orbits the spot for its endurance (12 h fighters) with the card and ring
+  saying so; a unit left in foreign land keeps the incursion running, pauses the game with «sigue dentro» and can be
+  ordered out. Evidence: w5-verify release/releaseout R0-R4, X3-X4, audit I5/I6, J3.
+* **19 incursion response in real seconds** — warning at entry with a countdown (30 s land / 25 s air / 40 s sea /
+  15 s near the capital; travel mode blocked during an incursion), real fighters from the nearest airbase in 1-3 min,
+  ground patrol 1.5-5 min, warship 2-7 min, then last warning and fire. **New this round**: the strategic map can no
+  longer send a patrol over a nation at peace without alliance / open borders (`order.err.airspace`, air-audit C5,
+  f2-verify C2: «Espacio aéreo de China: sin alianza ni paso libre…»), so the strategic layer has no silent
+  incursion the command mode would treat as one.
+* **20 escorts** — APCs / a tank at ≤ 55 km/h, lane overtaking, stations, no ramming (B7, B10, B10b), fighters in
+  formation; firing on them is an act of war.
+* **21 entry matches the world** — battle hand-off one for one (H0-H5: 2,627 / 599 soldiers, the division's 4 tanks).
+* **22 slim arrow under the bands** — V1b drawn-pixel measurement (5 px shaft, 0.05 % of the screen, gone below
+  1,000 km). **23 attack flow** — offensive dialog with commitment and preview, managed from the badge / Guerra panel.
+* **25 air missions, real and meaningful (this round's work)**:
+  - *Air superiority*: fighters on a CAP whose circle covers an offensive's corridor count for their side; the side
+    with more owns the sky: attacker's advance ×1.10 or ×0.90, and the other side's drone support stops counting
+    (the patrol also shoots those drones down). Measured on one plains front, same seed (air-audit C2): baseline
+    2.36 km/h / 100 tiles in 300 ticks; our patrol 2.61 km/h (×1.11); the enemy's patrol 2.18 km/h (×0.92); both
+    patrols 2.36 (contested); 2 drone swarms in close support 3.37 km/h (×1.43: +15 % power and +15 % speed plus the
+    garrison attrition); the same drones under the enemy's sky 2.18 (cas 0).
+  - *CAP over a border against the real AI* (C1, the sim-ai director, not a script): 2,400 ticks of AI raids on our
+    cities; with two squadrons patrolling the Pyrenees: 3 AI bombers/drones shot down (0 without), 9 strikes reached
+    their target (19 without), front bombing 12,750 troops lost (87,633 without); both our squadrons were lost to its
+    escorts — the risk is real and shown before ordering.
+  - *Escorted strikes* (C3): a bomber destroys a factory (hp 1 → destroyed) and bleeds a front sector (557 troops);
+    through an enemy patrol, 12 unescorted sorties: 12 lost, 1 on target; escorted: 5 lost, 7 on target (the escort
+    now stays with its bomber all the way home and ties the interceptor up: ×0.3 kill chance, dogfight).
+  - *The AI uses the same missions* (C4): strike 12-19, cap 3, escort 3 orders in a war; drones fly close support
+    over its own running offensive.
+  - *One clear action each, explained before confirming*: Guerra y frentes row «Cielo · cazas en patrulla: 1 tuyos,
+    0 enemigos · superioridad aérea tuya (+10 % a tu avance, sus drones no cuentan)» and «Apoyo aéreo» (each aircraft
+    with its mission, ETA, integrity and threat — SAM, enemy fighters, airbases — and one button: Patrullar / Apoyar /
+    Bombardear); the offensive dialog's «Apoyo aéreo» row (the preview counts the sky and drones as the sim does);
+    right-click chips «Patrulla: derriba bombarderos, drones y misiles que entren a 150 km… Riesgo medio: bases
+    aéreas enemigas cerca: 1.»; the unit card's order tips. Real play (f2-verify): A1 the list, A2 the tooltip, A3
+    one click each gives cap / support, A4 the row shows our superiority once the patrol is on station, A5 the dialog
+    row, A6 with time running the AI sends its aircraft and our patrol shoots 2 of its bombers/drones down; C1/C2 the
+    chips.
+* **24 polish met along the way** — the order chip wrapped nothing and ran off the left of the screen with a long
+  line; long explanations now wrap at 22 rem in sentence case (shots/feedback2/verify/c1-chip-war.png). An escort
+  used to leave its bomber on the way home (where it was shot down). The AI's escort order was sent with no tile and
+  always refused. The «Apoyo aéreo» list stays open after an order so several aircraft can be sent.
+
+**Still open / notes**: the CAP itself does not run out of fuel (the squadron «rotates with its base», said in the
+tooltip); only released aircraft on «hold» have an endurance clock. The front badge does not repeat the sky (the
+Guerra panel row and the dialog do; the badge has no room). The air effects are flat multipliers per side (not scaled
+by the number of squadrons beyond «more than the enemy»).
