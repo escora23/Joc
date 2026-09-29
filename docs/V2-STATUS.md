@@ -498,7 +498,7 @@ Stage 3, beside W5, after both W3 and W4. Read DESIGN_V2 §11 (all), §10.12, §
 
 ## Owner feedback #2 (added while W5/W6 were being verified)
 
-See docs/FEEDBACK-1.md, section "Owner feedback #2", items 18–24 (release keeps position; fast, sensible incursion
+See docs/FEEDBACK-1.md, section "Owner feedback #2", items 18–25 (item 25 added later: fighter/bomber missions — defend a border with CAP, attack the rival, CAS, strikes, escorts — must work end-to-end with visible, explained effects; see FEEDBACK-1.md) (release keeps position; fast, sensible incursion
 response with warning + short grace + real interceptors; sensible escorts, no ramming trucks; command-mode entry
 matches the enemies visible on the strategic/battle view; slimmer attack arrows that don't hide the front; a clear,
 non-click-spam attack flow; small polish). Whoever works on command mode, fronts, integration or gauntlet fixes MUST

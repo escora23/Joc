@@ -96,4 +96,24 @@ What it means (each is a hard requirement; the owner-proxy critic checks them as
     persists and is managed (reinforce, change intensity, halt, retreat) from the front badge / Guerra panel —
     repeated clicks must not be needed to keep an attack going. Explain it in the tutorial and tooltips.
 24. **Polish pass on "detallitos"**: while fixing the above, fix the small inconsistencies you meet in command mode
-    and fronts. Keep scope tight: finish current work first, then do 18–24 well, without an endless loop.
+    and fronts. Keep scope tight: finish current work first, then do 18–25 well, without an endless loop.
+    Item 25 below is part of this same round (the Feedback 2 fix and verify agents must do and check it too).
+
+Added by the owner (verbatim):
+
+> vale, que se asegure que puedas integrar correctamente lo de por ejemplo mandar cazas a atacar al rival o a defender la frontera o cosas así y que tenga sentido y no esté ahi estando por estar sabes.
+
+25. **Air (and other unit) missions must be real, integrated and meaningful, not decoration.** From the strategic map
+    the player must be able, in one clear action each (select squadron → order, from the Fuerzas panel, the front
+    badge / Guerra panel or right-click), to: send fighters to **defend a border/front or a city** (combat air patrol
+    that actually intercepts enemy bombers, fighters and drones entering that zone), send them to **attack the rival**
+    (air superiority over an enemy front, close air support that measurably helps a friendly offensive, strikes on
+    enemy structures/units with bombers escorted by fighters), and **escort** other aircraft. Each mission must have
+    visible, explained consequences in the simulation: the aircraft fly there at believable speeds, fight enemy
+    aircraft and SAMs (losses on both sides, shown), change front pressure / damage targets by an amount shown in the
+    preview and in the front badge or Guerra panel, consume fuel/endurance and return to rearm, and the AI nations use
+    the same missions against the player (so a CAP over your border really matters). The order card/tooltip explains
+    what the mission does, its expected effect and risk before confirming. If a mission type exists but has no real
+    effect, make it work or remove it. Verify end-to-end in real play: order a CAP over a border, watch it intercept an
+    AI raid; order CAS on a front and measure the change in advance speed; order a strike and see the damage.
+
