@@ -108,7 +108,9 @@ export type PlayerCommand =
    */
   | { type: 'commandCasualties'; unitId: number; victim: number; troops: number; unitHits: { unitId: number; dmg: number }[]; structureHits: { structureId: number; dmg: number }[] }
   /** The controlled unit's integrity after local losses (0 = destroyed, by = the player who destroyed it). */
-  | { type: 'controlledDamage'; unitId: number; integrity: number; by?: number };
+  | { type: 'controlledDamage'; unitId: number; integrity: number; by?: number }
+  /** A vehicle of the quick-reaction force of this unit's incursion is at its station beside it in the scene: the last warning starts. */
+  | { type: 'escortAlongside'; unitId: number };
 
 export type PlayerCommandType = PlayerCommand['type'];
 

@@ -171,10 +171,17 @@ export async function bootstrap(): Promise<void> {
       if (!result.unitLost) ctx.sim.send({ type: 'unitControl', unitId: result.unitId, controlled: false });
       setState('playing');
       bus.emit('commandExit', { result });
-      await ctx.post.fadeTo(0, 400);
-      // Climb to 2,500 km above the unit's new position.
+      // Climb to 2,500 km above the unit's new position. The climb starts, still behind the fade, from 60 km above
+      // it looking down: the camera left at the entry pose (3 km, tilted, where a ground battle had cut its hole in
+      // the globe) would show one frame of black void. The fade lifts after the globe has rendered that pose.
       const u = ctx.sim.view.units.get(result.unitId);
       const at = u ? tileXYToLatLon(u.x, u.y) : null;
+      if (at) {
+        const cam = ctx.cameraRig.getState();
+        ctx.cameraRig.setState({ ...cam, lat: at.lat, lon: at.lon, altitudeKm: 60, tilt: 0.3 });
+      }
+      await Promise.race([waitFrames(3), new Promise<void>((r) => setTimeout(r, 5000))]);
+      await ctx.post.fadeTo(0, 400);
       await ctx.cameraRig.flyTo(at ? { lat: at.lat, lon: at.lon, altitudeKm: 2500, tilt: 0.3 } : { altitudeKm: 2500, tilt: 0.3 }, 2000);
       ctx.cameraRig.setMode('game');
       input.setEnabled(true);

@@ -62,6 +62,10 @@ export interface ForcesLog {
 const V = new THREE.Vector3();
 const P2 = { x: 0, z: 0 };
 
+/** Within this distance of the player a sim-driven vehicle is in sight: 55 km/h at most, no catch-up jumps (#20). */
+const SIGHT_M = 3000;
+const NEAR_MS = 55 / 3.6;
+
 export class Forces {
   private readonly groups = new Map<string, Group>();
   private refreshN = 0;
@@ -755,14 +759,19 @@ export class Forces {
         const dx = gx - e.pos.x, dz = gz - e.pos.z;
         const d = Math.hypot(dx, dz);
         if (d < 5) continue;
-        // Road speed (the force's 80 km/h, a division's 40 km/h), up to 1.3× to catch up with the sim sample; in sight
-        // (inside 1.5 km) never faster than 55 km/h.
-        const vmax = dist < 1500 ? 15 : (qrf ? 80 : 40) / 3.6 * 1.3;
-        const step = Math.min(d, vmax * dtFar);
+        // Road speed (the force's 80 km/h, a division's 40 km/h), up to 1.3× to catch up with the sim sample while out
+        // of sight. In sight (inside 3 km) never faster than 55 km/h and only by the local frame's time: no catch-up
+        // jumps in view (the sim's last warning waits for the escort to be really alongside, so nothing needs them
+        // there early). A far catch-up step stops at the edge of sight.
+        const inSight = dist < SIGHT_M;
+        const vmax = inSight ? NEAR_MS : (qrf ? 80 : 40) / 3.6 * 1.3;
+        const dtUse = inSight ? Math.min(dtGame, 0.25) : dtFar;
+        let step = Math.min(d, vmax * dtUse);
+        if (!inSight && dist - step < SIGHT_M) step = Math.min(step, Math.max(0, dist - SIGHT_M) + NEAR_MS * Math.min(dtGame, 0.25));
         e.pos.x += (dx / d) * step;
         e.pos.z += (dz / d) * step;
         e.yaw = Math.atan2(-dx, -dz);
-        e.speed = dtFar > 0 ? Math.min(vmax, step / dtFar) : 0;
+        e.speed = dtUse > 0 ? Math.min(vmax, step / dtUse) : 0;
         e.pos.y = this.ground.heightAt(e.pos.x, e.pos.z);
       }
     }

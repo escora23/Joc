@@ -56,8 +56,26 @@ export const ESCORT_WARN_SEC: Record<'tank' | 'jet' | 'ship', number> = { tank: 
 export const ESCORT_WARN_CAPITAL_SEC = 30;
 /** An armed incident (engage) that goes on this long becomes a war. */
 export const ENGAGE_WAR_SEC = 1800;
-/** A unit left inside under fire (released, strategic time) loses this share of its integrity per game minute. */
-export const ENGAGE_DAMAGE_PER_MIN = 0.05;
+/**
+ * A unit left inside under fire (released, strategic time) is worn down by the force really there (owner feedback
+ * #18, fix 2): per game minute it loses ENGAGE_KILL_PER_MIN × (firepower present ÷ its own full strength) of its
+ * integrity, in tank equivalents (a division is 4 tanks, a patrol APC 0.25 of a tank, a squadron 3 jets). An equal
+ * force would destroy it in 90 min; two APCs take ~4 % of a division in the 30 minutes before the incident is a war.
+ */
+export const ENGAGE_KILL_PER_MIN = 1 / 90;
+/** Firepower of one vehicle of a quick-reaction force, in tanks: an APC or patrol vehicle, the tank leading one. */
+export const QRF_APC_FIRE = 0.25;
+export const QRF_TANK_FIRE = 1;
+/** Full strength of each command kind in the same units (division 4 tanks, squadron 3 jets, one warship). */
+export const INTRUDER_STRENGTH: Record<'tank' | 'jet' | 'ship', number> = { tank: 4, jet: 3, ship: 1 };
+/** Real divisions of the victim count toward the fire only this close (km) to the intruder. */
+export const ENGAGE_DIVISION_KM = 3;
+/**
+ * In command mode the last warning waits for an escort vehicle to be alongside in the scene (`escortAlongside`); if
+ * none gets there (a broken or stalled scene; the client itself reports a force it could not place) the warning starts
+ * anyway this long after the sim's arrival (game s).
+ */
+export const ALONGSIDE_FALLBACK_SEC = 1800;
 /** Real divisions of the victim within this distance are sent toward the intruder. */
 export const QRF_DIVISION_KM = 30;
 /** Airborne fighters within this distance, else docked fighters at an airbase within the scramble reach, intercept. */
@@ -115,6 +133,10 @@ interface Incursion {
   qrf: Qrf | null;
   /** Game seconds of fire taken while engaged and not controlled (strategic damage accumulator). */
   fireSec: number;
+  /** The force arrived in the sim; the last warning waits for an escort vehicle alongside in the scene. */
+  awaitAlong: boolean;
+  /** A released unit under orders to leave (timers held while it goes). */
+  leaving: boolean;
   left: boolean;
   leftSec: number;
 }
@@ -330,7 +352,7 @@ export class CommandSystem {
     const inc: Incursion = {
       id: this.nextIncursion++, intruder: c.owner, victim: o, unitId: u.id, kind: c.kind, tile: t, entryX: u.x, entryY: u.y,
       enteredSec: this.sec, graceSec: grace, decideAtSec: this.sec + grace, response: 'none', respondedSec: 0,
-      deadlineSec: Number.POSITIVE_INFINITY, depthKm: 0, capitalKm: capKm, qrf: null, fireSec: 0, left: false, leftSec: 0,
+      deadlineSec: Number.POSITIVE_INFINITY, depthKm: 0, capitalKm: capKm, qrf: null, fireSec: 0, awaitAlong: false, leaving: false, left: false, leftSec: 0,
     };
     this.incursions.push(inc);
     g.emit({ type: 'borderIncursion', tick: g.tick, intruder: c.owner, victim: o, unitId: u.id, tile: t, stage: 'entered', kind: c.kind, sec: this.sec, graceSec: grace, nearCapital });
@@ -398,6 +420,25 @@ export class CommandSystem {
       if (capKm <= CAPITAL_KM && inc.response === 'none') inc.decideAtSec = Math.min(inc.decideAtSec, this.sec + GRACE_CAPITAL_SEC);
     }
     const nearCapital = inc.capitalKm >= 0 && inc.capitalKm <= CAPITAL_KM;
+    const controlled = this.controlled.has(u.id);
+    // Released and ordered out (owner feedback #18: the player can order it out): the victim sees it go and holds
+    // its clocks (grace, last warning, fire, the half hour to war) while it drives out under escort.
+    const leaving = !controlled && this.isLeaving(u, inc.victim);
+    if (leaving !== inc.leaving) {
+      inc.leaving = leaving;
+      this.dirty = true;
+      if (leaving) this.log(`[command] incursion #${inc.id}: unit ${u.id} is leaving ${inc.victim} under orders; the victim holds fire and its clocks`);
+    }
+    if (leaving) {
+      if (inc.response === 'none') inc.decideAtSec += dt;
+      if (Number.isFinite(inc.deadlineSec)) inc.deadlineSec += dt;
+      if (inc.response === 'engage') inc.respondedSec += dt;
+    }
+    // The last warning waits for the escort alongside in the scene; released (no scene) or never reached, it starts.
+    if (inc.awaitAlong && inc.qrf && (!controlled || this.sec - inc.qrf.arriveSec >= ALONGSIDE_FALLBACK_SEC)) {
+      if (controlled) this.log(`[command] incursion #${inc.id}: no escort alongside ${ALONGSIDE_FALLBACK_SEC} s after arrival; the last warning starts`);
+      this.startLastWarning(inc, nearCapital);
+    }
     if (inc.response === 'none' && this.sec >= inc.decideAtSec) this.decide(inc, u);
     else if ((inc.response === 'intercept' || inc.response === 'protest') && this.sec >= inc.deadlineSec) {
       // The last warning was ignored.
@@ -415,13 +456,14 @@ export class CommandSystem {
     } else if (inc.response === 'engage') {
       if (this.sec - inc.respondedSec >= ENGAGE_WAR_SEC && g.war.declareError(inc.victim, inc.intruder, { force: true }) === null) {
         this.respond(inc, u, 'war', true);
-      } else if (!this.controlled.has(u.id)) {
-        // Left inside under fire on the strategic map: the escort and the air defences wear it down.
+      } else if (!controlled && !leaving) {
+        // Left inside under fire on the strategic map: the forces really there wear it down (in proportion).
         inc.fireSec += dt;
         if (inc.fireSec >= 60) {
           const mins = Math.floor(inc.fireSec / 60);
           inc.fireSec -= mins * 60;
-          g.unitSys.damage(u, u.maxHp * ENGAGE_DAMAGE_PER_MIN * mins, inc.victim);
+          const share = ENGAGE_KILL_PER_MIN * this.firepower(inc, u) / INTRUDER_STRENGTH[inc.kind];
+          if (share > 0) g.unitSys.damage(u, u.maxHp * Math.min(0.5, share * mins), inc.victim);
           if (u.dead) {
             this.leave(inc);
             return;
@@ -438,13 +480,12 @@ export class CommandSystem {
       this.carry(q, u, false);
       if (k >= 1) {
         q.arrived = true;
-        const warn = nearCapital ? ESCORT_WARN_CAPITAL_SEC : ESCORT_WARN_SEC[inc.kind];
-        if (inc.response === 'intercept') inc.deadlineSec = this.sec + warn;
-        g.emit({
-          type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile, stage: 'arrived',
-          response: inc.response === 'none' ? 'intercept' : inc.response, kind: inc.kind, sec: this.sec, deadlineSec: warn, qrfMode: q.mode, nearCapital,
-        });
-        this.log(`[command] incursion #${inc.id}: the ${q.mode} force arrived ${(this.sec - q.dispatchSec).toFixed(0)} game s after dispatch; last warning ${warn} s`);
+        q.arriveSec = this.sec;
+        if (controlled && inc.response === 'intercept') {
+          // Command mode: the warning starts when a vehicle is really alongside in the scene (escortAlongside).
+          inc.awaitAlong = true;
+          this.log(`[command] incursion #${inc.id}: the ${q.mode} force is in the area ${(this.sec - q.dispatchSec).toFixed(0)} game s after dispatch; the last warning waits for it to be alongside`);
+        } else this.startLastWarning(inc, nearCapital);
       }
       this.dirty = true;
     } else if (q && q.arrived) {
@@ -484,6 +525,61 @@ export class CommandSystem {
     }
     const ex = wdx(px, r.x) * kmPerTileX(r.y), ny = -(r.y - py) * TILE_KM;
     if (Math.hypot(ex, ny) > 0.05) r.heading = Math.atan2(ex, ny);
+  }
+
+  /** The force is alongside: the last warning starts now (emits 'arrived' with its length). */
+  private startLastWarning(inc: Incursion, nearCapital: boolean): void {
+    const g = this.g;
+    const q = inc.qrf;
+    inc.awaitAlong = false;
+    const warn = nearCapital ? ESCORT_WARN_CAPITAL_SEC : ESCORT_WARN_SEC[inc.kind];
+    if (inc.response === 'intercept') inc.deadlineSec = this.sec + warn;
+    g.emit({
+      type: 'borderIncursion', tick: g.tick, intruder: inc.intruder, victim: inc.victim, unitId: inc.unitId, tile: inc.tile, stage: 'arrived',
+      response: inc.response === 'none' ? 'intercept' : inc.response, kind: inc.kind, sec: this.sec, deadlineSec: warn, qrfMode: q?.mode, nearCapital,
+    });
+    this.log(`[command] incursion #${inc.id}: the ${q?.mode ?? '-'} force is alongside ${q ? (this.sec - q.dispatchSec).toFixed(0) : '-'} game s after dispatch; last warning ${warn} s`);
+    this.dirty = true;
+  }
+
+  /** Client: a vehicle of the force is at its station beside the controlled unit in the scene. */
+  alongside(p: Player, unitId: number): boolean {
+    const inc = this.incursions.find((i) => i.unitId === unitId && i.intruder === p.id && !i.left);
+    if (!inc || !inc.awaitAlong || !inc.qrf?.arrived) return false;
+    this.startLastWarning(inc, inc.capitalKm >= 0 && inc.capitalKm <= CAPITAL_KM);
+    return true;
+  }
+
+  /** A released unit whose current orders take it out of `victim`'s land (or air / waters). */
+  private isLeaving(u: Unit, victim: number): boolean {
+    if (u.state !== UnitState.Moving && u.state !== UnitState.Returning) return false;
+    const dest = u.targetTile >= 0 && u.type === UnitType.ArmoredDivision ? u.targetTile : tileOfXY(u.toX, u.toY);
+    const t = dest;
+    const o = this.g.owner[t];
+    if (UNIT_DEFS[u.type].command === 'ship' && isWaterTerrain(this.g.terrain[t])) return this.territorialOwner(t) !== victim;
+    return o !== victim;
+  }
+
+  /** Firepower of the victim's forces really engaging the intruder, in tank equivalents (see ENGAGE_KILL_PER_MIN). */
+  private firepower(inc: Incursion, u: Unit): number {
+    const g = this.g;
+    const q = inc.qrf;
+    let f = 0;
+    if (q && q.arrived) {
+      if (q.mode === 'ground') f += q.heavy ? QRF_TANK_FIRE + (q.vehicles - 1) * QRF_APC_FIRE : q.vehicles * QRF_APC_FIRE;
+      else if (q.mode === 'sea' && !q.unitId) f += 0.3;
+      if (q.unitId) {
+        const r = g.unitMap.get(q.unitId);
+        if (r && !r.dead) f += (r.hp / r.maxHp) * (r.type === UnitType.FighterSquadron ? 3 : 1);
+      }
+    }
+    for (const id of q?.divisions ?? []) {
+      const d = g.unitMap.get(id);
+      if (d && !d.dead && tileDistKm(d.x, d.y, u.x, u.y) <= ENGAGE_DIVISION_KM) f += (d.hp / d.maxHp) * 4;
+    }
+    // Surface-to-air missiles fire at an aircraft that stays in their cover.
+    if (inc.kind === 'jet' && this.samCovers(inc.victim, u)) f += 1.5;
+    return f;
   }
 
   private samCovers(victim: number, u: Unit): boolean {
@@ -704,6 +800,7 @@ export class CommandSystem {
       id: i.id, intruder: i.intruder, victim: i.victim, unitId: i.unitId, kind: i.kind, enteredSec: i.enteredSec,
       decideAtSec: i.decideAtSec, graceSec: i.graceSec, response: i.response, respondedSec: i.respondedSec,
       deadlineSec: Number.isFinite(i.deadlineSec) ? i.deadlineSec : 0, depthKm: i.depthKm, capitalKm: i.capitalKm, left: i.left,
+      awaitingAlongside: i.awaitAlong, leaving: i.leaving,
       qrf: i.qrf ? { ...i.qrf, divisions: [...i.qrf.divisions], fighters: [...i.qrf.fighters] } : null,
     }));
     const controlled = [...this.controlled.values()].map((c) => ({ unitId: c.unitId, x: c.x, y: c.y, sec: c.sec }));

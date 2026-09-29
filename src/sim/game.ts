@@ -626,6 +626,8 @@ export class Game implements SimGame {
         return this.command.casualties(p, cmd);
       case 'controlledDamage':
         return this.command.damage(p, cmd);
+      case 'escortAlongside':
+        return this.command.alongside(p, cmd.unitId);
       case 'commandResult':
         return this.applyCommandResult(p, cmd);
     }

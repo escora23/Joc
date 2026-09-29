@@ -316,7 +316,10 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     const ttl = sticky ? Infinity : (input.ttlSec ?? DEFAULT_TTL_MS / 1000) * 1000;
     let a = input.groupKey ? byGroup.get(input.groupKey) : undefined;
     let fresh = false;
+    // A grouped entry that turns into a different event (a new title: «último aviso» → «abre fuego») may pause too.
+    let changed = false;
     if (a && !a.acknowledged && a.el) {
+      changed = a.input.title !== input.title;
       // One entry per group: update its numbers, keep its place, restart its timer.
       const escalated = SEV_ORDER[input.severity] > SEV_ORDER[a.input.severity];
       const sameKind = a.input.kind === input.kind;
@@ -352,7 +355,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     if (fresh && input.ticker) center.onTicker?.(input.title + (input.body ? ` · ${input.body}` : ''), input.severity === 'critical' || input.severity === 'danger' ? 'critical' : input.severity === 'warning' ? 'warning' : 'info', input.lat, input.lon);
     // The globe marker (or its edge arrow) appears in the same frame as the entry, not at the next 10 Hz projection.
     if (fresh && input.lat !== undefined && inGame()) projectMarkers();
-    if (fresh && input.autoPause) maybeAutoPause(a, input.autoPause);
+    if ((fresh || changed) && input.autoPause) maybeAutoPause(a, input.autoPause);
     ctx.bus.emit('uiSound', { kind: input.severity === 'info' ? 'notify' : 'alert' });
     refreshCount();
     return a;
@@ -615,6 +618,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   }
 
   ctx.bus.on('alert', (e) => raise(e.input));
+  ctx.bus.on('alertResolve', (e) => resolve(e.groupKey));
   // A language change repaints the entries' buttons, ages and «Prioridad alta» labels (their titles keep the language
   // they were reported in, like a news feed) and the auto-pause banner's buttons.
   ctx.bus.on('languageChanged', () => {

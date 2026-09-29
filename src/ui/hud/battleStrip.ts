@@ -13,6 +13,7 @@ import { tx } from '../tx';
 import { hexToCss } from '../../shared/color';
 import { formatNumber, t } from '../../shared/i18n';
 import { HUMAN_ID } from '../../shared/constants';
+import { battleCentre, greatCircleKm, tileXYToLatLon } from '../../shared/geo';
 import { frontName } from './forcesInfo';
 import { unitLabel } from './news';
 import { advanceText, combatDayText, isoOf, sidesOf, troopsText } from './frontsInfo';
@@ -60,6 +61,17 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
   });
   const banners = h('div', { class: 'fu-bbanners fu-hidden' }, ...divEls, ...bannerEls);
   const v = new THREE.Vector3(), vc = new THREE.Vector3();
+  // The battle's centre (the middle of its soldiers; shared/geo battleCentre), refreshed at most once a second.
+  let centre: { lat: number; lon: number } | null = null, centreAt = -1e9;
+  function centreOfBattle(): { lat: number; lon: number } | null {
+    const now = performance.now();
+    if (now - centreAt > 1000) {
+      centreAt = now;
+      const ho = ctx.battle.active ? ctx.battle.handoff?.() ?? null : null;
+      centre = ho ? battleCentre(ho) : null;
+    }
+    return centre;
+  }
   // ---- the battle pointer ----
   const pArrow = h('span', { class: 'fu-bpointer-arrow' });
   const pText = h('span');
@@ -244,7 +256,16 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
           y = H / 2 + (dy / m) * (H / 2);
           edge = Math.abs(dx) * H > Math.abs(dy) * W * 0.9 ? (dx < 0 ? '◀ ' : '▶ ') : dy < 0 ? '▲ ' : '▼ ';
         }
-        const text = `${edge}▣ ${unitLabel(u.type, u.serial)} · ${hs.name(d.owner) || '—'}${edge ? ` · ${formatNumber(d.km, 0)} km` : ''}`;
+        // Off screen: how far it is from the battle's centre (the same distance command mode shows, #24).
+        let km = d.km;
+        if (edge) {
+          const c = centreOfBattle();
+          if (c) {
+            const ul = tileXYToLatLon(u.x, u.y);
+            km = greatCircleKm(ul.lat, ul.lon, c.lat, c.lon);
+          }
+        }
+        const text = `${edge}▣ ${unitLabel(u.type, u.serial)} · ${hs.name(d.owner) || '—'}${edge ? ` · ${t('battle.div.fromBattle', { km: formatNumber(km, km < 10 ? 1 : 0) })}` : ''}`;
         if (e.dataset.t !== text) {
           e.dataset.t = text;
           setText(e, text);

@@ -234,3 +234,26 @@ export function sunDirection<T extends Vec3Like>(worldTimeSec: number, out: T): 
 export function worldTimeForSubsolarLon(lon: number): number {
   return (-lon / 360) * DAY_LENGTH_SEC;
 }
+
+/**
+ * v2 (W5 fix 2, owner feedback #24): the one «distance to the battle» of a ground battle hand-off: the middle of the
+ * soldiers the battle view draws (packed [lat, lon, owner, …]), else its anchor. The battle view's division markers,
+ * command mode's HUD line, its entry notice and the battle's world label all measure to this point.
+ */
+export function battleCentre(ho: { lat: number; lon: number; soldiers?: number[] }, out: LatLon = { lat: 0, lon: 0 }): LatLon {
+  const L = ho.soldiers;
+  if (L && L.length >= 3) {
+    let la = 0, lo = 0, n = 0;
+    for (let i = 0; i + 2 < L.length; i += 3) {
+      la += L[i];
+      lo += L[i + 1];
+      n++;
+    }
+    out.lat = la / n;
+    out.lon = lo / n;
+    return out;
+  }
+  out.lat = ho.lat;
+  out.lon = ho.lon;
+  return out;
+}

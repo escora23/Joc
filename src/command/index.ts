@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import type { CommandApi, CommandEnterParams, CommandResult, FrameInfo, GameContext, SfxCue } from '../shared/api';
 import { HUMAN_ID, MAP_H, MAP_W, TILE_KM, TRAVEL_RATES, UNIT_DEFS } from '../shared/constants';
-import { subsolarPoint, sunDirection, tangentFrame } from '../shared/geo';
+import { battleCentre, subsolarPoint, sunDirection, tangentFrame } from '../shared/geo';
 import { formatNumber, playerName, t } from '../shared/i18n';
 import type { QualityProfile } from '../shared/quality';
 import { Rng } from '../shared/rng';
@@ -47,7 +47,7 @@ import { Ground } from './stream';
 import { Civil, type CivilLabel } from './civil';
 import { FLIGHT_CEILING_M, Forces } from './forces';
 import { TacMap } from './tacmap';
-import { fmtDur, releasedInsideAlert, wireIncursionAlerts } from './alerts';
+import { fmtDur, wireIncursionAlerts } from './alerts';
 
 registerCommandStrings();
 
@@ -196,6 +196,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   /** Local game seconds (kept within ~2.5 s of the sim's command clock). */
   let localSec = 0;
   let startSec = 0;
+  /** The sim's command clock at entry (game s): the debrief's game time counts on it. */
+  let startCmdSec = -1;
   let startWall = 0;
   // Sync.
   let lastMoveWall = 0;
@@ -256,17 +258,31 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let introHold = 0;
   /** Say where the watched battle is once the intro has come down to the vehicle. */
   let battleNotice = false;
+  /** Distance (km) and bearing (°) from the vehicle to the watched battle's centre (the one definition, #24). */
+  function battleKm(Pn: Ent): { km: number; brg: number; x: number; z: number } | null {
+    const bf = battleFocus;
+    if (!bf) return null;
+    const bp = frame.sceneOf(bf.lat, bf.lon, { x: 0, z: 0 });
+    const dx = bp.x - Pn.pos.x, dz = bp.z - Pn.pos.z;
+    return { km: Math.hypot(dx, dz) / 1000, brg: (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360, x: bp.x, z: bp.z };
+  }
+  const kmText = (km: number): string => formatNumber(km, km < 10 ? 1 : 0);
   function showBattleNotice(): void {
     const Pn = player();
     const bf = battleFocus;
     if (!Pn || !bf || !overlay || !world) return;
-    const bp = frame.sceneOf(bf.lat, bf.lon, { x: 0, z: 0 });
-    const dx = bp.x - Pn.pos.x, dz = bp.z - Pn.pos.z;
-    const km = Math.hypot(dx, dz) / 1000;
-    const brg = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
-    const n = formatNumber(world.soldiersNear(bp.x, bp.z, 6000));
+    const bk = battleKm(Pn)!;
+    const { km, brg } = bk;
+    const n = formatNumber(world.soldiersNear(bk.x, bk.z, 6000));
+    // Far from it: a waypoint on its near edge at once (the HUD counts down the distance, M shows it; + drives there
+    // in column when no enemy is within reach).
+    if (km >= 1.5 && ground) {
+      const f = Math.max(0, (km - 0.6) / km);
+      const wx = Pn.pos.x + (bk.x - Pn.pos.x) * f, wz = Pn.pos.z + (bk.z - Pn.pos.z) * f;
+      waypoint = new THREE.Vector3(wx, ground.surfaceAt(wx, wz) + 20, wz);
+    }
     overlay.showNotice(km < 1.5 ? t('command.battle.here', { n })
-      : t('command.battle.there', { km: formatNumber(km, km < 10 ? 1 : 0), dir: t(`command.dir.${Math.round(brg / 45) % 8}`), n }), 9, true);
+      : t('command.battle.there', { km: kmText(km), dir: t(`command.dir.${Math.round(brg / 45) % 8}`), n }), 9, true);
   }
   let introDur = 3.1;
   const introFrom = new THREE.Vector3();
@@ -775,19 +791,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const ho = p.battleHandoff;
     // The battle's focus: the middle of the soldiers it was drawing (where the two lines meet), else where its camera
     // looked, else its anchor.
-    let fLat = ho?.camera?.lookLat ?? ho?.lat ?? 0, fLon = ho?.camera?.lookLon ?? ho?.lon ?? 0;
-    const L = ho?.soldiers;
-    if (L && L.length >= 3) {
-      let la = 0, lo = 0, n = 0;
-      for (let i = 0; i + 2 < L.length; i += 3) {
-        la += L[i];
-        lo += L[i + 1];
-        n++;
-      }
-      fLat = la / n;
-      fLon = lo / n;
-    }
-    battleFocus = ho ? { lat: fLat, lon: fLon, a: ho.infantry[0]?.owner ?? 0, b: ho.infantry[1]?.owner ?? 0 } : null;
+    const bc = ho ? battleCentre(ho) : null;
+    battleFocus = ho && bc ? { lat: bc.lat, lon: bc.lon, a: ho.infantry[0]?.owner ?? 0, b: ho.infantry[1]?.owner ?? 0 } : null;
     // Terrain around the entry point first (the screen is faded out meanwhile).
     await waitFor(() => ground!.ringReady(0, 0, 1), ctx.app.isShot ? 90_000 : 30_000);
     // View distance and fog per vehicle.
@@ -912,6 +917,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     cadence.length = 0;
     lastMoveLocal = -1e9;
     localSec = startSec = ctx.sim.view.command?.sec ?? 0;
+    startCmdSec = ctx.sim.view.command ? ctx.sim.view.command.sec : -1;
     startWall = performance.now();
     landOwner = prevLandOwner = ownerOfTile(tileIndex(tileOf(me.pos.x, me.pos.z).x, tileOf(me.pos.x, me.pos.z).y));
     // Taking control inside foreign land (a unit left there, an incursion running): that border is already crossed.
@@ -1022,15 +1028,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // Everything goes back now (the report shows applied numbers).
     sendMove(performance.now(), true);
     flushCasualties(performance.now(), true);
-    const incOut = myIncursion();
-    const Pout = player();
-    if (!lost && incOut && !incOut.left && incOut.response !== 'war' && params && Pout) {
-      const ll = frame.latLonOfScene(Pout.pos.x, Pout.pos.z, { lat: 0, lon: 0 });
-      releasedInsideAlert(ctx, params.unitId, incOut.victim, ll.lat, ll.lon);
-    }
+    // A unit left inside foreign land raises its «sigue dentro» crisis after the exit (alerts.ts, on commandExit).
     const rows: DebriefRow[] = [];
     rows.push({ label: t('command.debrief2.distance'), value: `${formatNumber(distanceM / 1000, distanceM < 10_000 ? 1 : 0)} km` });
-    const gsec = Math.max(0, localSec - startSec);
+    // Game time on the sim's command clock (the same seconds the incursion timers use), not the local step count.
+    const cmdSec = ctx.sim.view.command?.sec;
+    const gsec = cmdSec !== undefined && startCmdSec >= 0 ? Math.max(0, cmdSec - startCmdSec) : Math.max(0, localSec - startSec);
     const gm = Math.floor(gsec / 60), gh = Math.floor(gm / 60);
     rows.push({ label: t('command.debrief2.gameTime'), value: gh > 0 ? `${gh} h ${String(gm % 60).padStart(2, '0')} min` : `${gm} min ${String(Math.floor(gsec % 60)).padStart(2, '0')} s` });
     rows.push({ label: t('command.debrief2.kills'), value: String(world.stats.kills) });
@@ -1285,7 +1288,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const other = fr ? (fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0) : 0;
       if (kind === 'jet') land = t('command.land.ownAirspace');
       else if (water) land = t('command.land.ownWaters');
-      else if (fr && other && fr.nearest.distKm < 60) land = t('command.land.ownFront', { nation: nationName(other), km: formatNumber(fr.nearest.distKm, 0) });
+      else if (battleFocus && kind === 'tank') {
+        // Entered from a battle: the distance is to that battle's centre, the same number as its label and notice.
+        const bk = battleKm(P)!;
+        const foe = battleFocus.a === HUMAN_ID ? battleFocus.b : battleFocus.a;
+        land = t('command.land.ownBattle', { nation: nationName(foe), km: kmText(bk.km) });
+      } else if (fr && other && fr.nearest.distKm < 60) land = t('command.land.ownFront', { nation: nationName(other), km: formatNumber(fr.nearest.distKm, 0) });
       else if (view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID)) land = t('command.land.ownWar');
       else land = t('command.land.own');
     } else if (o === 0) {
@@ -1371,6 +1379,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
 
   let radioStage = '';
   /** The victim's radio (owner feedback #19): the warning with its countdown, the interception, the last warning. */
+  let lastAlongWall = 0;
+  let noEscortSince = 0;
   function updateRadio(inc: ReturnType<typeof myIncursion>, P: Ent): void {
     if (!overlay) return;
     if (!inc || inc.left) {
@@ -1410,12 +1420,25 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     } else if (inc.response === 'intercept' || (inc.response === 'protest' && inc.deadlineSec > 0)) {
       const remain = Math.max(0, inc.deadlineSec - sec);
       const escort = inc.response === 'intercept';
-      const total = escort ? (q?.arrived ? Math.max(1, inc.deadlineSec - q.arriveSec) : 60) : Math.max(1, inc.deadlineSec - inc.respondedSec);
+      const warnLen = nearCapital ? 30 : inc.kind === 'jet' ? 45 : 90;
+      const total = escort ? warnLen : Math.max(1, inc.deadlineSec - inc.respondedSec);
       const mode = q?.mode === 'air' ? 'air' : inc.kind === 'ship' ? 'ship' : 'tank';
       // «Alongside» only when its vehicles really are (≈150 m on land, 600 m in the air, 1.5 km at sea); until then the
       // radio says how far they still are.
       const d = escort && forces ? forces.qrfDistance(inc.id, P.pos) : 0;
       const along = d <= (mode === 'air' ? 600 : mode === 'ship' ? 1500 : 150);
+      // The sim's last warning starts only when a vehicle is really alongside here (owner feedback #20); a force the
+      // scene could not place at all (no vehicle of it after 20 s) is reported as there so the incident can go on.
+      if (inc.awaitingAlongside && q?.arrived) {
+        const nowW = performance.now();
+        if (!Number.isFinite(d)) noEscortSince ||= nowW;
+        else noEscortSince = 0;
+        if ((along || (noEscortSince && nowW - noEscortSince > 20_000)) && nowW - lastAlongWall > 1000) {
+          lastAlongWall = nowW;
+          ctx.sim.send({ type: 'escortAlongside', unitId: inc.unitId });
+          console.info(`[command] escort alongside: ${Number.isFinite(d) ? Math.round(d) : '-'} m at game ${sec.toFixed(1)} s`);
+        }
+      }
       const distText = d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d / 10) * 10} m`;
       overlay.setRadio({
         severity: 'danger', from,
@@ -2002,7 +2025,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const f = battleFocus;
         labels.push({
           x: bp.x, y: ground.surfaceAt(bp.x, bp.z) + 60, z: bp.z, text: t('command.label.battle', { a: nationName(f.a), b: nationName(f.b) }),
-          sub: t('command.label.battleSub', { n: formatNumber(world.soldiersNear(bp.x, bp.z, 6000)) }), kind: 'force', tone: 'hostile', color: colorCss(f.a === HUMAN_ID ? f.b : f.a), owner: f.a,
+          sub: t('command.label.battleSub', { n: formatNumber(world.soldiersNear(bp.x, bp.z, 6000)), km: kmText(P ? Math.hypot(bp.x - P.pos.x, bp.z - P.pos.z) / 1000 : 0) }), kind: 'force', tone: 'hostile', color: colorCss(f.a === HUMAN_ID ? f.b : f.a), owner: f.a,
         });
       }
       overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);
@@ -2051,12 +2074,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     },
   };
   // Important strategic alerts reach the command HUD and end time compression (§9.3, §9.11).
+  const stripSeen = new Map<string, string>();
   ctx.bus.on('alert', (e) => {
     if (!active || !overlay) return;
     const a = e.input;
     if (a.severity !== 'warning' && a.severity !== 'danger' && a.severity !== 'critical') return;
     // The incursion of the unit you drive speaks on the radio panel instead (updateRadio).
     const own = a.kind === 'incursionResponse' && params && (a as { unitId?: number }).unitId === params.unitId;
+    // The same news again while the sim has not moved (tactical time: minutes of local play can pass inside one tick)
+    // is not news: it is not re-pushed (no «×16» climbing on a frozen situation).
+    const key = `${a.groupKey ?? a.title}`;
+    const sig = `${a.title}|${a.body ?? ''}|${ctx.sim.view.tick}`;
+    if (stripSeen.get(key) === sig) return;
+    stripSeen.set(key, sig);
     if (!own) overlay.pushAlert(a.severity, a.title, a.body ?? '');
     if (a.severity !== 'warning') dropToTactical('command.travel.alert');
   });

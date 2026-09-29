@@ -708,8 +708,8 @@ export interface HumanEconomyView {
   atWar: boolean;
 }
 /** Auto-pause triggers (§8.5). */
-export type AutoPauseKind = 'warOnYou' | 'ultimatum' | 'nukeAtYou' | 'capitalThreat' | 'invasion' | 'proposal' | 'peaceOffer' | 'callToArms';
-export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'ultimatum', 'nukeAtYou', 'capitalThreat', 'invasion', 'proposal', 'peaceOffer', 'callToArms'];
+export type AutoPauseKind = 'warOnYou' | 'ultimatum' | 'nukeAtYou' | 'capitalThreat' | 'incursion' | 'invasion' | 'proposal' | 'peaceOffer' | 'callToArms';
+export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'ultimatum', 'nukeAtYou', 'capitalThreat', 'incursion', 'invasion', 'proposal', 'peaceOffer', 'callToArms'];
 
 // --- v2 (W4): unit orders, modes and production (DESIGN_V2 §6.4, §7, §14.2) ------------------------------------------
 /** Orders a player gives to units (§6.4). The right-click context picks one (§7.3). */
@@ -818,6 +818,14 @@ export interface IncursionView {
   capitalKm: number;
   left: boolean;
   qrf: QrfView | null;
+  /**
+   * v2 (W5 fix 2): the force is there in the sim but the last warning waits until one of its vehicles is really
+   * alongside in the command-mode scene (`escortAlongside`), so the countdown never runs while the escort is still
+   * kilometres away.
+   */
+  awaitingAlongside?: boolean;
+  /** v2 (W5 fix 2): a released unit that is under orders to leave the victim's land (its timers are held). */
+  leaving?: boolean;
 }
 /** Command-mode state of the sim (TickUpdate.command): present while a unit is controlled or an incursion runs. */
 export interface CommandView {

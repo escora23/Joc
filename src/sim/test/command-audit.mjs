@@ -163,13 +163,21 @@ function spawnDivision(g, x, y) {
   const inc = g.command.view(true).incursions.find((i) => i.unitId === u.id);
   const q = inc?.qrf;
   ok(!!q && q.soldiers >= 8 && q.soldiers <= 24 && q.vehicles >= 2, `I1 quick-reaction force of ${q?.vehicles} vehicles with ${q?.soldiers} soldiers from ${q?.source}`);
-  let arrived = null;
-  for (let i = 0; i < 2000 && !arrived; i++) {
+  // Fix 2 (#20): in command mode the force is in the area on the sim's schedule, but the last warning waits until one
+  // of its vehicles is alongside in the scene (the client's escortAlongside).
+  let inArea = null;
+  for (let i = 0; i < 2000 && !inArea; i++) {
     g.subStep(1);
-    arrived = events.find((e) => e.type === 'borderIncursion' && e.stage === 'arrived');
+    inArea = g.command.view(true).incursions.find((x) => x.unitId === u.id && x.qrf?.arrived) ?? null;
   }
-  const travel = arrived && q ? arrived.sec - q.dispatchSec : -1;
+  const travel = inArea && q ? inArea.qrf.arriveSec - q.dispatchSec : -1;
   ok(travel >= 90 && travel <= 300, `I1 it arrives ${(travel / 60).toFixed(1)} game min after dispatch (1.5–5)`);
+  for (let i = 0; i < 120; i++) g.subStep(1);
+  const held = g.command.view(true).incursions.find((x) => x.unitId === u.id);
+  ok(!!held && held.awaitingAlongside === true && held.deadlineSec === 0 && held.response === 'intercept' && !events.some((e) => e.type === 'borderIncursion' && e.stage === 'arrived'),
+    `I1b no last warning while the escort is not alongside in the scene (120 game s after arrival: awaiting ${held?.awaitingAlongside}, deadline ${held?.deadlineSec})`);
+  g.issue(HUMAN_ID, { type: 'escortAlongside', unitId: u.id });
+  const arrived = events.find((e) => e.type === 'borderIncursion' && e.stage === 'arrived') ?? null;
   ok(arrived?.deadlineSec === 90 || arrived?.deadlineSec === 30, `I1 on arrival, the last warning: ${arrived?.deadlineSec} s to leave`);
   let fire = null;
   for (let i = 0; i < 200 && !fire; i++) {
@@ -204,6 +212,13 @@ function spawnDivision(g, x, y) {
   const stillIn = g.command.view(true).incursions.find((i) => i.unitId === u.id && !i.left);
   ok(u.state !== UnitState.Controlled && Math.hypot(u.x - rx, u.y - ry) < 1e-6 && (!!stillIn || g.war.atWar(spot.victim, HUMAN_ID)),
     `I3 released inside foreign land: it holds where it was left (moved ${(Math.hypot(u.x - rx, u.y - ry) * TILE_KM).toFixed(3)} km), the incursion goes on (${stillIn ? stillIn.response : 'war'})`);
+  // I5 (fix 2): left inside under fire, the force really there wears it down in proportion (two APCs cannot destroy
+  // a division in half an hour); within 30 game minutes the incident becomes a war instead.
+  const hpR = u.hp / u.maxHp;
+  for (let i = 0; i < 6; i++) g.tick1();
+  const inc5 = g.command.view(true).incursions.find((i) => i.unitId === u.id);
+  ok(!u.dead && hpR - u.hp / u.maxHp <= 0.1 && (g.war.atWar(spot.victim, HUMAN_ID) || inc5?.response === 'engage'),
+    `I5 released under fire for 36 game min: ${((hpR - u.hp / u.maxHp) * 100).toFixed(1)} % lost, ${g.war.atWar(spot.victim, HUMAN_ID) ? 'now a war' : inc5?.response}`);
   // C2: controlled damage.
   g.issue(HUMAN_ID, { type: 'unitControl', unitId: u.id, controlled: true });
   const i0 = u.hp / u.maxHp;
@@ -211,6 +226,42 @@ function spawnDivision(g, x, y) {
   ok(Math.abs(u.hp / u.maxHp - (i0 - 0.25)) < 1e-6, `C2 losing a tank lowers the division to ${(u.hp / u.maxHp * 100).toFixed(0)} %`);
   g.issue(HUMAN_ID, { type: 'controlledDamage', unitId: u.id, integrity: 0 });
   ok(u.dead, 'C2 losing the last tank destroys the division');
+}
+
+// ------------------------------------------------------------------------------------------------ I6
+// Fix 2 (#18): released inside and then ordered out from the map: the victim holds its clocks and fire while the unit
+// drives out; out of its land the incursion ends without war and without damage.
+{
+  const { g, events } = makeGame(11);
+  const spot = borderSpot(g);
+  g.applyDebug({ type: 'opinion', of: spot.victim, toward: HUMAN_ID, key: 'pastWar', value: -30 });
+  const u = spawnDivision(g, spot.x, spot.y);
+  u.x = spot.x;
+  u.y = spot.y;
+  g.issue(HUMAN_ID, { type: 'unitControl', unitId: u.id, controlled: true });
+  const kx = kmX(u.y);
+  let entered = null, lastOwn = null;
+  for (let i = 0; i < 400 && !entered; i++) {
+    lastOwn = { x: u.x, y: u.y };
+    g.subStep(60);
+    g.issue(HUMAN_ID, { type: 'controlledMove', unitId: u.id, x: u.x + spot.dir * (1 / kx), y: u.y, heading: 0 });
+    entered = events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered');
+  }
+  for (let i = 0; i < 40; i++) g.subStep(1);
+  g.issue(HUMAN_ID, { type: 'unitControl', unitId: u.id, controlled: false });
+  const hp0 = u.hp;
+  const own = Math.floor(lastOwn.y) * MAP_W + Math.floor(lastOwn.x - spot.dir * 2);
+  const P = g.playerById[HUMAN_ID];
+  const ordered = g.unitSys.order(P, [u.id], 'move', own, 0);
+  g.subStep(10);
+  const lv = g.command.view(true).incursions.find((i) => i.unitId === u.id);
+  let left = false;
+  for (let i = 0; i < 40 && !left; i++) {
+    g.tick1();
+    left = events.some((e) => e.type === 'borderIncursion' && e.stage === 'left' && e.unitId === u.id);
+  }
+  ok(ordered && !!lv?.leaving && left && !u.dead && u.hp >= hp0 && !g.war.atWar(spot.victim, HUMAN_ID) && g.owner[own] === HUMAN_ID,
+    `I6 released inside, then ordered home: leaving=${lv?.leaving}, out=${left}, integrity ${(u.hp / u.maxHp * 100).toFixed(0)} %, war ${g.war.atWar(spot.victim, HUMAN_ID)}`);
 }
 
 // ------------------------------------------------------------------------------------------------ I4
@@ -359,6 +410,8 @@ function spawnDivision(g, x, y) {
       for (let i = 0; i < 400 && !arr; i++) {
         g.subStep(1);
         resp ??= events.find((e) => e.type === 'borderIncursion' && e.stage === 'response' && e.unitId === jet.id) ?? null;
+        // On the wing in the scene: the client reports it alongside.
+        if (g.command.view(true).incursions.some((x) => x.unitId === jet.id && x.awaitingAlongside)) g.issue(HUMAN_ID, { type: 'escortAlongside', unitId: jet.id });
         arr = events.find((e) => e.type === 'borderIncursion' && e.stage === 'arrived' && e.unitId === jet.id) ?? null;
       }
       const inc = g.command.view(true).incursions.find((i) => i.unitId === jet.id);

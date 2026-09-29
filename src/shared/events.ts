@@ -172,6 +172,8 @@ export interface AppEvents {
   // --- v2 (W3): alerts, auto-pause, crisis, panels (DESIGN_V2 §8, §14.8) ---
   /** Anyone -> UI: raise (or update, by groupKey) a located alert in the feed, log, minimap and globe. */
   alert: { input: AlertInput };
+  /** Anyone -> UI: the situation of that alert group is over (the entry fades; a critical one is acknowledged). */
+  alertResolve: { groupKey: string };
   /** UI: the game paused itself (§8.5) for this reason. */
   autoPaused: { kind: AutoPauseKind; text: string };
   /** UI crisis component: nuclear weapons in flight (red = the human's or an ally's land is the target). */

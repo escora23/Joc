@@ -6,7 +6,7 @@
 import { HUMAN_ID } from '../shared/constants';
 import type { GameContext } from '../shared/api';
 import type { AlertInput } from '../shared/events';
-import { tileToLatLon } from '../shared/geo';
+import { tileToLatLon, tileXYToLatLon } from '../shared/geo';
 import { playerName, t } from '../shared/i18n';
 import { unitLabel } from '../ui/hud/news';
 
@@ -20,6 +20,16 @@ export function fmtDur(sec: number): string {
   return t('command.dur.ms', { m: Math.floor(s / 60), s: String(s % 60).padStart(2, '0') });
 }
 
+/** Units of the human released inside foreign land whose incursion is still running (the «sigue dentro» row). */
+const held = new Map<number, number>();
+
+const isControlled = (ctx: GameContext, unitId: number): boolean => (ctx.sim.view.command?.controlled ?? []).some((c) => c.unitId === unitId);
+
+function raiseAlert(ctx: GameContext, input: AlertInput): void {
+  if (ctx.ui.alert) ctx.ui.alert(input);
+  else ctx.bus.emit('alert', { input });
+}
+
 export function wireIncursionAlerts(ctx: GameContext): void {
   if (wired) return;
   wired = true;
@@ -30,9 +40,24 @@ export function wireIncursionAlerts(ctx: GameContext): void {
     const nation = p ? playerName(p, ctx.world) : '—';
     const u = view.units.get(e.unitId);
     const unit = u ? unitLabel(u.type, u.serial).toLowerCase() : t(`command.kind.${e.kind}`).toLowerCase();
-    const ll = tileToLatLon(e.tile);
+    const ll = u ? tileXYToLatLon(u.x, u.y) : tileToLatLon(e.tile);
+    // Released inside (owner feedback #18): on the map a whole incursion takes game minutes, so every escalation is a
+    // crisis that pauses (setting «Tu unidad dentro de otra nación») and says how to get the unit out.
+    const released = !isControlled(ctx, e.unitId);
+    const groupKey = `incursion:${e.unitId}:${e.victim}`;
+    if (e.stage === 'left') {
+      ctx.bus.emit('alertResolve', { groupKey });
+      ctx.bus.emit('alertResolve', { groupKey: `held:${e.unitId}` });
+      const wasHeld = held.delete(e.unitId);
+      const alive = !!u && u.hp > 0;
+      if (wasHeld && alive && view.pairState(HUMAN_ID, e.victim) !== 'war') {
+        raiseAlert(ctx, { kind: 'incursionResponse', severity: 'info', title: t('alert.incursion.out.title', { nation, unit }), body: t('alert.incursion.out.body', { nation }), lat: ll.lat, lon: ll.lon, actors: [e.victim], groupKey, unitId: e.unitId, ttlSec: 20 });
+      }
+      return;
+    }
     let input: AlertInput | null = null;
-    const base = { lat: ll.lat, lon: ll.lon, actors: [e.victim], groupKey: `incursion:${e.unitId}:${e.victim}`, unitId: e.unitId };
+    const base = { lat: ll.lat, lon: ll.lon, actors: [e.victim], groupKey, unitId: e.unitId };
+    const orderOut = released ? ` ${t('alert.incursion.orderOut', { unit })}` : '';
     if (e.stage === 'entered') {
       const body = t('alert.incursion.entered.body', { nation, unit, t: fmtDur(e.graceSec ?? 30) }) + (e.nearCapital ? ` ${t('alert.incursion.enteredCapital')}` : '');
       input = { kind: 'incursionResponse', severity: 'warning', title: t('alert.incursion.entered.title', { nation }), body, ...base, ttlSec: 40 };
@@ -42,34 +67,50 @@ export function wireIncursionAlerts(ctx: GameContext): void {
       if (e.response === 'intercept') body = t(`alert.incursion.intercept.body.${e.qrfMode ?? 'ground'}`, { nation, unit, t: fmtDur(e.etaSec ?? 120) });
       else if (e.response === 'protest') body = e.deadlineSec ? t('alert.incursion.protestStay.body', { nation, unit, t: fmtDur(e.deadlineSec) }) : t('alert.incursion.protest.body', { nation, unit });
       else body = t(`alert.incursion.${e.response}.body`, { nation, unit });
+      const fire = e.response === 'war' || e.response === 'engage';
       input = {
         kind: 'incursionResponse',
-        severity: e.response === 'war' || e.response === 'engage' ? 'critical' : e.response === 'intercept' ? 'danger' : 'info',
-        title: t(`alert.incursion.${e.response}.title`, { nation, unit }), body: body + extra, ...base, ticker: e.response === 'war', ttlSec: 45,
+        severity: fire ? 'critical' : e.response === 'intercept' ? 'danger' : 'info',
+        title: t(`alert.incursion.${e.response}.title`, { nation, unit }), body: body + extra + (e.response === 'engage' ? orderOut : ''), ...base, ticker: e.response === 'war', ttlSec: 45,
+        ...(released && e.response === 'engage' ? { autoPause: 'incursion' as const } : {}),
       };
+      if (released && held.has(e.unitId) && fire) heldAlert(ctx, e.unitId, e.victim, e.response);
     } else if (e.stage === 'arrived') {
       input = {
-        kind: 'incursionResponse', severity: 'danger', title: t('alert.incursion.arrived.title', { nation }),
-        body: t('alert.incursion.arrived.body', { nation, unit, t: fmtDur(e.deadlineSec ?? 60) }), ...base, ttlSec: 45,
+        kind: 'incursionResponse', severity: released ? 'critical' : 'danger', title: t('alert.incursion.arrived.title', { nation }),
+        body: t('alert.incursion.arrived.body', { nation, unit, t: fmtDur(e.deadlineSec ?? 60) }) + orderOut, ...base, ttlSec: 45,
+        ...(released ? { autoPause: 'incursion' as const } : {}),
       };
     }
-    if (!input) return;
-    if (ctx.ui.alert) ctx.ui.alert(input);
-    else ctx.bus.emit('alert', { input });
+    if (input) raiseAlert(ctx, input);
+  });
+  // After the exit (the map is live again, so the pause can hold it): the unit left inside says so and pauses.
+  ctx.bus.on('commandExit', (e) => {
+    const r = e.result;
+    if (r.unitLost) return;
+    const inc = [...(ctx.sim.view.command?.incursions ?? [])].filter((i) => i.unitId === r.unitId && !i.left).sort((a, b) => b.id - a.id)[0];
+    if (!inc) return;
+    held.set(r.unitId, inc.victim);
+    heldAlert(ctx, r.unitId, inc.victim, inc.response);
   });
 }
 
-/** Leaving command mode with the unit inside foreign land: say it stays there and the incursion goes on (#18). */
-export function releasedInsideAlert(ctx: GameContext, unitId: number, victim: number, lat: number, lon: number): void {
+/**
+ * The «Tu … sigue dentro de …» row of a unit released inside foreign land (#18): critical (it stays until the unit is
+ * out or lost), pauses once on release, and its body follows the victim's reaction; resolved when the incursion ends.
+ */
+function heldAlert(ctx: GameContext, unitId: number, victim: number, response: string): void {
   const view = ctx.sim.view;
   const p = view.players[victim];
   const nation = p ? playerName(p, ctx.world) : '—';
   const u = view.units.get(unitId);
   const unit = u ? unitLabel(u.type, u.serial).toLowerCase() : '';
-  const input: AlertInput = {
-    kind: 'incursionResponse', severity: 'warning', title: t('alert.incursion.released.title', { nation, unit }),
-    body: t('alert.incursion.released.body', { nation, unit }), lat, lon, actors: [victim], groupKey: `incursion:${unitId}:${victim}`, unitId, ttlSec: 40,
-  };
-  if (ctx.ui.alert) ctx.ui.alert(input);
-  else ctx.bus.emit('alert', { input });
+  const ll = u ? tileXYToLatLon(u.x, u.y) : { lat: 0, lon: 0 };
+  const body = response === 'war' ? t('alert.incursion.released.bodyWar', { nation, unit })
+    : response === 'engage' ? t('alert.incursion.released.bodyFire', { nation, unit })
+      : t('alert.incursion.released.body', { nation, unit });
+  raiseAlert(ctx, {
+    kind: 'incursionHeld', severity: 'critical', title: t('alert.incursion.released.title', { nation, unit }), body,
+    lat: ll.lat, lon: ll.lon, actors: [victim], groupKey: `held:${unitId}`, unitId, autoPause: 'incursion',
+  });
 }

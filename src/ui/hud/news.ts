@@ -410,6 +410,8 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
   const fronts = new Map<string, FrontTrack>();
   const flagged = new Map<string, number>();
   const lastTroops = new Map<string, number>();
+  /** Sim tick of each offensive entry's last refresh: nothing is re-pushed while the sim stands still (paused, command mode). */
+  const flaggedTick = new Map<string, number>();
   let capitalAlarm = 0;
   let lastRun = 0;
 
@@ -471,7 +473,8 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       const prev = flagged.get(key);
       const last = lastTroops.get(key) ?? 0;
       // Update the entry (never restack) when the numbers move by more than 10 %; else refresh it now and then.
-      if (prev === undefined || Math.abs(g.troops - last) > 0.1 * Math.max(1, last) || now - prev > 25_000) {
+      if (prev === undefined || Math.abs(g.troops - last) > 0.1 * Math.max(1, last) || (now - prev > 25_000 && flaggedTick.get(key) !== v.tick)) {
+        flaggedTick.set(key, v.tick);
         alert({
           kind: 'offensive', severity: 'danger', icon: 'attack', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30, frontKey,
           title: t('alert.offensive.title', { name: name(g.attacker), place: place.text }),
