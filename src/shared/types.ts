@@ -481,6 +481,11 @@ export interface AttackView {
   attackPower: number;
   /** v2 (W6, #23): 0 hold the line, 1 sustained, 2 all-out assault. */
   intensity: OffensiveIntensity;
+  /** v2 (#25): air superiority over the corridor (1 attacker, -1 defender, 0 contested / none) and drone swarms in
+   * close air support that count for each side. */
+  air?: -1 | 0 | 1;
+  casAtk?: number;
+  casDef?: number;
 }
 
 export interface FrontView {
@@ -528,6 +533,11 @@ export interface FrontView {
   casualtiesB: number;
   divisionsA: number;
   divisionsB: number;
+  /** v2 (#25): fighter squadrons of each side on patrol over the front, and drone swarms supporting there. */
+  airA?: number;
+  airB?: number;
+  casA?: number;
+  casB?: number;
   /** At war but no offensive on it. */
   quiet: boolean;
   /** Attack id of each side's offensive on this front (0 = none). */

@@ -350,6 +350,11 @@ export class Attack implements SimAttack {
   stalled = false;
   /** v2 (W6, #23): 0 hold the line, 1 sustained, 2 all-out assault. */
   intensity: 0 | 1 | 2 = 1;
+  /** v2 (#25): who owns the sky over the corridor (1 attacker, -1 defender, 0 contested / nobody) and the drone swarms
+   * whose close air support counts for each side this tick. */
+  air: -1 | 0 | 1 = 0;
+  casAtk = 0;
+  casDef = 0;
   /** Tiles ready to fall but held by the war's logistics bucket this tick. */
   consolidating = false;
   /** Retreat: troops are back home at this tick (-1 = not retreating). */

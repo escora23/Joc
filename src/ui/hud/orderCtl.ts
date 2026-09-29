@@ -12,10 +12,13 @@ import { tx } from '../tx';
 import type { HudShared } from './shared';
 import { etaText, unitName } from './forcesInfo';
 import { viewRules } from '../../sim/rulesView';
-import { ARMOR_RAIL_KMH, HUMAN_ID, MAP_W, UNIT_DEFS } from '../../shared/constants';
+import {
+  ARMOR_RAIL_KMH, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, BOMBER_GARRISON_SHARE, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES,
+  DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, HUMAN_ID, MAP_W, TILE_KM, UNIT_DEFS, structureLevel,
+} from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
 import {
-  inferOrder, orderCheck, planDivision, reachKm, strikeTarget, tileCx, tileCy, tileKm, type OrderIssue,
+  hostileTo, inferOrder, orderCheck, planDivision, strikeTarget, tileCx, tileCy, tileKm, type OrderIssue,
 } from '../../shared/orders';
 import { StructureType, UnitMode, UnitType, type UnitOrderKind, type UnitView } from '../../shared/types';
 
@@ -40,6 +43,8 @@ export interface OrderPreview {
   why: string | null;
   /** Needs the escalation confirmation (a first strategic strike). */
   confirm: boolean;
+  /** The tile the preview was made for (the air orders' effect and risk are read there). */
+  tile: number;
 }
 
 /** Own units currently selected (single or multi). */
@@ -128,7 +133,7 @@ export function previewOrders(hs: HudShared, ids: number[], tile: number, hoverU
   let best = 0;
   for (const [k, n] of count) if (n > best) { best = n; order = k; }
   const n = plans.filter((p) => !p.issue || p.issue.confirm).length;
-  return { plans, n, m: plans.length, order, why, confirm };
+  return { plans, n, m: plans.length, order, why, confirm, tile };
 }
 
 /** The i18n reason with its parameters («Base llena (3/3)», «En paz con Francia…»). */
@@ -160,23 +165,68 @@ export function chipText(hs: HudShared, pv: OrderPreview): { title: string; line
   if (pv.confirm && pv.n > 0) line = line ? `${line} · ${t('order.err.needsL2')}` : t('order.err.needsL2');
   if (!line && lead && pv.m === 1) {
     const u = view.units.get(lead.unitId);
-    if (u) line = hintFor(pv.order, u);
+    if (u) line = hintFor(hs, pv.order, u, lead.targetId, pv.tile);
   }
   return { title, line, bad: pv.n === 0 };
 }
 
-function hintFor(order: UnitOrderKind, u: UnitView): string {
+function hintFor(hs: HudShared, order: UnitOrderKind, u: UnitView, targetId: number, tile: number): string {
   switch (order) {
     case 'attach': return t('chip.hint.attach');
     case 'attack': return t('chip.hint.attack');
-    case 'cap': return t('chip.hint.cap', { km: formatNumber(reachKm(u.type)) });
-    case 'strike': return t('chip.hint.strike');
-    case 'support': return t('chip.hint.support');
+    case 'cap': return `${t('air.hint.cap', { km: formatNumber(Math.round(CAP_RADIUS_TILES * TILE_KM / 10) * 10) })} ${airRisk(hs, tile, u)}`;
+    case 'strike': {
+      const st = strikeTarget(viewRules(hs.ctx.sim.view), tile, targetId);
+      const kind = st?.kind ?? 'front';
+      const drone = u.type === UnitType.DroneSwarm;
+      const pct = kind === 'structure' ? Math.round((drone ? DRONE_DIRECT_DMG : BOMBER_DIRECT_DMG) * 100)
+        : kind === 'division' ? Math.round(BOMBER_DIVISION_DMG * 100) : Math.round(BOMBER_GARRISON_SHARE * 100 * (drone ? 0.4 : 1));
+      const at = st ? { x: st.x, y: st.y } : null;
+      return `${t(`air.hint.strike.${kind}`, { pct })} ${airRisk(hs, tile, u, at)}`;
+    }
+    case 'support': return `${t('air.hint.support', { pct: Math.round((DRONE_ADVANCE_MUL - 1) * 100) })} ${airRisk(hs, tile, u)}`;
+    case 'escort': return t('air.hint.escort');
+    case 'intercept': return t('air.hint.intercept', { pct: Math.round(CAP_HIT_AIRCRAFT * 100) });
     case 'blockade': return t('chip.hint.blockade');
     case 'bombard': return t('chip.hint.bombard');
     case 'patrol': return t('chip.hint.patrol');
     default: return t('chip.hint.shift');
   }
+}
+
+/**
+ * The risk an aircraft runs over a point (#25): hostile SAM sites whose range covers it, hostile fighter patrols whose
+ * circle covers it and hostile airbases close enough to scramble against it. The same figures the sim uses.
+ */
+export function airThreat(hs: HudShared, x: number, y: number, owner: number): { sams: number; fighters: number; bases: number } {
+  const view = hs.ctx.sim.view;
+  const r = viewRules(view);
+  let sams = 0, fighters = 0, bases = 0;
+  for (const s of view.structures.values()) {
+    if (s.built < 1 || s.owner === owner || !hostileTo(r, owner, s.owner)) continue;
+    const d = tileKm(x, y, tileCx(s.tile), tileCy(s.tile));
+    if (s.type === StructureType.SamSite && d <= (structureLevel(s.type, s.level).rangeTiles ?? 8) * TILE_KM) sams++;
+    else if (s.type === StructureType.Airbase && d <= (structureLevel(s.type, s.level).scrambleTiles ?? 16) * TILE_KM) bases++;
+  }
+  for (const o of view.units.values()) {
+    if (o.type !== UnitType.FighterSquadron || o.owner === owner || o.mode === UnitMode.Docked || o.mode === UnitMode.Rearming) continue;
+    if (!hostileTo(r, owner, o.owner)) continue;
+    if (tileKm(x, y, o.x, o.y) <= CAP_RADIUS_TILES * TILE_KM * 1.5) fighters++;
+  }
+  return { sams, fighters, bases };
+}
+
+function airRisk(hs: HudShared, tile: number, u: UnitView, at: { x: number; y: number } | null = null): string {
+  if (tile < 0) return '';
+  const x = at?.x ?? tileCx(tile), y = at?.y ?? tileCy(tile);
+  const th = airThreat(hs, x, y, u.owner);
+  const score = th.sams * 2 + th.fighters * 2 + th.bases;
+  const level = score === 0 ? 'low' : score <= 2 ? 'mid' : 'high';
+  const parts: string[] = [];
+  if (th.sams) parts.push(t('air.risk.sams', { n: th.sams }));
+  if (th.fighters) parts.push(t('air.risk.fighters', { n: th.fighters }));
+  if (th.bases) parts.push(t('air.risk.bases', { n: th.bases }));
+  return t('air.risk', { level: t(`air.risk.${level}`), why: parts.length ? parts.join(', ') : t('air.risk.none') });
 }
 
 /**

@@ -31,13 +31,14 @@ import { openPeaceDialog } from './wardialogs';
 import { openOffensiveDialog } from './offensiveDialog';
 import { hexToCss } from '../../shared/color';
 import {
-  DEFENSE_REDEPLOY_TICKS, FRONT_PRIORITY_WEIGHT, HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_DAY, UNIT_DEFS,
+  AIR_DENIAL_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, BOMBER_GARRISON_SHARE, CAP_RADIUS_TILES, DEFENSE_REDEPLOY_TICKS,
+  DRONE_ADVANCE_MUL, FRONT_PRIORITY_WEIGHT, HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_DAY, TILE_KM, UNIT_DEFS,
 } from '../../shared/constants';
 import { tileXYToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
 import { orderCheck, tileKm } from '../../shared/orders';
-import { reasonText } from './orderCtl';
-import { UNIT_ORDER_KINDS, UnitState, UnitType, type FrontView, type UnitView, type WarView } from '../../shared/types';
+import { airThreat, reasonText } from './orderCtl';
+import { UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type FrontView, type UnitView, type WarView } from '../../shared/types';
 import { viewRules } from '../../sim/rulesView';
 
 export interface FrontsPanel {
@@ -75,6 +76,11 @@ interface FrontRow {
   send: HTMLButtonElement | null;
   sendList: HTMLElement | null;
   sendPaintMs: number;
+  /** v2 (#25): the sky over the front, and the «Apoyo aéreo» list of own aircraft to send there. */
+  air?: HTMLElement;
+  airBtn?: HTMLButtonElement;
+  airList?: HTMLElement;
+  airPaintMs?: number;
 }
 
 interface WarCard {
@@ -102,6 +108,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
   const rows = new Map<number, FrontRow>();
   const wars = new Map<number, WarCard>();
   const expanded = new Set<number>();
+  const airExpanded = new Set<number>();
 
   const closeBtn = h('button', { class: 'fu-close' }, icon('close'));
   closeBtn.addEventListener('click', () => close());
@@ -351,6 +358,110 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     }
   }
 
+  // ---- aircraft to send (owner item #25) --------------------------------------------------------------
+  /** «Cielo: …» — who patrols over this front, who owns the sky and what it does, the drones in support. */
+  function airLine(f: FrontView, hsd: number): string {
+    const own = (hsd === 0 ? f.airA : f.airB) ?? 0, their = (hsd === 0 ? f.airB : f.airA) ?? 0;
+    const cOwn = (hsd === 0 ? f.casA : f.casB) ?? 0, cTheir = (hsd === 0 ? f.casB : f.casA) ?? 0;
+    const enemy = hsd === 0 ? f.b : f.a;
+    const sky = own > their ? t('fr.air.skyOwn', { pct: Math.round((AIR_SUPERIORITY_ADVANCE_MUL - 1) * 100) })
+      : their > own ? t('fr.air.skyTheir', { enemy: hs.name(enemy), pct: Math.round((1 - AIR_DENIAL_ADVANCE_MUL) * 100) })
+      : own > 0 ? t('fr.air.skyContested') : t('fr.air.skyNone');
+    let line = t('fr.air', { own, their, sky });
+    if (cOwn + cTheir > 0) line += ` · ${t('fr.air.cas', { own: cOwn, their: cTheir, pct: Math.round((DRONE_ADVANCE_MUL - 1) * 100) })}`;
+    return line;
+  }
+  type AirCandidate = { u: UnitView; order: 'cap' | 'support' | 'strike'; hours: number; why: string | null; onWay: boolean };
+  function airCandidates(f: FrontView): AirCandidate[] {
+    const v = view();
+    const r = viewRules(v);
+    const enemy = f.a === HUMAN_ID ? f.b : f.a;
+    const tile = attachTile(f, enemy);
+    if (tile < 0) return [];
+    const tx0 = (tile % MAP_W) + 0.5, ty0 = Math.floor(tile / MAP_W) + 0.5;
+    const out: AirCandidate[] = [];
+    for (const u of v.units.values()) {
+      if (u.owner !== HUMAN_ID || u.state === UnitState.Destroyed) continue;
+      const order = u.type === UnitType.FighterSquadron ? 'cap' : u.type === UnitType.DroneSwarm ? 'support' : u.type === UnitType.Bomber ? 'strike' : null;
+      if (!order) continue;
+      const base = v.structures.get(u.home);
+      const docked = u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming;
+      const fx = docked && base ? (base.tile % MAP_W) + 0.5 : u.x, fy = docked && base ? Math.floor(base.tile / MAP_W) + 0.5 : u.y;
+      const km = tileKm(fx, fy, tx0, ty0);
+      const onWay = u.order === UNIT_ORDER_KINDS.indexOf(order) && nearFront(f, u.targetX, u.targetY, order === 'cap' ? CAP_RADIUS_TILES : 3);
+      const issue = onWay ? null : orderCheck(r, u.id, order, tile, 0);
+      out.push({ u, order, hours: km / UNIT_DEFS[u.type].speedKmh, why: onWay ? t('fr.airsend.onWayWhy') : issue && !issue.confirm ? reasonText(hs, issue) : null, onWay });
+    }
+    const rank = (c: AirCandidate): number => (!c.why ? 0 : c.onWay ? 1 : 2);
+    return out.sort((p, q) => rank(p) - rank(q) || p.hours - q.hours || p.u.id - q.u.id).slice(0, 8);
+  }
+  function airEffect(order: 'cap' | 'support' | 'strike'): string {
+    return order === 'cap' ? t('fr.airsend.cap.tip', { pct: Math.round((AIR_SUPERIORITY_ADVANCE_MUL - 1) * 100), km: formatNumber(Math.round(CAP_RADIUS_TILES * TILE_KM / 10) * 10) })
+      : order === 'support' ? t('fr.airsend.support.tip', { pct: Math.round((DRONE_ADVANCE_MUL - 1) * 100) })
+      : t('fr.airsend.strike.tip', { pct: Math.round(BOMBER_GARRISON_SHARE * 100) });
+  }
+  function paintAirList(row: FrontRow, f: FrontView): void {
+    const listEl = row.airList;
+    if (!listEl) return;
+    const list = airCandidates(f);
+    const sig = `${t('fr.airsend.cap')}|` + (list.map((c) => `${c.u.id}:${c.onWay ? 2 : c.why ? 1 : 0}`).join(',') || 'none');
+    if (listEl.dataset.sig === sig) {
+      for (const c of list) {
+        const eta = listEl.querySelector<HTMLElement>(`.fu-war-send[data-unit="${c.u.id}"] .fu-war-send-eta`);
+        if (eta) setText(eta, etaText(hs, Math.round(c.hours * 10), false));
+      }
+      return;
+    }
+    listEl.dataset.sig = sig;
+    listEl.replaceChildren();
+    if (!list.length) {
+      listEl.append(h('div', { class: 'fu-war-note' }, t('fr.airsend.none')));
+      return;
+    }
+    for (const c of list) {
+      const btn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, t(c.onWay ? 'fr.send.onWay' : `fr.airsend.${c.order}`)) as HTMLButtonElement;
+      btn.disabled = !!c.why;
+      const unitId = c.u.id, order = c.order;
+      const current = (): AirCandidate | undefined => {
+        const ff = view().frontByKey.get(f.key);
+        return ff ? airCandidates(ff).find((q) => q.u.id === unitId) : undefined;
+      };
+      tip(btn, () => {
+        const q = current() ?? c;
+        const enemy = f.a === HUMAN_ID ? f.b : f.a;
+        const tile = attachTile(f, enemy);
+        const th = tile >= 0 ? airThreat(hs, (tile % MAP_W) + 0.5, Math.floor(tile / MAP_W) + 0.5, HUMAN_ID) : { sams: 0, fighters: 0, bases: 0 };
+        return {
+          title: `${unitName(q.u)} · ${t(`fr.airsend.${order}`)}`, text: airEffect(order),
+          now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`],
+            [t('fr.airsend.threat'), t('fr.airsend.threatV', { sams: th.sams, fighters: th.fighters, bases: th.bases })]],
+          whyNot: q.why,
+        };
+      });
+      btn.addEventListener('click', () => {
+        const ff = view().frontByKey.get(f.key);
+        const q = current();
+        if (!ff || !q) return;
+        const tile = attachTile(ff, ff.a === HUMAN_ID ? ff.b : ff.a);
+        if (tile < 0 || q.why) {
+          hs.sound('error');
+          return;
+        }
+        ctx.sim.send({ type: 'unitOrder', unitIds: [unitId], order, tile, targetId: 0 });
+        hs.sound('confirm');
+        ctx.bus.emit('toast', { text: t(`fr.airsend.done.${order}`, { unit: unitName(q.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(q.hours * 10), false) }), kind: 'info', durationMs: 3600 });
+        airExpanded.delete(f.key);
+        listKey = '';
+      });
+      const item = h('div', { class: 'fu-war-send' },
+        h('div', { class: 'fu-war-send-name' }, h('b', null, unitName(c.u)), h('span', null, t(`fr.airsend.what.${c.order}`))),
+        h('span', { class: 'fu-mono fu-war-send-eta' }, etaText(hs, Math.round(c.hours * 10), false)),
+        btn);
+      item.dataset.unit = String(unitId);
+      listEl.append(item);
+    }
+  }
+
   // ---- rows ------------------------------------------------------------------------------------------
   function makeRow(f: FrontView, own: boolean): FrontRow {
     const name = h('div', { class: 'fu-war-fname' });
@@ -464,12 +575,26 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       row.retreat = retreat;
       row.send = send;
       row.sendList = h('div', { class: 'fu-war-sendlist fu-hidden' });
+      const airBtn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost fu-war-airbtn' }, icon('fighterSquadron'), tx('fr.airsend')) as HTMLButtonElement;
+      airBtn.addEventListener('click', () => {
+        hs.sound('click');
+        if (airExpanded.has(key)) airExpanded.delete(key);
+        else airExpanded.add(key);
+        const ff = view().frontByKey.get(key);
+        toggleClass(row.airList!, 'fu-hidden', !airExpanded.has(key));
+        if (ff && airExpanded.has(key)) paintAirList(row, ff);
+      });
+      tip(airBtn, () => ({ title: t('fr.airsend'), text: t('fr.airsend.help') }));
+      actions.insertBefore(airBtn, counter);
+      row.airBtn = airBtn;
+      row.airList = h('div', { class: 'fu-war-sendlist fu-war-airlist fu-hidden' });
+      row.air = h('div', { class: 'fu-war-line fu-war-air' });
     }
     row.el = h('div', { class: 'fu-war-front' },
       h('div', { class: 'fu-war-fhead' }, name, age),
       h('div', { class: 'fu-war-tug' }, chipA, dir, chipB, h('div', { class: 'fu-fb-bar' }, barA, barB), adv),
-      gar, redeploy, h('div', { class: 'fu-war-line' }, divs, tiles), ...(row.ownBox ? [row.ownBox] : []), actions,
-      ...(row.sendList ? [row.sendList] : []),
+      gar, redeploy, h('div', { class: 'fu-war-line' }, divs, tiles), ...(row.air ? [row.air] : []), ...(row.ownBox ? [row.ownBox] : []), actions,
+      ...(row.sendList ? [row.sendList] : []), ...(row.airList ? [row.airList] : []),
     );
     row.el.dataset.key = String(key);
     row.el.addEventListener('click', (e) => {
@@ -548,6 +673,11 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     if (row.sendList && expanded.has(f.key) && performance.now() - row.sendPaintMs > 2000) {
       row.sendPaintMs = performance.now();
       paintSendList(row, f);
+    }
+    if (row.air && hsd >= 0) setText(row.air, airLine(f, hsd));
+    if (row.airList && airExpanded.has(f.key) && performance.now() - (row.airPaintMs ?? 0) > 2000) {
+      row.airPaintMs = performance.now();
+      paintAirList(row, f);
     }
   }
 
@@ -644,6 +774,10 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
           if (expanded.has(f.key)) {
             toggleClass(r.sendList!, 'fu-hidden', false);
             paintSendList(r, f);
+          }
+          if (airExpanded.has(f.key) && r.airList) {
+            toggleClass(r.airList, 'fu-hidden', false);
+            paintAirList(r, f);
           }
         }
       }

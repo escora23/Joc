@@ -51,6 +51,8 @@ const KM_PER_TICK: Record<number, number> = Object.fromEntries(
 );
 const RAIL_KM_PER_TICK = kmhToKmPerTick(ARMOR_RAIL_KMH);
 /** Strike kinds stored on a sortie. */
+/** #25: an escorted bomber or drone swarm is shot down this much less often per interception pass. */
+const ESCORT_INTERCEPT_MUL = 0.3;
 const SK_STRUCT = 1, SK_DIV = 2, SK_SHIP = 3, SK_FRONT = 4;
 /** A* budget (expanded tiles) for a division's road march. */
 const LAND_SEARCH_BUDGET = 60_000;
@@ -64,6 +66,15 @@ export interface FrontSupport {
   dronesDef: number;
   /** Warships bombarding the defender's coast within reach of the corridor. */
   navalAtk: number;
+  /** v2 (#25): fighter squadrons of each side on combat air patrol over the corridor (air superiority). */
+  fightersAtk: number;
+  fightersDef: number;
+}
+
+/** v2 (#25): aircraft of one side working over a front (FrontView.airA/B, casA/B). */
+export interface AirOverFront {
+  fighters: number;
+  drones: number;
 }
 
 export class UnitSystem {
@@ -286,13 +297,13 @@ export class UnitSystem {
       for (const s of this.support.values()) {
         s.atk.length = 0;
         s.def.length = 0;
-        s.dronesAtk = s.dronesDef = s.navalAtk = 0;
+        s.dronesAtk = s.dronesDef = s.navalAtk = s.fightersAtk = s.fightersDef = 0;
       }
     }
     let s = this.support.get(attackId);
-    if (s && s.atk.length + s.def.length + s.dronesAtk + s.dronesDef + s.navalAtk > 0) return s;
+    if (s && s.atk.length + s.def.length + s.dronesAtk + s.dronesDef + s.navalAtk + s.fightersAtk + s.fightersDef > 0) return s;
     if (!s) {
-      s = { atk: [], def: [], dronesAtk: 0, dronesDef: 0, navalAtk: 0 };
+      s = { atk: [], def: [], dronesAtk: 0, dronesDef: 0, navalAtk: 0, fightersAtk: 0, fightersDef: 0 };
       this.support.set(attackId, s);
     }
     const a = g.attacks.byId(attackId);
@@ -306,12 +317,43 @@ export class UnitSystem {
       if (u.type === UnitType.ArmoredDivision && u.mode === Mode.Front && u.enemy === a.defender && nearAxis(a, u.x, u.y, reach)) s!.atk.push(u);
       else if (u.type === UnitType.DroneSwarm && u.mode === Mode.Patrol && u.enemy === a.defender && this.atStation(u) && nearAxis(a, u.stationX, u.stationY, reach)) s!.dronesAtk++;
       else if (u.type === UnitType.Warship && u.mode === Mode.Bombard && u.enemy === a.defender && this.atStation(u) && nearAxis(a, u.stationX, u.stationY, reach + WARSHIP_BOMBARD_TILES)) s!.navalAtk++;
+      else if (this.onCap(u) && nearAxis(a, u.stationX, u.stationY, reach + CAP_RADIUS_TILES)) s!.fightersAtk++;
     });
     scan(a.defender, (u) => {
       if (u.type === UnitType.ArmoredDivision && u.mode === Mode.Front && u.enemy === a.attacker && nearAxis(a, u.x, u.y, reach + DIVISION_ATTACH_TILES)) s!.def.push(u);
       else if (u.type === UnitType.DroneSwarm && u.mode === Mode.Patrol && u.enemy === a.attacker && this.atStation(u) && nearAxis(a, u.stationX, u.stationY, reach)) s!.dronesDef++;
+      else if (this.onCap(u) && nearAxis(a, u.stationX, u.stationY, reach + CAP_RADIUS_TILES)) s!.fightersDef++;
     });
     return s;
+  }
+
+  /** A fighter squadron on station on its combat air patrol (within its orbit, not transiting or out of fuel). */
+  private onCap(u: Unit): boolean {
+    if (u.type !== UnitType.FighterSquadron || u.mode !== Mode.Cap || u.dead) return false;
+    return tileKm(u.x, u.y, u.stationX, u.stationY) <= CAP_RADIUS_TILES * TILE_KM;
+  }
+
+  /**
+   * v2 (#25): fighters of `p` on patrol whose circle covers a front's contact line, and its drone swarms supporting
+   * against `enemy` there (FrontView.airA/B, casA/B: what the badge and the Guerra panel say about the sky).
+   */
+  airNear(p: number, samples: readonly number[] | Float32Array, enemy: number): AirOverFront {
+    let fighters = 0, drones = 0;
+    for (const u of this.g.unitsByOwner.get(p) ?? []) {
+      let r: number;
+      if (this.onCap(u)) r = CAP_RADIUS_TILES + 1;
+      else if (u.type === UnitType.DroneSwarm && u.mode === Mode.Patrol && u.enemy === enemy && this.atStation(u)) r = DRONE_SUPPORT_TILES + 1;
+      else continue;
+      for (let i = 0; i < samples.length; i += 2) {
+        const dx = wdx(u.stationX, samples[i]) * latCos(u.stationY), dy = samples[i + 1] - u.stationY;
+        if (dx * dx + dy * dy <= r * r) {
+          if (u.type === UnitType.DroneSwarm) drones++;
+          else fighters++;
+          break;
+        }
+      }
+    }
+    return { fighters, drones };
   }
 
   /** Attached divisions of `p` near a front's contact line (FrontView.divisionsA/B). */
@@ -2075,10 +2117,7 @@ export class UnitSystem {
           return;
         }
         u.state = UnitState.Moving;
-        if (t.mode === Mode.Return && tileKm(u.x, u.y, t.x, t.y) < TILE_KM) {
-          this.goHome(u);
-          return;
-        }
+        // It stays with its charge all the way home (#25: the way back crosses the same patrols).
         const d = tileKm(u.x, u.y, t.x, t.y);
         this.moveToward(u, t.x, t.y, Math.min(speed, d));
         u.heading = t.heading;
@@ -2196,8 +2235,10 @@ export class UnitSystem {
     let p = chance;
     const escort = this.escortOf(t);
     if (escort) {
-      p *= 0.5;
-      if (this.rnd() < 0.4) this.damage(f, f.maxHp * 0.25, escort.owner);
+      // #25: the escort ties the interceptor up in a dogfight; few get through to the bomber.
+      g.emit({ type: 'combat', tick: g.tick, kind: 'strafe', owner: escort.owner, fromX: escort.x, fromY: escort.y, toX: f.x, toY: f.y, hit: true });
+      p *= ESCORT_INTERCEPT_MUL;
+      if (this.rnd() < 0.5) this.damage(f, f.maxHp * 0.25, escort.owner);
       if (this.rnd() < 0.3) this.damage(escort, escort.maxHp * 0.25, f.owner);
     }
     if (f.dead) return;

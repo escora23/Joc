@@ -27,7 +27,7 @@ import {
   LANDING_COAST_MUL, LANDING_STORM_TICKS, MAP_H, MAP_W, NEUTRAL_ADVANCE_KMH, NEUTRAL_TROOPS_PER_FRONT_TILE,
   OFFENSIVE_BREAK_TICKS, OFFENSIVE_CONTACT_TICKS, OFFENSIVE_RETURN_TICKS, OFFENSIVE_STALL_TICKS, RETREAT_LOSS,
   SIEGE_DEFENSE_MUL, THRESHOLD_JITTER, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE, BOMBARD_ATTACK_MUL, DRONE_ADVANCE_MUL,
-  DRONE_ENEMY_ADVANCE_MUL, structureLevel,
+  DRONE_ENEMY_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, AIR_DENIAL_ADVANCE_MUL, structureLevel,
 } from '../shared/constants';
 import { StructureType, TerrainClass, TerrainFlag, type AttackView, type OffensiveIntensity } from '../shared/types';
 import { NEUTRAL_LOSS_DIV, terrainCombat, type TerrainCombat } from './balance';
@@ -97,6 +97,9 @@ export class AttackSystem {
   /** Drone swarms supporting each side and warships bombarding for the attacker (this offensive, this tick). */
   private dronesAtk = 0;
   private dronesDef = 0;
+  /** v2 (#25): fighter squadrons on patrol over the corridor, each side (air superiority). */
+  private fightersAtk = 0;
+  private fightersDef = 0;
   private navalAtk = 0;
   private readonly ready: number[] = [];
   /** Terrain defense of tiles taken in the last 10 ticks (ring of per-tick sums). */
@@ -692,6 +695,13 @@ export class AttackSystem {
     } else {
       const armorA = Math.min(2, 1 + 0.25 * this.atkArmor.length);
       const armorD = Math.min(2, 1 + 0.25 * this.defArmor.length);
+      // #25: the side with more fighters on patrol over the corridor owns the sky; the other side's drones stop counting.
+      const skyAtk = this.fightersAtk > this.fightersDef, skyDef = this.fightersDef > this.fightersAtk;
+      if (skyAtk) this.dronesDef = 0;
+      if (skyDef) this.dronesAtk = 0;
+      a.air = skyAtk ? 1 : skyDef ? -1 : 0;
+      a.casAtk = this.dronesAtk;
+      a.casDef = this.dronesDef;
       // §4.4: ×1.15 with drone support over the front, ×1.15 with naval bombardment of its coast.
       Pa = a.troops * atkPower * armorA * (this.dronesAtk > 0 ? 1.15 : 1) * (this.navalAtk > 0 ? BOMBARD_ATTACK_MUL : 1);
       // All-out assault (#23): every reserve thrown in at once, +25 % attack power (paid in casualties below).
@@ -721,6 +731,8 @@ export class AttackSystem {
       // Drones over the front (§6.3): our advance ×1.15, the enemy's ×0.85 (never above the cap).
       if (this.dronesAtk > 0) v *= DRONE_ADVANCE_MUL;
       if (this.dronesDef > 0) v *= DRONE_ENEMY_ADVANCE_MUL;
+      if (skyAtk) v *= AIR_SUPERIORITY_ADVANCE_MUL;
+      if (skyDef) v *= AIR_DENIAL_ADVANCE_MUL;
     }
     // Holding the line (#23): the troops stay dug in on the contact, nothing is pushed.
     if (a.intensity === 0) v = 0;
@@ -1061,7 +1073,7 @@ export class AttackSystem {
     atk.length = 0;
     dfn.length = 0;
     this.posts.length = 0;
-    this.dronesAtk = this.dronesDef = this.navalAtk = 0;
+    this.dronesAtk = this.dronesDef = this.navalAtk = this.fightersAtk = this.fightersDef = 0;
     if (!D) return;
     const sup = g.unitSys.frontSupport(a.id);
     for (const u of sup.atk) atk.push(u);
@@ -1069,6 +1081,8 @@ export class AttackSystem {
     this.dronesAtk = sup.dronesAtk;
     this.dronesDef = sup.dronesDef;
     this.navalAtk = sup.navalAtk;
+    this.fightersAtk = sup.fightersAtk;
+    this.fightersDef = sup.fightersDef;
     for (const s of g.structByOwner.get(D.id) ?? []) {
       if (s.type !== StructureType.DefensePost || !s.operational) continue;
       const lv = structureLevel(s.type, s.level);
@@ -1126,6 +1140,7 @@ export class AttackSystem {
       tilesTaken: a.tilesTaken, tilesLost: a.tilesLost, ratio: +a.ratio.toFixed(2), advanceKmh: +a.advanceKmh.toFixed(2),
       committed: Math.floor(a.committed), etaTicks: eta, state: a.state, defensePower: Math.round(a.pd), attackPower: Math.round(a.pa),
       intensity: a.intensity,
+      air: a.air, casAtk: a.casAtk, casDef: a.casDef,
     };
   }
 

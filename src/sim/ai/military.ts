@@ -97,6 +97,13 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
   const enemyAim = enemy ? b.front.aim.get(enemy.id) ?? -1 : -1;
   const ourFront = enemy ? b.front.ours.get(enemy.id) ?? -1 : -1;
   let targets: readonly SimStructure[] | null = null;
+  // Owner item #25: the AI flies the same missions as the player. Our land offensive against this enemy (drones give it
+  // close air support, a fighter patrol wins the sky over it) and the free fighters that can escort a bomber.
+  let pushing = false;
+  if (enemy) for (const a of g.outgoingAttacks(p.id)) if (a.defender === enemy.id && !a.naval && a.state !== 'retreating') pushing = true;
+  const freeFighters: number[] = [];
+  for (const u of units) if (u.type === UnitType.FighterSquadron && (u.state === UnitState.Docked || u.state === UnitState.Idle)) freeFighters.push(u.id);
+  let fighterN = 0;
   // Naval path planning is expensive: at most one warship gets new orders per pass.
   let shipOrders = 0;
   const reserve = Math.max(0.15, b.prof.reserve + b.diff.reserveDelta);
@@ -153,14 +160,24 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
             best = s.tile;
           }
         }
+        // Drones over our own offensive: close air support (+15 % advance) rather than a one-way strike.
+        if (u.type === UnitType.DroneSwarm && pushing && enemyAim >= 0 && nearestDist2(airbaseTiles, enemyAim) < range * range * 0.8 && rng.next() < 0.65
+          && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'support', tile: enemyAim, targetId: 0 })) break;
         if (best < 0 && enemyAim >= 0 && nearestDist2(airbaseTiles, enemyAim) < range * range * 0.8) best = enemyAim;
-        if (best >= 0) g.issue(p.id, { type: 'airStrike', unitId: u.id, targetTile: best });
+        if (best >= 0 && g.issue(p.id, { type: 'airStrike', unitId: u.id, targetTile: best }) && u.type === UnitType.Bomber && freeFighters.length > 1) {
+          // An escorted strike: a free fighter flies with the bomber (enemy interceptors must get through it).
+          const f = freeFighters.pop()!;
+          g.issue(p.id, { type: 'unitOrder', unitIds: [f], order: 'escort', tile: unitTile(u.x, u.y), targetId: u.id });
+        }
         break;
       }
       case UnitType.FighterSquadron: {
         if (u.state !== UnitState.Docked && u.state !== UnitState.Idle) break;
-        // Combat air patrol over our front (intercepts bombers and transports), else over the capital.
-        const cap = ourFront >= 0 ? ourFront : b.homeTile;
+        if (!freeFighters.includes(u.id)) break; // taken as an escort this pass
+        // Combat air patrol (intercepts bombers, drones and missiles): the first one over our offensive for air
+        // superiority, then over the front where the enemy pushes, else over our front, else over the capital.
+        const k = fighterN++;
+        const cap = k === 0 && pushing && enemyAim >= 0 ? enemyAim : threatFront >= 0 && k <= 1 ? threatFront : ourFront >= 0 ? ourFront : b.homeTile;
         if (cap >= 0 && nearestDist2(airbaseTiles, cap) < AIR_RANGE[u.type] * AIR_RANGE[u.type] * 0.8 && rng.next() < 0.7) {
           g.issue(p.id, { type: 'moveUnit', unitId: u.id, tile: cap });
         }

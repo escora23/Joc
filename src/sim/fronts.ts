@@ -498,6 +498,7 @@ export class FrontTracker {
         targetShareB: +f.target[1].toFixed(3), priorityA: f.priority[0], priorityB: f.priority[1],
         casualtiesA: Math.round(f.casualties[0]), casualtiesB: Math.round(f.casualties[1]),
         divisionsA: g.attacks.divisionsNear(f.a, f), divisionsB: g.attacks.divisionsNear(f.b, f),
+        ...airOf(g.unitSys.airNear(f.a, f.samples, f.b), g.unitSys.airNear(f.b, f.samples, f.a)),
         quiet: !offA && !offB, offensiveA: offA?.id ?? 0, offensiveB: offB?.id ?? 0,
       };
       if (focus && (offA || offB)) {
@@ -574,3 +575,8 @@ export class FrontTracker {
 }
 
 const EMPTY: readonly Front[] = [];
+
+/** v2 (#25): the sky over a front for its record (FrontView.airA/B, casA/B). */
+function airOf(a: { fighters: number; drones: number }, b: { fighters: number; drones: number }): { airA: number; airB: number; casA: number; casB: number } {
+  return { airA: a.fighters, airB: b.fighters, casA: a.drones, casB: b.drones };
+}

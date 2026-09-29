@@ -469,6 +469,14 @@ export const DRONE_SUPPORT_TILES = 2;
 export const DRONE_GARRISON_PER_HOUR = 0.0025;
 export const DRONE_ADVANCE_MUL = 1.15;
 export const DRONE_ENEMY_ADVANCE_MUL = 0.85;
+/**
+ * v2 (owner item #25): air superiority over a front. Fighter squadrons flying a combat air patrol whose circle covers
+ * an offensive's corridor count for their side; the side with more of them owns the sky there: the attacker's advance
+ * ×1.10 (or ×0.90 when the defender owns it), and the other side's drone support stops counting (its drones are shot
+ * down or driven off by the patrol, which capSweep really does too). Equal numbers: contested, no effect.
+ */
+export const AIR_SUPERIORITY_ADVANCE_MUL = 1.1;
+export const AIR_DENIAL_ADVANCE_MUL = 0.9;
 /** Warships: engagement and blockade radius, bombardment reach and effects, escort radius and survival bonus. */
 export const WARSHIP_ENGAGE_TILES = 6;
 export const WARSHIP_BOMBARD_TILES = 4;

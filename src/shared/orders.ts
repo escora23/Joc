@@ -394,6 +394,10 @@ function aircraftCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: nu
   switch (order) {
     case 'cap': {
       if (u.type !== UnitType.FighterSquadron) return { key: 'order.err.notForAircraft' };
+      // #19: a patrol over another nation's airspace at peace, with no alliance or open borders, is an incursion; the
+      // strategic map refuses it (command mode is where a pilot may cross and face the warning and the interceptors).
+      const o = tile >= 0 && tile < TILE_COUNT ? r.ownerOf(tile) : 0;
+      if (o > 0 && o !== u.owner && !canTransit(r, u.owner, o) && !hostileTo(r, u.owner, o)) return { key: 'order.err.airspace', params: nameParam(o) };
       return outOfReach(tileCx(tile), tileCy(tile));
     }
     case 'intercept': {
