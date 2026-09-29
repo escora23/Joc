@@ -145,6 +145,55 @@ Stage 3, beside W6, after both W3 and W4. Read DESIGN_V2 §9 (all), §2.2 (sub-t
 15. Esc shows the debrief with synced numbers and climbs to 2500 km above the unit's new position; the view resyncs without artifacts and the occupied stipple is unchanged; tsc and build clean
 
 
+## W5-command-v2: close-out (2026-09-28)
+
+> Built by the W5 owner; `git log --grep W5`. CODEMAP §17 «v2 as built» maps the code. Verification:
+> `npx tsx src/sim/test/command-audit.mjs` (headless, 23/23), `node tools/w5-verify.mjs [--only peace,travel,border,front,jet,ship]`
+> (browser, SwiftShader, results merged into shots/W5-command-v2/verify.json), `npx tsx tools/i18n-check.mjs` (now also
+> walks src/command and src/app: 1065 keys, none missing), shots `command-peace|border|front|travel|jet-cap|ship-coast`.
+> Under SwiftShader a frame takes 1-3 s and the local step is clamped to 0.1 s, so checks stated in real seconds are
+> reported, not asserted; game-time checks are exact.
+
+1. **Entry at peace** (E1-E3): scene at 0.000 km from the sim position, «Territorio propio · en paz», 0 hostiles,
+   23 towns / 12 roads / the army base around Zaragoza (command-peace). PASS.
+2. **No scripted content** (E4 + i18n): no objective / wave / operation / air-strike text in the page; mission.ts and
+   its strings removed; every command string in es and en (206/206). PASS.
+3. **Drive 20 km** (D1): autopilot to a waypoint 20 km east at ×60: local 19.36 km, sim 19.32 km, gap 0 at arrival
+   (drops to ×1 on arrival). PASS. View updates: 16 distinct sim positions in 66 real s (SwiftShader frames; moves are
+   sent every 200 m or 1 s of frames).
+4. **Tactical clock** (K1-K2): 25.4 game s in 30 real s, 0 ticks; exit sets the strategic clock and the speed chosen
+   before is untouched (X2). PASS (30 s sampled, not 5 min).
+5. **Travel ×900** (T1-T3): ×900 accepted with a waypoint; 28,779 game s → 80 ticks (expected 79.9); missing chunks
+   ahead 0 at every 1 Hz sample; throttled while the terrain lagged (chip «limitado por el terreno»); 96 km travelled
+   in 150 real s with the sim unit 0 km from the local one. PASS. The contact / fire / border drops exist
+   (`dropToTactical`) but were not triggered in this run.
+6. **Chunks** (T4): main-thread chunk work p95 2.2 ms, meshes built in the two terrain workers. PASS. Holes/cracks:
+   judged on shots only (masks + skirts), no automated crack check.
+7. **Incursion** (B1-B5 + audit I1-I3): warning at 1.5 km, the confirmation before the line (no incursion in the sim
+   until «Cruzar»: fixed a move that slipped across before the answer), `borderIncursion` entered, protest 47 game s
+   later via subStep with 0 ticks, the protest alert in the command HUD; QRF arrival 5-15 game min, open borders raise
+   nothing (audit). PASS.
+8. **Front forces** (F1, F1b): infantry shown 40 = min(40, 1206); pools equal `__localForces` (deriveLocalForces) at
+   the same point; the real enemy division drawn as 4 tanks at its position. PASS.
+9. **Kill sync** (F2, F3 + audit C1): soldier −25 troops, tank −25 % of its division, SAM 0.35 (audit). PASS (applied
+   within the 2 s flush; real-time latency not asserted).
+10. **Own losses** (F4, F5 + audit C2): −25 % and the next tank; the last one destroys the division, debrief, map. PASS.
+11. **Jet** (J1-J2 + audit J1): 9,000 m at the real position; enemy aircraft only from squadrons (none airborne in the
+    staged run, so J2 is vacuous); foreign airspace at peace raises a jet incursion (audit). PASS with that caveat.
+12. **Ship** (S1 + audit S1): off Málaga in own territorial waters, calm sea, the real coast on the horizon; water next
+    to a foreign coast at peace raises a ship incursion, open sea never (audit). PASS.
+13. **Move clamp** (audit M1-M3): snapped beyond maxKmh × elapsed × 1.1 (logged), a 6 km jump rejected; travel checks
+    the strategic 40 km/h. Change: a jump is now «> 5 km and > 2× the allowed distance», because travel at ×900 moves
+    several km per message. PASS.
+14. **Battle hand-off**: `commandParams.battleHandoff` from W6's `BattleApi.handoff()` caps the local infantry per side;
+    NOT verified in the browser (needs a visible ground battle, T, and counts on both sides).
+15. **Exit** (X1-X2): the report, then the camera at 2,500 km above the unit's new position (lat/lon within 0.01°),
+    unit released, strategic clock. tsc and build clean. The occupied stipple after exit was not checked. PASS except
+    that item.
+
+Known limits: trains are simple boxes on view.rail; a docked squadron starts just after take-off; a floating-origin
+rebase can make the texture noise pop; enemy aircraft in the jet front shot depend on real airborne squadrons.
+
 ## W6-battle-clarity: close-out (2026-09-28)
 
 > Built in full by the W6 owner; commits 8379fc2 … (see `git log --grep W6`). CODEMAP §6 «W6 battle clarity» maps the code.

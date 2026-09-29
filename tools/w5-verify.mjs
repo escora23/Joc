@@ -1,6 +1,7 @@
 // FRONT ULTRA — W5 command mode v2 verifier (DESIGN_V2 §9, V2-STATUS W5 acceptance criteria). Test tooling only.
 //
-//   node tools/w5-verify.mjs [--url http://127.0.0.1:5450/] [--only peace,travel,border,front,jet,ship] [--lang en]
+//   node tools/w5-verify.mjs [--url http://127.0.0.1:5450/] [--only peace,travel,border,front,jet,ship]
+// Results merge into shots/W5-command-v2/verify.json (one section per run fits a SwiftShader session).
 //
 // Plays the command shots in `live` mode (the staged session keeps running) and measures, in the browser:
 //   E  entry at the unit's real position (≤ 1 km), own land at peace: no hostiles, towns and roads around, no
@@ -25,7 +26,6 @@ import fs from 'node:fs';
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 const BASE = arg('--url', 'http://127.0.0.1:5450/');
 const ONLY = (arg('--only', 'peace,travel,border,front,jet,ship')).split(',');
-const LANG = arg('--lang', '');
 const results = [];
 const rec = (id, ok, detail) => {
   results.push({ id, ok, detail });
@@ -42,7 +42,7 @@ async function open(shot) {
   const errs = [];
   page.on('pageerror', (e) => errs.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 300)); });
-  await page.goto(`${BASE}?shot=${shot}&live=1${LANG ? `&lang=${LANG}` : ''}`, { waitUntil: 'load', timeout: 120000 });
+  await page.goto(`${BASE}?shot=${shot}&live=1`, { waitUntil: 'load', timeout: 120000 });
   await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 560000, polling: 500 });
   await page.waitForFunction(() => !!window.__cmdStats && window.__cmdStats.phase === 'play', null, { timeout: 120000, polling: 500 }).catch(() => undefined);
   return { page, errs };
@@ -285,12 +285,19 @@ if (ONLY.includes('front')) {
     if (tank) w.kill(tank, w.player, true);
     return { owner, troops0, div0, divId: tank?.src.id ?? 0, soldier: !!soldier, tank: !!tank };
   });
-  await wait(6000);
-  const f2 = await page.evaluate(({ owner, divId }) => {
-    const v = window.__cmd.ctx.sim.view;
-    return { troops1: v.players?.get?.(owner)?.troops ?? v.playerList.find((p) => p.id === owner)?.troops, div1: divId ? v.units.get(divId)?.hp : null, stats: { killsBy: window.__cmdStats.killsBy, unitHitN: window.__cmdStats.unitHitN } };
-  }, f);
-  rec('F2 soldier kill → 25 troops leave the owner', f.soldier && f.troops0 - f2.troops1 >= 25 - 1e-6, { before: f.troops0, after: f2.troops1, note: 'troops also change with the sim economy' });
+  // The casualties go out with the next flush (every 2 s of frames); poll the sim view (SwiftShader frames are slow).
+  const tKill = Date.now();
+  let f2 = null;
+  for (let i = 0; i < 40; i++) {
+    await wait(1000);
+    f2 = await page.evaluate(({ owner, divId }) => {
+      const v = window.__cmd.ctx.sim.view;
+      return { troops1: v.players?.get?.(owner)?.troops ?? v.playerList.find((p) => p.id === owner)?.troops, div1: divId ? v.units.get(divId)?.hp : null, stats: { killsBy: window.__cmdStats.killsBy, unitHitN: window.__cmdStats.unitHitN } };
+    }, f);
+    if ((!f.soldier || f.troops0 - f2.troops1 >= 25 - 1e-6) && (!f.tank || f2.div1 == null || f.div0 - f2.div1 > 0.2)) break;
+  }
+  f2.realS = Math.round((Date.now() - tKill) / 1000);
+  rec('F2 soldier kill → 25 troops leave the owner', f.soldier && f.troops0 - f2.troops1 >= 25 - 1e-6, { before: f.troops0, after: f2.troops1, realS: f2.realS });
   rec('F3 tank kill → 25 % off its division', f.tank && f.div0 != null && f2.div1 != null && Math.abs(f.div0 - f2.div1 - 0.25) < 0.06, { before: f.div0, after: f2.div1, ...f2.stats });
   // Own loss.
   const own0 = await page.evaluate(() => ({ integrity: window.__cmdStats.integrity, alive: window.__cmdStats.formationAlive }));
