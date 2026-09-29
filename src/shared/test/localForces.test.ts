@@ -7,7 +7,7 @@
 
 import { MAP_H, MAP_W, STRUCTURE_LEVELS, TILE_KM, DEFENSE_REAR_SHARE } from '../constants';
 import {
-  deriveLocalForces, deriveLocalForcesAt, visibleSplit, FRONT_BAND_KM, TROOPS_PER_SOLDIER,
+  deriveLocalForces, deriveLocalForcesAt, holderAt, visibleSplit, FRONT_BAND_KM, TROOPS_PER_SOLDIER,
   type LocalForces, type LocalForcesAttack, type LocalForcesFront, type LocalForcesStructure, type LocalForcesUnit,
   type LocalForcesView,
 } from '../localForces';
@@ -214,6 +214,18 @@ near(f3.sides.find((s) => s.owner === 2)!.infantry, sA.infantry, 1e-9, 'pools do
   // Beyond its window (along the line) the published line does not apply.
   const beyond = deriveLocalForces({ ...view, fronts: [withLine] }, AX, 200 - (75 + 12) / TILE_KM - 1, R, 1).fronts[0];
   ok(!!beyond && !beyond.line, 'no published line beyond its window');
+
+  // --- 6. one source of truth for who holds the ground (W6 final): the drawn line, not the 25 km tile, near our front.
+  const vl = { ...view, fronts: [withLine] };
+  const xAt = (kmWestOf800: number) => 800 - kmWestOf800 / kmX;
+  ok(holderAt(vl, xAt(1.5), 200, 1) === 2, 'our tile 1.5 km behind the tile edge but ahead of the drawn line (3.2 km in): side a holds it');
+  ok(holderAt(vl, xAt(5), 200, 1) === 1, 'our tile beyond the drawn line: ours');
+  ok(holderAt(vl, 803, 200, 1) === 2, 'their tile behind their line: theirs');
+  ok(holderAt(vl, 760, 200, 1) === 1, 'far from the line (beyond the band): the tile owner');
+  ok(holderAt(vl, xAt(1.5), 200, 3) === 1, 'a third nation reads tile owners (its incursions follow the sim)');
+  ok(holderAt({ ...view, fronts: [front] }, xAt(1.5), 200, 1) === 1, 'no published line: the tile owner');
+  const lp = deriveLocalForces(vl, xAt(1.5), 200, 6, 1).point;
+  ok(lp.owner === 2 && lp.relation === 'war', `local forces report the drawn line's side at the point (owner ${lp.owner}, ${lp.relation})`);
 }
 
 console.log(`localForces: ${checks - failures}/${checks} checks passed`);

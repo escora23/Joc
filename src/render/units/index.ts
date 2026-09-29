@@ -827,9 +827,62 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     return false;
   }
 
+  const lineW = new THREE.Vector3(), ownW = new THREE.Vector3(), lineS = new THREE.Vector3(), ownS = new THREE.Vector3();
+  const clearOff = { x: 0, y: 0 };
+  /**
+   * W6: a division attached to a front stands on the contact line; from orbit (icons only) its icon is drawn beside the
+   * front's band on its own side, so the band, its chevrons and the arrows stay readable. Needs scrXY of the unit.
+   */
+  function frontClearOffset(u: UnitView, iconHalf: number): void {
+    clearOff.x = clearOff.y = 0;
+    if (u.type !== UnitType.ArmoredDivision || !u.frontKey || env.altitudeKm < 600) return;
+    const f = ctx.sim.view.frontByKey.get(u.frontKey);
+    if (!f || f.samples.length < 2) return;
+    const s = f.samples;
+    const n = s.length >> 1;
+    let m = 0, bd = Infinity;
+    for (let v = 0; v < n; v++) {
+      const dx = wrapDX(u.x, s[v * 2]), dy = s[v * 2 + 1] - u.y;
+      const d = dx * dx + dy * dy;
+      if (d < bd) {
+        bd = d;
+        m = v;
+      }
+    }
+    const own = u.owner === f.a ? -1 : u.owner === f.b ? 1 : 0;
+    if (!own) return;
+    const lx = s[m * 2] + f.dirX * 0.5, ly = s[m * 2 + 1] + f.dirY * 0.5;
+    const l0 = tileXYToLatLon(lx, ly), l1 = tileXYToLatLon(lx + f.dirX * own, ly + f.dirY * own);
+    latLonToVec3(l0.lat, l0.lon, 1.003, lineW);
+    latLonToVec3(l1.lat, l1.lon, 1.003, ownW);
+    lineS.copy(lineW).project(ctx.camera);
+    ownS.copy(ownW).project(ctx.camera);
+    if (lineS.z > 1 || ownS.z > 1) return;
+    const lxp = (lineS.x * 0.5 + 0.5) * viewW, lyp = (0.5 - lineS.y * 0.5) * viewH;
+    let nx = (ownS.x * 0.5 + 0.5) * viewW - lxp, ny = (0.5 - ownS.y * 0.5) * viewH - lyp;
+    const tilePx = Math.hypot(nx, ny);
+    if (tilePx < 1e-3) return;
+    nx /= tilePx;
+    ny /= tilePx;
+    // The band is 0.75 tile wide each side, at least 7 px; the icon clears it with a 3 px gap.
+    const need = Math.max(9, tilePx * 0.75) + iconHalf + 3;
+    const dist = (scrXY.x - lxp) * nx + (scrXY.y - lyp) * ny;
+    if (dist >= need) return;
+    clearOff.x = nx * (need - dist);
+    clearOff.y = ny * (need - dist);
+  }
+
   function offerUnitIcon(u: UnitView, pos: THREE.Vector3, sel: boolean, dxPx = 0, dyPx = 0): void {
     if (!icons || !toScreen(pos)) return;
     if (lod.worldView && !sel && worldViewHides(u)) return;
+    if (lod.unitIconMode === 0) {
+      const sx = scrXY.x, sy = scrXY.y;
+      frontClearOffset(u, 11);
+      scrXY.x = sx;
+      scrXY.y = sy;
+      dxPx += clearOff.x;
+      dyPx += clearOff.y;
+    }
     const size = iconSize(u.type);
     // Small icons float above the model; pips sit just above it.
     const lift = size === 1 ? 16 : size === 2 && lod.unitIconMode === 2 && u.type !== UnitType.Shell && u.type !== UnitType.SamInterceptor ? 11 : 0;

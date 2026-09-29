@@ -101,7 +101,10 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
   if (!me || tile < 0) return null;
   current?.close();
   const f = frontNear(hs, enemy, tile);
-  const own = ownOffensiveOn(hs, f, enemy);
+  const own0 = ownOffensiveOn(hs, f, enemy);
+  // The running offensive as the sim has it NOW (troops, intensity): the preview refreshes on sim ticks while open.
+  const ownNow = (): AttackView | null => (own0 ? ctx.sim.view.attacks.find((a) => a.id === own0.id && a.state !== 'retreating') ?? null : null);
+  const own = own0;
   let share = SHARES.reduce((b, s) => (Math.abs(s - hs.attackRatio) < Math.abs(b - hs.attackRatio) ? s : b), SHARES[1]);
   let intensity: OffensiveIntensity = own ? own.intensity : 1;
   const tx0 = (tile % MAP_W) + 0.5, ty0 = Math.floor(tile / MAP_W) + 0.5;
@@ -144,8 +147,11 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
   function paint(): void {
     const v = ctx.sim.view;
     const home = v.human?.troops ?? 0;
+    const cur = ownNow();
+    // Our offensive ended while the dialog was open: what is left is a new offensive with fresh troops.
+    if (own && !cur) addTroops = true;
     const send = addTroops ? Math.floor(home * share) : 0;
-    const total = (own ? own.troops : 0) + send;
+    const total = (cur ? cur.troops : 0) + send;
     setText(troopsOut, troopsText(send));
     toggleClass(shareSeg.el, 'is-disabled', !addTroops);
     const p = previewOffensive(hs, enemy, tile, Math.max(1, total), intensity);
@@ -153,7 +159,7 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
     setText(where, t('off.where', { front: fn || t('fr.front'), place }));
     const distKm = f ? minDistKm(f, tx0, ty0) : 0;
     table.replaceChildren(
-      row(t('off.row.troops'), own ? `${troopsText(own.troops)} + ${troopsText(send)}` : troopsText(send)),
+      row(t('off.row.troops'), cur ? `${troopsText(cur.troops)} + ${troopsText(send)}` : troopsText(send)),
       row(t('off.row.garrison', { name: hs.name(enemy) }), troopsText(p.garrison)),
       row(t('off.row.ratio'), `${formatNumber(p.ratio, 1)} : 1`, p.ratio >= 1.7 ? 'is-go' : p.ratio >= 1 ? 'is-risky' : 'is-bad'),
       row(t('off.row.corridor'), `${formatNumber(Math.round(p.corridorKm))} km`),
@@ -166,17 +172,18 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
     setText(verdict, t(`off.verdict.${p.verdict}`, { name: hs.name(enemy) }));
     verdict.className = `fu-offdlg-verdict is-${p.verdict}`;
     setText(intHelp, t(`off.int.${intensity}.tip`));
-    const noop = own && !addTroops && intensity === own.intensity;
-    setText(launch.querySelector('span')!, t(own ? 'off.go.reinforce' : 'off.go'));
-    launch.disabled = (!own && send < 1) || !!noop;
+    const noop = cur && !addTroops && intensity === cur.intensity;
+    setText(launch.querySelector('span')!, t(cur ? 'off.go.reinforce' : 'off.go'));
+    launch.disabled = (!cur && send < 1) || !!noop;
   }
 
   launch.addEventListener('click', () => {
     const v = ctx.sim.view;
     const home = v.human?.troops ?? 0;
-    if (own) {
+    const cur = ownNow();
+    if (cur) {
       if (addTroops) ctx.sim.send({ type: 'attack', target: enemy, ratio: share, tile, intensity });
-      else if (intensity !== own.intensity) ctx.sim.send({ type: 'offensiveIntensity', attackId: own.id, intensity });
+      else if (intensity !== cur.intensity) ctx.sim.send({ type: 'offensiveIntensity', attackId: cur.id, intensity });
       ctx.bus.emit('toast', { text: t('off.toast.reinforce', { name: hs.name(enemy) }), kind: 'info', durationMs: 3000 });
     } else {
       ctx.sim.send({ type: 'attack', target: enemy, ratio: share, tile, intensity });
@@ -202,12 +209,22 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
     titleKey: own ? 'off.title.reinforce' : 'off.title', titleParams: { name: hs.name(enemy) }, kickerKey: 'off.kicker',
     body, foot: [cancel, launch], narrow: true, className: 'fu-offdlg',
     onClose: () => {
+      offTick();
       if (current === handle) current = null;
       ctx.bus.emit('offensivePreview', { tile: -1, frontageTiles: 0, ratio: 0, valid: false });
     },
   });
   current = handle;
   paint();
+  // While open, the preview follows the running game (home troops, the offensive's troops and the enemy garrison
+  // change every tick): repainted at most twice a real second on sim ticks.
+  let lastPaint = 0;
+  const offTick = ctx.bus.on('simTick', () => {
+    const now = performance.now();
+    if (now - lastPaint < 500) return;
+    lastPaint = now;
+    paint();
+  });
   // The corridor preview stays drawn on the map while the dialog is open.
   const p0 = previewOffensive(hs, enemy, tile, Math.max(1, Math.floor((view.human?.troops ?? 0) * share)), intensity);
   ctx.bus.emit('offensivePreview', { tile, frontageTiles: p0.corridorKm / TILE_KM, ratio: p0.ratio, valid: true });

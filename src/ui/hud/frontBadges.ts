@@ -28,6 +28,27 @@ import type { HudShared } from './shared';
 const BADGE_MIN_ALT = 150;
 const MAX_BADGES = 14;
 
+/** Distance (px) between segment a-b and an axis-aligned rectangle (0 when they touch). */
+function segRectDist(ax: number, ay: number, bx: number, by: number, x0: number, y0: number, x1: number, y1: number): number {
+  const inside = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  if (inside(ax, ay) || inside(bx, by)) return 0;
+  // Segment against the four edges.
+  const cross = (px: number, py: number, qx: number, qy: number, rx: number, ry: number, sx: number, sy: number): boolean => {
+    const d = (qx - px) * (sy - ry) - (qy - py) * (sx - rx);
+    if (Math.abs(d) < 1e-9) return false;
+    const t = ((rx - px) * (sy - ry) - (ry - py) * (sx - rx)) / d, u = ((rx - px) * (qy - py) - (ry - py) * (qx - px)) / d;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  };
+  if (cross(ax, ay, bx, by, x0, y0, x1, y0) || cross(ax, ay, bx, by, x1, y0, x1, y1) || cross(ax, ay, bx, by, x1, y1, x0, y1) || cross(ax, ay, bx, by, x0, y1, x0, y0)) return 0;
+  const ptSeg = (px: number, py: number): number => {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    const t = l2 > 1e-9 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+    return Math.hypot(ax + dx * t - px, ay + dy * t - py);
+  };
+  const ptRect = (px: number, py: number): number => Math.hypot(Math.max(x0 - px, 0, px - x1), Math.max(y0 - py, 0, py - y1));
+  return Math.min(ptRect(ax, ay), ptRect(bx, by), ptSeg(x0, y0), ptSeg(x1, y0), ptSeg(x0, y1), ptSeg(x1, y1));
+}
+
 interface Badge {
   key: number;
   el: HTMLElement;
@@ -43,6 +64,14 @@ interface Badge {
   pos: THREE.Vector3;
   /** A point 1.5 tiles behind the line on the attacker's side: the badge is pushed that way, off the band. */
   back: THREE.Vector3;
+  /**
+   * What the badge must not cover, in world points (W6 final): the band's polyline, the mobilization arrows' reach on
+   * the aggressor's side while it mobilizes, and each offensive's operational arrow (tail, tip); the preferred side.
+   */
+  line: THREE.Vector3[];
+  mob: THREE.Vector3[];
+  arrows: THREE.Vector3[];
+  side: 1 | -1;
   prio: number;
   seen: boolean;
   /** Leader line from the front's middle to the badge. */
@@ -95,7 +124,10 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     });
     tip(e, () => badgeTip(key));
     el.append(e);
-    return { key, el: e, lead, chipA, chipB, dir, barA, barB, adv, divA, divB, pos: new THREE.Vector3(), back: new THREE.Vector3(), prio: 0, seen: false, w: 120, hgt: 60 };
+    return {
+      key, el: e, lead, chipA, chipB, dir, barA, barB, adv, divA, divB, pos: new THREE.Vector3(), back: new THREE.Vector3(), prio: 0, seen: false,
+      w: 120, hgt: 60, line: [], mob: [], arrows: [], side: 1,
+    };
   }
 
   function badgeTip(key: number) {
@@ -144,6 +176,54 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     b.el.dataset.gaining = String(s.gaining);
   }
 
+  /** World point of continuous tile coords into `out` (reused vectors). */
+  function worldAt(arr: THREE.Vector3[], i: number, x: number, y: number): void {
+    if (!arr[i]) arr[i] = new THREE.Vector3();
+    tileXYToLatLon(x, Math.max(0, Math.min(MAP_H - 1e-3, y)), ll);
+    latLonToVec3(ll.lat, ll.lon, 1.003, arr[i]);
+  }
+
+  /**
+   * What a badge must keep clear of (4 Hz): the band's line (subsampled to ≤ 24 points), the mobilization arrows' reach
+   * on the aggressor's side (0.6-3.6 tiles back from the border) while it mobilizes, and each offensive's arrow on the
+   * front, from 3 tiles behind its live contact to its axis point. The badge prefers the attacker's side, the target's
+   * side while the aggressor mobilizes (its arrows fill the other one).
+   */
+  function obstacles(b: Badge, f: FrontView, att: number): void {
+    const view = ctx.sim.view;
+    const s = f.samples;
+    const n = s.length >> 1;
+    const step = Math.max(1, Math.ceil(n / 24));
+    let k = 0;
+    for (let v = 0; v < n; v += step) worldAt(b.line, k++, s[v * 2] + f.dirX * 0.5, s[v * 2 + 1] + f.dirY * 0.5);
+    if (n > 1 && (n - 1) % step !== 0) worldAt(b.line, k++, s[(n - 1) * 2] + f.dirX * 0.5, s[(n - 1) * 2 + 1] + f.dirY * 0.5);
+    b.line.length = k;
+    const w = view.warBetween(f.a, f.b);
+    const mobilizing = !!w && view.tick < w.mobilizeUntilTick;
+    k = 0;
+    if (mobilizing && w) {
+      const sg = f.a === w.aggressor ? -1 : 1;
+      for (let v = 0; v < n; v += step) worldAt(b.mob, k++, s[v * 2] + f.dirX * (0.5 + 2.1 * sg), s[v * 2 + 1] + f.dirY * (0.5 + 2.1 * sg));
+    }
+    b.mob.length = k;
+    k = 0;
+    for (const a of view.attacks) {
+      if (a.frontKey !== f.key || a.naval || a.state === 'retreating' || a.defender === 0) continue;
+      const cx = a.contactX >= 0 ? a.contactX : a.originX, cy = a.contactX >= 0 ? a.contactY : a.originY;
+      if (cx < 0) continue;
+      let dx = a.x - cx, dy = a.y - cy;
+      if (dx > 800) dx -= 1600;
+      else if (dx < -800) dx += 1600;
+      const l = Math.hypot(dx, dy);
+      const ux = l > 0.3 ? dx / l : f.dirX * (a.attacker === f.a ? 1 : -1), uy = l > 0.3 ? dy / l : f.dirY * (a.attacker === f.a ? 1 : -1);
+      worldAt(b.arrows, k++, cx - ux * 3, cy - uy * 3);
+      worldAt(b.arrows, k++, l > 2 ? a.x : cx + ux * 2, l > 2 ? a.y : cy + uy * 2);
+    }
+    b.arrows.length = k;
+    const attSide = att === f.a ? -1 : 1;
+    b.side = (mobilizing && w ? (f.a === w.aggressor ? 1 : -1) : attSide) as 1 | -1;
+  }
+
   function refreshContent(): void {
     const view = ctx.sim.view;
     for (const b of badges.values()) b.seen = false;
@@ -161,9 +241,11 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
       frontAnchor(f, anchor);
       tileXYToLatLon(anchor.x, anchor.y, ll);
       latLonToVec3(ll.lat, ll.lon, 1.003, b.pos);
-      const sgn = sidesOf(ctx.sim.view, f).att === f.a ? -1.5 : 1.5;
+      const sd = sidesOf(ctx.sim.view, f);
+      const sgn = sd.att === f.a ? -1.5 : 1.5;
       tileXYToLatLon(anchor.x + f.dirX * sgn, Math.max(0, Math.min(MAP_H - 1, anchor.y + f.dirY * sgn)), ll);
       latLonToVec3(ll.lat, ll.lon, 1.003, b.back);
+      obstacles(b, f, sd.att);
       b.prio = (human ? 10 : 0) + (f.quiet ? 0 : 5) + f.intensity;
       paint(b, f);
       order.push(b);
@@ -181,6 +263,49 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     }
   }
 
+  /** Candidate gaps (px) between the band's middle and the badge's edge, nearest first. */
+  const GAPS = [16, 30, 48, 70, 96, 130, 170];
+  const segA: number[] = [], segB: number[] = [], segC: number[] = [];
+
+  /** +1 when b.back (the attacker's side) is the side b.side names, else -1. */
+  function sideOfBack(b: Badge): 1 | -1 {
+    const f = ctx.sim.view.frontByKey.get(b.key);
+    if (!f) return b.side;
+    const att = sidesOf(ctx.sim.view, f).att;
+    return (att === f.a ? -1 : 1) as 1 | -1;
+  }
+
+  /** Project world points to screen px pairs (NaN for points behind the globe or the camera). */
+  function project(pts: THREE.Vector3[], out: number[]): void {
+    const cam = ctx.camera;
+    const W = window.innerWidth, H = window.innerHeight;
+    out.length = pts.length * 2;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const facing = vc.copy(camPos).sub(p).dot(p) > 0;
+      vc.copy(p).project(cam);
+      if (!facing || vc.z > 1) {
+        out[i * 2] = NaN;
+        out[i * 2 + 1] = NaN;
+        continue;
+      }
+      out[i * 2] = ((vc.x + 1) / 2) * W;
+      out[i * 2 + 1] = ((1 - vc.y) / 2) * H;
+    }
+  }
+
+  /** Does the rectangle come within `half` px of the polyline (pairs = separate segments)? */
+  function hitsPolyline(pts: number[], x0: number, y0: number, x1: number, y1: number, half: number, pairs: boolean): boolean {
+    const n = pts.length >> 1;
+    for (let i = 0; i + 1 < n; i += pairs ? 2 : 1) {
+      const ax = pts[i * 2], ay = pts[i * 2 + 1], qx = pts[i * 2 + 2], qy = pts[i * 2 + 3];
+      if (!Number.isFinite(ax) || !Number.isFinite(qx)) continue;
+      if (segRectDist(ax, ay, qx, qy, x0, y0, x1, y1) < half) return true;
+    }
+    if (n === 1 && Number.isFinite(pts[0])) return segRectDist(pts[0], pts[1], pts[0], pts[1], x0, y0, x1, y1) < half;
+    return false;
+  }
+
   function position(): void {
     const cam = ctx.camera;
     camPos.copy(cam.position);
@@ -194,11 +319,14 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
       vc.copy(v).project(cam);
       let ok = facing && vc.z < 1 && Math.abs(vc.x) < 0.98 && Math.abs(vc.y) < 0.98 && n < MAX_BADGES;
       const x = ((vc.x + 1) / 2) * W, y = ((1 - vc.y) / 2) * H;
-      // The badge stands off the band on the attacker's side (behind its line), so the band, its chevrons and the
-      // arrowhead stay visible; a short leader line ties it to the middle of the front.
+      // The badge stands off the band (W6 final: clear of the band's whole screen polyline, not only its middle's
+      // normal), on its preferred side, as close as it can: the band, its chevrons, the mobilization arrows and the
+      // operational arrow stay visible; a short leader line ties it to the middle of the front.
       vc.copy(b.back).project(cam);
       let bx = ((vc.x + 1) / 2) * W - x, by = ((1 - vc.y) / 2) * H - y;
       const bl = Math.hypot(bx, by);
+      // Pixels per tile at the anchor (b.back is 1.5 tiles away): the band is 0.75 tile wide each side, ≥ 7 px.
+      const tilePx = bl / 1.5;
       if (bl < 1e-3) {
         bx = 0;
         by = -1;
@@ -206,9 +334,43 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
         bx /= bl;
         by /= bl;
       }
-      // Distance from the anchor to the badge rectangle's edge along (bx, by), plus a gap.
-      const reach = Math.min(Math.abs(bx) > 1e-3 ? b.w / 2 / Math.abs(bx) : 1e9, Math.abs(by) > 1e-3 ? b.hgt / 2 / Math.abs(by) : 1e9) + 26;
-      const cx = x + bx * reach, cy = y + by * reach;
+      if (b.side !== sideOfBack(b)) {
+        bx = -bx;
+        by = -by;
+      }
+      const bandHalf = Math.max(9, tilePx * 0.75) + 4;
+      const mobHalf = tilePx * 1.5 + 8;
+      project(b.line, segA);
+      project(b.mob, segB);
+      project(b.arrows, segC);
+      let cx = 0, cy = 0, reach = 26, found = false;
+      for (const sd of [1, -1]) {
+        const dx = bx * sd, dy = by * sd;
+        const r0 = Math.min(Math.abs(dx) > 1e-3 ? b.w / 2 / Math.abs(dx) : 1e9, Math.abs(dy) > 1e-3 ? b.hgt / 2 / Math.abs(dy) : 1e9);
+        for (const gap of GAPS) {
+          const px = x + dx * (r0 + gap), py = y + dy * (r0 + gap);
+          const rx0 = px - b.w / 2, ry0 = py - b.hgt / 2, rx1 = rx0 + b.w, ry1 = ry0 + b.hgt;
+          if (rx0 < 2 || ry0 < 2 || rx1 > W - 2 || ry1 > H - 2) continue;
+          if (hitsPolyline(segA, rx0, ry0, rx1, ry1, bandHalf, false)) continue;
+          if (hitsPolyline(segB, rx0, ry0, rx1, ry1, mobHalf, false)) continue;
+          if (hitsPolyline(segC, rx0, ry0, rx1, ry1, 9, true)) continue;
+          if (placed.some((r) => rx0 < r.x1 && rx1 > r.x0 && ry0 < r.y1 && ry1 > r.y0)) continue;
+          cx = px;
+          cy = py;
+          reach = r0 + gap;
+          bx = dx;
+          by = dy;
+          found = true;
+          break;
+        }
+        if (found) break;
+      }
+      if (!found) {
+        // Nowhere clear: the old place, just off the middle of the band on the preferred side.
+        reach = Math.min(Math.abs(bx) > 1e-3 ? b.w / 2 / Math.abs(bx) : 1e9, Math.abs(by) > 1e-3 ? b.hgt / 2 / Math.abs(by) : 1e9) + 26;
+        cx = x + bx * reach;
+        cy = y + by * reach;
+      }
       const x0 = cx - b.w / 2, y0 = cy - b.hgt / 2, x1 = x0 + b.w, y1 = y0 + b.hgt;
       b.lead.style.transform = `translate(${(x - x0).toFixed(1)}px, ${(y - y0).toFixed(1)}px) rotate(${Math.atan2(by, bx).toFixed(3)}rad)`;
       b.lead.style.width = `${Math.max(0, reach - Math.min(b.w, b.hgt) * 0.3).toFixed(0)}px`;

@@ -320,6 +320,35 @@ export function publishedLineOffset(line: FrontLine, x: number, y: number, atTic
   };
 }
 
+/** How far from its published line (km, across it) a front decides who holds the ground (W6 final): 1.5 tiles. */
+export const HOLD_BAND_KM = 1.5 * TILE_KM;
+
+/**
+ * Who holds the ground at (x, y) (continuous tile coords) as every close view shows it — ONE source of truth for the
+ * ground battle's drawn line, the command-mode HUD and local forces (W6 final fix pass). Near a front between two sides
+ * at war, inside its published line's window (FrontView.line) and within HOLD_BAND_KM of that line, the side of the
+ * line the point is on: the sub-tile line the battle draws, which runs inside the tile being taken, so a tank standing
+ * behind our drawn line is on our ground even while the sim still counts that 25 km tile as the enemy's. Elsewhere,
+ * and wherever the tile is a third party's, the tile's owner. Only the viewer's own fronts (the sides of a front it does
+ * not fight on keep their tile owners, so an incursion is always named after the nation the sim names).
+ */
+export function holderAt(view: Pick<LocalForcesView, 'owner' | 'fronts' | 'tick'>, x: number, y: number, viewer: number, fronts: readonly LocalForcesFront[] = view.fronts): number {
+  const o = view.owner[tileAt(x, y)] ?? 0;
+  if (o === 0) return 0;
+  let best = o, bestAbs = Infinity;
+  for (const f of fronts) {
+    const L = f.line;
+    if (!L || (o !== f.a && o !== f.b) || f.b === 0 || (f.a !== viewer && f.b !== viewer)) continue;
+    const po = publishedLineOffset(L, x, y, view.tick);
+    if (Math.abs(po.alongKm) > L.halfKm || Math.abs(po.offsetKm) > HOLD_BAND_KM) continue;
+    if (Math.abs(po.offsetKm) >= bestAbs) continue;
+    bestAbs = Math.abs(po.offsetKm);
+    // offsetKm > 0: the line lies ahead of the point along its axis (toward side b), so the point is on side a's ground.
+    best = po.offsetKm > 0 ? f.a : f.b;
+  }
+  return best;
+}
+
 /** Parameter interval [t0, t1] ⊂ [0, 1] of segment p0 + t·d inside the circle of radius r at the origin, or null. */
 function clipCircle(px: number, py: number, dx: number, dy: number, r: number): [number, number] | null {
   const a = dx * dx + dy * dy;
@@ -381,8 +410,11 @@ export function deriveLocalForces(
 
   // --- the point itself ----------------------------------------------------------------------------
   const tile = tileAt(x, y);
-  const pOwner = ownerOf(tile);
+  // Fronts whose published line reaches this view: near them the drawn line decides who holds the ground (holderAt).
+  const lineFronts = view.fronts.filter((f) => !!f.line && (f.a === viewer || f.b === viewer) && Math.hypot(wdx(x, f.line.x) * kmX, (y - f.line.y) * kmY) <= R + f.line.halfKm + 120);
+  const holder = (px: number, py: number, t: number): number => (lineFronts.length ? holderAt(view, px, py, viewer, lineFronts) : ownerOf(t));
   const pWater = isWater(tile);
+  const pOwner = pWater ? ownerOf(tile) : holder(x, y, tile);
   let coastOwner = 0;
   if (pWater) {
     const tx = tile % MAP_W, ty = (tile / MAP_W) | 0;
@@ -412,12 +444,13 @@ export function deriveLocalForces(
       const e = ((i + 0.5) / N * 2 - 1) * R, n = ((j + 0.5) / N * 2 - 1) * R;
       if (e * e + n * n > R * R) continue;
       samples++;
-      const t = tileAt(x + e / kmX, y - n / kmY);
+      const sx = x + e / kmX, sy = y - n / kmY;
+      const t = tileAt(sx, sy);
       if (isWater(t)) {
         water++;
         continue;
       }
-      const o = ownerOf(t);
+      const o = holder(sx, sy, t);
       land.set(o, (land.get(o) ?? 0) + 1);
     }
   }

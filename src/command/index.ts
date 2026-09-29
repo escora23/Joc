@@ -20,6 +20,7 @@ import { formatNumber, playerName, t } from '../shared/i18n';
 import type { QualityProfile } from '../shared/quality';
 import { Rng } from '../shared/rng';
 import { easeInOutCubic } from '../shared/math';
+import { holderAt } from '../shared/localForces';
 import { localSideText } from '../shared/localForcesText';
 import { isWaterTerrain } from '../shared/terrain';
 import type { CommandKind } from '../shared/types';
@@ -415,6 +416,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   /** Crossing into this owner is an incursion (§9.7): foreign, not at war, no alliance or open borders. */
+  /**
+   * Who holds the ground under a scene point: at sea the coast's owner (territorial waters), on land holderAt — near our
+   * own fronts the side of the drawn line the point is on (the same line the ground battle draws), else the tile's
+   * owner (W6 final: one source of truth for the line, the ground and this HUD).
+   */
+  function holderOfScene(x: number, z: number): number {
+    const tp = tileOf(x, z);
+    const tile = tileIndex(tp.x, tp.y);
+    const w = ctx.world;
+    if (w && isWaterTerrain(w.terrain[tile])) return ownerOfTile(tile);
+    return holderAt(ctx.sim.view, tp.x, tp.y, HUMAN_ID);
+  }
+
   function incursionOwner(o: number): boolean {
     if (o <= 0 || o === HUMAN_ID) return false;
     const view = ctx.sim.view;
@@ -921,7 +935,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     localSec = startSec = ctx.sim.view.command?.sec ?? 0;
     startCmdSec = ctx.sim.view.command ? ctx.sim.view.command.sec : -1;
     startWall = performance.now();
-    landOwner = prevLandOwner = ownerOfTile(tileIndex(tileOf(me.pos.x, me.pos.z).x, tileOf(me.pos.x, me.pos.z).y));
+    landOwner = prevLandOwner = holderOfScene(me.pos.x, me.pos.z);
     // Taking control inside foreign land (a unit left there, an incursion running): that border is already crossed.
     if (incursionOwner(landOwner)) confirmed.add(landOwner);
   }
@@ -1512,8 +1526,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   function updateBorders(now: number): void {
     const P = player();
     if (!P || decision) return;
-    const tp = tileOf(P.pos.x, P.pos.z);
-    const o = ownerOfTile(tileIndex(tp.x, tp.y));
+    const o = holderOfScene(P.pos.x, P.pos.z);
     prevLandOwner = landOwner;
     landOwner = o;
     if (incursionOwner(o) && !confirmed.has(o)) {
