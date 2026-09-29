@@ -6,7 +6,7 @@
 import { HUMAN_ID } from '../shared/constants';
 import type { GameContext } from '../shared/api';
 import type { AlertInput } from '../shared/events';
-import { tileToLatLon, tileXYToLatLon } from '../shared/geo';
+import { tileAtXY, tileToLatLon, tileXYToLatLon } from '../shared/geo';
 import { playerName, t } from '../shared/i18n';
 import { unitLabel } from '../ui/hud/news';
 
@@ -22,6 +22,13 @@ export function fmtDur(sec: number): string {
 
 /** Units of the human released inside foreign land whose incursion is still running (the «sigue dentro» row). */
 const held = new Map<number, number>();
+/** Released units still inside a nation that went to war with us over them: their row stays until they are out or lost. */
+const heldAtWar = new Map<number, number>();
+
+function ownerAtUnit(ctx: GameContext, unitId: number): number {
+  const u = ctx.sim.view.units.get(unitId);
+  return u ? ctx.sim.view.ownerAt(tileAtXY(u.x, u.y)) : -1;
+}
 
 const isControlled = (ctx: GameContext, unitId: number): boolean => (ctx.sim.view.command?.controlled ?? []).some((c) => c.unitId === unitId);
 
@@ -47,9 +54,18 @@ export function wireIncursionAlerts(ctx: GameContext): void {
     const groupKey = `incursion:${e.unitId}:${e.victim}`;
     if (e.stage === 'left') {
       ctx.bus.emit('alertResolve', { groupKey });
+      const alive = !!u && u.hp > 0;
+      const war = view.pairState(HUMAN_ID, e.victim) === 'war';
+      if (held.has(e.unitId) && alive && war && ownerAtUnit(ctx, e.unitId) === e.victim) {
+        // It is a war now: the incident is over, but the unit is still in there (holding): the row says so until it
+        // is out or lost (watchHeldAtWar).
+        heldAlert(ctx, e.unitId, e.victim, 'war');
+        heldAtWar.set(e.unitId, e.victim);
+        held.delete(e.unitId);
+        return;
+      }
       ctx.bus.emit('alertResolve', { groupKey: `held:${e.unitId}` });
       const wasHeld = held.delete(e.unitId);
-      const alive = !!u && u.hp > 0;
       if (wasHeld && alive && view.pairState(HUMAN_ID, e.victim) !== 'war') {
         raiseAlert(ctx, { kind: 'incursionResponse', severity: 'info', title: t('alert.incursion.out.title', { nation, unit }), body: t('alert.incursion.out.body', { nation }), lat: ll.lat, lon: ll.lon, actors: [e.victim], groupKey, unitId: e.unitId, ttlSec: 20 });
       }
@@ -84,6 +100,15 @@ export function wireIncursionAlerts(ctx: GameContext): void {
     }
     if (input) raiseAlert(ctx, input);
   });
+  setInterval(() => {
+    for (const [id, victim] of heldAtWar) {
+      const u = ctx.sim.view.units.get(id);
+      if (!u || !(u.hp > 0) || ownerAtUnit(ctx, id) !== victim || ctx.app.state !== 'playing') {
+        heldAtWar.delete(id);
+        ctx.bus.emit('alertResolve', { groupKey: `held:${id}` });
+      }
+    }
+  }, 2000);
   // After the exit (the map is live again, so the pause can hold it): the unit left inside says so and pauses.
   ctx.bus.on('commandExit', (e) => {
     const r = e.result;

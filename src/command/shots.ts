@@ -239,15 +239,20 @@ async function stageBorder(s: ShotContext, unit: UnitType, lat: number, lon: num
   const id = await spawnNearEdge(s, unit, b, km);
   if (frontKm > 0) {
     // Close in on the real front line (the sub-tile contact line of this war, not the tile edge).
-    const u = ctx.sim.view.units.get(id);
-    if (u) {
+    // The line moves while the walk's ticks run (the war goes on): walk again from where it is until it is that close.
+    for (let pass = 0; pass < 4; pass++) {
+      const u = ctx.sim.view.units.get(id);
+      if (!u) break;
+      // The sim reads the precise (sub-tile) line under the focus, as it will under the vehicle in command mode.
+      ctx.sim.setClock('observation', undefined, { x: u.x, y: u.y });
+      await s.wait(1500);
       const lf = deriveLocalForces(ctx.sim.view, u.x, u.y, 40, HUMAN_ID);
       const fr = lf.fronts[0];
-      if (fr) {
-        const nl = latLonToTileXY(fr.nearest.lat, fr.nearest.lon);
-        await walkToward(s, id, nl.x, nl.y, frontKm);
-      }
+      if (!fr || fr.nearest.distKm <= frontKm + 0.3) break;
+      const nl = latLonToTileXY(fr.nearest.lat, fr.nearest.lon);
+      await walkToward(s, id, nl.x, nl.y, frontKm);
     }
+    ctx.sim.setClock('strategic');
   }
   await ctx.app.enterCommandMode(id);
   ctx.sim.setSpeed(0);
@@ -313,21 +318,52 @@ registerShot('command-border', 'command', 'Near the real border with a nation at
 });
 
 registerShot('command-front', 'command', 'At a real front of a staged war: enemy infantry and armor derived from the front, real divisions nearby', async (s) => {
-  await stageBorder(s, UnitType.ArmoredDivision, 42.7, -0.5, 16, 2.5, 200, (st, foe, b) => {
+  await stageBorder(s, UnitType.ArmoredDivision, Number(s.params.get('lat') ?? 42.1), Number(s.params.get('lon') ?? -1.2), 16, 2.5, 200, (st, foe, b) => {
     // A real enemy division and a defense post on the far side of the line.
     st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: foe, tile: b.fy * MAP_W + b.fx, targetTile: -1 });
     st.ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.DefensePost, owner: foe, tile: b.fy * MAP_W + b.fx, level: 2 });
-  }, 0.9);
+  }, Number(s.params.get('frontKm') ?? 0.4));
   if (live(s)) return;
   const I = internalsOrThrow();
-  // Face the nearest enemy (turret on it), so the frame shows the line rather than the ground behind it.
+  await settle(s, I, Number(s.params.get('fight') ?? 6));
+  // Face the nearest enemy the crew can actually see (a clear line of sight over the terrain), through the gunner's
+  // sight: at 1-2 km a soldier is a few pixels in the chase view, the sight shows the enemy line itself.
   const p = I.controller!.ent;
-  const foeEnt = nearest(I, p.pos, 1, ['tank', 'ifv', 'at', 'soldier']);
+  const eye = p.pos.clone().setY(p.pos.y + 3);
+  const visible = (e: Ent): boolean => {
+    for (let k = 1; k < 24; k++) {
+      const f = k / 24;
+      const x = eye.x + (e.pos.x - eye.x) * f, z = eye.z + (e.pos.z - eye.z) * f;
+      if (I.ground.heightAt(x, z) > eye.y + (e.pos.y + 1.5 - eye.y) * f) return false;
+    }
+    return true;
+  };
+  let foeEnt: Ent | null = null, bd = Infinity;
+  for (const e of I.world.ents) {
+    if (!e.alive || e.team !== 1 || e.neutral || !['tank', 'ifv', 'at', 'soldier'].includes(e.kind)) continue;
+    const d = e.pos.distanceTo(p.pos);
+    if (d < bd && d < 3500 && visible(e)) {
+      bd = d;
+      foeEnt = e;
+    }
+  }
+  foeEnt ??= nearest(I, p.pos, 1, ['tank', 'ifv', 'at', 'soldier']);
+  if (foeEnt && bd > 250 && bd < 3500) {
+    // Drive up behind the own line to ~200 m from the enemy (local staging of what the player would do: the enemy
+    // line is 1-2 km off, a few pixels in any view from where the division stands).
+    const f = (bd - 200) / bd;
+    p.pos.x += (foeEnt.pos.x - p.pos.x) * f;
+    p.pos.z += (foeEnt.pos.z - p.pos.z) * f;
+    p.pos.y = I.ground.heightAt(p.pos.x, p.pos.z);
+    bd = 200;
+  }
   if (foeEnt) {
     p.yaw = Math.atan2(-(foeEnt.pos.x - p.pos.x), -(foeEnt.pos.z - p.pos.z));
-    I.controller!.aimAt(foeEnt.pos.clone().setY(foeEnt.pos.y + 1.4));
+    I.controller!.aimAt(foeEnt.pos.clone().setY(foeEnt.pos.y + 1.2));
+    if (bd > 100 && 'setZoom' in I.controller!) (I.controller as unknown as { setZoom(on: boolean): void }).setZoom(true);
   }
-  await settle(s, I, Number(s.params.get('fight') ?? 6));
+  I.simulate(45, 1 / 30);
+  await s.waitFrames(6);
   await freezeAndWait(s, I);
 });
 

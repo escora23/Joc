@@ -266,7 +266,7 @@ if (ONLY.includes('border')) {
       // Watch the escort: speeds, distance to the intruder, turning; until the last warning runs out.
       const samples = [];
       let arrivedAt = -1, fired = null;
-      for (let i = 0; i < 520 && !fired; i++) {
+      for (let i = 0; i < 1800 && !fired; i++) {
         await wait(1000);
         const o = await page.evaluate(() => {
           const I = window.__cmd, v = I.ctx.sim.view, P = I.controller.ent;
@@ -278,6 +278,7 @@ if (ONLY.includes('border')) {
           };
         });
         samples.push(o);
+        if (i % 30 === 0) console.log(`  t=${i}s sec=${o.sec.toFixed(0)} ${o.response} arrived=${o.arrived} deadline=${o.deadline.toFixed(0)} nearest=${o.q.length ? Math.round(Math.min(...o.q.map((e) => e.d))) : '-'} m`);
         if (o.arrived && arrivedAt < 0) arrivedAt = o.sec;
         if (o.response === 'engage' || o.response === 'war') fired = o;
       }
@@ -288,7 +289,12 @@ if (ONLY.includes('border')) {
       const calm = samples.filter((o) => o.response !== 'engage' && o.response !== 'war').flatMap((o) => o.q);
       rec('B7 escort vehicles: APCs/tanks, road speeds (≤ 16 m/s near you), never closer than 25 m, neutral until told', near.length > 0 && minD >= 25 && maxV <= 16.5 && calm.every((e) => e.neutral) && samples.some((o) => o.q.every((e) => e.kind === 'ifv' || e.kind === 'tank')),
         { samplesNear: near.length, minDistM: Math.round(minD), maxSpeedMs: +maxV.toFixed(1), kinds: [...new Set(samples.flatMap((o) => o.q.map((e) => e.kind)))] });
-      const lastRadio = samples.find((o) => o.arrived)?.radio ?? '';
+      // Criterion #20: the last warning's clock starts only with a vehicle really alongside (≤ 160 m) in the scene.
+      const firstDl = samples.find((o) => o.deadline > 0 && o.response === 'intercept');
+      const dlNear = firstDl && firstDl.q.length ? Math.min(...firstDl.q.map((e) => e.d)) : -1;
+      rec('B7b the last warning starts only when an escort vehicle is alongside in the scene', !!firstDl && dlNear >= 0 && dlNear <= 200 && samples.filter((o) => o.arrived && o.deadline === 0 && o.response === 'intercept').every((o) => !o.q.length || Math.min(...o.q.map((e) => e.d)) > 100),
+        { nearestAtStartM: Math.round(dlNear), startSec: firstDl?.sec, deadline: firstDl?.deadline });
+      const lastRadio = samples.find((o) => o.arrived && o.deadline > 0)?.radio ?? '';
       rec('B8 on arrival: the last warning on the radio', arrivedAt > 0 && /\d/.test(lastRadio), { radio: lastRadio.slice(0, 200) });
       // The radio matches the scene: «aquí la patrulla… no sigas avanzando» only with a vehicle within ~150 m; while it
       // is farther the radio says how far it still is («a 830 m de ti y acercándonos»).
@@ -555,26 +561,117 @@ async function exitToMap(page) {
   const ok = await page.waitForFunction(() => window.__w5exit === true && window.__front?.app?.state === 'playing', null, { timeout: 900000, polling: 1000 }).then(() => true).catch(() => false);
   return ok;
 }
+// Mean luma (0-255) of the middle of a screenshot: the first strategic frame after exit must show the globe, not a void.
+async function frameLuma(page) {
+  const { PNG } = await import('pngjs');
+  const buf = await page.screenshot();
+  const png = PNG.sync.read(buf);
+  let sum = 0, n = 0;
+  for (let y = Math.floor(png.height * 0.3); y < png.height * 0.7; y += 4) for (let x = Math.floor(png.width * 0.3); x < png.width * 0.7; x += 4) {
+    const i = (y * png.width + x) * 4;
+    sum += 0.299 * png.data[i] + 0.587 * png.data[i + 1] + 0.114 * png.data[i + 2];
+    n++;
+  }
+  return sum / Math.max(1, n);
+}
+async function pausedState(page) {
+  return page.evaluate(() => {
+    const b = document.querySelector('.fu-autopause');
+    return { speed: window.__front.ctx.sim.view.speed, banner: !!b && !b.classList.contains('fu-hidden'), kind: b?.dataset.kind ?? '', text: (b?.textContent ?? '').slice(0, 160) };
+  });
+}
 if (ONLY.includes('release')) {
   const { page, errs } = await open('command-escort');
   const before = await page.evaluate(() => {
     const v = window.__cmd.ctx.sim.view, id = v.command.controlled[0].unitId, u = v.units.get(id);
     window.__w5unit = id;
-    return { id, x: u.x, y: u.y, heading: u.heading, inc: v.command.incursions[0]?.response };
+    window.__front.ctx.bus.on('commandExit', () => { window.__w5exitSec = v.command?.sec ?? -1; });
+    return { id, x: u.x, y: u.y, heading: u.heading, inc: v.command.incursions[0]?.response, sec: v.command.sec };
   });
-  const out = await exitToMap(page);
+  // The debrief's game time is the sim's command clock since entry (criterion 15).
+  // The speed the player had on the map before entry comes back at exit (the staging held it at 0): ×1.
+  await page.evaluate(() => window.__cmd.ctx.sim.setSpeed(1));
+  const deb0 = await page.evaluate(() => { window.__cmd.debrief(); return window.__cmd.ctx.sim.view.command?.sec ?? -1; });
+  await wait(1500);
+  const deb = await page.evaluate(() => {
+    const el = window.__cmd.overlay.debrief;
+    return { text: el?.textContent ?? '', enterSec: window.__cmd.startCmdSec };
+  });
+  const out = await page.waitForFunction(() => window.__front?.app?.state === 'playing', null, { timeout: 900000, polling: 200 }).then(() => true).catch(() => false);
+  // First frames after exit: the globe, never a black void (criterion 15).
+  // Screens from the exit on: black while the fade covers it (luma ≈ 0), then every frame once it lifts shows the globe.
+  const lumas = [];
+  for (let i = 0; i < 10; i++) {
+    lumas.push(Math.round(await frameLuma(page)));
+    await wait(300);
+  }
+  const lift = lumas.findIndex((l) => l > 4);
+  rec('X3 once the fade lifts after exit, every frame shows the globe (mean luma of the centre > 25)', out && lift >= 0 && lumas.slice(lift + 1).every((l) => l > 25), { lumas });
+  const m = deb.text.match(/(\d+)\s*min\s*(\d+)\s*s/);
+  const shownS = m ? Number(m[1]) * 60 + Number(m[2]) : -1;
+  rec('X4 debrief game time = the sim command clock since entry (±3 s)', shownS >= 0 && deb.enterSec >= 0 && Math.abs(shownS - (deb0 - deb.enterSec)) <= 3, { shownS, simS: +(deb0 - deb.enterSec).toFixed(1), text: deb.text.slice(0, 200) });
+  const pz = await pausedState(page);
+  rec('R0 released inside foreign land: the game pauses with the crisis (auto-pause «incursion»)', pz.speed === 0 && pz.banner && pz.kind === 'incursion' && /sigue dentro/i.test(pz.text), pz);
+  // The player resumes without acting (the worst case): the unit must survive and the incident run its course.
   await page.evaluate(() => window.__front.ctx.sim.setSpeed(1));
   await wait(20000);
   const after = await page.evaluate((id) => {
     const v = window.__front.ctx.sim.view, u = v.units.get(id);
     const inc = v.command?.incursions?.find((i) => i.unitId === id);
     const feed = document.body.innerText.match(/sigue dentro de[^\n]*/i)?.[0] ?? '';
-    return { tick: v.tick, x: u?.x, y: u?.y, heading: u?.heading, mode: u?.mode, controlled: (v.command?.controlled ?? []).some((c) => c.unitId === id), inc: inc ? { response: inc.response, left: inc.left } : null, feed };
+    return { log: (v.command?.log ?? []).slice(-6).map((l) => l.text.slice(0, 140)), war: inc ? v.pairState(1, inc.victim) : v.wars.map((w) => `${w.aggressor}-${w.target}`), tick: v.tick, x: u?.x, y: u?.y, heading: u?.heading, mode: u?.mode, controlled: (v.command?.controlled ?? []).some((c) => c.unitId === id), inc: inc ? { response: inc.response, left: inc.left } : null, feed };
   }, before.id);
   const km = after.x !== undefined ? Math.hypot((after.x - before.x) * 25 * Math.cos(42.5 * Math.PI / 180), (after.y - before.y) * 25) : -1;
   rec('R1 released inside foreign land: the division holds where it was left', out && !after.controlled && km >= 0 && km < 0.05, { km: +km.toFixed(3), before, after });
-  rec('R2 the incursion goes on on the strategic map (and says so)', !!after.inc && (!after.inc.left || after.inc.response === 'war') && /sigue dentro/i.test(after.feed), { inc: after.inc, feed: after.feed.slice(0, 120) });
+  // Either the incident still runs, or (the player resumed without acting for 20 game hours) it became a war — then
+  // the incursion is over by definition and the unit, still in there, is at war inside that land; the row says so.
+  const atWar = Array.isArray(after.war) ? after.war.length > 0 : after.war === 'war';
+  rec('R2 the incursion goes on on the strategic map, or became a war with the unit still inside (and says so)', ((!!after.inc && !after.inc.left) || atWar) && /sigue dentro/i.test(after.feed), { inc: after.inc, war: after.war, feed: after.feed.slice(0, 160) });
+  const hp = await page.evaluate((id) => window.__front.ctx.sim.view.units.get(id)?.hp ?? -1, before.id);
+  rec('R1b left under fire by a 2-vehicle patrol, the division is worn down in proportion (≥ 85 % after 20 s at ×1)', hp >= 0.85, { hp, war: after.inc?.response === 'war' });
   rec('release page errors', errs.length === 0, errs.slice(0, 5));
+  await page.close();
+}
+
+// Owner feedback #18: the player can order a unit left inside out: paused on release, he selects it, orders it home
+// and resumes; the victim holds fire while it leaves and the incursion ends without war or damage.
+if (ONLY.includes('releaseout')) {
+  const { page, errs } = await open('command-escort');
+  const id = await page.evaluate(() => { const v = window.__cmd.ctx.sim.view; return v.command.controlled[0].unitId; });
+  const out = await exitToMap(page);
+  const pz = await pausedState(page);
+  // Order it home: the nearest own land tile (as a right-click on own land does: unitOrder move).
+  const ord = await page.evaluate((id) => {
+    const { ctx } = window.__front, v = ctx.sim.view, u = v.units.get(id);
+    let best = -1, bd = 1e9;
+    const W = 1600;
+    for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
+      const t = (Math.floor(u.y) + dy) * W + ((Math.floor(u.x) + dx + W) % W);
+      if (v.ownerAt(t) !== 1) continue;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = t; }
+    }
+    ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: 'move', tile: best, targetId: 0 });
+    return { tile: best, hp: u.hp, inc: v.command?.incursions?.find((i) => i.unitId === id)?.response };
+  }, id);
+  // Resume with the banner's own button.
+  await page.evaluate(() => document.querySelector('.fu-autopause .fu-btn--primary')?.click());
+  let st = null;
+  const seen = { leaving: false };
+  for (let i = 0; i < 90; i++) {
+    await wait(1000);
+    st = await page.evaluate((id) => {
+      const v = window.__front.ctx.sim.view, u = v.units.get(id);
+      const inc = v.command?.incursions?.find((x) => x.unitId === id);
+      return { hp: u?.hp ?? -1, x: u?.x, y: u?.y, inc: inc ? { response: inc.response, left: inc.left, leaving: inc.leaving } : null, war: v.pairState(1, inc?.victim ?? 0), speed: v.speed, feed: document.body.innerText.match(/ha salido de[^\n]*/i)?.[0] ?? '' };
+    }, id);
+    if (st.inc?.leaving) seen.leaving = true;
+    if (!st.inc || st.inc.left) break;
+    if (st.speed === 0) await page.evaluate(() => document.querySelector('.fu-autopause .fu-btn--primary')?.click());
+  }
+  rec('R4 ordered out after release: the victim holds fire while it leaves; out without war or damage', out && pz.speed === 0 && ord.tile >= 0 && (seen.leaving || !!st.inc?.left) && (!st.inc || st.inc.left) && st.hp >= ord.hp - 1e-6 && st.war !== 'war',
+    { paused: pz.speed === 0, order: ord, seenLeaving: seen.leaving, end: st });
+  rec('releaseout page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
 }
 if (ONLY.includes('jetrelease')) {

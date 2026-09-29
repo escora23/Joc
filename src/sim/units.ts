@@ -1916,7 +1916,8 @@ export class UnitSystem {
       default:
         u.state = UnitState.Idle;
         u.eta = -1;
-        if ((g.tick + u.id) % 20 === 0) this.autoAttach(u);
+        // An explicit «hold» (a unit released from command mode, owner feedback #18) stands until another order.
+        if ((g.tick + u.id) % 20 === 0 && u.order !== orderCode('hold')) this.autoAttach(u);
     }
   }
 

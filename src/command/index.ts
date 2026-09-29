@@ -66,6 +66,8 @@ const BORDER_WARN_M = 2000;
 
 /** Internals exposed to shots and the verifier (window.__cmd in every session; not part of the shared contract). */
 export interface CommandInternals {
+  /** The sim's command clock at entry (game s; -1 = unknown). */
+  readonly startCmdSec: number;
   /** The game context (tools: verifier and shots read the sim view through it). */
   readonly ctx: GameContext;
   readonly world: World;
@@ -1594,6 +1596,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       internals = {
         ctx, world: w, fx: f, hud: hh, overlay: ov, scatter, input, ground, civil, forces, frame, controller: null, brain: null, camera,
         atmos: () => atmos,
+        get startCmdSec() {
+          return startCmdSec;
+        },
         get freeze() {
           return freeze;
         },
