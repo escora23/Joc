@@ -69,25 +69,38 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
     vc.copy(v).project(ctx.camera);
     let x = ((vc.x + 1) / 2) * W, y = ((1 - vc.y) / 2) * H;
     const bw = pointer.offsetWidth || 300, bh = pointer.offsetHeight || 32;
-    let arrow = '▼';
-    const inView = !behind && vc.z < 1 && x > bw / 2 + 10 && x < W - bw / 2 - 10 && y > bh + 30 && y < H - 120;
+    // On screen: the label stands just above the point, an arrow pointing down at it. Off screen: it waits at the top
+    // centre of the view (under the top bar, clear of the side panels) with an arrow turned toward the battle.
+    const inView = !behind && vc.z < 1 && x > bw / 2 + 10 && x < W - bw / 2 - 10 && y > bh + 150 && y < H - 130;
+    let angle = 90;
+    let px = x - bw / 2, py = y - bh - 14;
     if (!inView) {
       let dx = vc.x, dy = -vc.y;
       if (behind || vc.z >= 1) {
         dx = -dx;
         dy = Math.abs(dy) + 1;
       }
-      const m = Math.max(Math.abs(dx) / 0.7, Math.abs(dy) / 0.62, 1e-6);
-      x = W / 2 + (dx / m) * (W / 2);
-      y = H / 2 + (dy / m) * (H / 2);
-      arrow = Math.abs(dx) * H > Math.abs(dy) * W * 0.9 ? (dx < 0 ? '◀' : '▶') : dy < 0 ? '▲' : '▼';
+      angle = (Math.atan2(dy * H, dx * W) * 180) / Math.PI;
+      px = W / 2 - bw / 2;
+      py = 118;
+      // Clear of every HUD panel: step down until free.
+      const rects: { left: number; right: number; top: number; bottom: number }[] = [...ctx.ui.getOccludedRects()];
+      if (!el.classList.contains('fu-hidden')) rects.push(el.getBoundingClientRect());
+      for (let k = 0; k < 12; k++) {
+        const hit = rects.some((r) => px < r.right && px + bw > r.left && py < r.bottom && py + bh > r.top);
+        if (!hit) break;
+        py += 34;
+      }
     }
     const text = t('fr.pointer', { front: frontName(hs, p.frontKey) || t('fr.front'), km: formatNumber(Math.round(p.km)) });
     if (pText.textContent !== text) setText(pText, text);
-    if (pArrow.textContent !== arrow) setText(pArrow, arrow);
-    const px = Math.max(8, Math.min(W - bw - 8, x - bw / 2)), py = Math.max(8, Math.min(H - bh - 110, y - bh - 14));
+    if (pArrow.textContent !== '➤') setText(pArrow, '➤');
+    pArrow.style.transform = `rotate(${angle.toFixed(0)}deg)`;
+    px = Math.max(8, Math.min(W - bw - 8, px));
+    py = Math.max(8, Math.min(H - bh - 110, py));
     pointer.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
   }
+
   let acc = 1;
   // A language change repaints at once (the strip otherwise refreshes 4 times a second).
   ctx.bus.on('languageChanged', () => (acc = 1));

@@ -417,7 +417,7 @@ breaking a NAP, alliance or truce marks the aggressor as traitor (§5.6).
   is moved or the offensive ends. (W1c) A frontier tile takes pressure only from attacker tiles behind it or beside it
   along the axis, never from one ahead of it: around an encircled pocket the offensive advances through it from the
   side it comes from instead of peeling every side at once (the far side is another army's front; a corridor whose
-  every contact faces backwards falls back to pushing where it touches). The offensive's arrow (§11.2) is drawn as wide as its corridor.
+  every contact faces backwards falls back to pushing where it touches). (W6 fix pass 2, owner items #22/#23) The corridor never outgrows the front it pushes on (capped at the front's contact length; extra troops raise the ratio), and the offensive's arrow (§11.2) is a slim shaft tipped on the axis point with the corridor as faint rails, not a corridor-wide body.
 
 ### 4.4 Local power
 
@@ -544,7 +544,7 @@ attacker `0.0005 × R^−1.5` of its committed troops, and regrowth at war retur
 | 1 – ~1.7 | a grinding front, 0–2.8 km/h; reinforcements, divisions, drones, terrain and front priority decide it | the defender's extra losses are roughly offset by its regrowth |
 | ≥ ~1.7 | the attacker's advantage grows; the defender's front garrison halves in 3–7 days and the front reaches the cap (mult 2 of T1: after ~600 ticks) | the defender loses 2–3× faster than it regrows at war |
 
-Offensives are not replenished automatically: the player reinforces by clicking the same front again (§4.3) and AI war
+Offensives are not replenished automatically: the player reinforces from the offensive dialog or the Guerra panel row (owner item #23: one deliberate order, intensity hold / sustained / assault, a broken human offensive halts and holds the line instead of withdrawing) and AI war
 plans top their offensives up to their commit ratio every 120 ticks (§5.7). `pace-audit attrition` logs `R(t)`, both
 sides' troops and casualties every 10 ticks for mult 1, 2 and 4, so tuning can never pass §3 by stalling (T32).
 

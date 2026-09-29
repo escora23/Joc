@@ -412,6 +412,43 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     return distKm <= alt * 5 + 4 && onScreen(x, y);
   }
 
+  // ---- settle onto the line (FEEDBACK #11): a low camera over a built battle whose line is just out of view ----
+  // After a descent (wheel zoom drifts toward the cursor, and the HUD's view offset moves the screen centre off the
+  // target) the camera can end up a few km from the line, looking at empty fields while the fight is behind the bottom
+  // edge. Once the camera has been still for a moment, it glides (once per battle) onto the line, keeping its altitude,
+  // tilt and heading: the soldiers and both banners come into view without the player hunting for them.
+  let glidedAnchor: Anchor | null = null;
+  let glideUntil = 0;
+  let stillSince = 0;
+  const lastCam = { lat: 0, lon: 0, alt: 0, tilt: 0, hdg: 0 };
+  function settleOnLine(nowMs: number, alt: number): void {
+    const moved = Math.abs(camState.lat - lastCam.lat) + Math.abs(camState.lon - lastCam.lon) > 1e-5
+      || Math.abs(camState.altitudeKm - lastCam.alt) > 0.005 || Math.abs(camState.tilt - lastCam.tilt) > 1e-3
+      || Math.abs(camState.heading - lastCam.hdg) > 1e-3;
+    lastCam.lat = camState.lat;
+    lastCam.lon = camState.lon;
+    lastCam.alt = camState.altitudeKm;
+    lastCam.tilt = camState.tilt;
+    lastCam.hdg = camState.heading;
+    if (moved) stillSince = nowMs;
+    if (!anchor || job || pendingAnchor || nearFade < 0.9 || glidedAnchor === anchor || ctx.app.state !== 'playing') return;
+    if (alt > 14 || nowMs - stillSince < 900) return;
+    const km = gcKm(camState.lat, camState.lon, anchor.lat, anchor.lon);
+    if (km < 0.6 || km > 12) return;
+    const t = latLonToTile(anchor.lat, anchor.lon);
+    if (onScreen((t % MAP_W) + 0.5, Math.floor(t / MAP_W) + 0.5)) {
+      glidedAnchor = anchor;
+      return;
+    }
+    glidedAnchor = anchor;
+    glideUntil = ctx.frame.frame + 150;
+    anchor.camLat = anchor.lat;
+    anchor.camLon = anchor.lon;
+    // The anchor moves with the camera target (the battle is kept while the camera stays within REANCHOR_KM of the
+    // place it was built from); gliding there re-centres the view on the line.
+    void ctx.cameraRig.flyTo({ lat: anchor.lat, lon: anchor.lon }, 1400);
+  }
+
   // ---- the battle pointer (FEEDBACK #11): where the fighting is when the camera is low but not looking at it ----
   const pointerState: BattlePointer = { lat: 0, lon: 0, km: 0, frontKey: 0, heading: 0, onScreen: false };
   let pointerOn = false, pointerAcc = 1;
@@ -1312,6 +1349,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       const alt = camState.altitudeKm;
       updateFar(bdt);
       updatePointer(Math.max(frame.dt, 0.016), alt);
+      settleOnLine(frame.now, alt);
 
       // ---- choose / stream the local battlefield (anchored by the front's stable key) ----
       let want: Anchor | null = null;
@@ -1335,7 +1373,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         // Keep the battle while the camera stays over it and its front still exists: the line may move under it
         // (observation time) without the battle re-anchoring, until it has left the patch.
         if (anchor && anchor.frontKey && view.frontByKey.has(anchor.frontKey)
-          && gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM && Math.abs(front.drift) < LINE_LEAVE_M) {
+          && (gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM || (glidedAnchor === anchor && ctx.frame.frame < glideUntil && camState.altitudeKm < 16))
+          && Math.abs(front.drift) < LINE_LEAVE_M) {
           want = anchor;
           same = true;
         } else {

@@ -466,10 +466,14 @@ tiles per second, makes wars whiplash.
   draw calls (bands, arrows), renderOrder 42/43, depth test off, analytic horizon fade, widths extruded in screen space
   from a world half-width and a pixel minimum. Bands: two-colour (side a behind the line, side b ahead), chevrons toward
   the side losing ground (sign of `FrontView.momentum` beyond ±0.1, speed from the measured `advanceKmh`); quiet fronts
-  dashed. Arrows: operational (corridor `frontageTiles × 25 km` wide, from 3 tiles behind the line to the axis point,
-  tail extended so a wide corridor still reads as an arrow), naval (transport route), mobilization (pulsing, until
-  `mobilizeUntilTick`). Rebuilt into preallocated buffers when fronts / attacks / wars change and at 2 Hz.
-  Debug: `__frontOverlay.stats()`.
+  dashed. Arrows (owner item #22, fix pass 2; it overrides the earlier «as wide as the corridor»): operational = a slim
+  semi-transparent shaft (≤ 5 % of the corridor, 4-7 px) from 3 tiles behind the line with a proportional head whose
+  tip lands ON the axis point, the corridor (≤ the front's length) as two faint dashed rails (kind 3), all under the
+  bands (renderOrder 42 < 43) and knocked out on every border / coast (the fragment samples the territory owner texture,
+  `GlobeApi.ownerTexture()`), fading out between 1,700 and 1,000 km (`uArrowFill`); naval (transport route),
+  mobilization (pulsing, until `mobilizeUntilTick`). Rebuilt into preallocated buffers when fronts / attacks / wars
+  change and at 2 Hz. Debug: `__frontOverlay.stats()` (per arrow: corridor, rails, front km, shaft/head sizes, tail /
+  tip / axis lat-lon), `.setArrowsVisible()`, `.arrowFade()`.
 * **The line as one depth** (sim, `sim/frontLine.ts`, T41): per front, a window 150 km along the line × ±75 km across
   it, sampled every 2.5 km (5 km off the focus); per column the side-a share, where a frontier tile under side a's
   offensive counts p/θ (under b's counter-offensive 1 − p/θ), so a falling tile adds nothing it had not already added:
@@ -488,8 +492,27 @@ tiles per second, makes wars whiplash.
 * **Guerra y frentes panel** `ui/hud/fronts.ts` (`G`, the swords button, the top-bar wars counter): wars (goal,
   reason, day, escalation, score, exhaustion, Proponer paz → `openPeaceDialog`, Pedir ayuda → `askHelp`), fronts by
   danger (both garrisons, redeployment ETA, tug of war, km/h, tiles, divisions, age; Ir, Prioridad baja/normal/alta →
-  `setFrontPriority`, Enviar divisiones (own divisions with ETA → `unitOrder attach`), Contraofensiva/Reforzar →
-  `attack`, Retirar → `retreat`), Mundo tab. Debug `__fuFronts`.
+  `setFrontPriority`, Enviar divisiones (own divisions with ETA → `unitOrder attach`), «Ofensiva…» / «Gestionar…» →
+  the offensive dialog, our offensive's line (troops, intensity, ratio, state) with Mantener la línea / Sostenida /
+  Asalto total → `offensiveIntensity`, Retirar → `retreat`), Mundo tab. Debug `__fuFronts`.
+* **Offensive flow** (owner item #23, fix pass 2) `ui/hud/offensiveDialog.ts`: a click on enemy land at war across a
+  border (also the radial's Atacar and the panel's «Ofensiva…») opens the dialog: front and axis place, troops 25-100 %
+  of home troops, intensity, and the preview (ratio against that front's garrison, corridor, km/h on plains, time to
+  the axis point, casualties per game day both sides, verdict) from `predictOffensive` and the sim's §4.6 formula;
+  «Lanzar ofensiva» sends one `attack` (with `intensity`). Shift+click launches at once with the slider. Sim
+  (`sim/attacks.ts`): `Attack.intensity` 0 hold (no push, engagement ×0.25, no stall/break clock), 1 sustained, 2
+  assault (Pa ×1.25, own losses ×1.6, enemy ×1.2); the corridor never outgrows its front (`frontageOf` caps it at
+  `Front.length`, also `predictOffensive`); an offensive whose frontier empties re-forms on the contact nearest its
+  axis point (`setAxis`) before ending; a broken human offensive (R < 0.5 for 60 ticks) switches to hold with
+  `msg.offensiveHalted` instead of withdrawing; every sim end of a human offensive other than Retirar sends a message
+  (`msg.offensiveNoContactEnded`, `msg.offensiveEndedPeace`); a launch with no contact in its corridor is refused
+  up front (`msg.offensiveNoContact`). Tutorial step `offensive` (on the first war).
+* **Battle pointer** (FEEDBACK #11, fix pass 2): the ground battle stands under the view target (≤ max(8 km, 2.5 ×
+  altitude)) or in front of it when its anchor is on screen (≤ 5 × altitude + 4 km); otherwise it is not built there.
+  `BattleApi.pointer()` names the nearest battle when the camera is below 160 km and not looking at it, and
+  `ui/hud/battleStrip.ts` draws «▼ Frente de X · la batalla está a N km [Ir a la batalla]» (at the point, or at the
+  screen edge toward it); the button flies down to 3 km facing the line from the human's side. The panel's Ir flies
+  onto the published line (`frontFocus`). Debug `__battleDebug.soldiersOnScreen()`.
 * **Ground battle** `render/battle/index.ts`: anchored by front key (stays while the camera stays and the line is within
   4.5 km of the patch centre; in observation time a new battle waits ≤ 1.5 s for the line read at the focus); infantry
   per side = `visibleSplit()` of `deriveLocalForcesAt(anchor, 6 km)`; no generic vehicles — real divisions within 50 km
@@ -510,8 +533,10 @@ tiles per second, makes wars whiplash.
   frame, min 22 px, ≤ 8 % of the screen height (`__fx.plumes()`). **Audio**: combat cues capped at 2/s per front
   and 6/s in all (`__fuAudio.stats().combat`).
 * Tools: `npx tsx src/sim/test/w6-audit.mjs` (momentum reversal, garrisons, priority, T34 via the panel command,
-  retreat, key stability), `node tools/w6-verify.mjs` (browser: overlay, badge, panel, mobilization, front-600,
-  plume, ground battle, observation, animation clock, audio), shots `front-orbit`, `front-600`, `front-mobilization`,
+  retreat, key stability, A7 corridor cap / persistence / intensity), `node tools/w6-verify.mjs` (browser: overlay
+  with V1b measured on the drawn pixels, badge, panel with the offensive dialog, persistence and Retirar measured in the
+  browser, mobilization, front-600, plume, ground battle, V14 descent without shot framing and the battle pointer,
+  observation, animation clock, audio), shots `front-orbit`, `front-600`, `front-mobilization`,
   `fronts-panel`, `front-ground-real`, `front-observation`, `plume-zoom` (`render/battle/shotsFronts.ts`; staged in
   exact ticks with `fastForward`, so every run stages the same front; the ground shots put one real division per side
   where the offensive's axis crosses the line, focus the sim there and frame the line clear of the HUD;

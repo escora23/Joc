@@ -327,7 +327,7 @@ Stage 3, beside W5, after both W3 and W4. Read DESIGN_V2 §11 (all), §10.12, §
 **Orbit overlay** (render/battle/overlay.ts, ≤ 4 draw calls, above clouds, hidden in command mode):
 - bands in both colours, with chevrons from momentum and measured advanceKmh;
 - dashed quiet fronts;
-- operational arrows as wide as the offensive's corridor; naval invasion arrows; mobilization arrows until mobilizeUntilTick;
+- operational arrows (SUPERSEDED by owner item #22, see fix pass 2: a slim shaft tipped on the axis point, the corridor as faint rails, under the bands, gone below 1,000 km); naval invasion arrows; mobilization arrows until mobilizeUntilTick;
 - badges: ISO3 chips, tug-of-war Pa/(Pa+Pd), measured km/h or «consolidando», division chips, hover details, click emits frontSelected.
 
 **Guerra y frentes panel** (ui/hud/fronts.ts, G):
@@ -353,7 +353,7 @@ Stage 3, beside W5, after both W3 and W4. Read DESIGN_V2 §11 (all), §10.12, §
 
 ### Acceptance criteria
 
-1. front-orbit at 2500 km: the band shows both colours; chevrons point in the advance direction; an operational arrow as wide as the corridor (+-15%) runs from the attacker to the axis point; the badge shows both ISO3 codes, the tug-of-war bar and measured km/h; a reviewer names attacker, defender, direction and who is winning from the screenshot alone
+1. front-orbit at 2500 km: the band shows both colours; chevrons point in the advance direction; an operational arrow ~~as wide as the corridor (+-15%)~~ (owner item #22 overrides this wording: slim shaft, corridor as faint rails, never wider than the front) runs from the attacker to the axis point; the badge shows both ISO3 codes, the tug-of-war bar and measured km/h; a reviewer names attacker, defender, direction and who is winning from the screenshot alone
 
 2. Chevrons and the badge bar follow FrontView.momentum: giving the defender enough troops (debug) reverses the chevrons within 20 ticks
 

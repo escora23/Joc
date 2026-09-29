@@ -859,7 +859,7 @@ export class AttackSystem {
       a.breakTicks = R < 0.5 ? a.breakTicks + 1 : 0;
       if (a.troops < a.committed * 0.1) this.startRetreat(a);
       else if (a.breakTicks >= OFFENSIVE_BREAK_TICKS) {
-        if (a.attacker === HUMAN_ID) {
+        if (a.attacker === HUMAN_ID && !g.config.humanAutopilot) {
           // The player's offensive is never withdrawn behind their back (#23): broken, it halts on the line and holds,
           // and the player decides (reinforce, change intensity, retreat) from the Guerra panel or the front badge.
           this.setIntensity(a, 0);

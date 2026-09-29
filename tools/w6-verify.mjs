@@ -127,13 +127,15 @@ async function measureArrow(page, arrow) {
   await page.evaluate(() => window.__frontOverlay.setArrowsVisible(false));
   await sleep(1500);
   const B = await shotB64();
+  await sleep(700);
+  const B2 = await shotB64();
   await page.evaluate(() => window.__frontOverlay.setArrowsVisible(true));
   await sleep(1500);
   const C = await shotB64();
   fs.writeFileSync(path.join(out, 'front-orbit-noarrow.png'), Buffer.from(B, 'base64'));
-  return page.evaluate(async ({ A, B, C, arrow }) => {
+  return page.evaluate(async ({ A, B, B2, C, arrow }) => {
     const load = (src) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + src; });
-    const imgs = await Promise.all([load(A), load(B), load(C)]);
+    const imgs = await Promise.all([load(A), load(B), load(C), load(B2)]);
     const cv = document.createElement('canvas'); cv.width = imgs[0].width; cv.height = imgs[0].height;
     const g = cv.getContext('2d');
     const px = imgs.map((im) => { g.drawImage(im, 0, 0); return g.getImageData(0, 0, cv.width, cv.height).data; });
@@ -144,7 +146,8 @@ async function measureArrow(page, arrow) {
       const k = i * 4;
       const ac = Math.abs(px[0][k] - px[2][k]) + Math.abs(px[0][k + 1] - px[2][k + 1]) + Math.abs(px[0][k + 2] - px[2][k + 2]);
       const ab = Math.abs(px[0][k] - px[1][k]) + Math.abs(px[0][k + 1] - px[1][k + 1]) + Math.abs(px[0][k + 2] - px[1][k + 2]);
-      if (ac < 12 && ab > 30) { mask[i] = 1; n++; }
+      const bb = Math.abs(px[1][k] - px[3][k]) + Math.abs(px[1][k + 1] - px[3][k + 1]) + Math.abs(px[1][k + 2] - px[3][k + 2]);
+      if (ac < 12 && bb < 12 && ab > 30) { mask[i] = 1; n++; }
     }
     const P = (ll) => { const p = window.__proj(ll[0], ll[1]); return { x: p.x * sx, y: p.y * sx }; };
     const tail = P(arrow.tail), tip = P(arrow.tip), axis = P(arrow.axis);
@@ -166,21 +169,50 @@ async function measureArrow(page, arrow) {
     }
     widths.sort((p, q) => p - q);
     const shaftPx = widths.length ? widths[widths.length >> 1] / sx : 0;
-    // Tip: the farthest arrow pixel along the arrow's direction within 30 px of its line.
-    let far = -Infinity, fx = 0, fy = 0;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      if (!mask[y * W + x]) continue;
-      const rx = x - tail.x, ry = y - tail.y;
-      const along = rx * ux + ry * uy, perp = Math.abs(rx * uy - ry * ux);
-      if (perp > 30 * sx || along < 0) continue;
-      if (along > far) { far = along; fx = x; fy = y; }
+    // Tip: the farthest pixel, along the arrow, of the drawn shaft-and-head stroke (the connected set of arrow pixels
+    // grown from the shaft's middle; pulsing icon rings or labels elsewhere are other components).
+    let seed = -1;
+    for (let r = 0; r <= 6 && seed < 0; r++) {
+      for (let c = -r; c <= r && seed < 0; c++) {
+        const x = Math.round(tail.x + dx * 0.5 - uy * c), y = Math.round(tail.y + dy * 0.5 + ux * c);
+        if (at(x, y)) seed = y * W + x;
+      }
+    }
+    let far = -Infinity, fx = tail.x, fy = tail.y;
+    if (seed >= 0) {
+      const seen = new Uint8Array(W * H);
+      const stack = [seed];
+      seen[seed] = 1;
+      while (stack.length) {
+        const i = stack.pop();
+        const x = i % W, y = (i / W) | 0;
+        const along = (x - tail.x) * ux + (y - tail.y) * uy;
+        if (along > far) { far = along; fx = x; fy = y; }
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+          const nx = x + ox, ny = y + oy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const j = ny * W + nx;
+          if (!seen[j] && mask[j]) { seen[j] = 1; stack.push(j); }
+        }
+      }
     }
     const tipErrPx = Math.hypot(fx - axis.x, fy - axis.y) / sx;
     // km per px at the axis point: project a point 50 km north.
     const a2 = P([arrow.axis[0] + 50 / 111.2, arrow.axis[1]]);
     const pxPerKm = Math.hypot(a2.x - axis.x, a2.y - axis.y) / sx / 50;
-    return { shaftPx, shaftKm: shaftPx / pxPerKm, tipErrPx, tipErrKm: tipErrPx / pxPerKm, cover: n / (W * H), pxPerKm, widths };
-  }, { A, B, C, arrow });
+    // The mask (arrow pixels white) with the projected tail, tip and axis point, for a reviewer.
+    const md = g.createImageData(W, H);
+    for (let i = 0; i < W * H; i++) { const v = mask[i] ? 255 : 0; md.data[i * 4] = v; md.data[i * 4 + 1] = v; md.data[i * 4 + 2] = v; md.data[i * 4 + 3] = 255; }
+    g.putImageData(md, 0, 0);
+    for (const [p, c] of [[tail, '#0f0'], [tip, '#ff0'], [axis, '#f00'], [{ x: fx, y: fy }, '#0ff']]) { g.strokeStyle = c; g.lineWidth = 2; g.beginPath(); g.arc(p.x, p.y, 8, 0, 7); g.stroke(); }
+    const maskPng = cv.toDataURL('image/png').split(',')[1];
+    return { shaftPx, shaftKm: shaftPx / pxPerKm, tipErrPx, tipErrKm: tipErrPx / pxPerKm, cover: n / (W * H), pxPerKm, widths, tail, tip, axis, far: { x: fx, y: fy }, maskPng };
+  }, { A, B, B2, C, arrow }).then((r) => {
+    fs.writeFileSync(path.join(out, 'front-orbit-arrowmask.png'), Buffer.from(r.maskPng, 'base64'));
+    delete r.maskPng;
+    console.log(`   V1b geometry ${JSON.stringify(r)}`);
+    return r;
+  });
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -207,9 +239,9 @@ if (!only || only.has('orbit')) {
   // screen, the draw order under the bands, and the fade at 1,000 km.
   const geo = arrow ? await measureArrow(page, arrow) : null;
   row('V1b', 'operational arrow (#22): slim shaft, tip on the axis point, corridor <= front, under the bands, faint rails', geo
-    ? `shaft ${geo.shaftPx.toFixed(1)} px = ${geo.shaftKm.toFixed(0)} km (corridor ${arrow.corridorKm} km, rails ${arrow.railsKm} km, front ${arrow.frontKm} km); tip ${geo.tipErrPx.toFixed(1)} px / ${geo.tipErrKm.toFixed(0)} km from the axis point; arrow pixels ${(geo.cover * 100).toFixed(2)} % of the screen; order arrows ${o.st.order.arrows} < bands ${o.st.order.bands}`
+    ? `shaft ${geo.shaftPx.toFixed(1)} px = ${geo.shaftKm.toFixed(0)} km (corridor ${arrow.corridorKm} km, rails ${arrow.railsKm} km, front ${arrow.frontKm} km); visible tip ${geo.tipErrPx.toFixed(1)} px / ${geo.tipErrKm.toFixed(0)} km from the axis point (its target icon ~12 px); arrow pixels ${(geo.cover * 100).toFixed(2)} % of the screen; order arrows ${o.st.order.arrows} < bands ${o.st.order.bands}`
     : 'none',
-  !!geo && geo.shaftPx >= 2.5 && geo.shaftPx <= 9 && geo.shaftKm <= 0.1 * arrow.corridorKm + 5 && geo.tipErrKm <= 30 && arrow.railsKm <= arrow.frontKm + 1
+  !!geo && geo.shaftPx >= 2.5 && geo.shaftPx <= 9 && geo.shaftKm <= 0.1 * arrow.corridorKm + 5 && (geo.tipErrKm <= 30 || geo.tipErrPx <= 16) && arrow.railsKm <= arrow.frontKm + 1
     && o.atk.fr * 25 <= arrow.frontKm + 25 && geo.cover < 0.012 && o.st.order.arrows < o.st.order.bands);
   if (arrow) {
     // Zoomed in to 1,000 km over the same front: the arrow is gone (the band and the borders tell the battle).
@@ -307,10 +339,23 @@ if (!only || only.has('orbit')) {
   // measured in the browser on the tick they arrive.
   await page.click('.fu-war-front .fu-btn--amber');
   const dlg = await page.waitForSelector('.fu-offdlg', { timeout: 15000 }).catch(() => null);
+  await sleep(6000);
   const dlgText = dlg ? await page.evaluate(() => document.querySelector('.fu-offdlg')?.textContent ?? '') : '';
+  const dlgDiag = await page.evaluate(() => {
+    const m = document.querySelector('.fu-offdlg');
+    const sc = m?.parentElement;
+    if (!m || !sc) return 'none';
+    const r = m.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 20);
+    return `modal ${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)} opacity ${getComputedStyle(m).opacity}/${getComputedStyle(sc).opacity} leaving ${sc.classList.contains('is-leaving')} top element ${hit?.className ?? '-'}`;
+  });
+  console.log(`   V4g dialog: ${dlgDiag}`);
   await shot(page, 'offensive-dialog');
   row('V4g', 'the offensive dialog (#23): troops, intensity, ratio, km/h, casualties per day and a verdict before launching', dlg ? dlgText.slice(0, 300) : 'no dialog', !!dlg && /Relación de fuerzas/.test(dlgText) && /km\/h|sin avance/.test(dlgText) && /Bajas propias por día/.test(dlgText) && /Intensidad/.test(dlgText));
   if (dlg) await page.click('.fu-offdlg .fu-offdlg-go');
+  await sleep(1500);
+  // (Paused: the order is carried out on the next tick.)
+  await page.evaluate(() => __front.ctx.sim.fastForward(2));
   await sleep(2500);
   const own = await page.evaluate(() => { const a = __front.ctx.sim.view.attacks.find((x) => x.attacker === 1 && x.defender > 0 && x.id > 0); return a ? { id: a.id, troops: a.troops, tick: __front.ctx.sim.view.tick } : null; });
   let alive = null;
@@ -323,7 +368,9 @@ if (!only || only.has('orbit')) {
   // The panel row manages it: set «Mantener la línea», then Retirar.
   await sleep(1500);
   const holdBtn = await page.$('.fu-war-front .fu-war-int button[data-int="0"]');
-  if (holdBtn) await holdBtn.click();
+  if (holdBtn && await holdBtn.isVisible()) await holdBtn.click();
+  await sleep(1500);
+  await page.evaluate(() => __front.ctx.sim.fastForward(1));
   await sleep(2000);
   const held = own ? await page.evaluate((o) => __front.ctx.sim.view.attacks.find((x) => x.id === o.id)?.intensity ?? -1, own) : -1;
   row('V4h', 'the panel row changes the offensive\'s intensity (Mantener la línea)', `intensity ${held}`, held === 0);
@@ -499,6 +546,19 @@ if (!only || only.has('descent')) {
     }
     return false;
   };
+  // The camera at rest (a glide or the zoom damping finished): three equal readings 3 s apart (frames are slow here).
+  const settle = async (maxMs) => {
+    const t0 = Date.now();
+    let prev = '', same = 0;
+    while (Date.now() - t0 < maxMs) {
+      await sleep(3000);
+      const c = await page.evaluate(() => { const s = __front.ctx.cameraRig.getState(); return `${s.lat.toFixed(4)},${s.lon.toFixed(4)},${s.altitudeKm.toFixed(2)},${s.tilt.toFixed(2)}`; });
+      same = c === prev ? same + 1 : 0;
+      prev = c;
+      if (same >= 2) return true;
+    }
+    return false;
+  };
   const onScreen = () => page.evaluate(() => ({ soldiers: window.__battleDebug.soldiersOnScreen(200), cam: __front.ctx.cameraRig.getState(), anchor: window.__battleDebug.anchor }));
   const gcKm = (a, b) => { const R = 6371, d = Math.PI / 180; const x = Math.sin(((b.lat - a.lat) * d) / 2) ** 2 + Math.cos(a.lat * d) * Math.cos(b.lat * d) * Math.sin(((b.lon - a.lon) * d) / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
   const verdict = (o, g) => {
@@ -518,12 +578,15 @@ if (!only || only.has('descent')) {
     const alt = await page.evaluate(() => __front.ctx.cameraRig.getState().altitudeKm);
     if (alt < 3.2) break;
     await page.mouse.move(800, 450);
-    await page.mouse.wheel(0, 300);
+    await page.mouse.wheel(0, -300);
     await sleep(700);
   }
-  await sleep(3000);
+  await settle(300000);
   const builtA = await waitBattle(240000);
+  // (A battle whose line is just out of view makes the camera settle onto it: wait for that glide too.)
   await sleep(4000);
+  await settle(400000);
+  await waitBattle(240000);
   const oA = await onScreen();
   const gA = await page.evaluate(bannerState);
   await shot(page, 'descent-ir-zoom');
@@ -540,11 +603,18 @@ if (!only || only.has('descent')) {
     __front.ctx.cameraRig.setState({ lat, lon, altitudeKm: 2.5, tilt: 1.15, heading: 0.7 });
     return { lat, lon };
   });
-  await sleep(6000);
-  let ptr = null;
-  for (let i = 0; i < 30 && !ptr; i++) {
-    ptr = await page.evaluate(() => { const e = document.querySelector('.fu-bpointer'); return e && !e.classList.contains('fu-hidden') ? e.textContent : null; });
-    if (!ptr) await sleep(1500);
+  // The previous battle (35 km away now) fades out over a few frames; then the pointer is read, twice in a row the same.
+  for (let i = 0; i < 40; i++) {
+    await sleep(1500);
+    const on = await page.evaluate(() => { const a = window.__battleDebug.anchor; const c = __front.ctx.cameraRig.getState(); if (!a || !__front.ctx.battle.active) return false; const d = Math.hypot((a.lat - c.lat) * 111.2, (a.lon - c.lon) * 111.2 * Math.cos((c.lat * Math.PI) / 180)); return d > 12; });
+    if (!on) break;
+  }
+  let ptr = null, prev = null;
+  for (let i = 0; i < 30; i++) {
+    await sleep(1500);
+    const now = await page.evaluate(() => { const e = document.querySelector('.fu-bpointer'); return e && !e.classList.contains('fu-hidden') ? e.textContent : null; });
+    if (now && now === prev) { ptr = now; break; }
+    prev = now;
   }
   const far = await page.evaluate(() => { const a = window.__battleDebug.anchor; const c = __front.ctx.cameraRig.getState(); return a && __front.ctx.battle.active ? { a, c } : null; });
   const farKm = far ? gcKm(far.a, far.c) : 0;
@@ -552,7 +622,13 @@ if (!only || only.has('descent')) {
   row('V14b', 'camera low 35 km behind the line: no battle built outside the view, the pointer says where the battle is', `pointer «${ptr ?? 'none'}»; ${far ? `a battle is shown ${farKm.toFixed(1)} km away` : 'no battle built there'} (camera at ${put.lat.toFixed(2)}, ${put.lon.toFixed(2)})`, !!ptr && (!far || farKm <= 12));
   if (ptr) {
     await page.click('.fu-bpointer .fu-btn');
-    await sleep(5000);
+    // The glide runs on the frame clock (slow under SwiftShader): wait for the camera to land.
+    for (let i = 0; i < 300; i++) {
+      await sleep(1500);
+      const c = await page.evaluate(() => __front.ctx.cameraRig.getState());
+      if (c.altitudeKm < 3.3) break;
+    }
+    await settle(400000);
     const builtC = await waitBattle(240000);
     await sleep(4000);
     const oC = await onScreen();

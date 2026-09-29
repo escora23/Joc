@@ -285,6 +285,10 @@ void main() {
     alpha = mix(0.58, 0.8, outline) * smoothstep(0.0, 0.15, vU) * uArrowFill;
     if (alpha < 0.003) discard;
     alpha *= 1.0 - 0.88 * borderHere();
+  } else if (vInfo.x > 3.5) {
+    // The axis point: a small ring where the tip lands (the place the offensive drives to).
+    alpha = 0.9 * uArrowFill;
+    if (alpha < 0.003) discard;
   } else if (vInfo.x > 2.5) {
     // Corridor rail: a faint dashed hairline along each flank of the corridor.
     float dash = fract(vU * vInfo.z / 22.0);
@@ -707,6 +711,17 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
         shaftHalfKm: +shaftHalfKm.toFixed(2), shaftPx, headHalfKm: +headHalfKm.toFixed(2), headPx, headLenKm: Math.round(headLenKm),
         lengthKm: Math.round(len), tail: tl, tip: tp, axis: ax, mid: [m0[0], m0[1], m1[0], m1[1]],
       });
+    }
+    if (onAxis && len > 0) {
+      // A small ring on the axis point, so the tip visibly lands on the place (a sub-pixel apex alone does not read).
+      const rT = 14 / TILE_KM;
+      const k = 16;
+      for (let q = 0; q <= k; q++) {
+        const th = (q / k) * Math.PI * 2;
+        curveX[q] = a.x + (Math.cos(th) * rT) / cosL;
+        curveY[q] = a.y + Math.sin(th) * rT;
+      }
+      addArrow(k + 1, 4, 0.01, 1, 1, 0, 0, 0, 0, 0);
     }
   }
 
