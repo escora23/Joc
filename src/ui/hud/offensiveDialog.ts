@@ -22,7 +22,10 @@ import { describeXY } from '../places';
 import { etaText, frontName } from './forcesInfo';
 import { troopsText } from './frontsInfo';
 import type { HudShared } from './shared';
-import { ENGAGEMENT_RATE, HUMAN_ID, MAP_W, TICKS_PER_GAME_DAY, TILE_KM } from '../../shared/constants';
+import {
+  AIR_DENIAL_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, DRONE_ADVANCE_MUL, DRONE_ENEMY_ADVANCE_MUL, ENGAGEMENT_RATE, HUMAN_ID, MAP_W,
+  TICKS_PER_GAME_DAY, TILE_KM,
+} from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
 import { advanceKmh as advanceAt, predictOffensive, tileKm } from '../../shared/orders';
 import type { AttackView, FrontView, OffensiveIntensity } from '../../shared/types';
@@ -70,6 +73,10 @@ export interface OffensivePreview {
   enemyLossDay: number;
   verdict: 'advance' | 'grind' | 'stall' | 'hold';
   startsInTicks: number;
+  /** #25: the sky over that front (1 ours, -1 theirs, 0 contested / none) and the drone swarms supporting each side. */
+  air: number;
+  casOwn: number;
+  casTheir: number;
 }
 
 /** What an offensive (or a reinforcement) of `troops` at `intensity` would do on the front nearest `tile`. */
@@ -77,8 +84,20 @@ export function previewOffensive(hs: HudShared, enemy: number, tile: number, tro
   const r = viewRules(hs.ctx.sim.view);
   const pr = predictOffensive(r, HUMAN_ID, enemy, troops, tile);
   const G = Math.max(1, pr.garrison);
-  const ratio = (troops / G) * (intensity === 2 ? ASSAULT_POWER : 1);
-  const kmh = intensity === 0 ? 0 : advanceAt(ratio);
+  // #25: the aircraft already over that front count as the sim counts them (attacks.ts): the side with more fighters
+  // on patrol owns the sky (+10 % / −10 % speed) and cancels the other side's drones (+15 % power and speed each).
+  const f = frontNear(hs, enemy, tile);
+  const side = f ? (f.a === HUMAN_ID ? 0 : 1) : 0;
+  const airOwn = f ? (side === 0 ? f.airA : f.airB) ?? 0 : 0, airTheir = f ? (side === 0 ? f.airB : f.airA) ?? 0 : 0;
+  const air = airOwn > airTheir ? 1 : airTheir > airOwn ? -1 : 0;
+  const casOwn = f && air >= 0 ? (side === 0 ? f.casA : f.casB) ?? 0 : 0;
+  const casTheir = f && air <= 0 ? (side === 0 ? f.casB : f.casA) ?? 0 : 0;
+  const ratio = (troops / G) * (intensity === 2 ? ASSAULT_POWER : 1) * (casOwn > 0 ? DRONE_ADVANCE_MUL : 1);
+  let kmh = intensity === 0 ? 0 : advanceAt(ratio);
+  if (casOwn > 0) kmh *= DRONE_ADVANCE_MUL;
+  if (casTheir > 0) kmh *= DRONE_ENEMY_ADVANCE_MUL;
+  if (air > 0) kmh *= AIR_SUPERIORITY_ADVANCE_MUL;
+  if (air < 0) kmh *= AIR_DENIAL_ADVANCE_MUL;
   // Casualties per tick (§4.6), in troops: E = rate × min(Pa, Pd); the attacker loses E·√(Pd/Pa), the defender E·√(Pa/Pd).
   const Pa = troops * (intensity === 2 ? ASSAULT_POWER : 1), Pd = G;
   const E = ENGAGEMENT_RATE * Math.min(Pa, Pd) * (intensity === 0 ? HOLD_ENGAGEMENT : 1);
@@ -87,7 +106,7 @@ export function previewOffensive(hs: HudShared, enemy: number, tile: number, tro
   const ownLossDay = Math.min(troops, (ownPow * troops) / Math.max(1, Pa)) * TICKS_PER_GAME_DAY;
   const enemyLossDay = enemyPow * TICKS_PER_GAME_DAY;
   const verdict = intensity === 0 ? 'hold' : ratio >= 1.7 ? 'advance' : ratio >= 1 ? 'grind' : 'stall';
-  return { troops, garrison: pr.garrison, ratio, kmh, corridorKm: pr.frontageTiles * TILE_KM, ownLossDay, enemyLossDay, verdict, startsInTicks: pr.startsInTicks };
+  return { troops, garrison: pr.garrison, ratio, kmh, corridorKm: pr.frontageTiles * TILE_KM, ownLossDay, enemyLossDay, verdict, startsInTicks: pr.startsInTicks, air, casOwn, casTheir };
 }
 
 /**
@@ -167,6 +186,7 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
       row(t('off.row.eta'), p.kmh > 0.2 && distKm > 0 ? etaText(hs, Math.round((distKm / p.kmh) * 10), false) : '—'),
       row(t('off.row.lossOwn'), `≈ ${troopsText(p.ownLossDay)}`),
       row(t('off.row.lossEnemy'), `≈ ${troopsText(p.enemyLossDay)}`),
+      row(t('off.row.air'), t(p.air > 0 ? 'off.air.own' : p.air < 0 ? 'off.air.their' : 'off.air.none', { own: p.casOwn, their: p.casTheir }), p.air > 0 ? 'is-go' : p.air < 0 ? 'is-bad' : ''),
     );
     if (p.startsInTicks > 10) table.append(row(t('off.row.starts'), etaText(hs, p.startsInTicks, false)));
     setText(verdict, t(`off.verdict.${p.verdict}`, { name: hs.name(enemy) }));

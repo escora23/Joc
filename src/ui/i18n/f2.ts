@@ -5,6 +5,11 @@
 export const esF2: Record<string, string> = {
   'order.err.airspace': 'Espacio aéreo de {name}: sin alianza ni paso libre no puedes patrullar sobre su territorio en paz',
 
+  // ---- order buttons of the unit card (override W4's shorter texts) -----------------------------------
+  'order.cap.tip': 'Patrulla de 150 km de radio hasta que la retires: derriba bombarderos, drones y misiles que la crucen y se bate con sus cazas. Sobre un frente, con más cazas que el enemigo, da superioridad aérea: +10 % a tu avance y sus drones dejan de contar.',
+  'order.support.tip': 'Apoyo aéreo cercano sobre un frente: +15 % de potencia y de velocidad a tu ofensiva allí y desgaste de su guarnición. No cuenta si el enemigo domina el cielo.',
+  'order.strike.tip': 'Vuela a velocidad de misión, ataca al llegar (edificio, división, buque o el sector del frente) y vuelve a rearmarse. Con un caza de escolta sobrevive mucho más a las patrullas enemigas.',
+
   // ---- the right-click chip of an air order: what it does and what it risks (#25) -----------------------
   'air.hint.cap': 'Patrulla: derriba bombarderos, drones y misiles que entren a {km} km. Sobre un frente da superioridad aérea (+10 % a tu avance, anula sus drones).',
   'air.hint.support': 'Apoyo cercano: +{pct} % de potencia y de velocidad a tu ofensiva aquí (o −{pct} % a la enemiga) y desgasta su guarnición. No cuenta si el enemigo domina el cielo.',
@@ -23,8 +28,14 @@ export const esF2: Record<string, string> = {
   'air.risk.fighters': 'cazas enemigos: {n}',
   'air.risk.bases': 'bases aéreas enemigas cerca: {n}',
 
+  // ---- the offensive dialog's air row -------------------------------------------------------------------
+  'off.row.air': 'Apoyo aéreo',
+  'off.air.own': 'cielo tuyo (+10 % de velocidad) · drones: {own} tuyos, {their} suyos',
+  'off.air.their': 'cielo enemigo (−10 %; tus drones no cuentan) · drones suyos: {their}',
+  'off.air.none': 'sin superioridad · drones: {own} tuyos, {their} suyos. Manda cazas y drones desde «Apoyo aéreo» en Guerra y frentes',
+
   // ---- the sky over a front (Guerra panel row) ---------------------------------------------------------
-  'fr.air': 'Cielo: {own} escuadrones tuyos y {their} enemigos patrullando · {sky}',
+  'fr.air': 'Cielo · cazas en patrulla: {own} tuyos, {their} enemigos · {sky}',
   'fr.air.skyOwn': 'superioridad aérea tuya (+{pct} % a tu avance, sus drones no cuentan)',
   'fr.air.skyTheir': 'superioridad aérea de {enemy} (−{pct} % a tu avance, tus drones no cuentan)',
   'fr.air.skyContested': 'cielo disputado',
@@ -53,6 +64,10 @@ export const esF2: Record<string, string> = {
 export const enF2: Record<string, string> = {
   'order.err.airspace': '{name}\'s airspace: without an alliance or open borders you cannot patrol over their land in peacetime',
 
+  'order.cap.tip': 'A 150 km patrol circle until recalled: shoots down bombers, drones and missiles crossing it and fights their fighters. Over a front, with more fighters than the enemy, it wins air superiority: +10 % to your advance and their drones stop counting.',
+  'order.support.tip': 'Close air support over a front: +15 % power and speed for your offensive there and attrition on their garrison. Does not count if the enemy owns the sky.',
+  'order.strike.tip': 'Flies at mission speed, strikes on arrival (building, division, ship or the front sector) and returns to rearm. With a fighter escort it survives enemy patrols far more often.',
+
   'air.hint.cap': 'Patrol: shoots down bombers, drones and missiles within {km} km. Over a front it gives air superiority (+10 % to your advance, cancels their drones).',
   'air.hint.support': 'Close support: +{pct} % power and speed for your offensive here (or −{pct} % for the enemy\'s) and wears down their garrison. Does not count if the enemy owns the sky.',
   'air.hint.strike.structure': 'Air strike: −{pct} % integrity on the target and damage around it; returns to rearm.',
@@ -70,7 +85,12 @@ export const enF2: Record<string, string> = {
   'air.risk.fighters': 'enemy fighters: {n}',
   'air.risk.bases': 'enemy airbases nearby: {n}',
 
-  'fr.air': 'Sky: {own} of your squadrons and {their} enemy ones on patrol · {sky}',
+  'off.row.air': 'Air support',
+  'off.air.own': 'your sky (+10 % speed) · drones: {own} yours, {their} theirs',
+  'off.air.their': 'enemy sky (−10 %; your drones do not count) · their drones: {their}',
+  'off.air.none': 'no superiority · drones: {own} yours, {their} theirs. Send fighters and drones from «Air support» in War and fronts',
+
+  'fr.air': 'Sky · fighters on patrol: {own} yours, {their} enemy · {sky}',
   'fr.air.skyOwn': 'your air superiority (+{pct} % to your advance, their drones do not count)',
   'fr.air.skyTheir': '{enemy}\'s air superiority (−{pct} % to your advance, your drones do not count)',
   'fr.air.skyContested': 'contested sky',

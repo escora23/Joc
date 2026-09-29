@@ -8,6 +8,7 @@ import '../render/units/shots';
 import '../render/fx/shots';
 import '../render/battle/shots';
 import '../render/battle/shotsFronts';
+import '../ui/shotsF2';
 import '../command/shots';
 import '../sim/ai/shots';
 import { registerShot } from '../shared/shots';

@@ -450,8 +450,9 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         ctx.sim.send({ type: 'unitOrder', unitIds: [unitId], order, tile, targetId: 0 });
         hs.sound('confirm');
         ctx.bus.emit('toast', { text: t(`fr.airsend.done.${order}`, { unit: unitName(q.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(q.hours * 10), false) }), kind: 'info', durationMs: 3600 });
-        airExpanded.delete(f.key);
-        listKey = '';
+        // The list stays open (several aircraft are often sent at once); the row now reads «En camino».
+        listEl.dataset.sig = '';
+        row.airPaintMs = 0;
       });
       const item = h('div', { class: 'fu-war-send' },
         h('div', { class: 'fu-war-send-name' }, h('b', null, unitName(c.u)), h('span', null, t(`fr.airsend.what.${c.order}`))),
