@@ -59,6 +59,8 @@ const CONTACT_M: Record<CommandKind, number> = { tank: 8000, jet: 40000, ship: 3
 const REBASE_M: Record<CommandKind, number> = { tank: 3000, jet: 24000, ship: 8000 };
 /** Send the position at least every this many meters (§9.8). */
 const MOVE_SEND_M: Record<CommandKind, number> = { tank: 200, jet: 2000, ship: 500 };
+/** Moves also go out every half second of local game time (so ≥ 1 per second at ×1 whatever the frame rate). */
+const MOVE_SEND_S = 0.5;
 /** A border of a nation at peace closer than this drops travel to ×1 and warns (§9.7.1). */
 const BORDER_WARN_M = 2000;
 
@@ -99,6 +101,10 @@ export interface CommandInternals {
   atmos(): Atmos;
   /** Player position (lat, lon, heading deg) now. */
   where(): { lat: number; lon: number; heading: number; x: number; y: number };
+  /** The entry parameters of this session (tools). */
+  readonly params: CommandEnterParams | null;
+  /** Moves sent and sim-view position changes per whole local second of driving (criterion 3). */
+  cadence(): { sec: number; moves: number; views: number }[];
 }
 
 let internals: CommandInternals | null = null;
@@ -193,6 +199,26 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let startWall = 0;
   // Sync.
   let lastMoveWall = 0;
+  /** Local game second of the last move sent: moves go out at least every MOVE_SEND_S of local time too. */
+  let lastMoveLocal = -1e9;
+  /**
+   * Move cadence per local second of driving (criterion 3, measured in simulated time): moves sent and changes of the
+   * controlled unit's position in the sim view, per whole local second while the vehicle moves (tools).
+   */
+  const cadence: { sec: number; moves: number; views: number }[] = [];
+  let cadViewKey = '';
+  function cadenceBucket(): { sec: number; moves: number; views: number } | null {
+    const P = player();
+    // At ×1 only (compressed travel covers many game seconds per frame by design).
+    if (!P || Math.abs(P.speed) < 1 || phase !== 'play' || effRate !== 1) return null;
+    const sec = Math.floor(localSec);
+    let b = cadence[cadence.length - 1];
+    if (!b || b.sec !== sec) {
+      cadence.push((b = { sec, moves: 0, views: 0 }));
+      if (cadence.length > 900) cadence.shift();
+    }
+    return b;
+  }
   const lastMovePos = new THREE.Vector3();
   let lastCasWall = 0;
   const cas = new Map<number, Casualties>();
@@ -224,6 +250,25 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let mouseX = -1, mouseY = -1;
   let localClock = '';
 
+  /** Entered from a ground battle: the point the battle camera looked at and its two sides (null otherwise). */
+  let battleFocus: { lat: number; lon: number; a: number; b: number } | null = null;
+  /** Intro length (real s): the usual swoop, or from the battle view: hold on it, then glide down to the vehicle. */
+  let introHold = 0;
+  /** Say where the watched battle is once the intro has come down to the vehicle. */
+  let battleNotice = false;
+  function showBattleNotice(): void {
+    const Pn = player();
+    const bf = battleFocus;
+    if (!Pn || !bf || !overlay || !world) return;
+    const bp = frame.sceneOf(bf.lat, bf.lon, { x: 0, z: 0 });
+    const dx = bp.x - Pn.pos.x, dz = bp.z - Pn.pos.z;
+    const km = Math.hypot(dx, dz) / 1000;
+    const brg = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+    const n = formatNumber(world.soldiersNear(bp.x, bp.z, 6000));
+    overlay.showNotice(km < 1.5 ? t('command.battle.here', { n })
+      : t('command.battle.there', { km: formatNumber(km, km < 10 ? 1 : 0), dir: t(`command.dir.${Math.round(brg / 45) % 8}`), n }), 9, true);
+  }
+  let introDur = 3.1;
   const introFrom = new THREE.Vector3();
   const introTo = new THREE.Vector3();
   const introQFrom = new THREE.Quaternion();
@@ -526,7 +571,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const P = player();
     if (!P || !params || !P.alive) return;
     const moved = P.pos.distanceTo(lastMovePos);
-    if (!force && now - lastMoveWall < 1000 && moved < MOVE_SEND_M[kind]) return;
+    if (!force && now - lastMoveWall < 1000 && localSec - lastMoveLocal < MOVE_SEND_S && moved < MOVE_SEND_M[kind]) return;
     const tp = tileOf(P.pos.x, P.pos.z);
     // Never report a position across a peaceful border before the player confirmed the crossing (the frame's border
     // check puts the vehicle back on the line; a move sent in between would start an incursion in the sim).
@@ -536,6 +581,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const alt = kind === 'jet' ? Math.max(0, Math.min(1, P.pos.y / FLIGHT_CEILING_M)) : undefined;
     ctx.sim.send({ type: 'controlledMove', unitId: params.unitId, x: tp.x, y: tp.y, heading, ...(alt !== undefined ? { alt } : {}) });
     lastMoveWall = now;
+    lastMoveLocal = localSec;
+    const cb = cadenceBucket();
+    if (cb) cb.moves++;
     lastMovePos.copy(P.pos);
   }
 
@@ -720,7 +768,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     scatter.keepOut = civil.keepOut;
     if (grass) grass.keepOut = civil.keepOut;
     forces.reset(kind, p.unitId);
-    if (p.battleHandoff) forces.handoff = new Map(p.battleHandoff.infantry.map((s) => [s.owner, s.count]));
+    forces.setHandoff(p.battleHandoff);
+    world.nationColor = (o) => ctx.sim.view.players[o]?.color ?? 0x888888;
+    // Entered from a visible ground battle (§9.6): the point the battle camera looked at, for the first view, the
+    // vehicle's facing and the battle's label in the world.
+    const ho = p.battleHandoff;
+    battleFocus = ho ? { lat: ho.camera?.lookLat ?? ho.lat, lon: ho.camera?.lookLon ?? ho.lon, a: ho.infantry[0]?.owner ?? 0, b: ho.infantry[1]?.owner ?? 0 } : null;
     // Terrain around the entry point first (the screen is faded out meanwhile).
     await waitFor(() => ground!.ringReady(0, 0, 1), ctx.app.isShot ? 90_000 : 30_000);
     // View distance and fog per vehicle.
@@ -740,8 +793,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     (ground.material.userData.scorch as { value: number }).value = 0;
     mats.setTeamColors(p.friendlyColor, p.enemyColor);
     world.setTeamTints(p.friendlyColor, p.enemyColor);
-    // The player's vehicle at the unit's real position and heading.
-    const yaw = LocalFrame.yawOfHeading(p.heading ?? 0);
+    // The player's vehicle at the unit's real position and heading; entered from a ground battle, turned toward the
+    // battle it was watching (the division faces its front).
+    let yaw = LocalFrame.yawOfHeading(p.heading ?? 0);
+    if (battleFocus && kind === 'tank') {
+      const bp = frame.sceneOf(battleFocus.lat, battleFocus.lon, { x: 0, z: 0 });
+      if (Math.hypot(bp.x, bp.z) > 300) yaw = Math.atan2(-bp.x, -bp.z);
+    }
     // The civil layout first (towns, bases, roads), so the vehicle never starts inside a building.
     civil.update(ctx.sim.view, 0, 0, performance.now(), 1);
     const spot = kind === 'jet' ? new THREE.Vector3() : findSpot(kind === 'ship');
@@ -837,6 +895,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     autopilot = false;
     rebaseN = 0;
     lastFiredSec = -1e9;
+    cadence.length = 0;
+    lastMoveLocal = -1e9;
     localSec = startSec = ctx.sim.view.command?.sec ?? 0;
     startWall = performance.now();
     landOwner = prevLandOwner = ownerOfTile(tileIndex(tileOf(me.pos.x, me.pos.z).x, tileOf(me.pos.x, me.pos.z).y));
@@ -1337,9 +1397,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const remain = Math.max(0, inc.deadlineSec - sec);
       const escort = inc.response === 'intercept';
       const total = escort ? (q?.arrived ? Math.max(1, inc.deadlineSec - q.arriveSec) : 60) : Math.max(1, inc.deadlineSec - inc.respondedSec);
+      const mode = q?.mode === 'air' ? 'air' : inc.kind === 'ship' ? 'ship' : 'tank';
+      // «Alongside» only when its vehicles really are (≈150 m on land, 600 m in the air, 1.5 km at sea); until then the
+      // radio says how far they still are.
+      const d = escort && forces ? forces.qrfDistance(inc.id, P.pos) : 0;
+      const along = d <= (mode === 'air' ? 600 : mode === 'ship' ? 1500 : 150);
+      const distText = d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d / 10) * 10} m`;
       overlay.setRadio({
         severity: 'danger', from,
-        message: escort ? t(`command.radio.escort.${q?.mode === 'air' ? 'air' : inc.kind === 'ship' ? 'ship' : 'tank'}`, { nation: name }) : t('command.radio.protest', { nation: name }),
+        message: escort ? (along || !Number.isFinite(d) ? t(`command.radio.escort.${mode}`, { nation: name }) : t(`command.radio.closing.${mode}`, { nation: name, d: distText })) : t('command.radio.protest', { nation: name }),
         sub: escort ? t('command.radio.nofire') : undefined,
         countLabel: t(escort ? 'command.radio.count.last' : 'command.radio.count.protest'), remain: inc.deadlineSec > 0 ? remain : undefined, total, remainText: fmtDur(remain), exit,
       });
@@ -1512,6 +1578,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           }
         },
         hold: false,
+        get params() {
+          return params;
+        },
+        cadence() {
+          return cadence.map((c) => ({ ...c }));
+        },
         get phase() {
           return `${phase}:${phaseT.toFixed(2)}:${active}`;
         },
@@ -1612,6 +1684,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const view = ctx.sim.view;
         const atWar = view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID);
         const peaceful = !atWar && (forces?.log.hostiles ?? 0) === 0 && landOwner === HUMAN_ID && !(forces?.last?.fronts.length);
+        battleNotice = !!battleFocus && kind === 'tank';
         if (peaceful) {
           setTimeout(() => {
             // Not over a more important notice (a border ahead): the peaceful welcome is only for the quiet case.
@@ -1626,11 +1699,26 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         introQTo.copy(camera.quaternion);
         const e = controller.ent;
         const k = kind === 'jet' ? 5 : kind === 'ship' ? 3 : 1;
-        camera.getWorldDirection(tmp);
-        introFrom.copy(e.pos).addScaledVector(tmp, -140 * k);
-        introFrom.y += 260 * k;
-        camera.position.copy(introFrom);
-        camera.lookAt(tmp2.copy(e.pos));
+        const bc = p.battleHandoff?.camera;
+        if (bc && ground) {
+          // The first view is the battle view the player was watching (same place, same look), held for a moment,
+          // then the camera glides down to the vehicle: the soldiers and tanks of that battle are there (§9.6).
+          const c0 = frame.sceneOf(bc.lat, bc.lon, { x: 0, z: 0 });
+          const l0 = frame.sceneOf(bc.lookLat, bc.lookLon, { x: 0, z: 0 });
+          introFrom.set(c0.x, ground.surfaceAt(c0.x, c0.z) + Math.max(150, Math.min(20_000, bc.altM)), c0.z);
+          camera.position.copy(introFrom);
+          camera.lookAt(tmp2.set(l0.x, ground.surfaceAt(l0.x, l0.z), l0.z));
+          introHold = 2.2;
+          introDur = 7.5;
+        } else {
+          camera.getWorldDirection(tmp);
+          introFrom.copy(e.pos).addScaledVector(tmp, -140 * k);
+          introFrom.y += 260 * k;
+          camera.position.copy(introFrom);
+          camera.lookAt(tmp2.copy(e.pos));
+          introHold = 0;
+          introDur = 3.1;
+        }
         introQFrom.copy(camera.quaternion);
       }
       ctx.post.setExposure(1 + atmos.night * 1.5);
@@ -1706,9 +1794,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       // Phases.
       let allowInput = false;
       if (phase === 'intro') {
-        if (phaseT > 3.2) {
+        if (phaseT > introDur + 0.1) {
           phase = 'play';
           phaseT = 0;
+          if (battleNotice) {
+            battleNotice = false;
+            showBattleNotice();
+          }
           hud.setCinematic(false);
         }
       } else if (phase === 'play') {
@@ -1790,6 +1882,16 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         sendMove(now);
         flushCasualties(now);
       }
+      // The sim view's position of the controlled unit: count its changes per local second of driving (tools).
+      {
+        const uv = unitView();
+        const key = uv ? `${uv.x.toFixed(5)},${uv.y.toFixed(5)}` : '';
+        const cb = cadenceBucket();
+        if (key !== cadViewKey) {
+          cadViewKey = key;
+          if (cb) cb.views++;
+        }
+      }
       if (now - lastForcesWall > 2000 && P && phase !== 'debrief') {
         lastForcesWall = now;
         forces.refresh(view, P, fr.simAlpha, false);
@@ -1835,7 +1937,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         if (phase === 'intro') {
           introTo.copy(camera.position);
           introQTo.copy(camera.quaternion);
-          const k = easeInOutCubic(Math.min(1, phaseT / 3.1));
+          const k = easeInOutCubic(Math.max(0, Math.min(1, (phaseT - introHold) / (introDur - introHold))));
           camera.position.copy(introFrom).lerp(introTo, k);
           camera.quaternion.copy(introQFrom).slerp(introQTo, k);
         }
@@ -1846,6 +1948,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (Math.abs(fd - fog.density) > fogBase * 0.02) applyAtmosphere(atmos, fd);
       applyShake(realDt);
       camera.updateMatrixWorld();
+      // The far crowd (soldiers handed over by a ground battle): scaled for this view, woken near the vehicle.
+      world.updateCrowd(camera.position, P && P.alive ? P.pos : null, realDt);
       sky?.update(camera, fr.time);
       water?.update(camera, fr.time);
       fx.listener.copy(camera.position);
@@ -1878,6 +1982,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           kind: 'force', tone, color: colorCss(a.owner), owner: a.owner,
         });
       }
+      // The ground battle the player took control from, named where its line is (with how far it is).
+      if (battleFocus) {
+        const bp = frame.sceneOf(battleFocus.lat, battleFocus.lon, { x: 0, z: 0 });
+        const f = battleFocus;
+        labels.push({
+          x: bp.x, y: ground.surfaceAt(bp.x, bp.z) + 60, z: bp.z, text: t('command.label.battle', { a: nationName(f.a), b: nationName(f.b) }),
+          sub: t('command.label.battleSub', { n: formatNumber(world.soldiersNear(bp.x, bp.z, 6000)) }), kind: 'force', tone: 'hostile', color: colorCss(f.a === HUMAN_ID ? f.b : f.a), owner: f.a,
+        });
+      }
       overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);
       if (tacmap?.isOpen && now - lastMapWall > 500 && P) {
         lastMapWall = now;
@@ -1901,6 +2014,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           vehiclesLost, moves: view.command?.moves ?? null, rebases: rebaseN, towns: civil.stats.towns, labels: civil.labels.length, civil: civil.stats,
           notice: overlay.noticeText, radio: overlay.radioText, info: overlay.infoText, dialog: overlay.dialogOpen, offX: frame.offX, offZ: frame.offZ,
           kills: world.stats.kills, killsBy: Object.fromEntries(killsBy), unitHitN, structHitN,
+          soldiers: world.soldiersByNation(), handoff: forces.handoff ? Object.fromEntries(forces.handoff.counts) : null,
+          alertRows: overlay.alertRows,
         };
       }
     },

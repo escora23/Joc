@@ -257,6 +257,8 @@ export class Unit implements SimUnit {
   eta = -1;
   /** Aircraft: on the ground rearming until this tick. */
   readyTick = 0;
+  /** Aircraft released from command mode: holding over the spot until this tick (fuel), then home; 0 = not holding. */
+  holdUntil = 0;
   /** Station of a patrol, CAP, blockade, bombardment or drone support (continuous tile coords). */
   stationX = 0;
   stationY = 0;

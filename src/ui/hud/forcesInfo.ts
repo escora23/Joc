@@ -10,7 +10,7 @@ import { unitLabel } from './news';
 import { describeXY, frontPlace } from '../places';
 import {
   ARMOR_RAIL_KMH, BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
-  DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HUMAN_ID,
+  DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HOLD_ORBIT_KM, HUMAN_ID,
   PORT_TRADE_GOLD_PER_HOUR, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, RAIL_GOLD_PER_HOUR, REARM_TICKS, STRUCTURE_DEFS,
   STRUCTURE_LEVELS, TILE_KM, UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, structureLevel, upgradeCost, upgradeTicks,
 } from '../../shared/constants';
@@ -69,6 +69,11 @@ export const MODE_IDS: Record<number, string> = {
   [UnitMode.Escort]: 'escort', [UnitMode.Strike]: 'strike', [UnitMode.Support]: 'support', [UnitMode.Blockade]: 'blockade',
   [UnitMode.Bombard]: 'bombard', [UnitMode.Embarking]: 'embarking', [UnitMode.Engaged]: 'engaged',
 };
+
+/** An aircraft left by the player on a holding orbit over a spot (released from command mode, feedback #18). */
+export function holdingAir(u: UnitView): boolean {
+  return !!UNIT_DEFS[u.type].airborne && u.mode === UnitMode.Patrol && u.order >= 0 && UNIT_ORDER_KINDS[u.order] === 'hold';
+}
 
 /** «1.ª División acorazada» (or the type when unnamed). */
 export function unitName(u: UnitView): string {
@@ -130,6 +135,9 @@ export function stateLine(hs: HudShared, u: UnitView): string {
     case UnitMode.Strike:
       return t('fstate.to', { mode, place: dest(), eta });
     case UnitMode.Patrol:
+      // Released from command mode (owner feedback #18): holding over the spot with the fuel it has left.
+      if (holdingAir(u)) return t('fstate.holding', { place: dest(), eta: etaText(hs, u.etaTicks, false) });
+      return t('fstate.over', { mode, place: dest() });
     case UnitMode.Support:
     case UnitMode.Blockade:
     case UnitMode.Bombard:
@@ -200,6 +208,7 @@ export function effectLine(hs: HudShared, u: UnitView): string {
       if (u.mode === UnitMode.Moving || u.mode === UnitMode.Rail) return t('effect.division.moving');
       return t('effect.division.idle', { r: Math.round(DIVISION_ATTACH_TILES * TILE_KM) });
     case UnitType.FighterSquadron:
+      if (u.mode === UnitMode.Patrol && holdingAir(u)) return t('effect.fighter.hold', { r: HOLD_ORBIT_KM, km: Math.round(CAP_RADIUS_TILES * TILE_KM), eta: etaText(hs, u.etaTicks, true) });
       if (u.mode === UnitMode.Patrol) return t('effect.fighter.cap', { km: Math.round(CAP_RADIUS_TILES * TILE_KM), place: place(), p: Math.round(CAP_HIT_AIRCRAFT * 100) });
       if (u.mode === UnitMode.Intercept) return t('effect.fighter.intercept');
       if (u.mode === UnitMode.Escort) return t('effect.fighter.escort');

@@ -4,7 +4,8 @@
 //   top-left     unit name, place («cerca de Zaragoza (España)»), land status («Territorio propio · en paz»,
 //                «Francia · en paz · INCURSIÓN», «Alemania · en guerra») and the clock chip («TÁCTICO 1:1»,
 //                «VIAJE ×300 · 1 s = 5 min», «VIAJE ×300 (limitado por el terreno)») with its explanation;
-//   top-centre   the strategic alert strip (warning, danger and critical alerts) with «Esc: volver al mapa»;
+//   top-right    the strategic alert strip (warning, danger and critical alerts) under the exit button, clear of the
+//                compass tape: one row per alert (a repeat refreshes its row with ×n), rows fade out after 12 s;
 //   centre       one-line notices (why time dropped to 1:1, a border ahead) and the decision dialogs (crossing a
 //                border, firing first on a nation at peace, leaving command mode);
 //   bottom       formation pips and integrity, the controls hint (H toggles it);
@@ -53,13 +54,15 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
   background: rgba(6,10,16,0.94); border: 1px solid rgba(132,196,255,0.25); border-radius: 3px; z-index: 5; }
 .fu-cmdx-info .c:hover .fu-cmdx-tip { display: block; }
 .fu-cmdx-info .cw { position: relative; display: inline-block; }
-.fu-cmdx-alerts { position: absolute; top: 0.8rem; left: 50%; transform: translateX(-50%); width: min(40rem, 50vw); display: flex; flex-direction: column; gap: 0.3rem; align-items: stretch; }
+.fu-cmdx-alerts { position: absolute; top: 3.6rem; right: 1rem; width: min(27rem, 36vw); display: flex; flex-direction: column; gap: 0.3rem; align-items: stretch; }
 .fu-cmdx-alerts .a { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.4rem 0.7rem; background: rgba(8,12,18,0.82);
   border-left: 3px solid #ffb53d; font: 600 0.82rem/1.3 var(--fu-font, sans-serif); animation: fu-cmdx-in 0.3s ease both; transition: opacity 0.6s; }
 .fu-cmdx-alerts .a.danger { border-color: #ff6a4a; } .fu-cmdx-alerts .a.critical { border-color: #ff2a2a; background: rgba(40,6,6,0.85); }
 .fu-cmdx-alerts .a b { font: 700 0.8rem/1.3 var(--fu-font-cond, sans-serif); letter-spacing: 0.05em; text-transform: uppercase; flex: none; }
 .fu-cmdx-alerts .a span { color: var(--fu-text-2, #b3c4d6); }
-.fu-cmdx-alerts .back { align-self: center; font: 700 0.64rem/1 var(--fu-font-cond, sans-serif); letter-spacing: 0.24em; color: var(--fu-text-dim, #7d91a8); text-transform: uppercase; }
+.fu-cmdx-alerts .a { transition: opacity 0.8s ease; flex-wrap: wrap; row-gap: 0.1rem; }
+.fu-cmdx-alerts .a i { font: 700 0.72rem/1.3 var(--fu-font-cond, sans-serif); font-style: normal; color: #ffd58a; margin-left: auto; flex: none; }
+.fu-cmdx-alerts .back { align-self: flex-end; font: 700 0.64rem/1 var(--fu-font-cond, sans-serif); letter-spacing: 0.24em; color: var(--fu-text-dim, #7d91a8); text-transform: uppercase; }
 .fu-cmdx-notice { position: absolute; top: 27%; left: 50%; transform: translateX(-50%); padding: 0.5rem 1rem; text-align: center;
   font: 700 0.92rem/1.3 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #ffe0a0;
   background: rgba(10,8,4,0.7); border: 1px solid rgba(255,181,61,0.35); border-radius: 3px; opacity: 0; transition: opacity 0.4s; max-width: 46rem; }
@@ -190,7 +193,7 @@ export class CommandOverlay {
   private time = 0;
   private lastInfo = '';
   private lastForm = '';
-  private alertList: { el: HTMLElement; t: number }[] = [];
+  private alertList: { el: HTMLElement; t: number; key: string; n: number }[] = [];
   private dpr = 1;
   private w = 1;
   private h = 1;
@@ -284,16 +287,39 @@ export class CommandOverlay {
     return this.notice.classList.contains('show') ? this.notice.textContent ?? '' : '';
   }
 
+  /**
+   * A strategic alert on the strip under the compass. The same alert again (same title: the strategic feed coalesces it
+   * as «ahora ×n») refreshes its row with a counter instead of adding another; at most 3 rows, each fading out after
+   * ALERT_S seconds.
+   */
   pushAlert(severity: string, title: string, body: string): void {
-    const e = el('div', `a ${severity}`, `<b>${esc(title)}</b><span>${esc(body)}</span>`);
-    this.alerts.prepend(e);
-    this.alertList.unshift({ el: e, t: this.time });
-    while (this.alertList.length > 3) this.alertList.pop()!.el.remove();
+    const key = `${severity}|${title}`;
+    const old = this.alertList.find((a) => a.key === key);
+    if (old) {
+      old.n++;
+      old.t = this.time;
+      old.el.className = `a ${severity}`;
+      old.el.style.opacity = '';
+      old.el.innerHTML = `<b>${esc(title)}</b><span>${esc(body)}</span><i>×${old.n}</i>`;
+      this.alerts.prepend(old.el);
+      this.alertList.splice(this.alertList.indexOf(old), 1);
+      this.alertList.unshift(old);
+    } else {
+      const e = el('div', `a ${severity}`, `<b>${esc(title)}</b><span>${esc(body)}</span>`);
+      this.alerts.prepend(e);
+      this.alertList.unshift({ el: e, t: this.time, key, n: 1 });
+      while (this.alertList.length > 3) this.alertList.pop()!.el.remove();
+    }
     let back = this.alerts.querySelector('.back') as HTMLElement | null;
     if (!back) {
       back = el('div', 'back', t('command.alerts.back'));
     }
     this.alerts.appendChild(back);
+  }
+
+  /** Rows on the alert strip (tools). */
+  get alertRows(): { text: string; n: number }[] {
+    return this.alertList.map((a) => ({ text: a.el.textContent ?? '', n: a.n }));
   }
 
   /** A modal choice. Resolves with the button index (keys: Enter = first, Escape = last). */
@@ -405,7 +431,16 @@ export class CommandOverlay {
     }
     this.helpT += dt;
     this.help.style.opacity = this.helpOn && this.helpT < 25 ? '1' : '0';
-    for (const a of this.alertList) if (this.time - a.t > 14) a.el.style.opacity = '0';
+    // Rows fade out after ALERT_S and leave the strip; the «Esc» hint goes with the last one.
+    for (let i = this.alertList.length - 1; i >= 0; i--) {
+      const a = this.alertList[i];
+      const age = this.time - a.t;
+      if (age > ALERT_S + 1) {
+        a.el.remove();
+        this.alertList.splice(i, 1);
+      } else if (age > ALERT_S) a.el.style.opacity = '0';
+    }
+    if (this.alertList.length === 0) this.alerts.querySelector('.back')?.remove();
     // World labels.
     const g = this.g, W = this.w, H = this.h;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -491,6 +526,9 @@ export class CommandOverlay {
     }
   }
 }
+
+/** Seconds an alert row stays on the command HUD's strip. */
+const ALERT_S = 12;
 
 function rankOf(l: CivilLabel): number {
   return l.kind === 'border' ? -2 : l.kind === 'force' ? -1 : l.kind === 'capital' ? 0 : l.kind === 'city' ? 1 : l.kind === 'base' ? 2 : 3;

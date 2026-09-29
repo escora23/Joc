@@ -90,6 +90,10 @@
 .fu-bdiv::after { content: ''; position: absolute; left: 50%; top: 100%; width: 1px; height: 0.4rem; background: var(--c); }
 .fu-bdiv.is-edge { background: rgba(6, 11, 18, 0.86); color: #cfd8e3; }
 .fu-bdiv.is-edge::after { display: none; }
+/* Clickable (W5, owner feedback #21): a click selects the division, T then takes command of it in this battle. */
+.fu-bdiv { pointer-events: auto; cursor: pointer; }
+.fu-bdiv:hover { background: rgba(20, 32, 46, 0.92); }
+.fu-bdiv.is-sel { outline: 1px solid #ffd58a; }
 
 /* ---------------------------------------------------------------------------------------------
    Offensive management (owner item #23): our offensive's line and intensity in the panel row, and the dialog

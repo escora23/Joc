@@ -26,14 +26,12 @@ import { deriveLocalForces, type LocalForces, type LocalRelation } from '../shar
 import { StructureType, UnitMode, UnitType, type CommandKind } from '../shared/types';
 import type { LocalFrame } from './frame';
 import type { Ground } from './stream';
-import { ENT_DEFS, type Ent, type EntKind, type EntSource, type World } from './world';
+import { ENT_DEFS, WAKE_M, type Ent, type EntKind, type EntSource, type World } from './world';
 
 /** Radius of the derivation per vehicle (km): the whole area that can reach you. */
 export const FORCES_RADIUS_KM: Record<CommandKind, number> = { tank: 30, jet: 150, ship: 40 };
 export const INFANTRY_CAP = 40;
 export const REAR_CAP = 12;
-/** Soldiers per side at most when the ground battle view hands its infantry over (the scene draws 2 × 160 per team, split at random between two soldier models). */
-export const HANDOFF_BUDGET = 240;
 const DIVISION_KM = 30;
 const SHIP_KM = 40;
 const POST_KM = 10;
@@ -74,8 +72,12 @@ export class Forces {
   private readonly divPos = new Map<number, { x: number; z: number; yaw: number; moving: boolean }>();
   kind: CommandKind = 'tank';
   controlledId = 0;
-  /** Soldiers per side the ground battle was showing when control was taken from it (§9.6 hand-off). */
-  handoff: Map<number, number> | null = null;
+  /**
+   * What the ground battle was showing when control was taken from it (§9.6 hand-off): its soldiers one for one
+   * ([lat, lon, owner, …]) and the count per side. They are all spawned where they stood (the far ones in the cheap
+   * crowd layer of world.ts), so the entry keeps the entities the player was watching.
+   */
+  handoff: { counts: Map<number, number>; soldiers: number[]; spawned: boolean } | null = null;
 
   constructor(private readonly world: World, private readonly frame: LocalFrame, private readonly ground: Ground) {}
 
@@ -89,12 +91,20 @@ export class Forces {
     this.kind = kind;
     this.controlledId = controlledId;
     this.handoff = null;
+    this.battleFacing.clear();
   }
 
-  /** Scale of the battle view's infantry into the scene's budget (HANDOFF_BUDGET soldiers per side at most). */
-  handoffScale(): number {
-    if (!this.handoff || this.handoff.size === 0) return 1;
-    return Math.min(1, HANDOFF_BUDGET / Math.max(1, ...this.handoff.values()));
+  /** Take over a battle view's hand-off (before the first refresh). */
+  setHandoff(h: { infantry: { owner: number; count: number }[]; soldiers?: number[] } | undefined): void {
+    if (!h) {
+      this.handoff = null;
+      return;
+    }
+    const counts = new Map<number, number>();
+    const soldiers = h.soldiers ?? [];
+    if (soldiers.length) for (let i = 2; i < soldiers.length; i += 3) counts.set(soldiers[i], (counts.get(soldiers[i]) ?? 0) + 1);
+    else for (const s of h.infantry) counts.set(s.owner, s.count);
+    this.handoff = { counts, soldiers, spawned: false };
   }
 
   /** Relation of a nation to the human, as the sim sees it now. */
@@ -122,8 +132,11 @@ export class Forces {
   // ---------------------------------------------------------------------------------------------
   // Refresh (every 2 real s)
   // ---------------------------------------------------------------------------------------------
+  private lastView: GameView | null = null;
+
   refresh(view: GameView, player: Ent, alpha: number, initial: boolean): LocalForces {
     this.refreshN++;
+    this.lastView = view;
     const f = this.frame;
     const tp = f.tileOfScene(player.pos.x, player.pos.z, { x: 0, y: 0 });
     const lf = deriveLocalForces(view, tp.x, tp.y, FORCES_RADIUS_KM[this.kind], HUMAN_ID, { alpha });
@@ -158,27 +171,33 @@ export class Forces {
       };
       logSides.push(entry);
       if (this.kind !== 'tank') continue;
+      // The battle's own sides are handled from its hand-off below (all of their soldiers, where they stood).
+      if (this.handoff?.counts.has(side.owner)) {
+        entry.shownInfantry = this.handoff.counts.get(side.owner)!;
+        if (hostile) enemyShown += entry.shownInfantry;
+        continue;
+      }
       if (hostile || friendly) {
         // Front and offensive pools stand along the local contact line (when it is within 6 km).
-        // Entered from the ground battle view: its whole window (30 km) is the scene it showed, so its soldiers are here.
-        const reach = this.handoff ? 30 : 6;
-        if (front && frontKm < reach && (side.owner === front.a || side.owner === front.b || friendly)) {
+        if (front && frontKm < 6 && (side.owner === front.a || side.owner === front.b || friendly)) {
           const pool = side.pools.front + side.pools.offensive;
-          // From the battle view: its count for this side, scaled into the scene's soldier budget with the sides'
-          // balance kept (a 1,600 v 500 battle becomes 240 v 75 here).
-          const ho = this.handoff?.get(side.owner);
-          const cap = ho !== undefined ? Math.round(ho * this.handoffScale()) : (hostile ? INFANTRY_CAP : INFANTRY_CAP / 2);
-          const shown = Math.min(cap, Math.round(pool));
+          const shown = Math.min(hostile ? INFANTRY_CAP : INFANTRY_CAP / 2, Math.round(pool));
           entry.shownInfantry = shown;
           if (hostile) enemyShown += shown;
           this.reconcileInfantry(want(`front:${side.owner}`), shown, side.owner, rel, lf, player, 'front', initial);
         }
-        if (hostile && (!front || frontKm >= (this.handoff ? 30 : 6))) {
+        if (hostile && (!front || frontKm >= 6)) {
           const shown = Math.min(REAR_CAP, Math.round(side.pools.rear));
           entry.shownInfantry += shown;
           this.reconcileInfantry(want(`rear:${side.owner}`), shown, side.owner, rel, lf, player, 'rear', initial);
         }
       }
+    }
+    // The ground battle's soldiers (§9.6 hand-off): every one where it stood; the fallen are replaced from behind their
+    // line, as the battle view recycles its casualties into reinforcements.
+    if (this.kind === 'tank' && this.handoff) {
+      if (!this.handoff.spawned) this.spawnHandoff(view, lf, player, want);
+      for (const [owner, count] of this.handoff.counts) this.reconcileHandoff(want(`battle:${owner}`), count, owner, lf, player);
     }
     // Posts (any nation; neutral when at peace, their soldiers stand guard).
     if (this.kind === 'tank') {
@@ -307,6 +326,80 @@ export class Forces {
       this.world.despawn(e);
       g.ents.splice(g.ents.indexOf(e), 1);
     }
+  }
+
+  /** Direction from an owner's side of the battle toward the other side (scene, unit), from the soldiers' centroids. */
+  private readonly battleFacing = new Map<number, { x: number; z: number }>();
+
+  /** Spawn the battle view's soldiers one for one where they stood (far ones in the crowd). */
+  private spawnHandoff(view: GameView, lf: LocalForces, player: Ent, want: (key: string) => Group): void {
+    const h = this.handoff!;
+    h.spawned = true;
+    const L = h.soldiers;
+    const cen = new Map<number, { x: number; z: number; n: number }>();
+    const pos: number[] = [];
+    for (let i = 0; i + 2 < L.length; i += 3) {
+      this.frame.sceneOf(L[i], L[i + 1], P2);
+      pos.push(P2.x, P2.z);
+      const c = cen.get(L[i + 2]) ?? { x: 0, z: 0, n: 0 };
+      c.x += P2.x;
+      c.z += P2.z;
+      c.n++;
+      cen.set(L[i + 2], c);
+    }
+    // Each side faces the other side's centroid.
+    for (const [o, c] of cen) {
+      let ox = 0, oz = 0, on = 0;
+      for (const [o2, c2] of cen) if (o2 !== o) (ox += c2.x, oz += c2.z, on += c2.n);
+      const dx = on ? ox / on - c.x / c.n : 0, dz = on ? oz / on - c.z / c.n : -1;
+      const dl = Math.hypot(dx, dz) || 1;
+      this.battleFacing.set(o, { x: dx / dl, z: dz / dl });
+    }
+    const perOwner = new Map<number, number>();
+    for (let i = 0, k = 0; i + 2 < L.length; i += 3, k += 2) {
+      const owner = L[i + 2];
+      const x = pos[k], z = pos[k + 1];
+      const rel = this.relationOf(view, owner);
+      const n = perOwner.get(owner) ?? 0;
+      perOwner.set(owner, n + 1);
+      const f = this.battleFacing.get(owner)!;
+      const far = Math.hypot(x - player.pos.x, z - player.pos.z) > WAKE_M;
+      const e = this.mkSoldier(n % 8 === 0 ? 'at' : 'soldier', this.team(rel), x, z, Math.atan2(-f.x, -f.z), owner, rel, far);
+      e.order = 'hold';
+      e.goal.set(x, 0, z);
+      want(`battle:${owner}`).ents.push(e);
+    }
+    void lf;
+  }
+
+  /** The battle's side keeps its count: the fallen are replaced by soldiers coming up from behind their line. */
+  private reconcileHandoff(g: Group, count: number, owner: number, lf: LocalForces, player: Ent): void {
+    const live = this.alive(g);
+    if (live.length >= count || live.length === 0) return;
+    const view = this.lastView;
+    const rel = view ? this.relationOf(view, owner) : 'war';
+    const f = this.battleFacing.get(owner) ?? { x: 0, z: -1 };
+    const rng = this.world.rng;
+    // A few per refresh (every 2 s), as the battle view recycles its casualties.
+    for (let k = 0, missing = Math.min(24, count - live.length); k < missing; k++) {
+      const m = live[Math.floor(rng.next() * live.length)];
+      const back = 350 + rng.next() * 300, side = (rng.next() - 0.5) * 120;
+      const x = m.pos.x - f.x * back - f.z * side, z = m.pos.z - f.z * back + f.x * side;
+      const far = Math.hypot(x - player.pos.x, z - player.pos.z) > WAKE_M;
+      const e = this.mkSoldier(k % 8 === 0 ? 'at' : 'soldier', this.team(rel), x, z, Math.atan2(-f.x, -f.z), owner, rel, far);
+      e.order = 'hold';
+      e.goal.set(m.pos.x + (rng.next() - 0.5) * 30, 0, m.pos.z + (rng.next() - 0.5) * 30);
+      g.ents.push(e);
+    }
+    void lf;
+  }
+
+  private mkSoldier(kind: EntKind, team: 0 | 1, x: number, z: number, yaw: number, owner: number, rel: LocalRelation, dormant: boolean): Ent {
+    const e = this.world.spawn(kind, team, x, z, yaw, undefined, dormant);
+    e.nation = owner;
+    e.neutral = team === 1 && !this.hostile(rel, owner);
+    e.src = { kind: 'pool', id: 0, owner, share: 0 };
+    return e;
   }
 
   /**
@@ -685,6 +778,14 @@ export class Forces {
       out.push({ key: g.key, unitId, owner: lead.nation, pos: lead.pos, hostile: lead.team === 1 && !lead.neutral, team: lead.team, qrf });
     }
     return out;
+  }
+
+  /** Distance (m) from a point to the nearest living vehicle of an incursion's quick-reaction force in the scene. */
+  qrfDistance(incId: number, from: THREE.Vector3): number {
+    const g = this.groups.get(`qrf:${incId}`);
+    let best = Infinity;
+    for (const e of g?.ents ?? []) if (e.alive && ENT_DEFS[e.kind].vehicle) best = Math.min(best, e.pos.distanceTo(from));
+    return best;
   }
 
   /** Where the player's formation should stand (slot offsets in the leader's frame: x right, z back). */

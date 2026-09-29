@@ -470,6 +470,34 @@ registerShot('command-jet', 'command', 'Fighter over a front at war: enemy aircr
   await freezeAndWait(s, I);
 });
 
+/**
+ * Criterion 11 (enemy aircraft only from real sources): a fighter over a front at war with both sources staged — a
+ * fighter squadron of the enemy docked at its airbase ~95 km away (it scrambles), and another of its squadrons flying a
+ * patrol ~40 km from the fighter (it covers the place). Nothing else may put an enemy aircraft in the sky.
+ */
+registerShot('command-jet-sources', 'command', 'Fighter at war: enemy jets only from a real airborne patrol and a scramble from a real airbase within 150 km', async (s) => {
+  let base = -1;
+  const foe = await stage(s, {
+    unit: UnitType.FighterSquadron, lat: 42.4, lon: -0.6, hour: 17, ownRadius: 3, neighbour: { lat: 43.2, lon: -0.5, radius: 4 }, war: 160,
+    before: (st, f) => {
+      if (!f) return;
+      base = latLonToTile(43.25, -0.4);
+      st.ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.Airbase, owner: f, tile: base, level: 2 });
+    },
+  });
+  const { ctx } = s;
+  // The two sources, placed after the war ran so that the enemy's own AI has not flown them elsewhere yet.
+  if (foe && base >= 0) {
+    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: foe, tile: base, targetTile: -1 });
+    ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: foe, tile: base, targetTile: latLonToTile(42.7, -0.4) });
+    await s.waitFrames(20);
+  }
+  if (live(s)) return;
+  const I = internalsOrThrow();
+  await settle(s, I, 4);
+  await freezeAndWait(s, I);
+});
+
 registerShot('command-ship', 'command', 'Warship at war: enemy ships only where the sim has them', async (s) => {
   await stage(s, {
     unit: UnitType.Warship, lat: 39.3, lon: 0.05, hour: 17.3, ownRadius: 8, neighbour: { lat: 39.6, lon: 2.9, radius: 3 }, war: 100,

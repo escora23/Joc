@@ -1512,7 +1512,16 @@ division to 1 tank per 25 % integrity + 2 IFVs. `src/command/forces.ts` (W5) cal
 vehicle, spawns visible entities from the pools up to its budgets and refills them as they die. Taking control of a
 division from a visible battle keeps the entities you were watching: the battle layer hands its spawned entity list
 to command mode (`CommandEnterParams.battleHandoff`, §14.8), so the counts per side at the anchor agree within 10 %
-between the two views.
+between the two views. As built (W5 fix pass 1): the hand-off carries every living soldier the battle draws, one for
+one, with its position (`soldiers: [lat, lon, owner, …]`) and the battle camera's pose; command mode spawns all of
+them where they stood. Soldiers within ~1 km of the vehicle are full entities with the AI; the rest stand in a cheap
+instanced crowd (world.ts `updateCrowd`: scaled up with distance and tinted toward their nation's colour, as the battle
+view draws its masses), and wake up as the vehicle approaches (they go back to the crowd beyond 1.4 km). The fallen are
+replaced from behind their line, as the battle view recycles casualties. The first view of command mode is the battle
+view itself (same place, same look), held for a moment before gliding down to the vehicle, which faces the battle; a
+world label «Combate · A contra B» names the line with its soldier count, and a notice says how far and in which
+direction it is. In the battle view, a division's marker is clickable (selects it) and T with nothing selected takes
+command of your division nearest the battle's line.
 
 | Sim source | Condition | Local representation | Visible cap |
 |---|---|---|---|

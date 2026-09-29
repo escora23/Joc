@@ -109,6 +109,13 @@ export interface Ent {
   src: EntSource | null;
   /** Part of the player's own formation (the division's tanks and IFVs, the squadron's jets). */
   formation: boolean;
+  /**
+   * A far soldier drawn by the cheap crowd layer (W5 hand-off, §9.6): no AI, no active instance slot; it stands where
+   * the battle had it, can be hit, and wakes up (full AI) when the player comes within ~1 km.
+   */
+  dormant: boolean;
+  /** Crowd instance slot (dormant soldiers). */
+  cinst: number;
   /** Behaviour: 'front' fight toward `goal`, 'hold' stay near `goal`, 'goto' drive to `goal`, 'follow' keep `slot` off
    *  the formation leader, 'escort' shadow the player without firing, 'patrol' circle `goal` (aircraft, ships). */
   order: EntOrder;
@@ -182,6 +189,16 @@ export interface WorldHooks {
   onPlayerKilled(): void;
 }
 
+/** Active soldier instances per team and model; the rest of a big battle stands in the crowd. */
+const SOLDIER_SLOTS = 160;
+/** Crowd capacity per side (a battle view shows a few thousand soldiers). */
+const CROWD_CAP = 6000;
+/** Crowd soldiers within WAKE_M of the player wake up (AI); active ones beyond SLEEP_M go back to the crowd. */
+export const WAKE_M = 1000;
+export const SLEEP_M = 1400;
+/** Far soldiers grow up to this factor with distance (≥ 1 px at the view distance, like the battle view's masses). */
+const CROWD_MAX_SCALE = 7;
+
 const TMP = new THREE.Vector3();
 const TMP2 = new THREE.Vector3();
 const TMP3 = new THREE.Vector3();
@@ -225,6 +242,10 @@ export class World {
   private readonly templates = new Map<string, THREE.Group>();
   private readonly soldierMeshes: THREE.InstancedMesh[] = [];
   private readonly soldierSlots: (Ent | null)[][] = [[], [], [], []];
+  /** The far crowd (dormant soldiers), one instanced mesh per side. */
+  private readonly crowdMeshes: THREE.InstancedMesh[] = [];
+  private readonly crowdSlots: (Ent | null)[][] = [[], []];
+  private readonly crowdFree: number[][] = [[], []];
   private readonly missileGeo: THREE.BufferGeometry;
   private readonly bombGeo: THREE.BufferGeometry;
   private readonly ordPool: THREE.Mesh[] = [];
@@ -268,6 +289,18 @@ export class World {
         this.soldierMeshes.push(im);
         this.group.add(im);
       }
+    }
+    for (let t = 0; t < 2; t++) {
+      const im = new THREE.InstancedMesh(sg[0], mats.soldier, CROWD_CAP);
+      im.count = 0;
+      im.castShadow = false;
+      im.receiveShadow = false;
+      im.frustumCulled = false;
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      im.name = `crowd-${t}`;
+      im.setColorAt(0, new THREE.Color(1, 1, 1));
+      this.crowdMeshes.push(im);
+      this.group.add(im);
     }
     this.missileGeo = buildMissileGeometry(1);
     this.bombGeo = buildBombGeometry();
@@ -365,7 +398,7 @@ export class World {
   // ---------------------------------------------------------------------------------------------
   // Spawning
   // ---------------------------------------------------------------------------------------------
-  spawn(kind: EntKind, team: Team, x: number, z: number, yaw: number, y?: number): Ent {
+  spawn(kind: EntKind, team: Team, x: number, z: number, yaw: number, y?: number, dormant = false): Ent {
     const d = ENT_DEFS[kind];
     const e: Ent = {
       id: this.nextId++, kind, team, alive: true, player: false, hp: d.hp, maxHp: d.hp,
@@ -377,6 +410,7 @@ export class World {
       value: d.troops, strategicId: -1, group: -1, burnT: 0, deadT: 0, flares: 30, missiles: 4, bank: 0, throttle: 0.7,
       trackAcc: 0, lastHitBy: -1, tossV: null, tossSpin: 0, threatT: 0,
       nation: 0, neutral: false, src: null, formation: false, order: 'front', goal: new THREE.Vector3(x, 0, z), slot: new THREE.Vector3(),
+      dormant: false, cinst: -1,
     };
     if (kind === 'jet') {
       e.pos.y = y ?? this.ground.surfaceAt(x, z) + 800;
@@ -390,24 +424,13 @@ export class World {
       e.pos.y = this.ground.heightAt(x, z);
     }
     if (kind === 'soldier' || kind === 'at') {
-      const slot = team * 2 + e.variant;
-      const list = this.soldierSlots[slot];
-      let idx = list.indexOf(null);
-      if (idx < 0) {
-        idx = list.length;
-        list.push(null);
+      // Near soldiers get a full instance slot (and the AI); far ones, or any beyond the 160 slots, join the crowd.
+      if (dormant || !this.takeSoldierSlot(e)) {
+        if (!this.takeCrowdSlot(e)) {
+          e.alive = false;
+          return e;
+        }
       }
-      if (idx >= 160) {
-        e.alive = false;
-        return e;
-      }
-      list[idx] = e;
-      e.inst = idx;
-      const im = this.soldierMeshes[slot];
-      const v = 0.85 + this.rng.next() * 0.25;
-      const tc = team === 0 ? this.friendlyTint : this.enemyTint;
-      im.setColorAt(idx, this.tmpColor.copy(tc).multiplyScalar(v));
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
     } else {
       e.rig = this.makeRig(kind, team);
       e.rig.root.position.copy(e.pos);
@@ -418,6 +441,165 @@ export class World {
     return e;
   }
 
+  /** An active soldier instance slot (≤ SOLDIER_SLOTS per team and model). */
+  private takeSoldierSlot(e: Ent): boolean {
+    const slot = e.team * 2 + e.variant;
+    const list = this.soldierSlots[slot];
+    let idx = list.indexOf(null);
+    if (idx < 0) {
+      idx = list.length;
+      if (idx >= SOLDIER_SLOTS) return false;
+      list.push(null);
+    }
+    list[idx] = e;
+    e.inst = idx;
+    e.dormant = false;
+    const im = this.soldierMeshes[slot];
+    const v = 0.85 + ((e.seed * 997) % 1) * 0.25;
+    const tc = e.team === 0 ? this.friendlyTint : this.enemyTint;
+    im.setColorAt(idx, this.tmpColor.copy(tc).multiplyScalar(v));
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    return true;
+  }
+
+  private freeSoldierSlot(e: Ent): void {
+    if (e.inst < 0) return;
+    const list = this.soldierSlots[e.team * 2 + e.variant];
+    if (list[e.inst] === e) list[e.inst] = null;
+    while (list.length && list[list.length - 1] === null) list.pop();
+    e.inst = -1;
+  }
+
+  private takeCrowdSlot(e: Ent): boolean {
+    const list = this.crowdSlots[e.team];
+    let idx = this.crowdFree[e.team].pop() ?? -1;
+    if (idx < 0) {
+      idx = list.length;
+      if (idx >= CROWD_CAP) return false;
+      list.push(null);
+    }
+    list[idx] = e;
+    e.cinst = idx;
+    e.dormant = true;
+    e.speed = 0;
+    e.target = null;
+    e.vel.set(0, 0, 0);
+    this.crowdDirty = true;
+    return true;
+  }
+
+  private freeCrowdSlot(e: Ent): void {
+    if (e.cinst < 0) return;
+    const list = this.crowdSlots[e.team];
+    if (list[e.cinst] === e) {
+      list[e.cinst] = null;
+      this.crowdFree[e.team].push(e.cinst);
+    }
+    e.cinst = -1;
+    this.crowdDirty = true;
+  }
+
+  /** Put a soldier to sleep in the crowd (far away) or wake it with a full instance and the AI. */
+  setDormant(e: Ent, on: boolean): boolean {
+    if (e.kind !== 'soldier' && e.kind !== 'at') return false;
+    if (on === e.dormant) return true;
+    if (on) {
+      if (!this.takeCrowdSlot(e)) return false;
+      this.freeSoldierSlot(e);
+      return true;
+    }
+    if (!this.takeSoldierSlot(e)) return false;
+    this.freeCrowdSlot(e);
+    e.moveT.copy(e.pos);
+    e.stateT = 0;
+    return true;
+  }
+
+  /** Soldiers alive per nation (active and crowd): what the scene holds, for tools and the HUD. */
+  soldiersByNation(): Record<number, { active: number; crowd: number }> {
+    const out: Record<number, { active: number; crowd: number }> = {};
+    for (const e of this.ents) {
+      if (!e.alive || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
+      const o = (out[e.nation] ??= { active: 0, crowd: 0 });
+      if (e.dormant) o.crowd++;
+      else o.active++;
+    }
+    return out;
+  }
+
+  /** Living soldiers within r of a point (the battle label's count). */
+  soldiersNear(x: number, z: number, r: number): number {
+    let n = 0;
+    for (const e of this.ents) if (e.alive && (e.kind === 'soldier' || e.kind === 'at') && Math.abs(e.pos.x - x) < r && Math.abs(e.pos.z - z) < r && Math.hypot(e.pos.x - x, e.pos.z - z) < r) n++;
+    return n;
+  }
+
+  /** Nation colour for the crowd's far tint (set by the command mode). */
+  nationColor: (owner: number) => number = () => 0x888888;
+  private crowdAcc = 1;
+  private lodAcc = 1;
+  private readonly crowdCam = new THREE.Vector3(1e9, 0, 0);
+  private crowdDirty = true;
+
+  /**
+   * The crowd (§9.6 hand-off): far soldiers drawn in one instanced mesh per side, standing (or lying) where they are,
+   * scaled up with distance so a battle kilometres away still reads as two masses of men (as the battle view shows
+   * them), tinted toward their nation's colour far away. Every second, soldiers within WAKE_M of the player wake up
+   * (full instance, AI) and active ones beyond SLEEP_M go back to the crowd.
+   */
+  updateCrowd(cam: THREE.Vector3, player: THREE.Vector3 | null, realDt: number): void {
+    this.lodAcc += realDt;
+    if (player && this.lodAcc >= 1) {
+      this.lodAcc = 0;
+      const wake: Ent[] = [];
+      for (const e of this.ents) {
+        if (!e.alive || e.formation || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
+        const d = Math.hypot(e.pos.x - player.x, e.pos.z - player.z);
+        if (e.dormant && d < WAKE_M) wake.push(e);
+        else if (!e.dormant && d > SLEEP_M) this.setDormant(e, true);
+      }
+      wake.sort((a, b) => Math.hypot(a.pos.x - player.x, a.pos.z - player.z) - Math.hypot(b.pos.x - player.x, b.pos.z - player.z));
+      for (const e of wake) if (!this.setDormant(e, false)) break;
+    }
+    this.crowdAcc += realDt;
+    const moved = cam.distanceToSquared(this.crowdCam) > 30 * 30;
+    if (!this.crowdDirty && !moved && this.crowdAcc < 0.5) return;
+    if (!this.crowdDirty && !moved && this.crowdAcc < 2) return;
+    this.crowdAcc = 0;
+    this.crowdDirty = false;
+    this.crowdCam.copy(cam);
+    for (let t = 0; t < 2; t++) {
+      const list = this.crowdSlots[t];
+      const im = this.crowdMeshes[t];
+      let last = -1;
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i];
+        if (!e) {
+          im.setMatrixAt(i, this.m4.makeScale(0, 0, 0));
+          continue;
+        }
+        last = i;
+        e.pos.y = this.ground.heightAt(e.pos.x, e.pos.z);
+        const d = cam.distanceTo(e.pos);
+        const s = Math.max(1, Math.min(CROWD_MAX_SCALE, d / 450));
+        const k = e.alive ? 0 : Math.min(1, e.deadT * 3);
+        this.e.set(-k * 1.45, e.yaw, 0, 'YXZ');
+        this.q.setFromEuler(this.e);
+        this.sc.set(s, s, s);
+        im.setMatrixAt(i, this.m4.compose(TMP.set(e.pos.x, e.pos.y + 0.12 * k, e.pos.z), this.q, this.sc));
+        const far = Math.max(0, Math.min(1, (d - 600) / 3400)) * 0.55;
+        const tc = t === 0 ? this.friendlyTint : this.enemyTint;
+        this.tmpColor.copy(tc).lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
+        if (!e.alive) this.tmpColor.multiplyScalar(0.6);
+        im.setColorAt(i, this.tmpColor);
+      }
+      im.count = last + 1;
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    }
+  }
+
+  private readonly tmpColor2 = new THREE.Color();
   private readonly tmpColor = new THREE.Color();
   readonly friendlyTint = new THREE.Color(0.55, 0.6, 0.45);
   readonly enemyTint = new THREE.Color(0.7, 0.62, 0.48);
@@ -435,6 +617,12 @@ export class World {
     this.ents.length = 0;
     for (const s of this.soldierSlots) s.length = 0;
     for (const im of this.soldierMeshes) im.count = 0;
+    for (let t = 0; t < 2; t++) {
+      this.crowdSlots[t].length = 0;
+      this.crowdFree[t].length = 0;
+      this.crowdMeshes[t].count = 0;
+    }
+    this.crowdDirty = true;
     for (const p of this.projs) {
       p.alive = false;
       if (p.mesh) this.releaseMesh(p);
@@ -456,11 +644,8 @@ export class World {
     this.ents.splice(i, 1);
     e.alive = false;
     if (e.rig) this.group.remove(e.rig.root);
-    if (e.inst >= 0) {
-      const list = this.soldierSlots[e.team * 2 + e.variant];
-      if (list[e.inst] === e) list[e.inst] = null;
-      e.inst = -1;
-    }
+    this.freeSoldierSlot(e);
+    this.freeCrowdSlot(e);
     for (const o of this.ents) if (o.target === e) o.target = null;
     for (const p of this.projs) if (p.alive && p.target === e) p.target = null;
   }
@@ -713,6 +898,7 @@ export class World {
     const d = ENT_DEFS[e.kind];
     this.center(e, TMP);
     if (e.kind === 'soldier' || e.kind === 'at') {
+      if (e.dormant) this.crowdDirty = true;
       this.fx.particles.emit(4, TMP.x, TMP.y, TMP.z, 0, 2, 0, 0.6, 0.2, 0.2, 0.1, 0.08, 0.06, 1);
     } else if (d.air) {
       this.fx.explosion(TMP, 2.4, 'air');

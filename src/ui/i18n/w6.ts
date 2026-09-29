@@ -175,6 +175,8 @@ export const esW6: Record<string, string> = {
   'fr.pointer': '{front} · la batalla está a {km} km',
   'fr.pointer.go': 'Ir a la batalla',
   'fr.pointer.tip': 'Lleva la cámara a ras de suelo sobre la línea del frente, mirando de tu lado al enemigo: verás a los soldados, las divisiones y las banderas de cada bando.',
+  'fr.div.tipOwn': 'Tu división en esta batalla. Clic para seleccionarla; T (o «Tomar el mando» en su ficha) te pone al mando de un carro suyo aquí mismo, con los soldados y blindados que estás viendo.',
+  'fr.div.tip': 'Una división enemiga real en esta batalla. Clic para ver su ficha. Si tomas el mando de una división tuya desde aquí, esta estará en el mismo sitio.',
   'tut.offensive.title': 'Cómo se ataca',
   'tut.offensive.text': 'Haz clic en la tierra del enemigo: se abre el diálogo de ofensiva con las tropas, la intensidad y la previsión (relación de fuerzas, km/h, bajas por día). Una sola orden basta: la ofensiva sigue sola. Después la gestionas desde el panel Guerra (G) o la etiqueta del frente: reforzar, cambiar la intensidad, mantener la línea o retirarse. Mayús+clic lanza al instante.',
 };
@@ -348,6 +350,8 @@ export const enW6: Record<string, string> = {
   'fr.pointer': '{front} · the battle is {km} km away',
   'fr.pointer.go': 'Go to the battle',
   'fr.pointer.tip': 'Takes the camera down to the front line, looking from your side toward the enemy: you will see the soldiers, the divisions and each side\'s banner.',
+  'fr.div.tipOwn': 'Your division in this battle. Click to select it; T (or «Take command» on its card) puts you in one of its tanks right here, with the soldiers and armour you are watching.',
+  'fr.div.tip': 'A real enemy division in this battle. Click to see its card. If you take command of one of your divisions from here, this one will be in the same place.',
   'tut.offensive.title': 'How to attack',
   'tut.offensive.text': 'Click the enemy\'s land: the offensive dialog opens with the troops, the intensity and the forecast (force ratio, km/h, casualties per day). One order is enough: the offensive carries on by itself. Then manage it from the War panel (G) or the front badge: reinforce, change intensity, hold the line or retreat. Shift+click launches at once.',
 };

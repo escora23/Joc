@@ -151,7 +151,9 @@ export async function bootstrap(): Promise<void> {
       }
       ctx.cameraRig.setMode('cinematic');
       input.setEnabled(false);
-      await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
+      // From a visible ground battle the view stays on the battle: command mode's first view is this one (§9.6), and
+      // it glides from there down to the unit. Otherwise the camera dives to the unit first.
+      if (!params.battleHandoff?.camera) await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
       await ctx.post.fadeTo(1, isShot ? 1 : 350);
       await ctx.command.enter(params);
       setState('command');

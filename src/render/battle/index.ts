@@ -1222,10 +1222,41 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     },
     handoff() {
       if (!anchor || job || !active) return null;
+      // Every living soldier where it stands (W5, §9.6): local metres (x east, z south) → lat/lon around the anchor.
+      const raw = infantry?.exportAlive(clock) ?? [];
+      const soldiers: number[] = [];
+      const counts = [0, 0];
+      const cosA = Math.max(0.05, Math.cos((anchor.lat * Math.PI) / 180));
+      for (let i = 0; i + 2 < raw.length; i += 3) {
+        const team = raw[i + 2] > 0.5 ? 1 : 0;
+        counts[team]++;
+        soldiers.push(anchor.lat - raw[i + 1] / M_PER_DEG, anchor.lon + raw[i] / (M_PER_DEG * cosA), team === 0 ? anchor.frontA : anchor.frontB);
+      }
+      // The camera and the ground point it looks at (ray against the unit sphere, else the anchor).
+      const cp = ctx.camera.position;
+      const cr = cp.length();
+      const dir = new THREE.Vector3();
+      ctx.camera.getWorldDirection(dir);
+      const b = cp.dot(dir), c = cr * cr - 1;
+      const disc = b * b - c;
+      let lookLat = anchor.lat, lookLon = anchor.lon;
+      if (disc > 0) {
+        const tHit = -b - Math.sqrt(disc);
+        if (tHit > 0) {
+          const hp = cp.clone().addScaledVector(dir, tHit);
+          lookLat = (Math.asin(Math.max(-1, Math.min(1, hp.y / hp.length()))) * 180) / Math.PI;
+          lookLon = (Math.atan2(-hp.z, hp.x) * 180) / Math.PI;
+        }
+      }
+      const camLat = (Math.asin(Math.max(-1, Math.min(1, cp.y / Math.max(1e-9, cr)))) * 180) / Math.PI;
+      const camLon = (Math.atan2(-cp.z, cp.x) * 180) / Math.PI;
+      const altM = (cr - ctx.globe.surfaceRadiusAt(camLat, camLon)) * R_M;
       return {
         lat: anchor.lat, lon: anchor.lon,
-        infantry: [{ owner: anchor.frontA, count: infantry?.deployed(0) ?? 0 }, { owner: anchor.frontB, count: infantry?.deployed(1) ?? 0 }],
+        infantry: [{ owner: anchor.frontA, count: counts[0] }, { owner: anchor.frontB, count: counts[1] }],
         divisions: shownDivs.map((d) => ({ unitId: d.unitId, tanks: d.tanks, ifvs: d.ifvs })),
+        soldiers,
+        camera: { lat: camLat, lon: camLon, altM, lookLat, lookLon },
       };
     },
     pointer() {

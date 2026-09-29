@@ -22,7 +22,7 @@ import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
 import { HUMAN_ID, MAP_W, MAP_H, DEFAULT_START_WORLD_TIME, TILE_KM } from '../../shared/constants.ts';
 import { latLonToTile } from '../../shared/geo.ts';
-import { UnitType, StructureType, UnitState } from '../../shared/types.ts';
+import { UnitType, StructureType, UnitState, UNIT_ORDER_KINDS } from '../../shared/types.ts';
 import { isWaterTerrain } from '../../shared/terrain.ts';
 
 const world = await loadWorldInit();
@@ -367,6 +367,34 @@ function spawnDivision(g, x, y) {
         `J2 fighters (${V?.name}, unit ${inc?.qrf?.unitId}, from ${inc?.qrf?.source}) intercept ${(entered ? resp?.sec - entered.sec : -1).toFixed(0)} s after entry and arrive in ${(tt / 60).toFixed(1)} min (1–3)`);
     } else ok(false, 'J1 fighter spawned');
   }
+}
+
+// J3 (owner feedback #18): a fighter released over its own land holds over the spot on a 12 km orbit with its fuel
+// shown (UnitView eta = ticks left), then flies home to refuel when the endurance runs out.
+{
+  const { g } = makeGame(11);
+  const t0 = latLonToTile(42.0, 0.2);
+  g.applyDebug({ type: 'spawnStructure', owner: HUMAN_ID, structure: StructureType.Airbase, tile: latLonToTile(41.7, -0.6), level: 1 });
+  g.applyDebug({ type: 'spawnUnit', unit: UnitType.FighterSquadron, owner: HUMAN_ID, tile: t0, targetTile: t0 });
+  let jet = null;
+  for (const u of g.unitMap.values()) if (u.owner === HUMAN_ID && u.type === UnitType.FighterSquadron) jet = u;
+  if (jet) {
+    g.issue(HUMAN_ID, { type: 'unitControl', unitId: jet.id, controlled: true });
+    g.subStep(10);
+    const rx = jet.x, ry = jet.y, kx = kmX(ry);
+    g.issue(HUMAN_ID, { type: 'unitControl', unitId: jet.id, controlled: false });
+    const eta0 = jet.eta;
+    let maxKm = 0;
+    for (let i = 0; i < 20; i++) {
+      g.tick1();
+      maxKm = Math.max(maxKm, Math.hypot((jet.x - rx) * kx, (jet.y - ry) * TILE_KM));
+    }
+    ok(jet.order === UNIT_ORDER_KINDS.indexOf('hold') && maxKm <= 15 && jet.alt > 0,
+      `J3 a released fighter holds over the spot: ${maxKm.toFixed(1)} km at most from it in 20 ticks (orbit 12 km), order ${UNIT_ORDER_KINDS[jet.order]}`);
+    ok(eta0 === 30 && jet.eta === 10, `J3 its fuel is published and runs down (eta ${eta0} → ${jet.eta} ticks)`);
+    for (let i = 0; i < 12; i++) g.tick1();
+    ok(jet.mode !== undefined && jet.holdUntil === 0 && (jet.state === UnitState.Returning || jet.state === UnitState.Docked), `J3 out of fuel after 3 game h it flies home to refuel (state ${jet.state})`);
+  } else ok(false, 'J3 fighter spawned');
 }
 
 console.log(`\ncommand-audit: ${pass} passed, ${fail} failed`);

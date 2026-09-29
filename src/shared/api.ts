@@ -427,6 +427,13 @@ export interface BattleHandoff {
   /** Soldiers shown per side (owner → count) and vehicles (real division ids with their tank counts). */
   infantry: { owner: number; count: number }[];
   divisions: { unitId: number; tanks: number; ifvs: number }[];
+  /**
+   * Every living soldier the battle was drawing, where it stood: packed [lat, lon, owner, …]. Command mode spawns
+   * exactly these (the counts in `infantry` are this list's per owner), so the entry keeps the entities you watched.
+   */
+  soldiers?: number[];
+  /** Where the battle camera was and the ground point it looked at: command mode's first view starts there. */
+  camera?: { lat: number; lon: number; altM: number; lookLat: number; lookLon: number };
 }
 
 export interface CommandResult {

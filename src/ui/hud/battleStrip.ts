@@ -12,6 +12,7 @@ import { tip } from '../tooltip';
 import { tx } from '../tx';
 import { hexToCss } from '../../shared/color';
 import { formatNumber, t } from '../../shared/i18n';
+import { HUMAN_ID } from '../../shared/constants';
 import { frontName } from './forcesInfo';
 import { unitLabel } from './news';
 import { advanceText, combatDayText, isoOf, sidesOf, troopsText } from './frontsInfo';
@@ -42,6 +43,21 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
   // Markers over the real divisions on the battlefield (up to 6): «▣ 1.ª División acorazada · Suiza».
   const divEls = Array.from({ length: 6 }, () => h('div', { class: 'fu-bdiv' }));
   const divIds = divEls.map(() => 0);
+  // A click on a division's marker selects it (its card offers «Tomar el mando», and T takes command of it here).
+  divEls.forEach((e, k) => {
+    e.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    e.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const id = divIds[k];
+      if (!id || !ctx.sim.view.units.has(id)) return;
+      hs.select({ kind: 'unit', id });
+      hs.sound('click');
+    });
+    tip(e, () => {
+      const u = ctx.sim.view.units.get(divIds[k]);
+      return { title: u ? unitLabel(u.type, u.serial) : t('fr.front'), text: t(u?.owner === HUMAN_ID ? 'fr.div.tipOwn' : 'fr.div.tip') };
+    });
+  });
   const banners = h('div', { class: 'fu-bbanners fu-hidden' }, ...divEls, ...bannerEls);
   const v = new THREE.Vector3(), vc = new THREE.Vector3();
   // ---- the battle pointer ----
@@ -234,6 +250,7 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
           setText(e, text);
         }
         toggleClass(e, 'is-edge', !!edge);
+        toggleClass(e, 'is-sel', hs.selection.kind === 'unit' && hs.selection.id === d.unitId);
         // Above its formation, else a little lower or higher, clear of the panels, the strip, the banners and the other
         // markers.
         let placedBox: { l: number; r: number; t: number; b: number } | null = null;

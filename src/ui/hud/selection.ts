@@ -571,7 +571,19 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
   // =================================================================================================
   function takeControl(): void {
     const ids = selectedUnitIds(hs);
-    const u = ids.length === 1 ? view().units.get(ids[0]) : undefined;
+    let u = ids.length === 1 ? view().units.get(ids[0]) : undefined;
+    // Nothing selected while watching a ground battle: T takes command of your division in that battle (the one
+    // nearest the line you are looking at), so its soldiers and tanks are kept (owner feedback #21).
+    if (!u && ids.length === 0) {
+      const bv = ctx.battle.active ? ctx.battle.view?.() ?? null : null;
+      let best = Infinity;
+      for (const d of bv?.divisions ?? []) {
+        const du = view().units.get(d.unitId);
+        if (!du || du.owner !== HUMAN_ID || !UNIT_DEFS[du.type].command || d.km >= best) continue;
+        best = d.km;
+        u = du;
+      }
+    }
     if (!u || u.owner !== HUMAN_ID || !UNIT_DEFS[u.type].command) {
       hs.sound('error');
       return;

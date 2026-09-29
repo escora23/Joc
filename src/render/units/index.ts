@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import type { FrameInfo, GameContext, UnitsApi } from '../../shared/api';
 import { FROZEN_TIME_SEC, presentationTime, shotView } from '../../shared/shots';
 import { getWorldAux } from '../../data';
-import { EARTH_RADIUS_KM, HUMAN_ID, MAP_H, MAP_W, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, TILE_KM, structureLevel } from '../../shared/constants';
+import { EARTH_RADIUS_KM, HOLD_ORBIT_KM, HUMAN_ID, MAP_H, MAP_W, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, TILE_KM, structureLevel } from '../../shared/constants';
 import { labelRects } from '../globe/labels';
 import { latLonToVec3, tangentFrame, tileToLatLon, tileX, tileXYToLatLon, tileY, vec3ToLatLon, wrapDX } from '../../shared/geo';
 import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
@@ -1644,6 +1644,8 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (u.owner !== HUMAN_ID && relations.relationTo(u.owner) !== 'war' && !selectedUnits.has(u.id)) continue;
       tileXYToLatLon(u.targetX, u.targetY, ll2);
       zone(ll2.lat, ll2.lon, EFFECT_TILES.cap * TILE_KM, ownerColor(u.owner).getHex(), u.owner === HUMAN_ID ? 0.8 : 0.6, 2, 40);
+      // Released from command mode (owner feedback #18): the holding orbit over the spot where it was left, solid.
+      if (u.owner === HUMAN_ID && u.order >= 0 && UNIT_ORDER_KINDS[u.order] === 'hold') zone(ll2.lat, ll2.lon, HOLD_ORBIT_KM, 0xffd58a, 0.95, 3);
     }
     for (const id of selectedUnits) {
       const u = view.units.get(id);

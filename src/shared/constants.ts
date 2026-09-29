@@ -445,6 +445,13 @@ export const DIVISION_WEAR_AT_CAP = 0.005;
 export const DIVISION_FIELD_REPAIR = 0.0025;
 /** Fighter combat air patrol circle and interception chances per engagement. */
 export const CAP_RADIUS_TILES = 6;
+/**
+ * v2 (W5, owner feedback #18): an aircraft released from command mode holds over the spot where the player left it,
+ * orbiting HOLD_ORBIT_KM around it (its patrol circle, CAP_RADIUS_TILES, keeps intercepting), for as long as its fuel
+ * allows (ticks; 10 ticks = 1 game hour); then it flies back to its base to refuel.
+ */
+export const HOLD_ORBIT_KM = 12;
+export const HOLD_ENDURANCE_TICKS: Partial<Record<UnitType, number>> = { [UnitType.FighterSquadron]: 30, [UnitType.Bomber]: 50, [UnitType.DroneSwarm]: 80 };
 export const CAP_HIT_AIRCRAFT = 0.6;
 export const CAP_HIT_CRUISE = 0.45;
 /** Aircraft rearm after landing (§2.4), ticks. */

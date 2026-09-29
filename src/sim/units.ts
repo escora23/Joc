@@ -15,7 +15,7 @@
 
 import {
   AIR_RAID_OBSERVER_KM, BOMBARD_GARRISON_PER_HOUR, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, BOMBER_GARRISON_SHARE,
-  BOMBER_STRUCT_DMG, CAP_HIT_AIRCRAFT, CAP_HIT_CRUISE, CAP_RADIUS_TILES, CONVOY_HIT, DEFENSE_REAR_SHARE,
+  BOMBER_STRUCT_DMG, CAP_HIT_AIRCRAFT, CAP_HIT_CRUISE, CAP_RADIUS_TILES, CONVOY_HIT, DEFENSE_REAR_SHARE, HOLD_ENDURANCE_TICKS, HOLD_ORBIT_KM,
   DIVISION_ATTACH_TILES, DIVISION_FIELD_REPAIR, DIVISION_WEAR_AT_CAP, DIVISION_WEAR_ENGAGED, DRONE_DIRECT_DMG,
   DRONE_GARRISON_PER_HOUR, DRONE_STRUCT_DMG, DRONE_SUPPORT_TILES, EMBARK_PORT_RANGE_KM, EMBARK_SHORE_TICKS, ESCORT_SURVIVAL,
   ESCORT_TILES, HUMAN_ID, INVASION_DETECT_TILES, MAP_H, MAP_W, OFFENSIVE_CONTACT_TICKS, PORT_TRADE_GOLD_PER_HOUR,
@@ -1182,6 +1182,8 @@ export class UnitSystem {
       u.state = UnitState.Idle;
       u.order = orderCode('hold');
     } else if (AIR_TYPES.has(u.type) && u.mode !== Mode.Docked) {
+      // A holding orbit of HOLD_ORBIT_KM around the spot (its patrol circle keeps intercepting) until its fuel runs
+      // out (HOLD_ENDURANCE_TICKS); the card shows «en espera» and the endurance left (UnitView.etaTicks).
       u.alt = Math.max(u.alt, 0.5);
       u.mode = Mode.Cap;
       u.state = UnitState.Moving;
@@ -1190,7 +1192,9 @@ export class UnitSystem {
       u.toX = u.x;
       u.toY = u.y;
       u.targetTile = tileOf(u.x, u.y);
-      u.order = orderCode('cap');
+      u.order = orderCode('hold');
+      u.holdUntil = g.tick + (HOLD_ENDURANCE_TICKS[u.type] ?? 30);
+      u.eta = u.holdUntil - g.tick;
     } else {
       u.state = u.savedState === UnitState.Controlled ? UnitState.Idle : u.savedState;
     }
@@ -2126,8 +2130,17 @@ export class UnitSystem {
   private stepCap(u: Unit, speed: number): void {
     const g = this.g;
     u.state = UnitState.Moving;
+    const holding = u.holdUntil > 0 && u.order === orderCode('hold');
+    if (u.holdUntil > 0 && !holding) u.holdUntil = 0;
+    if (holding && g.tick >= u.holdUntil) {
+      // Fuel: the holding ends and it flies home to refuel (its card then reads «volviendo a la base»).
+      u.holdUntil = 0;
+      u.order = -1;
+      this.goHome(u);
+      return;
+    }
     const d = tileKm(u.x, u.y, u.stationX, u.stationY);
-    const orbitKm = CAP_RADIUS_TILES * TILE_KM * 0.6;
+    const orbitKm = holding ? HOLD_ORBIT_KM : CAP_RADIUS_TILES * TILE_KM * 0.6;
     if (d > orbitKm * 1.3) {
       this.moveToward(u, u.stationX, u.stationY, speed);
       u.eta = Math.ceil((d - orbitKm) / speed);
@@ -2136,7 +2149,7 @@ export class UnitSystem {
       const ang = Math.atan2(u.y - u.stationY, wdx(u.stationX, u.x) * latCos(u.y)) + 0.6;
       const r = orbitKm / TILE_KM;
       this.moveToward(u, wrapXf(u.stationX + (Math.cos(ang) * r) / Math.max(0.2, latCos(u.stationY))), u.stationY + Math.sin(ang) * r, speed * 0.7);
-      u.eta = -1;
+      u.eta = holding ? u.holdUntil - g.tick : -1;
     }
     this.capSweep(u, u.stationX, u.stationY);
   }

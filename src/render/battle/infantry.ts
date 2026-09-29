@@ -236,6 +236,11 @@ export interface Infantry {
   translate(dx: number, dz: number): void;
   /** Soldiers deployed per team (alive or waiting as reinforcements). */
   deployed(team: number): number;
+  /**
+   * Every living soldier where it stands now (local metres: x east, z south) and its team, packed [x, z, team, …]
+   * (W5 hand-off, DESIGN_V2 §9.6: command mode spawns exactly these).
+   */
+  exportAlive(now: number): number[];
 }
 
 export function createInfantry(uniforms: BattleUniforms, capacity: number): Infantry {
@@ -621,6 +626,16 @@ export function createInfantry(uniforms: BattleUniforms, capacity: number): Infa
       let c = 0;
       for (const s of bySide[team]) c += s.count;
       return c;
+    },
+    exportAlive(now) {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const o = i * 4;
+        if (X[o + 2] > 0 && now >= X[o + 2]) continue;
+        posAt(i, now, tmp);
+        out.push(tmp.x, tmp.z, X[o]);
+      }
+      return out;
     },
     translate(dx, dz) {
       if (n === 0 || (dx === 0 && dz === 0)) return;

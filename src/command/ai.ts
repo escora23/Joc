@@ -32,7 +32,8 @@ export class Brain {
   update(dt: number): void {
     const w = this.w;
     for (const e of w.ents) {
-      if (!e.alive || e.player) continue;
+      // Crowd soldiers (far, dormant) stand where the battle had them until the player comes near (world.updateCrowd).
+      if (!e.alive || e.player || e.dormant) continue;
       this.shooterTeam = e.team;
       if (e.neutral) {
         this.neutral(e, dt);
@@ -78,7 +79,7 @@ export class Brain {
     w.center(e, T1);
     T1.y += 1;
     for (const t of w.ents) {
-      if (!t.alive || t.team === e.team || t.neutral || !filter(t)) continue;
+      if (!t.alive || t.team === e.team || t.neutral || t.dormant || !filter(t)) continue;
       const d = t.pos.distanceTo(e.pos);
       if (d > range) continue;
       let score = d * (t.player ? this.playerBias : 1) * (0.85 + 0.3 * ((t.id * 7919 + e.id * 104729) % 97) / 97);
@@ -241,42 +242,7 @@ export class Brain {
     }
     // Vehicles.
     if (escort) {
-      this.escortPoint(e, P!, e.moveT);
-      const lag = Math.hypot(e.moveT.x - e.pos.x, e.moveT.z - e.pos.z);
-      const toP = Math.hypot(P!.pos.x - e.pos.x, P!.pos.z - e.pos.z);
-      // The way to the station must not run over the intruder: if the straight line passes within 45 m of it, go
-      // round it on one side (chosen once, remembered in `state`) through a point 75 m abeam and 40 m ahead of it.
-      const sx = e.moveT.x - e.pos.x, sz = e.moveT.z - e.pos.z, sl = Math.hypot(sx, sz) || 1;
-      const px = P!.pos.x - e.pos.x, pz = P!.pos.z - e.pos.z;
-      const along = (px * sx + pz * sz) / sl;
-      const off = Math.abs(px * sz - pz * sx) / sl;
-      if (along > 0 && along < sl && off < 45) {
-        if (e.state === 0) e.state = px * sz - pz * sx > 0 ? -1 : 1;
-        const c = Math.cos(P!.yaw), sn = Math.sin(P!.yaw);
-        const rx = 75 * e.state, rz = -40;
-        e.moveT.set(P!.pos.x + rx * c + rz * sn, 0, P!.pos.z - rx * sn + rz * c);
-      } else e.state = 0;
-      // Never closer than 35 m to the intruder: back off to the side instead.
-      if (toP < 50) {
-        // Too close (the intruder may be driving at it): pull aside, off the intruder's path, never toward it.
-        T1.set(e.pos.x - P!.pos.x, 0, e.pos.z - P!.pos.z).normalize();
-        const fx = -Math.sin(P!.yaw), fz = -Math.cos(P!.yaw);
-        const side = T1.x * -fz + T1.z * fx >= 0 ? 1 : -1;
-        e.moveT.set(e.pos.x + (T1.x + -fz * side * 1.5) * 40, 0, e.pos.z + (T1.z + fx * side * 1.5) * 40);
-      }
-      // Up to 55 km/h while closing in; at the station, the intruder's speed; slow right next to it.
-      let vmax = Math.max(2.5, Math.min(15, Math.abs(P!.speed) + 2 + lag * 0.08));
-      if (toP < 60) vmax = Math.min(vmax, Math.max(3, Math.abs(P!.speed) + 1));
-      const toSt = Math.atan2(-(e.moveT.x - e.pos.x), -(e.moveT.z - e.pos.z));
-      if (lag < 10 && Math.abs(P!.speed) < 0.8 && toP >= 35) {
-        // In place and the intruder stopped: stop and face it.
-        e.yaw += angleDelta(e.yaw, Math.atan2(-(P!.pos.x - e.pos.x), -(P!.pos.z - e.pos.z))) * Math.min(1, dt * 0.4);
-        this.drive(e, dt, 0, 0.5, true);
-      } else if (lag < 300 && Math.abs(angleDelta(e.yaw, toSt)) > 2.0) {
-        // The station is behind it (the blocker facing an intruder that moves on): back up, as a crew would, rather
-        // than turning round in front of it.
-        this.reverse(e, dt, e.moveT.x, e.moveT.z, Math.min(vmax, 8));
-      } else this.drive(e, dt, vmax, 0.55, false);
+      this.escortVehicle(e, P!, dt);
     } else {
       e.stateT -= dt;
       if (e.stateT <= 0 && e.order === 'follow') {
@@ -286,6 +252,126 @@ export class Brain {
       this.drive(e, dt, 9, 0.6, false);
     }
     e.turretYaw += angleDelta(e.turretYaw, 0) * Math.min(1, dt * 0.8);
+  }
+
+  /**
+   * A patrol vehicle escorting an intruder (owner feedback #20), all in the intruder's frame (x right, z back; its
+   * station `slot` is e.g. 90 m ahead for the blocker, 55 m abeam for the others):
+   *   - from behind or beside, it overtakes in a lane 65 m to one side (never through the intruder), then merges into
+   *     its station; the lane and merge points move with the intruder and are led by its velocity;
+   *   - facing against the intruder's course (it came from ahead), it pulls out to its lane and turns there;
+   *   - its speed tracks the intruder's plus the gap along the course (up to 55 km/h), so it closes on a moving station
+   *     and then holds it at the intruder's speed; at the station it keeps the intruder's course;
+   *   - it only backs up when the intruder has stopped and the station is just behind it; within 40 m of the intruder
+   *     it never moves toward it.
+   */
+  private escortVehicle(e: Ent, P: Ent, dt: number): void {
+    const c = Math.cos(P.yaw), sn = Math.sin(P.yaw);
+    // Intruder frame: right = (c, -sn), back = (sn, c) in world x/z (forward = −back).
+    const rx = e.pos.x - P.pos.x, rz = e.pos.z - P.pos.z;
+    const ex = rx * c - rz * sn, ez = rx * sn + rz * c;
+    const sx = e.slot.x, sz = e.slot.z;
+    const pv = Math.max(0, P.speed);
+    const moving = pv > 0.8;
+    // Lane side: the station's side, or (for the blocker ahead) the side it is on now, kept once chosen.
+    if (e.state === 0) e.state = sx !== 0 ? Math.sign(sx) : ex >= 0 ? 1 : -1;
+    const side = e.state;
+    const LANE = 65;
+    let tx = sx, tz = sz;
+    let aimAhead = 0;
+    const heading = angleDelta(P.yaw, e.yaw);
+    const against = moving && Math.abs(heading) > 1.9;
+    let wait = false;
+    if (moving && (ez < sz - 30 || against) && ez < 20) {
+      // Ahead of its station, or facing the intruder: pull off to the roadside on the side it is on (never across the
+      // intruder's path), turn to its course there and let it come up; then fall in.
+      tx = (ex >= 0 ? 1 : -1) * Math.max(LANE, Math.abs(sx));
+      tz = ez;
+      wait = true;
+    } else if (sx !== 0 && Math.sign(ex) !== Math.sign(sx) && Math.abs(ex) > 15 && ez < 60) {
+      // Beside or behind the intruder on the wrong side for its station: drop back and cross behind it.
+      tx = 0;
+      tz = 80;
+    } else if (against) {
+      // Behind it and facing the wrong way: out to the lane at its level, turning there.
+      tx = side * LANE;
+      tz = ez;
+    } else if (ez > sz + 25 && Math.abs(ex) < LANE - 10 && Math.abs(sx) < LANE - 10) {
+      // Behind its station and inside the intruder's corridor: out to the lane first, a little ahead of where it is.
+      tx = side * LANE;
+      tz = Math.max(sz, ez - 40);
+    } else if (ez > sz + 25 && Math.abs(sx) < LANE - 10) {
+      // In the lane, still well behind the station: drive up the lane until nearly level with it, then merge.
+      tx = side * LANE;
+      tz = Math.max(sz, ez - 60);
+    } else {
+      // At or near its station: merge into it along the course (aim ahead of it by the sideways gap, ~45°), so it
+      // keeps the intruder's pace while it closes the last metres.
+      aimAhead = Math.min(60, Math.abs(ex - sx));
+    }
+    // World target, led by the intruder's motion (1.5 s).
+    const lead = moving && !wait ? 1.5 : 0;
+    const az = tz - (moving ? aimAhead : 0);
+    const wx = P.pos.x + tx * c + az * sn - sn * pv * lead, wz = P.pos.z - tx * sn + az * c - c * pv * lead;
+    const dx = wx - e.pos.x, dz = wz - e.pos.z;
+    const dist = Math.hypot(dx, dz);
+    const toP = Math.hypot(rx, rz);
+    const stLag = Math.hypot(ex - sx, ez - sz);
+    // Speed: the intruder's, plus the gap along its course and across it (never beyond 55 km/h); slower right by it.
+    let want = pv + Math.max(-pv, Math.min(15, (ez - tz) * 0.12)) + Math.min(6, Math.abs(ex - tx) * 0.05);
+    if (!moving || wait) want = Math.min(8, dist * 0.2);
+    want = Math.max(0, Math.min(15, want));
+    if (toP < 45) want = Math.min(want, pv + 2);
+    // Heading: toward the target while off it; at the station, the intruder's course (or facing it when stopped).
+    let desired: number;
+    if (dist > 10) desired = Math.atan2(-dx, -dz);
+    else if (moving) desired = P.yaw;
+    else desired = Math.atan2(-(P.pos.x - e.pos.x), -(P.pos.z - e.pos.z));
+    if (!moving && stLag < 60 && dist > 8 && Math.abs(angleDelta(e.yaw, Math.atan2(-dx, -dz))) > 2.0) {
+      // The intruder has stopped and the station is just behind: back up into it rather than turning in front of it.
+      this.reverse(e, dt, wx, wz, Math.min(5, dist * 0.3));
+      e.turretYaw += angleDelta(e.turretYaw, 0) * Math.min(1, dt * 0.8);
+      return;
+    }
+    const err = angleDelta(e.yaw, desired);
+    const turn = 0.6;
+    e.yaw += Math.max(-turn * dt, Math.min(turn * dt, err));
+    let v = (dist > 10 || (moving && !wait)) ? want * Math.max(0.25, 1 - Math.abs(err) / 1.6) : 0;
+    if ((!moving || wait) && dist <= 10) v = 0;
+    const acc = v > e.speed ? 3 : 5;
+    e.speed += Math.max(-acc * dt, Math.min(acc * dt, v - e.speed));
+    forwardOf(e.yaw, T1);
+    let vx = T1.x * e.speed, vz = T1.z * e.speed;
+    // Keep-out: within 40 m of the intruder no motion toward it (only along or away).
+    if (toP < 40 && toP > 0.1) {
+      const ux = -rx / toP, uz = -rz / toP;
+      const toward = vx * ux + vz * uz;
+      if (toward > 0) {
+        vx -= ux * toward;
+        vz -= uz * toward;
+      }
+    }
+    // Separation from other vehicles.
+    const w = this.w;
+    for (const o of w.ents) {
+      if (o === e || !o.rig || ENT_DEFS[o.kind].air || ENT_DEFS[o.kind].naval) continue;
+      const ox = e.pos.x - o.pos.x, oz = e.pos.z - o.pos.z;
+      const d2 = ox * ox + oz * oz;
+      const r = e.radius + o.radius + 1.5;
+      if (d2 < r * r && d2 > 1e-4) {
+        const d = Math.sqrt(d2);
+        e.pos.x += (ox / d) * (r - d) * 0.5;
+        e.pos.z += (oz / d) * (r - d) * 0.5;
+      }
+    }
+    const nx = e.pos.x + vx * dt, nz = e.pos.z + vz * dt;
+    if (w.ground.heightAt(nx, nz) > 0.6) {
+      e.pos.x = nx;
+      e.pos.z = nz;
+    } else e.speed *= 0.5;
+    e.vel.set(vx, 0, vz);
+    this.settle(e, dt);
+    if (e.speed > 2.5) w.fx.dust(e.pos.x - T1.x * 3.5, e.pos.y, e.pos.z - T1.z * 3.5, -e.vel.x, -e.vel.z, Math.min(0.8, e.speed * dt * 2.5));
   }
 
   /** Reverse toward a point (the rear leads), with the same acceleration limits and terrain seating as drive(). */

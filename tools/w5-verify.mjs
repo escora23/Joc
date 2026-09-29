@@ -110,7 +110,24 @@ if (ONLY.includes('peace')) {
   const cos = Math.cos((end.local.lat * Math.PI) / 180);
   const simKm = end.sim && start.sim ? Math.hypot((end.sim.x - start.sim.x) * 25 * cos, (end.sim.y - start.sim.y) * 25) : -1;
   rec("D1 drive ≈20 km: sim moved as far", localKm > 15 && Math.abs(simKm - localKm) <= Math.max(2, localKm * 0.1), { localKm: +localKm.toFixed(2), simKm: +simKm.toFixed(2), gapKm: +end.km.toFixed(3), rate: s2.rate, requested: s2.requested, waypointKm: s2.waypointKm, from: start.local, to: end.local });
-  rec('D2 controlled unit view updates', null, { distinctPositions: views, realS: Math.round((Date.now() - tDrive) / 1000), moves: s2.moves });
+  rec('D2i controlled unit view updates during the ×60 autopilot (real time, SwiftShader)', null, { distinctPositions: views, realS: Math.round((Date.now() - tDrive) / 1000), moves: s2.moves });
+  // Criterion 3 in simulated time: drive at ×1 with W held; every whole local second of driving must carry ≥ 1 move
+  // sent and ≥ 1 change of the unit's position in the sim view.
+  await page.evaluate(() => { window.__cmd.clearWaypoint(); window.__cmd.requestRate(1); });
+  await wait(3000);
+  await page.keyboard.down('KeyW');
+  let cad = [];
+  const tW = Date.now();
+  for (let i = 0; i < 150; i++) {
+    await wait(1000);
+    cad = await page.evaluate(() => window.__cmd.cadence());
+    if (cad.length >= 14) break;
+  }
+  await page.keyboard.up('KeyW');
+  const whole = cad.slice(1, -1);
+  const worstMoves = whole.length ? Math.min(...whole.map((c) => c.moves)) : 0, worstViews = whole.length ? Math.min(...whole.map((c) => c.views)) : 0;
+  rec('D2 at ×1: ≥ 1 move sent and ≥ 1 view update per local second of driving', whole.length >= 8 && worstMoves >= 1 && worstViews >= 1,
+    { localSeconds: whole.length, worstMoves, worstViews, realS: Math.round((Date.now() - tW) / 1000), buckets: whole.slice(0, 20) });
   // Exit.
   await page.evaluate(() => window.__cmd.debrief());
   let exited = false;
@@ -371,10 +388,45 @@ if (ONLY.includes('front')) {
 if (ONLY.includes('jet')) {
   const { page, errs } = await open('command-jet');
   const s = await stats(page);
-  const hostile = await page.evaluate(() => window.__cmd.world.ents.filter((e) => e.alive && e.team === 1 && e.kind === 'jet').map((e) => e.src?.kind ?? 'none'));
   rec('J1 fighter at its real altitude', s.alt > 1500, { altM: Math.round(s.alt) });
-  rec('J2 enemy aircraft only from real squadrons', hostile.every((k) => k === 'squadron'), hostile);
   rec('jet page errors', errs.length === 0, errs.slice(0, 5));
+  await page.close();
+}
+
+// Criterion 11: enemy aircraft only from real covering squadrons or a scramble from an airbase at war within 150 km.
+// Staged with both sources present (an enemy patrol ~40 km away, a docked squadron at an airbase ~95 km away).
+if (ONLY.includes('jet') || ONLY.includes('jetsources')) {
+  const { page, errs } = await open('command-jet-sources&live=1');
+  // A few 2 s refreshes: the sources were staged just after the entry.
+  await wait(30000);
+  const r = await page.evaluate(() => {
+    const I = window.__cmd, v = I.ctx.sim.view, P = I.controller.ent;
+    const here = I.where();
+    const km = (x, y) => Math.hypot((x - here.x) * 25 * Math.cos(here.lat * Math.PI / 180), (y - here.y) * 25);
+    // Every real source: enemy squadrons airborne within the derivation radius (150 km), and enemy squadrons docked at
+    // an airbase at war within 150 km.
+    const war = (o) => v.pairState(1, o) === 'war';
+    const sources = new Map();
+    for (const u of v.units.values()) {
+      // Fighter squadrons (UnitType 4) of a nation at war with us; docked = UnitMode 6 (ready) or 7 (rearming).
+      if (u.type !== 4 || u.owner === 1 || !war(u.owner)) continue;
+      const home = v.structures.get(u.home);
+      const docked = u.mode === 6 || u.mode === 7;
+      const d = km(u.x, u.y);
+      if (!docked && d <= 150) sources.set(u.id, { kind: 'airborne', km: Math.round(d), mode: u.mode });
+      else if (docked && home) {
+        const hx = (home.tile % 1600) + 0.5, hy = Math.floor(home.tile / 1600) + 0.5;
+        if (km(hx, hy) <= 150) sources.set(u.id, { kind: 'scramble', km: Math.round(km(hx, hy)), mode: u.mode });
+      }
+    }
+    const jets = I.world.ents.filter((e) => e.kind === 'jet' && e.team === 1).map((e) => ({ src: e.src?.kind ?? 'none', id: e.src?.id ?? 0, alive: e.alive, distKm: +(e.pos.distanceTo(P.pos) / 1000).toFixed(1) }));
+    return { jets, sources: Object.fromEntries(sources) };
+  });
+  const mapped = r.jets.every((j) => j.src === 'squadron' && r.sources[j.id]);
+  const kinds = new Set(r.jets.map((j) => r.sources[j.id]?.kind).filter(Boolean));
+  rec('J2 every enemy aircraft maps to a real source (a patrol within 150 km or a scramble from an airbase at war within 150 km), and some appear', r.jets.length > 0 && mapped, { jets: r.jets, sources: r.sources, kinds: [...kinds] });
+  await page.screenshot({ path: 'shots/W5-command-v2/jet-sources.png', timeout: 180000 }).catch(() => undefined);
+  rec('jetsources page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
 }
 
@@ -440,15 +492,22 @@ if (ONLY.includes('escortsim')) {
     I.skipIntro();
     const esc = () => I.world.ents.filter((e) => e.alive && e.src?.kind === 'qrf' && e.kind !== 'soldier' && e.kind !== 'at');
     let minD = Infinity, maxV = 0, maxYawRate = 0, ram = 0;
+    // Station keeping while the intruder drives on (30 km/h): each escort's distance from its station, 45-60 s.
+    const lagLate = new Map();
     const prevYaw = new Map();
     const track = [];
     const start = P.pos.clone();
     for (let i = 0; i < 90 * 30; i++) {
       const v = i < 60 * 30 ? 8.3 : 0;
-      I.simulate(1, 1 / 30);
+      // The intruder moves exactly v along its heading: the tank controller's own integration inside the step is
+      // undone (it would add its coasting speed to the scripted displacement).
+      const px = P.pos.x, pz = P.pos.z, pyaw = P.yaw;
       P.speed = v;
-      P.pos.x += fwd.x * v / 30;
-      P.pos.z += fwd.z * v / 30;
+      I.simulate(1, 1 / 30);
+      P.yaw = pyaw;
+      P.speed = v;
+      P.pos.x = px + fwd.x * v / 30;
+      P.pos.z = pz + fwd.z * v / 30;
       P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
       for (const e of esc()) {
         const d = Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z);
@@ -460,14 +519,20 @@ if (ONLY.includes('escortsim')) {
         if (py !== undefined) { let dy = e.yaw - py; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI; maxYawRate = Math.max(maxYawRate, Math.abs(dy) * 30); }
         prevYaw.set(e.id, e.yaw);
       }
+      if (i >= 45 * 30 && i < 60 * 30) for (const e of esc()) {
+        const c = Math.cos(P.yaw), sn = Math.sin(P.yaw);
+        const stx = P.pos.x + e.slot.x * c + e.slot.z * sn, stz = P.pos.z - e.slot.x * sn + e.slot.z * c;
+        lagLate.set(e.id, Math.max(lagLate.get(e.id) ?? 0, Math.hypot(e.pos.x - stx, e.pos.z - stz)));
+      }
       if (i % 300 === 0) track.push(esc().map((e) => {
         const c = Math.cos(P.yaw), sn = Math.sin(P.yaw);
         const stx = P.pos.x + e.slot.x * c + e.slot.z * sn, stz = P.pos.z - e.slot.x * sn + e.slot.z * c;
         return { d: Math.round(Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z)), lag: Math.round(Math.hypot(e.pos.x - stx, e.pos.z - stz)), v: +e.speed.toFixed(1) };
       }));
     }
-    return { n: esc().length, minD: Math.round(minD), ramMs: +ram.toFixed(2), maxV: +maxV.toFixed(1), maxYawRateDeg: Math.round(maxYawRate * 180 / Math.PI), playerKm: +(P.pos.distanceTo(start) / 1000).toFixed(2), final: esc().map((e) => Math.round(Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z))), track };
+    return { n: esc().length, minD: Math.round(minD), ramMs: +ram.toFixed(2), maxV: +maxV.toFixed(1), maxYawRateDeg: Math.round(maxYawRate * 180 / Math.PI), playerKm: +(P.pos.distanceTo(start) / 1000).toFixed(2), intruderKmh: +(P.pos.distanceTo(start) / 60 * 3.6).toFixed(1), final: esc().map((e) => Math.round(Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z))), track, lagLate: [...lagLate.values()].map((v) => Math.round(v)) };
   });
+  rec('B10b while the intruder drives on at 30 km/h, every escort holds its station (≤ 60 m from it from 45 to 60 local s)', r.lagLate.length > 0 && r.lagLate.every((v) => v <= 60), { lagLate: r.lagLate, track: r.track });
   rec('B10 escort drives sensibly around an intruder driving at it (never drives into it: ≤ 1 m/s toward it inside 40 m; ≤ 16 m/s, turns ≤ 70°/s, stays with it)', r.n > 0 && r.ramMs <= 1 && r.maxV <= 16.5 && r.maxYawRateDeg <= 70 && r.final.every((d) => d < 400), r);
   rec('escortsim page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
@@ -476,12 +541,14 @@ if (ONLY.includes('escortsim')) {
 // Owner feedback #18: releasing control never sends the unit back. Tank inside a neighbour (the escort staging):
 // exit, then the unit stays exactly there while the strategic clock runs, and the incursion goes on.
 async function exitToMap(page) {
-  await page.evaluate(() => window.__cmd.debrief());
-  for (let i = 0; i < 120; i++) {
-    await wait(1000);
-    if (await page.evaluate(() => window.__front?.app?.state === 'playing')) return true;
-  }
-  return false;
+  // Wait on the app's own commandExit event (the report, the fade and the release take many SwiftShader frames).
+  await page.evaluate(() => {
+    window.__w5exit = false;
+    window.__front.ctx.bus.on('commandExit', () => { window.__w5exit = true; });
+    window.__cmd.debrief();
+  });
+  const ok = await page.waitForFunction(() => window.__w5exit === true && window.__front?.app?.state === 'playing', null, { timeout: 900000, polling: 1000 }).then(() => true).catch(() => false);
+  return ok;
 }
 if (ONLY.includes('release')) {
   const { page, errs } = await open('command-escort');
@@ -513,59 +580,112 @@ if (ONLY.includes('jetrelease')) {
   });
   const out = await exitToMap(page);
   await page.evaluate(() => window.__front.ctx.sim.setSpeed(1));
-  await wait(25000);
+  // A few strategic ticks of holding (the orbit is flown tick by tick).
+  const tick0 = await page.evaluate(() => window.__front.ctx.sim.view.tick);
+  await page.waitForFunction((t0) => window.__front.ctx.sim.view.tick >= t0 + 4, tick0, { timeout: 600000, polling: 1000 }).catch(() => undefined);
   const after = await page.evaluate((id) => {
     const v = window.__front.ctx.sim.view, u = v.units.get(id);
-    return { tick: v.tick, x: u?.x, y: u?.y, mode: u?.mode, alt: u?.alt, order: u?.order };
+    window.__fuHud?.shared?.select({ kind: 'unit', id });
+    return { tick: v.tick, x: u?.x, y: u?.y, mode: u?.mode, alt: u?.alt, order: u?.order, etaTicks: u?.etaTicks };
   }, before.id);
+  await wait(3000);
+  const card = await page.evaluate(() => window.__fuCard?.text?.() ?? '');
   const km = after.x !== undefined ? Math.hypot((after.x - before.x) * 25 * Math.cos(41 * Math.PI / 180), (after.y - before.y) * 25) : -1;
-  // A combat air patrol orbits its station at 0.6 × the 6-tile CAP radius (~90 km): it holds over the spot.
-  rec('R3 released fighter flies a holding orbit over the spot (no return to base)', out && after.alt > 0 && after.order === 4 && km >= 0 && km < 120, { km: +km.toFixed(1), after });
+  // Holding (order «hold» = 2) on a 12 km orbit around the release point, with its fuel left on the card.
+  rec('R3 released fighter holds over the spot (≤ 20 km from it after 4 ticks; no return to base)', out && after.alt > 0 && after.order === 2 && km >= 0 && km <= 20, { km: +km.toFixed(1), after, exited: out });
+  rec('R3b the card says it is holding and how much fuel is left', /en espera|holding/i.test(card) && /combustible|fuel/i.test(card) && after.etaTicks > 0, { card: card.split('\n').slice(0, 6).join(' | ') });
+  await page.screenshot({ path: 'shots/W5-command-v2/jet-hold-card.png', timeout: 180000 }).catch(() => undefined);
   rec('jetrelease page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
 }
 
-// Criterion 14 / owner feedback #21: T on a division inside a visible ground battle keeps that battle's forces.
+// Criterion 14 / owner feedback #21: T on a division inside a visible ground battle keeps that battle's forces. Real UI:
+// the battle view in live mode, the own division selected by clicking its marker (or, when its marker is not on screen,
+// nothing selected: T takes your division in the battle), then T. The battle's soldiers come over one for one.
 if (ONLY.includes('handoff')) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errs = [];
   page.on('pageerror', (e) => errs.push(e.message));
-  await page.goto(`${BASE}?shot=front-ground-real`, { waitUntil: 'load', timeout: 120000 });
+  page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 300)); });
+  await page.goto(`${BASE}?shot=front-ground-real&live=1`, { waitUntil: 'load', timeout: 120000 });
   await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 900000, polling: 1000 });
+  await wait(4000);
+  await page.screenshot({ path: 'shots/W5-command-v2/h0-battle.png', timeout: 180000 }).catch(() => undefined);
   const h = await page.evaluate(() => {
     const { ctx } = window.__front;
     const ho = ctx.battle.handoff?.() ?? null;
-    let best = null, bd = Infinity;
-    if (ho) {
-      for (const u of ctx.sim.view.units.values()) {
-        if (u.owner !== 1 || u.type !== 3 || !(u.hp > 0)) continue;
-        const lat = 90 - (u.y / 800) * 180, lon = (u.x / 1600) * 360 - 180;
-        const d = Math.hypot(lat - ho.lat, (lon - ho.lon) * Math.cos((lat * Math.PI) / 180));
-        if (d < bd) { bd = d; best = u.id; }
+    const bv = ctx.battle.view?.() ?? null;
+    // The own division's marker, when it is drawn on screen.
+    const marks = [...document.querySelectorAll('.fu-bdiv')].filter((e) => e.style.display !== 'none').map((e) => { const r = e.getBoundingClientRect(); return { text: e.textContent, x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    return { ho: ho && { ...ho, soldiers: undefined, nSoldiers: ho.soldiers?.length / 3 }, list: ho?.soldiers ?? [], divs: bv?.divisions.map((d) => ({ unitId: d.unitId, owner: d.owner, km: d.km })) ?? [], marks };
+  });
+  const own = h.divs.filter((d) => d.owner === 1).sort((a, b) => a.km - b.km)[0];
+  if (!h.ho || !own) rec('H1 a visible ground battle with a human division to take', false, { ho: h.ho, divs: h.divs });
+  else {
+    // Select through the UI: the division's marker if it is on screen and names our division, else nothing selected.
+    const ownLabel = await page.evaluate((id) => { const u = window.__front.ctx.sim.view.units.get(id); return u ? window.__fuCard?.home ? '' : '' : ''; }, own.unitId);
+    void ownLabel;
+    const mark = h.marks.find((m) => !/Suiza|Switzerland/i.test(m.text ?? '') && /Divisi|Division/i.test(m.text ?? ''));
+    let how = 'T with nothing selected (your division in this battle)';
+    if (mark) {
+      await page.mouse.click(mark.x, mark.y);
+      await wait(2500);
+      const sel = await page.evaluate(() => window.__fuHud?.shared?.selection ?? null);
+      how = `clicked marker «${mark.text}» ${JSON.stringify(sel)}`;
+    } else {
+      // Nothing selected (Escape deselects; with nothing selected it would open the pause menu instead).
+      if (await page.evaluate(() => (window.__fuHud?.shared?.selection?.kind ?? 'none') !== 'none')) {
+        await page.keyboard.press('Escape');
+        await wait(1500);
       }
     }
-    return { ho, unitId: best, degFromAnchor: bd };
-  });
-  if (!h.ho || !h.unitId) rec('H1 a visible ground battle with a human division to take', false, h);
-  else {
-    await page.evaluate((id) => window.__front.app.enterCommandMode(id), h.unitId);
-    await page.waitForFunction(() => window.__cmdStats?.phase === 'play' || window.__cmdStats?.phase === 'intro', null, { timeout: 300000, polling: 1000 }).catch(() => undefined);
-    // A few 2 s refreshes: squads whose spot was not streamed yet are placed on the next ones.
-    await wait(20000);
-    const c = await page.evaluate(() => {
-      const I = window.__cmd, per = {};
-      for (const e of I.world.ents) if (e.alive && (e.kind === 'soldier' || e.kind === 'at') && e.src?.kind === 'pool') per[e.nation] = (per[e.nation] ?? 0) + 1;
+    await page.keyboard.press('t');
+    let entered = false;
+    for (let i = 0; i < 60 && !entered; i++) {
+      await wait(1000);
+      entered = await page.evaluate(() => !!window.__cmdStats);
+    }
+    rec('H0 T from the battle view enters command mode (real UI)', entered, { how, own });
+    // The first view: the battle view itself (intro), then the vehicle.
+    await page.waitForFunction(() => window.__cmdStats?.phase === 'intro' || window.__cmdStats?.phase === 'play', null, { timeout: 300000, polling: 500 }).catch(() => undefined);
+    await page.screenshot({ path: 'shots/W5-command-v2/h1-first-view.png', timeout: 180000 }).catch(() => undefined);
+    await page.waitForFunction(() => window.__cmdStats?.phase === 'play', null, { timeout: 600000, polling: 1000 }).catch(() => undefined);
+    await wait(6000);
+    const c = await page.evaluate((list) => {
+      const I = window.__cmd, P = I.controller.ent;
+      const per = {}, active = {}, cen = {};
+      for (const e of I.world.ents) {
+        if (!e.alive || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
+        per[e.nation] = (per[e.nation] ?? 0) + 1;
+        if (!e.dormant) active[e.nation] = (active[e.nation] ?? 0) + 1;
+        const ll = I.frame.latLonOfScene(e.pos.x, e.pos.z, { lat: 0, lon: 0 });
+        const c = (cen[e.nation] ??= { lat: 0, lon: 0, n: 0 });
+        c.lat += ll.lat; c.lon += ll.lon; c.n++;
+      }
+      const bcen = {};
+      for (let i = 0; i + 2 < list.length; i += 3) { const c = (bcen[list[i + 2]] ??= { lat: 0, lon: 0, n: 0 }); c.lat += list[i]; c.lon += list[i + 1]; c.n++; }
+      const offM = {};
+      for (const k of Object.keys(bcen)) {
+        const a = bcen[k], b = cen[k];
+        if (!b) continue;
+        const la = a.lat / a.n, lo = a.lon / a.n, lb = b.lat / b.n, lob = b.lon / b.n;
+        offM[k] = Math.round(Math.hypot((la - lb) * 111200, (lo - lob) * 111200 * Math.cos(la * Math.PI / 180)));
+      }
       const divs = {};
       for (const e of I.world.ents) if (e.alive && e.src?.kind === 'division' && e.kind === 'tank') divs[e.src.id] = (divs[e.src.id] ?? 0) + 1;
-      return { per, divs };
-    });
-    // The scene draws at most 240 soldiers a side: the battle's counts come over scaled by one factor for both sides.
-    const scale = Math.min(1, 240 / Math.max(1, ...h.ho.infantry.map((s) => s.count)));
-    const rows = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, expected: Math.round(s.count * scale), command: c.per[s.owner] ?? 0 }));
-    const ok = rows.every((r) => Math.abs(r.command - r.expected) <= Math.max(2, r.expected * 0.1));
-    rec('H1 infantry per side: battle view = command mode (±10 %, one scale for both sides)', ok, { scale: +scale.toFixed(3), rows });
+      // Facing: the vehicle's heading against the bearing to the battle's look point.
+      const ho = I.params?.battleHandoff;
+      const lk = ho?.camera ? I.frame.sceneOf(ho.camera.lookLat, ho.camera.lookLon, { x: 0, z: 0 }) : null;
+      const face = lk ? Math.abs(((Math.atan2(-(lk.x - P.pos.x), -(lk.z - P.pos.z)) - P.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * 180 / Math.PI : -1;
+      const battleKm = lk ? Math.hypot(lk.x - P.pos.x, lk.z - P.pos.z) / 1000 : -1;
+      return { per, active, offM, divs, faceDeg: Math.round(face), battleKm: +battleKm.toFixed(1), notice: window.__cmdStats.notice, stats: { soldiers: window.__cmdStats.soldiers, handoff: window.__cmdStats.handoff } };
+    }, h.list);
+    const rows = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, command: c.per[s.owner] ?? 0, active: c.active[s.owner] ?? 0, centroidOffM: c.offM[s.owner] }));
+    rec('H1 infantry per side: battle view = command mode (±10 %), where they stood (centroid ≤ 150 m)', rows.every((r) => Math.abs(r.command - r.battle) <= Math.max(2, r.battle * 0.1) && (r.centroidOffM ?? 1e9) <= 150), rows);
     const drows = h.ho.divisions.map((d) => ({ unitId: d.unitId, battle: d.tanks, command: c.divs[d.unitId] ?? 0 }));
-    rec('H2 the battle\'s real divisions are there with the same tanks', drows.every((d) => d.battle === d.command || d.unitId === h.unitId), drows);
+    rec('H2 the battle\'s real divisions are there with the same tanks', drows.every((d) => d.battle === d.command || d.unitId === own.unitId), drows);
+    rec('H3 the vehicle faces the battle it was watching, and the HUD says where it is', c.faceDeg >= 0 && c.faceDeg <= 20 && /batalla|battle/i.test(c.notice ?? ''), { faceDeg: c.faceDeg, battleKm: c.battleKm, notice: c.notice });
+    await page.screenshot({ path: 'shots/W5-command-v2/h2-command.png', timeout: 180000 }).catch(() => undefined);
   }
   rec('handoff page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
