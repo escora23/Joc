@@ -1704,7 +1704,8 @@ const SAVE_SPEC: GraphSpec = {
     [EnclaveSystem, new Set(['stamp', 'stack', 'nb', 'nb2'])],
     [UnitSystem, new Set(['comps', 'scratch', 'stations', 'routesOut', 'supportTick', 'support', 'heap', 'aStamp', 'aG', 'aParent', 'aGen', 'rnd'])],
     [EconomySystem, new Set(['comps', 'comps2', 'atWarSet'])],
-    [FrontTracker, new Set(['nb'])],
+    // FrontTracker.lines (T41, W6): view data re-measured from ownership and pressure on the next tick after a load.
+    [FrontTracker, new Set(['nb', 'lines'])],
     [DiplomacySystem, new Set(['cache', 'cacheTick', 'realTimeFloor'])],
     [WaterNav, new Set([
       'terrain', 'comp', 'compSize', 'coastal', 'node', 'nodeCount', 'nodeRep', 'adjStart', 'adjList', 'adjCost', 'ngen', 'nstamp',

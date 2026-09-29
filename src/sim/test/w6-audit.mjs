@@ -14,6 +14,10 @@
 // A7  owner items #22/#23 (fix pass 2): the corridor never outgrows its front; a human offensive persists (it re-forms
 //     on the contact when its origin loses touch, and a broken one halts and holds the line with a message instead of
 //     withdrawing); intensity: all-out assault ×1.25 power, hold = no push and a quarter of the casualties.
+// A8  save round trip (§12.8) in the middle of a human offensive with a published line (the FrontLines view state is
+//     not saved and is re-measured): the save succeeds, the restored game has the same fronts, garrisons and offensive,
+//     both games stay identical tick for tick (ownership, troops, offensive), and the restored front publishes its line
+//     again with the same speed within a few ticks.
 // A6  T41: the front's line published as one smoothed depth offset at the observation focus moves every tick by exactly
 //     its published speed, never jumps, sets the front's advanceKmh, and stays inside the tile being taken.
 
@@ -21,6 +25,7 @@ import fs from 'node:fs';
 import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
 import { HUMAN_ID } from '../../shared/constants.ts';
+import { SaveReader, SaveWriter } from '../save.ts';
 import { latLonToTile, latLonToTileXY } from '../../shared/geo.ts';
 
 const argv = process.argv.slice(2);
@@ -380,6 +385,66 @@ function persistence() {
   row('A7c', 'the offensive re-forms on the contact when its origin loses touch (no silent cancel)', `${a.ended ? 'ended' : `alive (${a.state})`}, origin x ${o0.toFixed(1)} -> ${a.originX.toFixed(1)}, frontier ${a.pressure.size} tiles`, 'alive, origin moved back, frontier > 0', !a.ended && a.originX < o0 - 1 && a.pressure.size > 0);
 }
 
+// ---- A8: save round trip during an offensive (the FrontLines regression) --------------------------------------
+function saveRoundTrip() {
+  const mk = () => {
+    const t = theatre(13);
+    const { g, step, H, E, D, P, cx, cy } = t;
+    g.war.declare(H, E, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+    for (let i = 0; i < 25; i++) step();
+    D.troops = 900_000;
+    P.troops = 250_000;
+    g.issue(H, { type: 'attack', target: E, ratio: 0.6, tile: cy * W + cx + 12 });
+    g.observationFocus = { x: cx + 0.5, y: cy + 2 };
+    for (let i = 0; i < 80; i++) step();
+    return t;
+  };
+  const A = mk();
+  let blob = null, err = '';
+  try {
+    const w = new SaveWriter();
+    A.g.serialize(w);
+    blob = w.finish();
+  } catch (e) {
+    err = String(e?.message ?? e);
+  }
+  row('A8a', 'save in the middle of an offensive with a published front line', blob ? `${(blob.byteLength / 1024).toFixed(0)} KB` : `failed: ${err}`, 'saved', !!blob);
+  if (!blob) return;
+  const B = Game.restore(new SaveReader(blob), world);
+  B.ai = { setup() {}, tick() {}, onEvent() {} };
+  B.observationFocus = { ...A.g.observationFocus };
+  const stepB = () => {
+    B.tick1();
+    B.buildUpdate(1);
+  };
+  const sig = (g) => {
+    let own = 0;
+    for (let t = 0; t < g.owner.length; t++) own = (own * 31 + g.owner[t]) >>> 0;
+    const at = g.attackList.filter((x) => !x.ended).map((x) => `${x.id}:${x.frontKey}:${Math.round(x.troops)}:${x.pressure.size}:${x.state}`).join('|');
+    const fr = [...g.fronts.all()].map((f) => `${f.key}:${f.a}/${f.b}:${Math.round(g.fronts.garrison(f, f.a))}/${Math.round(g.fronts.garrison(f, f.b))}`).sort().join('|');
+    return `${own}#${at}#${fr}#${Math.round(g.playerById[HUMAN_ID].troops)}`;
+  };
+  const same0 = sig(A.g) === sig(B);
+  let sameAll = same0, firstDiff = -1;
+  let kmhA = 0, kmhB = 0, keyA = 0;
+  for (let i = 1; i <= 120; i++) {
+    A.step();
+    stepB();
+    if (sameAll && sig(A.g) !== sig(B)) {
+      sameAll = false;
+      firstDiff = i;
+    }
+  }
+  const a = A.g.attackList.find((x) => !x.ended && x.attacker === HUMAN_ID);
+  keyA = a?.frontKey ?? 0;
+  const ra = record(A.g, keyA), rb = B.fronts.take().find((f) => f.key === keyA);
+  kmhA = ra?.advanceKmh ?? -1;
+  kmhB = rb?.advanceKmh ?? -1;
+  row('A8b', 'restored game identical right after the load and for 120 ticks (ownership, offensive, fronts, garrisons, troops)', same0 && sameAll ? 'identical' : `differs${firstDiff > 0 ? ` from tick ${firstDiff}` : ' at load'}`, 'identical', same0 && sameAll);
+  row('A8c', 'the restored front publishes its line again (advanceKmh original / restored, 120 ticks later)', `${kmhA.toFixed(2)} / ${kmhB.toFixed(2)} km/h, line ${rb?.line ? 'published' : 'missing'}`, 'line published, |Δ| <= 0.3 km/h', !!rb?.line && kmhA >= 0 && Math.abs(kmhA - kmhB) <= 0.3);
+}
+
+saveRoundTrip();
 reversal();
 persistence();
 depthLine();
