@@ -111,7 +111,21 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     if (e.playerId !== HUMAN_ID) return;
     if (COVERED.has(e.key.replace(/\.(m|f)$/, ''))) return;
     const sev = e.severity === 'danger' ? 'danger' : e.severity === 'warning' ? 'warning' : 'info';
-    alert({ kind: 'message', severity: sev, title: t(e.key, e.params), groupKey: `msg:${e.key}`, ttlSec: sev === 'info' ? 8 : 12 });
+    // The sim sends ids and raw numbers; the text gets the player's name in this language, locale decimals and places.
+    const p: Record<string, string | number> = { ...e.params };
+    if (typeof p.player === 'number' && p.name === undefined) p.name = name(p.player);
+    if (typeof p.ratio === 'number') p.ratio = decimal(p.ratio);
+    if (typeof p.troops === 'number') p.troops = formatNumber(p.troops);
+    let where: { lat: number; lon: number } | null = null;
+    if (typeof p.x1 === 'number' && typeof p.y1 === 'number') {
+      p.to = describeXY(view(), p.x1, p.y1).text;
+      where = atXY(p.x1, p.y1);
+    }
+    if (typeof p.x0 === 'number' && typeof p.y0 === 'number') p.from = describeXY(view(), p.x0, p.y0).text;
+    alert({
+      kind: 'message', severity: sev, title: t(e.key, p), groupKey: `msg:${e.key}`, ttlSec: sev === 'info' ? 8 : 12,
+      ...(where ? { lat: where.lat, lon: where.lon, icon: 'attack' as const } : {}),
+    });
     if (sev !== 'info') hs.sound('error');
   });
 
@@ -449,8 +463,10 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       if (!mob && a.naval && (a.state === 'embarking' || a.state === 'sailing')) continue;
       const key = mob ? `mob:${a.attacker}` : `front:${a.frontKey || `a${a.attacker}`}`;
       let g = groups.get(key);
-      // Where the fighting is: the offensive's front (its origin on our border), not the far axis point it aims at.
-      const fx = mob || !(a.originX > 0) ? a.x : a.originX, fy = mob || !(a.originY > 0) ? a.y : a.originY;
+      // Where the fighting is: the offensive's live contact (else its origin on our border), not the far axis point.
+      const live = !mob && a.contactX >= 0;
+      const fx = live ? a.contactX : mob || !(a.originX > 0) ? a.x : a.originX;
+      const fy = live ? a.contactY : mob || !(a.originY > 0) ? a.y : a.originY;
       if (!g) groups.set(key, (g = { attacker: a.attacker, troops: 0, x: fx, y: fy, ratio: 0, ids: [], mobilizing: mob, eta: a.etaTicks, fk: a.frontKey }));
       if (!g.fk && a.frontKey) g.fk = a.frontKey;
       g.troops += a.troops;

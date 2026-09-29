@@ -66,7 +66,7 @@ export type LocalForcesFront = Pick<FrontView,
   | 'momentum' | 'advanceKmh' | 'intensity' | 'quiet' | 'offensiveA' | 'offensiveB'>;
 export type LocalForcesAttack = Pick<AttackView,
   'id' | 'attacker' | 'defender' | 'troops' | 'x' | 'y' | 'originX' | 'originY' | 'frontKey' | 'frontageTiles' | 'state'
-  | 'naval' | 'advanceKmh'>;
+  | 'naval' | 'advanceKmh'> & Partial<Pick<AttackView, 'contactX' | 'contactY'>>;
 
 export interface LocalForcesView {
   readonly tick: number;
@@ -546,9 +546,12 @@ export function deriveLocalForces(
     for (const at of attacksByFront.get(f.key) ?? []) {
       if (at.troops <= 0) continue;
       const corridorKm = Math.max(TILE_KM, at.frontageTiles * TILE_KM);
-      // Corridor axis: origin → axis point (fallback: the front's advance direction through the axis point).
-      const ax = wdx(x, at.x) * kmX, an = (y - at.y) * kmY;
-      let ue = wdx(at.originX, at.x) * kmX, un = (at.originY - at.y) * kmY;
+      // Corridor axis: the ray from the origin through the live contact (where it fights now), else through the axis
+      // point (fallback: the front's advance direction through the axis point).
+      const live = (at.contactX ?? -1) >= 0 && Math.hypot(wdx(at.originX, at.contactX!) * kmX, (at.originY - at.contactY!) * kmY) >= TILE_KM;
+      const px = live ? at.contactX! : at.x, py = live ? at.contactY! : at.y;
+      const ax = wdx(x, px) * kmX, an = (y - py) * kmY;
+      let ue = wdx(at.originX, px) * kmX, un = (at.originY - py) * kmY;
       if (at.originX < 0 || Math.hypot(ue, un) < 1) {
         ue = at.attacker === f.a ? dirE : -dirE;
         un = at.attacker === f.a ? dirN : -dirN;

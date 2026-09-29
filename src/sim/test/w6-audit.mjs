@@ -18,6 +18,10 @@
 //     not saved and is re-measured): the save succeeds, the restored game has the same fronts, garrisons and offensive,
 //     both games stay identical tick for tick (ownership, troops, offensive), and the restored front publishes its line
 //     again with the same speed within a few ticks.
+// A9  an offensive that advances far past its axis point (W6 final fix pass, the verifier's iter-3 evidence): the axis
+//     point moves ahead of the advance on enemy land, the offensive's front key stays on the front where its frontier
+//     is (not a quiet front near the origin it left behind), the front reads km/h > 0 matching the fallen area's rate
+//     while tiles fall, its published line lies at the live contact, and local forces count the offensive there.
 // A6  T41: the front's line published as one smoothed depth offset at the observation focus moves every tick by exactly
 //     its published speed, never jumps, sets the front's advanceKmh, and stays inside the tile being taken.
 
@@ -277,7 +281,8 @@ function depthLine() {
   P.troops = 900_000;
   g.issue(E, { type: 'attack', target: H, ratio: 0.7, tile: cy * W + cx - 15 });
   const a = g.attackList.find((x) => !x.ended && x.attacker === E);
-  g.observationFocus = { x: cx - 0.5, y: cy + 3 };
+  // On the offensive's axis: the front's line there is measured every tick and is also its advanceKmh (W6 final).
+  g.observationFocus = { x: cx - 0.5, y: cy };
   const TILE = 25.02;
   // Ownership-only depth of the same window (independent of the sim's measure): mean over 2.5 km columns.
   const ownDepth = (L) => {
@@ -441,10 +446,124 @@ function saveRoundTrip() {
   kmhA = ra?.advanceKmh ?? -1;
   kmhB = rb?.advanceKmh ?? -1;
   row('A8b', 'restored game identical right after the load and for 120 ticks (ownership, offensive, fronts, garrisons, troops)', same0 && sameAll ? 'identical' : `differs${firstDiff > 0 ? ` from tick ${firstDiff}` : ' at load'}`, 'identical', same0 && sameAll);
-  row('A8c', 'the restored front publishes its line again (advanceKmh original / restored, 120 ticks later)', `${kmhA.toFixed(2)} / ${kmhB.toFixed(2)} km/h, line ${rb?.line ? 'published' : 'missing'}`, 'line published, |Δ| <= 0.3 km/h', !!rb?.line && kmhA >= 0 && Math.abs(kmhA - kmhB) <= 0.3);
+  row('A8c', 'the restored front publishes its line again (advanceKmh original / restored, 120 ticks later)', `${kmhA.toFixed(2)} / ${kmhB.toFixed(2)} km/h, line ${rb?.line ? 'published' : 'missing'}`, 'line published, |Δ| <= max(0.5 km/h, 10 %) (view data re-measured)', !!rb?.line && kmhA >= 0 && Math.abs(kmhA - kmhB) <= Math.max(0.5, 0.1 * kmhA));
+}
+
+// ---- A9: far past the axis point ------------------------------------------------------------------------------
+async function farAdvance() {
+  const { g, step } = controlledGame(14);
+  const H = HUMAN_ID;
+  stageLand(g, 0, (t) => g.owner[t] === H);
+  const c = latLonToTileXY(40, -98);
+  const cx = Math.floor(c.x), cy = Math.floor(c.y);
+  // The human west of x = cx; the enemy east (30 tiles deep) and a second enemy block touching the human's south
+  // flank 11+ tiles west of the main front: a separate front close to where the offensive starts.
+  stageLand(g, H, (t) => inRect(t, cx - 30, cx - 1, cy - 8, cy + 8));
+  const E = g.addPlayer({ name: 'Enemigo', kind: 'nation', personality: 'conqueror', color: 0xcc3333, countryIndex: 0 });
+  stageLand(g, E, (t) => inRect(t, cx, cx + 29, cy - 20, cy + 20) || inRect(t, cx - 22, cx - 12, cy + 9, cy + 12));
+  const D = g.playerById[H], P = g.playerById[E];
+  D.capitalTile = cy * W + cx - 25;
+  P.capitalTile = (cy - 18) * W + cx + 27;
+  step();
+  const msgs = [];
+  const orig = g.message.bind(g);
+  g.message = (pid, key, sev, params) => { msgs.push({ tick: g.tick, key, params }); orig(pid, key, sev, params); };
+  g.war.declare(H, E, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+  for (let i = 0; i < 25; i++) step();
+  D.troops = 1_400_000;
+  P.troops = 150_000;
+  // The objective 3 tiles into the enemy, level with the middle of our block.
+  g.issue(H, { type: 'attack', target: E, ratio: 0.5, tile: cy * W + cx + 3 });
+  const a = g.attackList.find((x) => !x.ended && x.attacker === H);
+  const lf = await import('../../shared/localForces.ts');
+  const kmX = (y) => 25.02 * Math.cos(((90 - (y / 800) * 180) * Math.PI) / 180);
+  let samples = 0, keyOk = 0, axisOk = 0, lineOk = 0, zero = 0, taking = 0, fullOk = 0;
+  const keys = new Set();
+  let tiles0 = -1, t0 = -1, kmhSum = 0, kmhN = 0, rateKmh = 0, localOff = 0, localOk = 0, localN = 0, maxAlong = 0;
+  const bad = [];
+  for (let i = 1; i <= 700 && !a.ended; i++) {
+    D.troops = Math.max(D.troops, 700_000);
+    step();
+    if (i < 40 || i % 10 !== 0) continue;
+    samples++;
+    // Independent: the front of the pair that most of the offensive's frontier tiles lie on (each tile counted on the
+    // front whose contact line is nearest to it).
+    const count = new Map();
+    const fr = g.fronts.frontsOfPair(H, E);
+    for (const t of a.pressure.keys()) {
+      const tx = (t % W) + 0.5, ty = Math.floor(t / W) + 0.5;
+      let bk = 0, bdd = Infinity;
+      for (const f of fr) {
+        for (let v = 0; v < f.samples.length; v += 2) {
+          const dx = f.samples[v] - tx, dy = f.samples[v + 1] - ty;
+          if (dx * dx + dy * dy < bdd) { bdd = dx * dx + dy * dy; bk = f.key; }
+        }
+      }
+      count.set(bk, (count.get(bk) ?? 0) + 1);
+    }
+    let best = 0, bn = -1;
+    for (const [k, n] of count) if (n > bn) { bn = n; best = k; }
+    keys.add(a.frontKey);
+    if (a.frontKey === best) keyOk++;
+    else if (bad.length < 3) bad.push(`tick ${i}: key ${a.frontKey}, frontier on ${best}`);
+    if (process.env.A9DBG && a.frontKey !== best) console.log(i, g.tick, 'contact', a.liveX.toFixed(1), a.liveY.toFixed(1), 'fronts', g.fronts.frontsOfPair(H, E).map((f) => `${f.key}:len${f.length}@${f.x.toFixed(0)},${f.y.toFixed(0)} seen${f.seenTick}`).join(' '), 'pressure', [...a.pressure.keys()].map((t) => `${t % W - cx},${Math.floor(t / W) - cy}`).join(' '));
+    // The axis point: on enemy land, ahead of the contact along the axis.
+    const ct = Math.floor(a.clickY) * W + Math.floor(a.clickX);
+    const clickAlong = (a.clickX - a.originX) * a.dirX + (a.clickY - a.originY) * a.dirY;
+    if (g.owner[ct] === E && clickAlong >= a.liveAlong - 0.5) axisOk++;
+    else if (bad.length < 6) bad.push(`tick ${i}: axis owner ${g.owner[ct]} along ${clickAlong.toFixed(1)} vs contact ${a.liveAlong.toFixed(1)}`);
+    maxAlong = Math.max(maxAlong, a.liveAlong);
+    const r = record(g, a.frontKey);
+    const L = r?.line;
+    if (L) {
+      const lx = L.x + (L.depthKm * L.e) / kmX(L.y), ly = L.y - (L.depthKm * L.n) / 25.02;
+      const dk = Math.hypot((lx - a.liveX) * kmX(L.y), (ly - a.liveY) * 25.02);
+      if (dk <= 40) lineOk++;
+      else if (bad.length < 9) bad.push(`tick ${i}: line ${dk.toFixed(0)} km from the contact`);
+    }
+    const kmh = r?.advanceKmh ?? 0;
+    if (a.state === 'advancing') {
+      taking++;
+      if (kmh < 0.05) zero++;
+    }
+    if (tiles0 < 0 && a.state === 'advancing') { tiles0 = a.tilesTaken; t0 = g.tick; }
+    else if (tiles0 >= 0) { kmhSum += kmh; kmhN++; }
+    // Local forces at the live contact count this offensive on the front it fights.
+    if (i % 50 === 0) {
+      const players = [];
+      for (const p of g.playerArr) players[p.id] = { id: p.id, alive: p.alive, troops: p.troops, tiles: p.tiles };
+      const view = {
+        tick: g.tick, world: { terrain: g.terrain }, owner: g.owner, players, units: new Map(), structures: new Map(),
+        fronts: g.fronts.take(), attacks: g.attackList.filter((x) => !x.ended).map((x) => g.attacks.view(x)),
+        pairState: () => 'war', hasTreaty: () => false, isOccupied: () => false,
+      };
+      try {
+        const loc = lf.deriveLocalForces(view, a.liveX, a.liveY, 30, H);
+        const us = loc.sides.find((sd) => sd.owner === H);
+        localOff = us?.pools?.offensive ?? 0;
+        localN++;
+        if (localOff > 0 && loc.frontKey === a.frontKey) localOk++;
+      } catch (e) {
+        if (bad.length < 12) bad.push(`localForces: ${String(e?.message ?? e).slice(0, 80)}`);
+      }
+    }
+  }
+  if (tiles0 >= 0) {
+    const hours = (g.tick - t0) / 10;
+    const W0 = 25.02 * Math.cos(((90 - (a.originY / 800) * 180) * Math.PI) / 180);
+    const widthKm = a.frontage * Math.sqrt((a.dirY * W0) ** 2 + (a.dirX * 25.02) ** 2);
+    rateKmh = ((a.tilesTaken - tiles0) * 25.02 * W0) / widthKm / Math.max(1, hours);
+  }
+  const meanKmh = kmhN ? kmhSum / kmhN : 0;
+  const moved = msgs.filter((m) => m.key === 'msg.offensiveObjective').length;
+  row('A9a', `the offensive advanced ${(maxAlong * 25).toFixed(0)} km past its origin (axis point 3 tiles in); its front key is the front most of its frontier is on (keys ${[...keys].join(', ')})${bad.length ? ` [${bad.slice(0, 2).join('; ')}]` : ''}`, `${keyOk}/${samples} samples`, 'all, advance >= 300 km', samples > 0 && keyOk === samples && maxAlong * 25 >= 300);
+  row('A9b', `the axis point stays on enemy land, never behind the line (moved ${moved} times, the player told each time)`, `${axisOk}/${samples} samples`, 'all', samples > 0 && axisOk === samples && moved > 0);
+  row('A9c', 'the front never reads 0 km/h while its offensive advances; the line speed matches the fallen area', `${zero} zero readings of ${taking}; mean ${meanKmh.toFixed(2)} km/h vs area ${rateKmh.toFixed(2)} km/h`, '0 zero; ratio 0.6-1.4', taking > 0 && zero === 0 && rateKmh > 0 && meanKmh / rateKmh >= 0.6 && meanKmh / rateKmh <= 1.4);
+  row('A9d', 'the published line stands at the live contact; local forces there count the offensive', `line ${lineOk}/${samples}; local offensive pool at the contact on the offensive's front ${localOk}/${localN} (last ${localOff.toFixed(0)} soldiers)`, 'all; all', lineOk === samples && localN > 0 && localOk === localN);
 }
 
 saveRoundTrip();
+await farAdvance();
 reversal();
 persistence();
 depthLine();

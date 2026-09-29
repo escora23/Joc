@@ -455,6 +455,12 @@ export interface AttackView {
   y: number;
   originX: number;
   originY: number;
+  /**
+   * W6: the live contact, where the axis ray meets the offensive's frontier now (continuous tile coords, -1 = none): the
+   * place it fights, which leaves the origin behind as it advances. The axis point (x, y) stays ahead of it.
+   */
+  contactX: number;
+  contactY: number;
   /** Stable key of the front it pushes on (0 = none yet / unclaimed land). */
   frontKey: number;
   /** Corridor width in tiles (§4.3). */

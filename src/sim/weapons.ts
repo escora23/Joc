@@ -750,7 +750,8 @@ export class WeaponSystem {
       // Offensives of the victim whose corridor lies in the blast.
       for (const a of g.attackList) {
         if (a.ended || a.attacker !== o) continue;
-        const d2 = surfDist2(cx, cy, a.originX, a.originY);
+        // Where its troops are: the live contact (W6), else the origin it started from.
+        const d2 = a.liveX >= 0 ? surfDist2(cx, cy, a.liveX, a.liveY) : surfDist2(cx, cy, a.originX, a.originY);
         if (d2 > outer2 * 2.25) continue;
         const k = a.troops * (isNuke ? (d2 <= inner2 * 2.25 ? def.troopLoss : 0.25) : 0.05);
         a.troops -= k;

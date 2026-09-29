@@ -504,12 +504,13 @@ export class FrontTracker {
         const near = this.progressNear(f, focus.x, focus.y, offA ?? offB!);
         if (near) rec.progress = near;
       }
-      // T41: where the line is measured, its speed IS the front's measured advance (badge, panel, strip, battle).
+      // T41: the published line (the battle's), and the front's measured advance: the speed of the line on its lead
+      // offensive's live axis (else of its focus line), the same figure for the badge, the panel and the strip. A line
+      // not found lately falls back to the fallen area's rate, so a front taking tiles never reads 0 km/h.
       const line = this.lines.record(f.key);
-      if (line) {
-        rec.line = line;
-        rec.advanceKmh = +Math.abs(line.kmh).toFixed(2);
-      }
+      if (line) rec.line = line;
+      const kmh = this.lines.kmh(f.key);
+      if (kmh !== null) rec.advanceKmh = +Math.abs(kmh).toFixed(2);
       out.push(rec);
     }
     return out;

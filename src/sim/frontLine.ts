@@ -13,9 +13,13 @@
 // is therefore the line's own speed by construction: the front badge, the Guerra panel and the HUD strip show it as
 // advanceKmh, and the ground battle draws the line gliding from one published depth to the next at that speed.
 //
-// Where it is measured: at the observation focus (the camera's ground point, every tick) for every front whose line
-// passes within 75 km of it; elsewhere on the lead offensive's axis where it crosses the line (every 5 ticks).
-// Quiet fronts away from the focus have none.
+// Where it is measured (W6 final fix pass): every front with a live offensive has ONE line on that offensive's LIVE axis
+// (where its axis ray meets its frontier now, Attack.liveX/Y, not where it started), over a window as wide as its
+// corridor (25-75 km each side), re-placed when the advance drifts sideways from it: the front's advanceKmh is that
+// line's speed, so a front that is taking tiles never reads 0 km/h however far it has gone. With the observation focus
+// inside that window the same line is measured every tick at the finer step and the ground battle stands on it; a
+// focus elsewhere on the front (or on a quiet front) gets its own line for the battle, and the front's advanceKmh stays
+// the offensive's. Quiet fronts away from the focus have none.
 
 import { ADVANCE_MAX_KMH, MAP_H, MAP_W, TICKS_PER_GAME_HOUR, TILE_KM } from '../shared/constants';
 import type { FrontLine } from '../shared/types';
@@ -44,6 +48,10 @@ const V_MAX = (ADVANCE_MAX_KMH * 1.5) / TICKS_PER_GAME_HOUR;
 const REBASE_KM = 50;
 /** Keep the axis while the front's direction stays within this angle of it (cos 35°). */
 const AXIS_KEEP_COS = Math.cos((35 * Math.PI) / 180);
+/** Window half-length on an offensive's axis: its corridor's half width, within these bounds (km). */
+const AXIS_HALF_MIN_KM = 25;
+/** Consecutive empty readings after which the line's speed is not trusted (the front reports the fallen area's rate). */
+const NULL_LIMIT = 2;
 
 interface LineState {
   /** Reference point (continuous tile coords) and the unit axis in local km (east, north) = side a's advance. */
@@ -61,10 +69,17 @@ interface LineState {
   focus: boolean;
   fx: number;
   fy: number;
+  /** Window half-length along the line (km). */
+  half: number;
+  /** Consecutive readings with no line inside the window. */
+  nulls: number;
 }
 
 export class FrontLines {
+  /** Lines at the observation focus away from an offensive's axis (and on quiet fronts): the ground battle's line. */
   private readonly lines = new Map<number, LineState>();
+  /** The line on each front's lead offensive's live axis: the front's advanceKmh (and its line when no focus is apart). */
+  private readonly axes = new Map<number, LineState>();
 
   constructor(private readonly g: Game) {}
 
@@ -72,31 +87,43 @@ export class FrontLines {
   update(fronts: Iterable<Front>): void {
     const g = this.g;
     const focus = g.observationFocus;
-    const seen = new Set<number>();
+    const seenF = new Set<number>(), seenA = new Set<number>();
     for (const f of fronts) {
       if (f.b === 0 || f.samples.length < 2) continue;
       const offA = this.live(f.offensive[0], f.key);
       const offB = this.live(f.offensive[1], f.key);
-      let st = this.lines.get(f.key);
+      const lead = offA && offB ? (offA.pa >= offB.pa ? offA : offB) : offA ?? offB;
       const near = focus ? nearestOnLine(f, focus.x, focus.y) : null;
       const atFocus = !!near && near.km <= FOCUS_REACH_KM;
-      if (!atFocus && !offA && !offB) continue;
-      seen.add(f.key);
-      if (atFocus && focus && near) {
-        if (!st || !st.focus || distKm(st.fx, st.fy, focus.x, focus.y) > FOCUS_MOVE_KM) {
-          st = this.place(f, near.x, near.y, st, true, focus.x, focus.y);
+      let shared = false;
+      if (lead) {
+        seenA.add(f.key);
+        const p = axisPoint(f, lead);
+        const half = axisHalfKm(lead);
+        let st = this.axes.get(f.key);
+        if (!st || lateralKm(st, p.x, p.y) > Math.max(AXIS_HALF_MIN_KM, st.half * 0.5) || Math.abs(st.half - half) > 10) {
+          st = this.place(this.axes, f, p.x, p.y, st ?? this.lines.get(f.key), false, 0, 0, half);
+        }
+        // The focus inside this window: the same line, measured every tick (the battle stands on it).
+        shared = atFocus && !!near && lateralKm(st, near.x, near.y) <= st.half - 3;
+        st.focus = shared;
+        if (shared && focus) {
+          st.fx = focus.x;
+          st.fy = focus.y;
+          this.measure(f, st, offA, offB, STEP_FOCUS_KM);
+        } else if (st.tick < 0 || (g.tick + f.key) % AXIS_EVERY === 0) this.measure(f, st, offA, offB, STEP_AXIS_KM);
+      }
+      if (atFocus && !shared && focus && near) {
+        seenF.add(f.key);
+        let st = this.lines.get(f.key);
+        if (!st || distKm(st.fx, st.fy, focus.x, focus.y) > FOCUS_MOVE_KM) {
+          st = this.place(this.lines, f, near.x, near.y, st, true, focus.x, focus.y, LINE_HALF_KM);
         }
         this.measure(f, st, offA, offB, STEP_FOCUS_KM);
-      } else {
-        if (!st || st.focus) {
-          const p = axisPoint(f, (offA && offB ? (offA.pa >= offB.pa ? offA : offB) : offA ?? offB)!);
-          st = this.place(f, p.x, p.y, st, false, 0, 0);
-        }
-        if (st.tick >= 0 && (g.tick + f.key) % AXIS_EVERY !== 0) continue;
-        this.measure(f, st, offA, offB, STEP_AXIS_KM);
       }
     }
-    for (const k of this.lines.keys()) if (!seen.has(k)) this.lines.delete(k);
+    for (const k of this.lines.keys()) if (!seenF.has(k)) this.lines.delete(k);
+    for (const k of this.axes.keys()) if (!seenA.has(k)) this.axes.delete(k);
   }
 
   /**
@@ -111,27 +138,48 @@ export class FrontLines {
       if (f.b === 0 || f.samples.length < 2) continue;
       const near = nearestOnLine(f, focus.x, focus.y);
       if (near.km > FOCUS_REACH_KM) continue;
+      const offA = this.live(f.offensive[0], f.key), offB = this.live(f.offensive[1], f.key);
+      const ax = this.axes.get(f.key);
+      if (ax && ax.tick >= 0 && lateralKm(ax, near.x, near.y) <= ax.half - 3) {
+        // Inside the offensive's window: that line is the battle's; read it now at the fine step.
+        ax.focus = true;
+        ax.fx = focus.x;
+        ax.fy = focus.y;
+        this.lines.delete(f.key);
+        continue;
+      }
       const st = this.lines.get(f.key);
-      if (st && st.focus && st.tick >= 0 && distKm(st.fx, st.fy, focus.x, focus.y) <= FOCUS_MOVE_KM) continue;
-      const placed = this.place(f, near.x, near.y, st, true, focus.x, focus.y);
-      this.measure(f, placed, this.live(f.offensive[0], f.key), this.live(f.offensive[1], f.key), STEP_FOCUS_KM);
+      if (st && st.tick >= 0 && distKm(st.fx, st.fy, focus.x, focus.y) <= FOCUS_MOVE_KM) continue;
+      const placed = this.place(this.lines, f, near.x, near.y, st ?? ax, true, focus.x, focus.y, LINE_HALF_KM);
+      this.measure(f, placed, offA, offB, STEP_FOCUS_KM);
       any = true;
     }
     return any;
   }
 
-  /** The published line of a front (null when it has none yet). */
+  /** The published line of a front: at the focus when one is apart from the offensive's axis, else the axis line. */
   record(key: number): FrontLine | null {
-    const st = this.lines.get(key);
+    const st = this.lines.get(key) ?? this.axes.get(key);
     if (!st || st.tick < 0) return null;
     return {
       x: +st.x.toFixed(4), y: +st.y.toFixed(4), e: +st.e.toFixed(5), n: +st.n.toFixed(5), depthKm: +st.L.toFixed(4),
-      halfKm: LINE_HALF_KM, kmh: +(st.V * TICKS_PER_GAME_HOUR).toFixed(3), tick: st.tick, focus: st.focus,
+      halfKm: st.half, kmh: +(st.V * TICKS_PER_GAME_HOUR).toFixed(3), tick: st.tick, focus: st.focus,
     };
+  }
+
+  /**
+   * The front's measured advance (km/h, signed: + side a gains): its lead offensive's axis line, else its focus line;
+   * null when there is none or it has not found the line lately (the front then reports the fallen area's rate).
+   */
+  kmh(key: number): number | null {
+    const st = this.axes.get(key) ?? this.lines.get(key);
+    if (!st || st.tick < 0 || st.nulls >= NULL_LIMIT) return null;
+    return st.V * TICKS_PER_GAME_HOUR;
   }
 
   clear(): void {
     this.lines.clear();
+    this.axes.clear();
   }
 
   private live(id: number, key: number): Attack | undefined {
@@ -140,13 +188,13 @@ export class FrontLines {
     return a && !a.ended && a.frontKey === key && a.returnAt < 0 ? a : undefined;
   }
 
-  /** (Re)place the reference point; the tracker's speed carries over (the same front, measured elsewhere). */
-  private place(f: Front, x: number, y: number, prev: LineState | undefined, focus: boolean, fx: number, fy: number): LineState {
-    const c = latCos(y);
-    let e = f.dirX * TILE_KM * c, n = -f.dirY * TILE_KM;
-    const l = Math.hypot(e, n) || 1;
-    e /= l;
-    n /= l;
+  /**
+   * (Re)place the reference point on the tile-level line at (x, y), its axis the line's local normal toward side b; the
+   * tracker's speed carries over (the same front, measured elsewhere).
+   */
+  private place(map: Map<number, LineState>, f: Front, x: number, y: number, prev: LineState | undefined, focus: boolean, fx: number, fy: number, half: number): LineState {
+    const nrm = localNormal(f, x, y);
+    let e = nrm.e, n = nrm.n;
     if (prev && prev.e * e + prev.n * n >= AXIS_KEEP_COS) {
       e = prev.e;
       n = prev.n;
@@ -154,8 +202,8 @@ export class FrontLines {
     let V = 0;
     if (prev) V = prev.V * (prev.e * e + prev.n * n);
     else if (!f.offensive[0] !== !f.offensive[1]) V = ((f.offensive[0] ? 1 : -1) * f.advanceKmh) / TICKS_PER_GAME_HOUR;
-    const st: LineState = { x, y, e, n, L: 0, V, raw: 0, tick: -1, focus, fx, fy };
-    this.lines.set(f.key, st);
+    const st: LineState = { x, y, e, n, L: 0, V, raw: 0, tick: -1, focus, fx, fy, half, nulls: 0 };
+    map.set(f.key, st);
     return st;
   }
 
@@ -173,6 +221,7 @@ export class FrontLines {
       return;
     }
     const raw = this.depth(f, st, st.L, offA, offB, step);
+    st.nulls = raw === null ? st.nulls + 1 : 0;
     const dt = Math.max(1, Math.min(20, tick - st.tick));
     const w = 1 / (st.focus ? TAU_TICKS : TAU_AXIS_TICKS);
     for (let i = 1; i <= dt; i++) {
@@ -205,12 +254,12 @@ export class FrontLines {
     const owner = g.owner;
     const a = f.a, b = f.b;
     const kmX = TILE_KM * latCos(st.y), kmY = TILE_KM;
-    const nCols = Math.round((2 * LINE_HALF_KM) / step) + 1;
+    const nCols = Math.round((2 * st.half) / step) + 1;
     const nRows = Math.round((2 * LINE_DEPTH_KM) / step) + 1;
     const d0 = c - LINE_DEPTH_KM;
     let sum = 0, cols = 0;
     for (let i = 0; i < nCols; i++) {
-      const u = -LINE_HALF_KM + i * step;
+      const u = -st.half + i * step;
       let nab = 0, wa = 0;
       for (let j = 0; j < nRows; j++) {
         const d = d0 + j * step;
@@ -278,8 +327,16 @@ export function nearestOnLine(f: Front, px: number, py: number): { x: number; y:
   return { x: bx, y: by, km: best };
 }
 
-/** Where the offensive's axis (origin → axis point) crosses the front's contact line; the line's middle without one. */
+/**
+ * Where the offensive fights on the front's contact line: the point of the tile-level line nearest to its live contact
+ * (Attack.liveX/Y, where its axis ray meets its frontier now); before it has one, where the ray from its origin through
+ * its axis point crosses the line; the line's middle without either.
+ */
 function axisPoint(f: Front, a: Attack | undefined): { x: number; y: number } {
+  if (a && a.liveX >= 0) {
+    const p = nearestOnLine(f, a.liveX, a.liveY);
+    return { x: p.x, y: p.y };
+  }
   const s = f.samples;
   const n = s.length >> 1;
   let m = n >> 1;
@@ -293,7 +350,7 @@ function axisPoint(f: Front, a: Attack | undefined): { x: number; y: number } {
       let best = Infinity;
       for (let v = 0; v < n; v++) {
         const rx = wdx(a.originX, s[v * 2]) * c, ry = s[v * 2 + 1] - a.originY;
-        const perp = Math.abs(rx * uy - ry * ux);
+        const perp = Math.abs(rx * uy - ry * ux) + (rx * ux + ry * uy < -2 ? 50 : 0);
         if (perp < best) {
           best = perp;
           m = v;
@@ -302,4 +359,52 @@ function axisPoint(f: Front, a: Attack | undefined): { x: number; y: number } {
     }
   }
   return { x: wrapXf(s[m * 2] + f.dirX * 0.5), y: s[m * 2 + 1] + f.dirY * 0.5 };
+}
+
+/** Window half-length on an offensive's axis: half its corridor (km), within 25-75 km. */
+function axisHalfKm(a: Attack): number {
+  return Math.round(Math.max(AXIS_HALF_MIN_KM, Math.min(LINE_HALF_KM, (a.frontage * TILE_KM) / 2)));
+}
+
+/** Distance (km) along the state's line, sideways from where its line is now, to the point (x, y). */
+function lateralKm(st: LineState, x: number, y: number): number {
+  const c = latCos(st.y);
+  const ex = wdx(st.x, x) * TILE_KM * c - st.L * st.e, ny = (st.y - y) * TILE_KM - st.L * st.n;
+  return Math.abs(-ex * st.n + ny * st.e);
+}
+
+/**
+ * The line's local normal toward side b (unit, local km east/north) near (x, y): perpendicular to the polyline over
+ * about ±4 vertices (±6 tiles, the window's length) around its nearest vertex; the front's mean direction as fallback.
+ */
+function localNormal(f: Front, x: number, y: number): { e: number; n: number } {
+  const c = latCos(y);
+  let fe = f.dirX * TILE_KM * c, fn = -f.dirY * TILE_KM;
+  const fl = Math.hypot(fe, fn) || 1;
+  fe /= fl;
+  fn /= fl;
+  const s = f.samples;
+  const nv = s.length >> 1;
+  if (nv < 3) return { e: fe, n: fn };
+  let m = 0, bd = Infinity;
+  for (let v = 0; v < nv; v++) {
+    const dx = wdx(x, s[v * 2]) * c, dy = s[v * 2 + 1] - y;
+    const d = dx * dx + dy * dy;
+    if (d < bd) {
+      bd = d;
+      m = v;
+    }
+  }
+  const i0 = Math.max(0, m - 4), i1 = Math.min(nv - 1, m + 4);
+  if (i1 - i0 < 2) return { e: fe, n: fn };
+  const te = wdx(s[i0 * 2], s[i1 * 2]) * TILE_KM * c, tn = (s[i0 * 2 + 1] - s[i1 * 2 + 1]) * TILE_KM;
+  const tl = Math.hypot(te, tn);
+  if (tl < 1e-6) return { e: fe, n: fn };
+  let e = -tn / tl, n = te / tl;
+  if (e * fe + n * fn < 0) {
+    e = -e;
+    n = -n;
+  }
+  // A local normal more than 60° off the front's mean direction is noise (a bend, a pocket): keep the mean.
+  return e * fe + n * fn >= 0.5 ? { e, n } : { e: fe, n: fn };
 }

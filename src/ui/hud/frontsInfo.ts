@@ -119,12 +119,15 @@ export function advanceText(view: GameView, f: FrontView, s: FrontSides, arrow =
     case 'holding': return `${arrow ? '‖ ' : ''}${t('fr.adv.holding')}`;
     default: break;
   }
+  // The measured line speed (on the offensive's live axis): «estancado» only when that line really stops (never «▶ 0
+  // km/h» next to an offensive that is taking ground), «consolidando» when the logistics hold it.
   const kmh = f.advanceKmh;
-  if (s.gaining === 0 && kmh < 0.5) return `${arrow ? '‖ ' : ''}${t('fr.adv.stalled')}`;
+  if (a.state === 'stalled' || kmh < 0.05) {
+    return `${arrow ? '‖ ' : ''}${t(a.state === 'consolidating' ? 'fr.adv.consolidating' : 'fr.adv.stalled')}`;
+  }
   const g = s.gaining === 0 ? 1 : s.gaining;
   const base = `${sym(g)}${t('fr.adv.kmh', { v: kmhText(kmh) })}`;
   if (a.state === 'consolidating') return `${base} · ${t('fr.adv.consolidating')}`;
-  if (a.state === 'stalled') return `${arrow ? '‖ ' : ''}${t('fr.adv.stalled')}`;
   return base;
 }
 
@@ -143,11 +146,17 @@ export function frontAnchor(f: FrontView, out: { x: number; y: number } = { x: 0
 }
 
 /**
- * Where to look at a front from low altitude: its anchor moved onto the front's published sub-tile line (FrontView.line,
- * where the ground battle stands) when the anchor lies along that line, else the anchor itself.
+ * Where to look at a front from low altitude: where its lead offensive fights now (its live contact, on the offensive's
+ * axis where the front's line and km/h are measured), else its anchor; moved onto the front's published sub-tile line
+ * (FrontView.line, where the ground battle stands) when it lies along that line.
  */
 export function frontFocus(view: GameView, f: FrontView): { x: number; y: number } {
   const p = frontAnchor(f);
+  const lead = sidesOf(view, f).lead;
+  if (lead && lead.frontKey === f.key && lead.contactX >= 0) {
+    p.x = lead.contactX;
+    p.y = lead.contactY;
+  }
   const L = f.line;
   if (!L) return p;
   const o = publishedLineOffset(L, p.x, p.y, Math.max(L.tick, Math.min(L.tick + 6, view.simTime * 10)));

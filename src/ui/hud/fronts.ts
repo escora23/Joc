@@ -144,13 +144,44 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     const ll = tileXYToLatLon(p.x, p.y);
     ctx.bus.emit('focusRequest', { lat: ll.lat, lon: ll.lon, altitudeKm: alt, durationMs: 1300 });
   }
-  /** A tile `depth` tiles into `side`'s land from the middle of the front (the contact edge ± dir). */
-  function tileInto(f: FrontView, side: number, depth: number): number {
-    const p = frontAnchor(f);
-    const s = side === f.b ? 1 : -1;
-    const x = (((p.x + f.dirX * depth * s) % MAP_W) + MAP_W) % MAP_W;
-    const y = Math.max(0, Math.min(MAP_H - 1, p.y + f.dirY * depth * s));
-    return Math.floor(y) * MAP_W + Math.floor(x);
+  /**
+   * Where a division sent to this front joins it (the sim's 'attach': enemy land right at the contact, within
+   * DIVISION_ATTACH_TILES of ours): beside our offensive's live contact when we have one there (it supports that
+   * offensive), else facing the middle of the line outwards; the first enemy tile 0.6-1.5 tiles past the contact edge.
+   * -1 when no stretch of the front faces enemy land.
+   */
+  function attachTile(f: FrontView, enemy: number): number {
+    const v = view();
+    const s = enemy === f.b ? 1 : -1;
+    const pick = (x0: number, y0: number, dx: number, dy: number): number => {
+      for (const depth of [0.6, 1, 1.5]) {
+        const x = (((x0 + dx * depth) % MAP_W) + MAP_W) % MAP_W;
+        const y = Math.max(0, Math.min(MAP_H - 1, y0 + dy * depth));
+        const t0 = Math.floor(y) * MAP_W + Math.floor(x);
+        if (v.owner[t0] === enemy) return t0;
+      }
+      return -1;
+    };
+    const mine = ownOffensive(sidesOf(v, f));
+    if (mine && mine.contactX >= 0) {
+      let dx = mine.x - mine.contactX, dy = mine.y - mine.contactY;
+      if (dx > MAP_W / 2) dx -= MAP_W;
+      else if (dx < -MAP_W / 2) dx += MAP_W;
+      const l = Math.hypot(dx, dy);
+      const t0 = l > 0.3 ? pick(mine.contactX, mine.contactY, dx / l, dy / l) : pick(mine.contactX, mine.contactY, f.dirX * s, f.dirY * s);
+      if (t0 >= 0) return t0;
+    }
+    const n = f.samples.length >> 1;
+    const mid = Math.floor(n / 2);
+    for (let k = 0; k < n; k++) {
+      const i = mid + (k % 2 ? 1 : -1) * Math.ceil(k / 2);
+      if (i < 0 || i >= n) continue;
+      // Side a's samples are its contact tiles: the contact edge is half a tile along dir from them.
+      const ex = f.samples[i * 2] + f.dirX * 0.5, ey = f.samples[i * 2 + 1] + f.dirY * 0.5;
+      const t0 = pick(ex, ey, f.dirX * s, f.dirY * s);
+      if (t0 >= 0) return t0;
+    }
+    return -1;
   }
   /**
    * The axis point of an offensive from this front: enemy land 2-3 tiles past the contact, found from the middle of the
@@ -229,7 +260,9 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
   function candidates(f: FrontView): { u: UnitView; hours: number; why: string | null }[] {
     const v = view();
     const r = viewRules(v);
-    const tile = tileInto(f, HUMAN_ID, 0.6);
+    const enemy = f.a === HUMAN_ID ? f.b : f.a;
+    const tile = attachTile(f, enemy);
+    if (tile < 0) return [];
     const out: { u: UnitView; hours: number; why: string | null }[] = [];
     const tx0 = (tile % MAP_W) + 0.5, ty0 = Math.floor(tile / MAP_W) + 0.5;
     for (const u of v.units.values()) {
@@ -256,7 +289,12 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       btn.addEventListener('click', () => {
         const ff = view().frontByKey.get(f.key);
         if (!ff) return;
-        ctx.sim.send({ type: 'unitOrder', unitIds: [c.u.id], order: 'attach', tile: tileInto(ff, HUMAN_ID, 0.6), targetId: 0 });
+        const tile = attachTile(ff, ff.a === HUMAN_ID ? ff.b : ff.a);
+        if (tile < 0) {
+          hs.sound('error');
+          return;
+        }
+        ctx.sim.send({ type: 'unitOrder', unitIds: [c.u.id], order: 'attach', tile, targetId: 0 });
         hs.sound('confirm');
         ctx.bus.emit('toast', { text: t('fr.send.done', { unit: unitName(c.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(c.hours * 10), false) }), kind: 'info', durationMs: 3200 });
         expanded.delete(f.key);

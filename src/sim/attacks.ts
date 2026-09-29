@@ -68,6 +68,13 @@ const REBUILD_EVERY = 20;
 /** Tiles around the axis ray that get the full axis factor. */
 const AXIS_CORE = 3;
 const ARMOR_REACH = 3;
+/**
+ * The player's axis point moves ahead of the advance (W6): once it is taken (or the line went past it by this many
+ * tiles), it moves AXIS_LEAD tiles ahead of the live contact along the same ray.
+ */
+const AXIS_PASSED = 0.5;
+const AXIS_LEAD = 6;
+const AXIS_LEAD_MIN = 1.5;
 
 interface PostZone {
   x: number;
@@ -211,7 +218,7 @@ export class AttackSystem {
     this.rebuildFrontier(a);
     if (a.pressure.size === 0 && target !== 0) {
       // No contact tile inside the corridor: refuse now, with the reason, instead of a silent cancel a tick later.
-      g.message(p.id, 'msg.offensiveNoContact', 'warning', { name: g.playerObj(target)?.name ?? '' });
+      g.message(p.id, 'msg.offensiveNoContact', 'warning', { player: target });
       return false;
     }
     this.register(a);
@@ -231,12 +238,16 @@ export class AttackSystem {
     this.g.attacksDirty = true;
   }
 
-  /** The front an offensive pushes on, and the opposing offensive on it (two-sided battle). */
+  /**
+   * The front an offensive pushes on (the one where its frontier is: its live contact, else its origin), and the
+   * opposing offensive on it (two-sided battle).
+   */
   private resolveFront(a: Attack): void {
     const g = this.g;
     const D = g.playerObj(a.defender);
     if (!D || D.kind === 'tribe' || a.defender === 0) return;
-    const f = g.fronts.frontAt(a.attacker, a.defender, a.originX, a.originY);
+    const live = a.updateContact();
+    const f = g.fronts.frontAt(a.attacker, a.defender, live ? a.liveX : a.originX, live ? a.liveY : a.originY);
     a.frontKey = f?.key ?? 0;
     if (f) f.offensive[f.a === a.attacker ? 0 : 1] = a.id;
     a.counterId = 0;
@@ -262,7 +273,9 @@ export class AttackSystem {
     }
     let best: Attack | null = null, bd = Infinity;
     for (const x of list) {
-      const dx = wdx(cx, x.originX), dy = x.originY - cy;
+      // Where it fights now (its live contact), not where it started.
+      const lx = x.liveX >= 0 ? x.liveX : x.originX, ly = x.liveX >= 0 ? x.liveY : x.originY;
+      const dx = wdx(cx, lx), dy = ly - cy;
       const d = dx * dx + dy * dy;
       if (d < bd) {
         bd = d;
@@ -555,7 +568,7 @@ export class AttackSystem {
     const g = this.g;
     // The player is always told when the sim ends one of their offensives (never a silent disappearance).
     if (a.attacker === HUMAN_ID && a.defender > 0 && reason !== 'retreat' && why) {
-      g.message(HUMAN_ID, why, 'warning', { name: g.playerObj(a.defender)?.name ?? '', troops: Math.floor(a.troops) });
+      g.message(HUMAN_ID, why, 'warning', { player: a.defender, troops: Math.floor(a.troops) });
     }
     a.ended = true;
     const p = g.playerObj(a.attacker);
@@ -658,6 +671,10 @@ export class AttackSystem {
       this.end(a, neutral ? 'exhausted' : 'cancelled', true, 'msg.offensiveNoContactEnded');
       return;
     }
+    a.updateContact();
+    // The player's offensive keeps its axis point ahead of the advance (the AI staff re-aims its own, §5.7), and every
+    // offensive keeps its front key on the front where it fights (W6).
+    if (!neutral && !tribeDef && a.attacker === HUMAN_ID && !g.config.humanAutopilot && a.state !== 'landing' && tick >= a.contactUntil) this.followAdvance(a);
     if (!neutral && !tribeDef && tick % 5 === 0) this.resolveFrontKeepCounter(a);
     // Contact phase: the troops move up to the line.
     if (tick < a.contactUntil) {
@@ -864,18 +881,53 @@ export class AttackSystem {
           // and the player decides (reinforce, change intensity, retreat) from the Guerra panel or the front badge.
           this.setIntensity(a, 0);
           a.state = 'holding';
-          g.message(HUMAN_ID, 'msg.offensiveHalted', 'warning', { name: D?.name ?? '', ratio: R.toFixed(1) });
+          g.message(HUMAN_ID, 'msg.offensiveHalted', 'warning', { player: a.defender, ratio: +R.toFixed(3) });
         } else this.startRetreat(a);
       }
     }
     if (a.troops < 1 && !a.ended) this.end(a, 'exhausted', false);
   }
 
-  /** Keep the front key current (fronts re-cluster) and relink the opposing offensive. */
+  /**
+   * Keep the front key current: the front where the offensive's frontier is (fronts re-cluster, and an advance of
+   * hundreds of km leaves the origin behind, next to other fronts); relink the opposing offensive.
+   */
   private resolveFrontKeepCounter(a: Attack): void {
-    const f = this.g.fronts.frontAt(a.attacker, a.defender, a.originX, a.originY);
+    const live = a.liveX >= 0;
+    const f = this.g.fronts.frontAt(a.attacker, a.defender, live ? a.liveX : a.originX, live ? a.liveY : a.originY);
     if (f && f.key !== a.frontKey) this.resolveFront(a);
     else if (f) f.offensive[f.a === a.attacker ? 0 : 1] = a.id;
+  }
+
+  /**
+   * Past the axis point the corridor keeps pushing along the same ray (§4.3); the player's axis point moves with it (W6).
+   * Once the objective is taken (no longer the defender's) or the line went past it, the axis point moves AXIS_LEAD
+   * tiles ahead of the live contact on the same ray, onto the defender's land (the nearest such point walking back
+   * toward the contact; none: the ray leaves the enemy there and the point stays). The player is told where it goes.
+   */
+  private followAdvance(a: Attack): void {
+    const g = this.g;
+    if (!(a.liveX >= 0) || a.clickX < 0 || a.originX < 0) return;
+    const clickAlong = wdx(a.originX, a.clickX) * a.dirX + (a.clickY - a.originY) * a.dirY;
+    const cy = Math.floor(a.clickY);
+    const ct = cy >= 0 && cy < MAP_H ? cy * MAP_W + (((Math.floor(a.clickX) % MAP_W) + MAP_W) % MAP_W) : -1;
+    const reached = clickAlong - a.liveAlong < -AXIS_PASSED || ct < 0 || g.owner[ct] !== a.defender;
+    if (!reached) return;
+    for (let k = AXIS_LEAD; k >= AXIS_LEAD_MIN; k -= 0.5) {
+      const along = a.liveAlong + k;
+      const x = a.originX + a.dirX * along, y = a.originY + a.dirY * along;
+      if (y < 0 || y >= MAP_H) continue;
+      const t = Math.floor(y) * MAP_W + (((Math.floor(x) % MAP_W) + MAP_W) % MAP_W);
+      if (g.owner[t] !== a.defender || !g.playable[t]) continue;
+      const x0 = a.clickX, y0 = a.clickY;
+      a.clickX = ((x % MAP_W) + MAP_W) % MAP_W;
+      a.clickY = y;
+      g.attacksDirty = true;
+      if (a.attacker === HUMAN_ID) {
+        g.message(HUMAN_ID, 'msg.offensiveObjective', 'info', { player: a.defender, x0: +x0.toFixed(2), y0: +y0.toFixed(2), x1: +a.clickX.toFixed(2), y1: +a.clickY.toFixed(2) });
+      }
+      return;
+    }
   }
 
   /** The beach fell: the offensive continues inland as a normal front from the landing tile toward the click. */
@@ -1069,7 +1121,8 @@ export class AttackSystem {
     }
     return {
       id: a.id, attacker: a.attacker, defender: a.defender, troops: Math.floor(a.troops), naval: a.naval, startTick: a.startTick,
-      x: a.clickX, y: a.clickY, originX: a.originX, originY: a.originY, frontKey: a.frontKey, frontageTiles: +a.frontage.toFixed(1),
+      x: a.clickX, y: a.clickY, originX: a.originX, originY: a.originY, contactX: a.liveX >= 0 ? +a.liveX.toFixed(3) : -1,
+      contactY: a.liveX >= 0 ? +a.liveY.toFixed(3) : -1, frontKey: a.frontKey, frontageTiles: +a.frontage.toFixed(1),
       tilesTaken: a.tilesTaken, tilesLost: a.tilesLost, ratio: +a.ratio.toFixed(2), advanceKmh: +a.advanceKmh.toFixed(2),
       committed: Math.floor(a.committed), etaTicks: eta, state: a.state, defensePower: Math.round(a.pd), attackPower: Math.round(a.pa),
       intensity: a.intensity,
@@ -1088,7 +1141,7 @@ export class AttackSystem {
       const x = q.tile >= 0 ? (q.tile % MAP_W) + 0.5 : -1, y = q.tile >= 0 ? Math.floor(q.tile / MAP_W) + 0.5 : -1;
       out.push({
         id: -(++i), attacker: q.attacker, defender: q.target, troops: Math.floor(p.troops * q.ratio), naval: q.naval, startTick: w.mobilizeUntilTick,
-        x, y, originX: x, originY: y, frontKey: 0, frontageTiles: 0, tilesTaken: 0, tilesLost: 0, ratio: 0, advanceKmh: 0,
+        x, y, originX: x, originY: y, contactX: -1, contactY: -1, frontKey: 0, frontageTiles: 0, tilesTaken: 0, tilesLost: 0, ratio: 0, advanceKmh: 0,
         committed: 0, etaTicks: Math.max(0, w.mobilizeUntilTick - g.tick), state: 'mobilizing', defensePower: 0, attackPower: 0, intensity: 1,
       });
     }

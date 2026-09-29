@@ -650,9 +650,29 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     }
     ux /= ul;
     uy /= ul;
-    // Where the axis crosses the front line: the line vertex nearest the ray, ahead of the origin.
+    // Where the axis crosses the front line: the offensive's live contact (the sim's, where its axis ray meets its
+    // frontier now); without one, the line vertex nearest the ray, ahead of the origin.
     let lx = ox, ly = oy, best = Infinity;
-    if (f) {
+    if (a.contactX >= 0) {
+      lx = a.contactX;
+      ly = a.contactY;
+      // The advance runs from the origin through the contact; the arrow points at the axis point when it lies ahead.
+      let ax = wrapDX(ox, lx) * cosL, ay = ly - oy;
+      const al = Math.hypot(ax, ay);
+      if (al > 1) {
+        ax /= al;
+        ay /= al;
+        const tx = wrapDX(lx, a.x) * cosL, ty = a.y - ly;
+        const tl = Math.hypot(tx, ty);
+        if (tl > 1 && (tx * ax + ty * ay) / tl > 0.3) {
+          ux = tx / tl;
+          uy = ty / tl;
+        } else {
+          ux = ax;
+          uy = ay;
+        }
+      }
+    } else if (f) {
       const s = f.samples;
       const sgn = a.attacker === f.a ? 1 : -1;
       for (let v = 0; v < s.length >> 1; v++) {

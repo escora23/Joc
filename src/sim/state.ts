@@ -3,6 +3,7 @@
 // and carry the extra internal state the systems need. sim-ai only ever sees the SimX interfaces.
 
 import { MAP_W } from '../shared/constants';
+import { wdx, wrapXf } from './spatial';
 import type { ModifierKey, SimAttack, SimPlayer, SimStructure, SimUnit } from '../shared/simapi';
 import {
   STRUCTURE_TYPES, UNIT_TYPES, UnitState, emptyStats, type AttackState, type BuildableUnit, type Personality, type PlayerKind,
@@ -357,6 +358,14 @@ export class Attack implements SimAttack {
   lastActiveTick: number;
   /** The id of the opposing offensive on the same front (two-sided battle), 0 = none. */
   counterId = 0;
+  /**
+   * The live contact (W6): where the axis ray meets the frontier this tick, continuous tile coords on the ray (-1 = none
+   * yet), and its depth along the axis from the origin (tiles). The front key, the axis point that moves ahead of the
+   * advance, the measured line and the arrow all follow it, not the origin the offensive started from.
+   */
+  liveX = -1;
+  liveY = -1;
+  liveAlong = 0;
 
   constructor(
     readonly id: number,
@@ -378,6 +387,32 @@ export class Attack implements SimAttack {
   pushRecent(tile: number): void {
     this.recent[this.recentN % this.recent.length] = tile;
     this.recentN++;
+  }
+
+  /**
+   * Recompute the live contact: the mean depth along the axis of the frontier tiles near the ray (within a fifth of the
+   * corridor, at least 4 tiles; all frontier tiles when none is near), half a tile back from their centres (the line),
+   * placed on the ray. False when the offensive has no frontier.
+   */
+  updateContact(): boolean {
+    if (this.pressure.size === 0 || !(this.originX >= 0)) return false;
+    const core = Math.max(4, this.frontage * 0.2);
+    let s = 0, n = 0, sAll = 0, nAll = 0;
+    for (const t of this.pressure.keys()) {
+      const rx = wdx(this.originX, (t % MAP_W) + 0.5), ry = ((t / MAP_W) | 0) + 0.5 - this.originY;
+      const along = rx * this.dirX + ry * this.dirY;
+      sAll += along;
+      nAll++;
+      if (Math.abs(rx * this.dirY - ry * this.dirX) <= core) {
+        s += along;
+        n++;
+      }
+    }
+    const d = (n ? s / n : sAll / nAll) - 0.5;
+    this.liveAlong = d;
+    this.liveX = wrapXf(this.originX + this.dirX * d);
+    this.liveY = this.originY + this.dirY * d;
+    return true;
   }
 }
 
