@@ -19,7 +19,7 @@ import {
   DIVISION_ATTACH_TILES, DIVISION_FIELD_REPAIR, DIVISION_WEAR_AT_CAP, DIVISION_WEAR_ENGAGED, DRONE_DIRECT_DMG,
   DRONE_GARRISON_PER_HOUR, DRONE_STRUCT_DMG, DRONE_SUPPORT_TILES, EMBARK_PORT_RANGE_KM, EMBARK_SHORE_TICKS, ESCORT_SURVIVAL,
   ESCORT_TILES, HUMAN_ID, INVASION_DETECT_TILES, MAP_H, MAP_W, OFFENSIVE_CONTACT_TICKS, PORT_TRADE_GOLD_PER_HOUR,
-  RADAR_SCRAMBLE_MUL, RAIL_GOLD_PER_HOUR, REARM_TICKS, TILE_COUNT, TILE_KM, TRADE_AGREEMENT_BONUS, TRADE_DEST_SHARE,
+  RADAR_SCRAMBLE_MUL, RAIL_GOLD_PER_HOUR, REARM_TICKS, STATION_ENDURANCE_TICKS, STATION_MIN_TICKS, TILE_COUNT, TILE_KM, TRADE_AGREEMENT_BONUS, TRADE_DEST_SHARE,
   UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, WARSHIP_HIT, WARSHIP_HOME_PATROL_TILES, ADVANCE_MAX_KMH,
   kmhToKmPerTick, structureLevel, ARMOR_RAIL_KMH,
 } from '../shared/constants';
@@ -394,6 +394,14 @@ export class UnitSystem {
         firstErr ??= 'order.err.noUnit';
         continue;
       }
+      if (order === 'return' && u.mode === Mode.Docked && u.resumeOrder >= 0) {
+        // A patrol refuelling at its base: «volver a la base» ends the mission, it stays home.
+        u.resumeOrder = -1;
+        u.resumeTile = -1;
+        u.order = -1;
+        accepted.push(id);
+        continue;
+      }
       const err = orderCheck(g.rules, id, order, tile, targetId, { confirm, ai });
       if (err) {
         if (!firstErr) {
@@ -744,6 +752,9 @@ export class UnitSystem {
   private orderAircraft(p: Player, u: Unit, order: UnitOrderKind, tile: number, targetId: number): boolean {
     const g = this.g;
     u.targetUnit = 0;
+    u.stationUntil = 0;
+    u.resumeOrder = -1;
+    u.resumeTile = -1;
     switch (order) {
       case 'return':
         u.mode = Mode.Return;
@@ -2084,6 +2095,10 @@ export class UnitSystem {
       }
       if (u.hp < u.maxHp && (g.tick + u.id) % 10 === 0) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * (base ? structureLevel(base.type, base.level).repairPerHour ?? 0.1 : 0.1));
       u.eta = u.readyTick > g.tick ? u.readyTick - g.tick : -1;
+      if (u.resumeOrder >= 0 && u.readyTick <= g.tick) {
+        this.resumeStation(u);
+        if (u.mode !== Mode.Docked) return;
+      }
       if (u.type === UnitType.FighterSquadron && u.readyTick <= g.tick && (g.tick + u.id) % 5 === 0) this.scramble(u);
       return;
     }
@@ -2159,7 +2174,7 @@ export class UnitSystem {
       u.mode = Mode.Docked;
       u.state = UnitState.Docked;
       u.alt = 0;
-      u.order = -1;
+      u.order = u.resumeOrder >= 0 ? u.resumeOrder : -1;
       u.readyTick = g.tick + (REARM_TICKS[u.type] ?? 20);
       u.eta = u.readyTick - g.tick;
       u.capTries = null;
@@ -2186,6 +2201,7 @@ export class UnitSystem {
     }
     const d = tileKm(u.x, u.y, u.stationX, u.stationY);
     const orbitKm = holding ? HOLD_ORBIT_KM : CAP_RADIUS_TILES * TILE_KM * 0.6;
+    if (!holding && this.stationFuel(u, d <= orbitKm * 1.3, speed)) return;
     if (d > orbitKm * 1.3) {
       this.moveToward(u, u.stationX, u.stationY, speed);
       u.eta = Math.ceil((d - orbitKm) / speed);
@@ -2194,9 +2210,69 @@ export class UnitSystem {
       const ang = Math.atan2(u.y - u.stationY, wdx(u.stationX, u.x) * latCos(u.y)) + 0.6;
       const r = orbitKm / TILE_KM;
       this.moveToward(u, wrapXf(u.stationX + (Math.cos(ang) * r) / Math.max(0.2, latCos(u.stationY))), u.stationY + Math.sin(ang) * r, speed * 0.7);
-      u.eta = holding ? u.holdUntil - g.tick : -1;
+      u.eta = holding ? u.holdUntil - g.tick : u.stationUntil > 0 ? u.stationUntil - g.tick : -1;
     }
     this.capSweep(u, u.stationX, u.stationY);
+  }
+
+  /**
+   * Owner feedback #2 item 25: fuel on a patrol / drone support station. The clock starts on arrival (the flight
+   * there and back comes off STATION_ENDURANCE_TICKS); when it runs out the aircraft fly home keeping their order,
+   * rearm and go back by themselves (resumeStation). With no airbase to land at they stay. True = it left for home.
+   */
+  private stationFuel(u: Unit, onStation: boolean, speed: number): boolean {
+    const g = this.g;
+    const endurance = STATION_ENDURANCE_TICKS[u.type];
+    if (!endurance) return false;
+    if (u.stationUntil === 0) {
+      if (!onStation) return false;
+      const base = g.structureMap.get(u.home);
+      const transit = base ? tileKm(base.x, base.y, u.stationX, u.stationY) / Math.max(1e-6, speed) : 0;
+      const stay = Math.max(STATION_MIN_TICKS, Math.round(endurance - 2 * transit));
+      u.stationUntil = g.tick + stay;
+      // Staggered relief: a second squadron on the same station leaves half a stay apart from the first one, so the
+      // zone is never left uncovered while one of them refuels (the first leg is shortened, never lengthened).
+      const gap = 2 * transit + (REARM_TICKS[u.type] ?? 20) + 10;
+      for (const o of g.unitsByOwner.get(u.owner) ?? []) {
+        if (o === u || o.dead || o.type !== u.type || o.mode !== u.mode || o.stationUntil <= 0) continue;
+        if (tileKm(o.stationX, o.stationY, u.stationX, u.stationY) > CAP_RADIUS_TILES * TILE_KM) continue;
+        if (Math.abs(o.stationUntil - u.stationUntil) >= gap) continue;
+        u.stationUntil = Math.max(g.tick + STATION_MIN_TICKS, o.stationUntil - Math.round(stay / 2));
+        if (Math.abs(o.stationUntil - u.stationUntil) < gap) u.stationUntil = Math.min(g.tick + stay, o.stationUntil + gap);
+        break;
+      }
+      return false;
+    }
+    if (g.tick < u.stationUntil) return false;
+    if (!g.structureMap.has(u.home)) u.home = this.nearestHome(u.owner, u.type, u.x, u.y);
+    if (!g.structureMap.has(u.home)) {
+      u.stationUntil = g.tick + STATION_MIN_TICKS;
+      return false;
+    }
+    const order = u.order, tile = u.targetTile;
+    u.stationUntil = 0;
+    u.targetUnit = 0;
+    u.mode = Mode.Return;
+    u.state = UnitState.Returning;
+    u.resumeOrder = order;
+    u.resumeTile = tile;
+    return true;
+  }
+
+  /** A patrol / support that went home to refuel takes off again for the same station once rearmed. */
+  private resumeStation(u: Unit): void {
+    const g = this.g;
+    const code = u.resumeOrder, tile = u.resumeTile;
+    u.resumeOrder = -1;
+    u.resumeTile = -1;
+    const kind = code >= 0 ? UNIT_ORDER_KINDS[code] : undefined;
+    const p = g.playerById[u.owner];
+    if (!kind || !p || tile < 0 || tile >= TILE_COUNT) {
+      u.order = -1;
+      return;
+    }
+    // The same validation as a new order (a peace signed meanwhile closes the airspace, the front may be gone).
+    if (orderCheck(g.rules, u.id, kind, tile, 0, { ai: true }) || !this.apply(p, u, kind, tile, 0)) u.order = -1;
   }
 
   /** Engage hostile aircraft and cruise missiles inside the CAP circle (each pass is engaged once per squadron). */
@@ -2396,12 +2472,13 @@ export class UnitSystem {
       return;
     }
     const d = tileKm(u.x, u.y, u.stationX, u.stationY);
+    if (this.stationFuel(u, d <= TILE_KM, speed)) return;
     if (d > TILE_KM) {
       this.moveToward(u, u.stationX, u.stationY, speed);
       u.eta = Math.ceil(d / speed);
       return;
     }
-    u.eta = -1;
+    u.eta = u.stationUntil - g.tick;
     u.state = UnitState.Attacking;
     const ang = (g.tick * 0.35 + u.id) % (Math.PI * 2);
     this.moveToward(u, wrapXf(u.stationX + Math.cos(ang) * 0.8), u.stationY + Math.sin(ang) * 0.8, speed * 0.5);

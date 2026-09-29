@@ -18,7 +18,7 @@ import { tx } from '../tx';
 import { attackNation, breakAlliance, donate, focusNation, nationRelation, requestAlliance, toggleEmbargo } from './diplomacy';
 import {
   effectLine, enduranceLine, etaText, goldPerHour, homeName, hostedUnits, integrityHelp, levelEffects, maxLevel, placeOf,
-  reachLine, speedLine, speedRealLine, stateLine, structId, structureName, structurePurpose, unitId, unitName,
+  reachLine, speedLine, speedRealLine, stateLine, stationOrder, structId, structureName, structurePurpose, unitId, unitName,
 } from './forcesInfo';
 import { selectedUnitIds } from './orderCtl';
 import type { HudShared } from './shared';
@@ -197,7 +197,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     if (live.endurance) setText(live.endurance, enduranceLine(u));
     if (live.place) setText(live.place, placeOf(hs, u));
     if (live.tc) toggleClass(live.tc, 'is-disabled', u.state === UnitState.Controlled);
-    if (live.back) toggleClass(live.back, 'is-disabled', u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming);
+    if (live.back) toggleClass(live.back, 'is-disabled', (u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming) && !stationOrder(u));
     const m = hs.mode;
     for (const b of el.querySelectorAll<HTMLElement>('[data-order]')) toggleClass(b, 'is-on', m.kind === 'order' && m.order === b.dataset.order);
   }

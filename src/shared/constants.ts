@@ -453,6 +453,13 @@ export const CAP_RADIUS_TILES = 6;
  */
 export const HOLD_ORBIT_KM = 12;
 export const HOLD_ENDURANCE_TICKS: Partial<Record<UnitType, number>> = { [UnitType.FighterSquadron]: 120, [UnitType.Bomber]: 160, [UnitType.DroneSwarm]: 240 };
+/**
+ * Owner feedback #2 item 25: a patrol (fighter CAP) or drone support stays on station for this long, less the flight
+ * there and back (never under STATION_MIN_TICKS), then flies home to refuel and rearm (REARM_TICKS) and goes back to
+ * the same station by itself until it is given another order. A far base means short stays and long gaps. Ticks.
+ */
+export const STATION_ENDURANCE_TICKS: Partial<Record<UnitType, number>> = { [UnitType.FighterSquadron]: 240, [UnitType.DroneSwarm]: 360 };
+export const STATION_MIN_TICKS = 60;
 export const CAP_HIT_AIRCRAFT = 0.6;
 export const CAP_HIT_CRUISE = 0.45;
 /** Aircraft rearm after landing (§2.4), ticks. */

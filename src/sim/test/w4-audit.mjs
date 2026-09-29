@@ -14,7 +14,7 @@ import {
 } from '../../shared/constants.ts';
 import { greatCircleKm, latLonToTile, tileXYToLatLon } from '../../shared/geo.ts';
 import { inferOrder, orderError } from '../../shared/orders.ts';
-import { StructureType as S, UnitMode as M, UnitType as U } from '../../shared/types.ts';
+import { StructureType as S, UnitMode as M, UnitType as U, UNIT_ORDER_KINDS } from '../../shared/types.ts';
 
 const argv = process.argv.slice(2);
 const arg = (name, def) => {
@@ -351,7 +351,9 @@ scenarios.cap = () => {
   for (const b of raiders) if (b.dead && b.killedBy === HUMAN_ID) killed++;
   const alive = !f.dead;
   const mode = g.unitSys.publicMode(f);
-  row('13', 'CAP persists (>= 2400 ticks, until recalled)', `${alive ? 'alive' : 'lost'}, mode ${mode}, ${g.tick} ticks`, 'patrolling', alive && (mode === M.Patrol || mode === M.Engaged));
+  // Owner feedback #2 item 25: the patrol refuels at its base every ~22 h and goes back by itself; it keeps its order.
+  const onCap = f.order === UNIT_ORDER_KINDS.indexOf('cap');
+  row('13', 'CAP persists (>= 2400 ticks, until recalled; refuels and goes back by itself)', `${alive ? 'alive' : 'lost'}, mode ${mode}, order ${UNIT_ORDER_KINDS[f.order] ?? 'none'}, ${g.tick} ticks`, 'patrolling or refuelling, order cap', alive && onCap && (mode === M.Patrol || mode === M.Engaged || mode === M.Returning || mode === M.Rearming));
   row('13', '20 bomber sorties crossing the circle intercepted', `${killed}/20`, '>= 10', killed >= 10);
   g.unitSys.order(H, [f.id], 'return', -1, 0);
   step(80);

@@ -61,6 +61,9 @@ interface Badge {
   adv: HTMLElement;
   divA: HTMLElement;
   divB: HTMLElement;
+  /** The sky over the front (#25): who has more fighters on patrol there, and the drones in support. */
+  sky: HTMLElement;
+  divs: HTMLElement;
   /** World anchor (unit sphere, slightly lifted) and priority for the declutter. */
   pos: THREE.Vector3;
   /** A point 1.5 tiles behind the line on the attacker's side: the badge is pushed that way, off the band. */
@@ -110,12 +113,14 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     const adv = h('div', { class: 'fu-fb-adv fu-mono' });
     const divA = h('span', { class: 'fu-fb-div' });
     const divB = h('span', { class: 'fu-fb-div' });
+    const sky = h('span', { class: 'fu-fb-sky' });
+    const divs = h('div', { class: 'fu-fb-divs' }, divA, sky, divB);
     const lead = h('i', { class: 'fu-fb-lead' });
     const e = h('div', { class: 'fu-fb fu-interactive' }, lead,
       h('div', { class: 'fu-fb-row' }, chipA, dir, chipB),
       h('div', { class: 'fu-fb-bar' }, barA, barB),
       adv,
-      h('div', { class: 'fu-fb-divs' }, divA, divB),
+      divs,
     );
     e.dataset.key = String(key);
     e.addEventListener('click', (ev) => {
@@ -126,7 +131,7 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     tip(e, () => badgeTip(key));
     el.append(e);
     return {
-      key, el: e, lead, chipA, chipB, dir, barA, barB, adv, divA, divB, pos: new THREE.Vector3(), back: new THREE.Vector3(), prio: 0, seen: false,
+      key, el: e, lead, chipA, chipB, dir, barA, barB, adv, divA, divB, sky, divs, pos: new THREE.Vector3(), back: new THREE.Vector3(), prio: 0, seen: false,
       w: 120, hgt: 60, line: [], mob: [], arrows: [], side: 1,
     };
   }
@@ -147,7 +152,20 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
       [t('fr.tip.days'), formatNumber(combatDays(view, f), 1)],
       [t('fr.tip.divisions'), `${s.divAtt} / ${s.divDef}`],
     ];
+    const air = skyOf(f, s.att);
+    if (air.any) now.push([t('fr.tip.sky'), t('fr.tip.skyV', { a: air.att, d: air.def, ca: air.casAtt, cd: air.casDef, who: air.owner ? hs.name(air.owner) : t('fr.tip.skyNobody') })]);
     return { title: name, text: t(s.quiet ? 'fr.tip.quiet' : 'fr.tip.text'), now, lines: [t('fr.tip.click')], hotkey: 'G' };
+  }
+
+  /** Fighters on patrol and drones in support over the front, per side (attacker first), and who owns the sky. */
+  function skyOf(f: FrontView, att: number) {
+    const aIsAtt = f.a === att;
+    const fa = f.airA ?? 0, fb = f.airB ?? 0, ca = f.casA ?? 0, cb = f.casB ?? 0;
+    const owner = fa > fb ? f.a : fb > fa ? f.b : 0;
+    return {
+      att: aIsAtt ? fa : fb, def: aIsAtt ? fb : fa, casAtt: aIsAtt ? ca : cb, casDef: aIsAtt ? cb : ca,
+      owner, any: fa + fb + ca + cb > 0,
+    };
   }
 
   function paint(b: Badge, f: FrontView): void {
@@ -168,6 +186,11 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     setText(b.adv, advanceText(view, f, s));
     setText(b.divA, s.divAtt > 0 ? `▣${s.divAtt}` : '');
     setText(b.divB, s.divDef > 0 ? `▣${s.divDef}` : '');
+    // The sky (#25): «✈» in the colour of the side that owns it (more fighters on patrol over the line), dim if nobody.
+    const air = skyOf(f, s.att);
+    setText(b.sky, air.any ? '✈' : '');
+    b.sky.style.color = air.owner ? hexToCss(view.players[air.owner]?.color ?? 0x888888) : '';
+    toggleClass(b.divs, 'fu-hidden', !b.divA.textContent && !b.divB.textContent && !b.sky.textContent);
     toggleClass(b.el, 'is-quiet', s.quiet);
     toggleClass(b.el, 'is-human', f.a === HUMAN_ID || f.b === HUMAN_ID);
     toggleClass(b.el, 'is-losing', s.def === HUMAN_ID && s.gaining > 0);

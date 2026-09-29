@@ -13,7 +13,7 @@ import { tx } from '../tx';
 import { unitLabel } from './news';
 import type { HudShared } from './shared';
 import {
-  domainOf, effectLine, etaText, frontName, groupOf, isListedForce, placeOf, stateLine, structureName, unitName,
+  domainOf, effectLine, etaText, frontName, groupOf, isListedForce, placeOf, stateLine, stationOrder, structureName, unitName,
   type Domain, type ForceGroup,
 } from './forcesInfo';
 import { selectedUnitIds } from './orderCtl';
@@ -307,7 +307,7 @@ export function createForces(hs: HudShared): ForcesPanel {
       const fr = u.frontKey && (u.mode === UnitMode.Front || u.mode === UnitMode.Offensive || u.mode === UnitMode.Support) ? frontName(hs, u.frontKey) : '';
       setText(r.front, fr);
       toggleClass(r.el, 'is-sel', sel.has(u.id));
-      if (r.back) toggleClass(r.back, 'fu-hidden', u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming);
+      if (r.back) toggleClass(r.back, 'fu-hidden', (u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming) && !stationOrder(u));
     }
     for (const q of prod) {
       const pr = prodRows.get(prodKey(q));

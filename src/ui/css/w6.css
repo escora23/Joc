@@ -22,7 +22,10 @@
 .fu-fb-bar > i.fu-fb-a { box-shadow: inset -1px 0 0 #fff; }
 .fu-fb-adv { text-align: center; font-size: 0.66rem; color: var(--fu-text-2); white-space: nowrap; }
 .fu-fb-divs { display: flex; justify-content: space-between; font-size: 0.62rem; color: var(--fu-text-dim); line-height: 1; }
-.fu-fb-divs:empty, .fu-fb-divs > span:empty { display: none; }
+.fu-fb-divs:empty { display: none; }
+/* Keep each side's division count under its own chip even when the other side has none. */
+.fu-fb-divs > span:empty { visibility: hidden; }
+.fu-fb-sky { font-weight: 600; }
 
 /* ---------------------------------------------------------------------------------------------
    Guerra y frentes panel (G)

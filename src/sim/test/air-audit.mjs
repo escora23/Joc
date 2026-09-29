@@ -108,9 +108,10 @@ function aiRaids(withCap) {
   const caps = [];
   if (withCap) {
     // Two squadrons on patrol over the Pyrenees border (the raids' way in).
+    // Each squadron now refuels every ~22 h (C6); a player covering a border staggers them (the tooltip says so).
     for (const [lat, lon] of [[42.6, -0.5], [42.2, 1.8]]) {
       const f = spawn(g, U.FighterSquadron, HUMAN_ID, ab.tile);
-      step();
+      step(caps.length ? 110 : 1);
       g.unitSys.order(H, [f.id], 'cap', T(lat, lon), 0);
       caps.push(f);
     }
@@ -119,6 +120,10 @@ function aiRaids(withCap) {
   const t0 = g.tick;
   for (let i = 0; i < 2400; i++) {
     step();
+    if (argv.includes('--trace2') && i % 10 === 0) {
+      const raiders = [...g.unitMap.values()].filter((u) => u.owner === E.id && (u.type === U.Bomber || u.type === U.DroneSwarm || u.type === U.FighterSquadron) && u.mode !== 13);
+      if (raiders.length) console.log(i, caps.map((f) => `${f.id}:${f.dead ? 'dead' : f.mode}@${f.x.toFixed(0)},${f.y.toFixed(0)}`).join(' '), '|', raiders.map((u) => `${u.type}:${u.mode}@${u.x.toFixed(0)},${u.y.toFixed(0)}`).join(' '));
+    }
     E.troops = Math.max(E.troops, 600_000);
     H.troops = Math.max(H.troops, 500_000);
   }
@@ -343,7 +348,50 @@ function airspace() {
   void H;
 }
 
-const all = { cap, cas, strike, airspace };
+// -------------------------------------------------------------------------------------------------------------
+// C6: a patrol runs out of fuel on station, flies home, rearms and goes back to the same station by itself
+// -------------------------------------------------------------------------------------------------------------
+function rotation() {
+  const { g, step, H, others } = quiet(1, false);
+  const E = others[0];
+  claim(g, HUMAN_ID, T(40.4, -3.7), 22);
+  claim(g, E.id, T(46.5, 2.5), 22);
+  war(g, HUMAN_ID, E.id);
+  const ab = struct(g, S.Airbase, HUMAN_ID, T(40.42, -3.7), 3);
+  const f = spawn(g, U.FighterSquadron, HUMAN_ID, ab.tile);
+  step();
+  const station = T(42.6, -0.5);
+  g.unitSys.order(H, [f.id], 'cap', station, 0);
+  const cap = f.order;
+  let arrive = -1, leave = -1, docked = -1, back = -1;
+  for (let i = 0; i < 900 && back < 0; i++) {
+    step();
+    if (arrive < 0 && f.stationUntil > 0) arrive = g.tick;
+    if (arrive >= 0 && leave < 0 && f.resumeOrder >= 0) leave = g.tick;
+    if (leave >= 0 && docked < 0 && f.mode === 13 /* Mode.Docked */) docked = g.tick;
+    if (docked >= 0 && f.stationUntil > 0) back = g.tick;
+  }
+  row('C6', 'patrol on station until its fuel runs out (game h)', arrive >= 0 && leave >= 0 ? ((leave - arrive) / 10).toFixed(1) : 'never', '6-24 h', leave > arrive && leave - arrive >= 60 && leave - arrive <= 240);
+  row('C6', 'flies home keeping its order, rearms', docked >= 0 ? `docked at +${((docked - leave) / 10).toFixed(1)} h, order ${f.order === cap ? 'kept' : 'lost'}` : 'never docked', 'docks, order kept', docked > leave && f.order === cap);
+  // Two squadrons ordered together over the same station relieve each other (never both refuelling at once).
+  const f2 = spawn(g, U.FighterSquadron, HUMAN_ID, ab.tile), f3 = spawn(g, U.FighterSquadron, HUMAN_ID, ab.tile);
+  step();
+  const st2 = T(41.8, 1.0);
+  g.unitSys.order(H, [f2.id, f3.id], 'cap', st2, 0);
+  let both = 0, covered = 0;
+  for (let i = 0; i < 800; i++) {
+    step();
+    const on = [f2, f3].filter((f) => f.mode === 7 && f.stationUntil > 0).length;
+    if (i > 60) {
+      covered += on > 0 ? 1 : 0;
+      both += on === 0 ? 1 : 0;
+    }
+  }
+  row('C6', 'two squadrons on one station take turns: hours with nobody on station (of 74 h)', `${(both / 10).toFixed(1)} h uncovered, ${(covered / 10).toFixed(1)} h covered`, '0 h uncovered', both === 0);
+  row('C6', 'back on the same station by itself', back >= 0 ? `+${((back - docked) / 10).toFixed(1)} h after landing, station ${f.targetTile === station ? 'same' : 'other'}` : 'never', 'back, same station', back > docked && f.targetTile === station);
+}
+
+const all = { cap, cas, strike, airspace, rotation };
 for (const [name, fn] of Object.entries(all)) {
   if (ONLY && ONLY !== name && !(ONLY === 'ai' && name === 'cap')) continue;
   const t = Date.now();

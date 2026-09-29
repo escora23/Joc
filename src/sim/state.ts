@@ -260,6 +260,11 @@ export class Unit implements SimUnit {
   readyTick = 0;
   /** Aircraft released from command mode: holding over the spot until this tick (fuel), then home; 0 = not holding. */
   holdUntil = 0;
+  /** Patrol / drone support: fuel on station runs out at this tick (0 = not on station yet). */
+  stationUntil = 0;
+  /** Patrol / drone support gone home to refuel: the order and tile it resumes once rearmed (-1 = none). */
+  resumeOrder = -1;
+  resumeTile = -1;
   /** Station of a patrol, CAP, blockade, bombardment or drone support (continuous tile coords). */
   stationX = 0;
   stationY = 0;

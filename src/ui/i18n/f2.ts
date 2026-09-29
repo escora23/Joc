@@ -4,10 +4,18 @@
 
 export const esF2: Record<string, string> = {
   'order.err.airspace': 'Espacio aéreo de {name}: sin alianza ni paso libre no puedes patrullar sobre su territorio en paz',
+  // ---- a patrol / drone support rotating with its base to refuel (#25) ----------------------------------
+  'fr.tip.sky': 'Cielo',
+  'fr.tip.skyV': 'cazas en patrulla {a} / {d} · drones {ca} / {cd} · domina: {who}',
+  'fr.tip.skyNobody': 'nadie',
+  'fstate.refuel': 'Vuelve a repostar a {place} · {eta}; luego retoma la misión',
+  'fstate.rearmResume': 'Repostando · vuelve a la misión en {eta}',
+  'fstate.overFuel': '{mode} sobre {place} · combustible para {eta}',
+  'effect.refuel': 'Ninguno mientras reposta: su zona queda sin cobertura hasta que vuelva sola a la misión',
 
   // ---- order buttons of the unit card (override W4's shorter texts) -----------------------------------
-  'order.cap.tip': 'Patrulla de 150 km de radio hasta que la retires: derriba bombarderos, drones y misiles que la crucen y se bate con sus cazas. Sobre un frente, con más cazas que el enemigo, da superioridad aérea: +10 % a tu avance y sus drones dejan de contar.',
-  'order.support.tip': 'Apoyo aéreo cercano sobre un frente: +15 % de potencia y de velocidad a tu ofensiva allí y desgaste de su guarnición. No cuenta si el enemigo domina el cielo.',
+  'order.cap.tip': 'Patrulla de 150 km de radio hasta que la retires (unas 24 h en el aire menos el viaje; luego vuelve a repostar y regresa sola): derriba bombarderos, drones y misiles que la crucen y se bate con sus cazas. Sobre un frente, con más cazas que el enemigo, da superioridad aérea: +10 % a tu avance y sus drones dejan de contar.',
+  'order.support.tip': 'Apoyo aéreo cercano sobre un frente: +15 % de potencia y de velocidad a tu ofensiva allí y desgaste de su guarnición. No cuenta si el enemigo domina el cielo. Unas 36 h en el aire menos el viaje; luego vuelven a repostar y regresan solos.',
   'order.strike.tip': 'Vuela a velocidad de misión, ataca al llegar (edificio, división, buque o el sector del frente) y vuelve a rearmarse. Con un caza de escolta sobrevive mucho más a las patrullas enemigas.',
 
   // ---- the right-click chip of an air order: what it does and what it risks (#25) -----------------------
@@ -49,7 +57,7 @@ export const esF2: Record<string, string> = {
   'fr.airsend.what.cap': 'caza · superioridad aérea',
   'fr.airsend.what.support': 'drones · apoyo cercano',
   'fr.airsend.what.strike': 'bombardero · ataque al sector',
-  'fr.airsend.cap.tip': 'Patrulla de {km} km de radio sobre el frente hasta que la retires: derriba bombarderos, drones y misiles enemigos, se bate con sus cazas y, con más cazas que el enemigo, da superioridad aérea: +{pct} % a tu avance aquí y sus drones dejan de contar. Rota con su base para repostar.',
+  'fr.airsend.cap.tip': 'Patrulla de {km} km de radio sobre el frente hasta que la retires: derriba bombarderos, drones y misiles enemigos, se bate con sus cazas y, con más cazas que el enemigo, da superioridad aérea: +{pct} % a tu avance aquí y sus drones dejan de contar. Aguanta unas 24 h en el aire menos el viaje; luego vuelve a repostar y regresa sola (mientras tanto el frente queda sin su cobertura: con dos escuadrones se relevan).',
   'fr.airsend.support.tip': 'Los drones vuelan en círculo sobre el frente: +{pct} % de potencia y de velocidad a tu ofensiva (el enemigo avanza un {pct} % menos) y desgastan su guarnición. Si el enemigo domina el cielo no cuentan y sus cazas los derriban.',
   'fr.airsend.strike.tip': 'Una salida: bombardea el sector enemigo del frente (−{pct} % de su guarnición allí) y vuelve a rearmarse. Sus SAM y cazas pueden derribarlo.',
   'fr.airsend.threat': 'Amenaza',
@@ -63,9 +71,16 @@ export const esF2: Record<string, string> = {
 
 export const enF2: Record<string, string> = {
   'order.err.airspace': '{name}\'s airspace: without an alliance or open borders you cannot patrol over their land in peacetime',
+  'fr.tip.sky': 'Sky',
+  'fr.tip.skyV': 'fighters on patrol {a} / {d} · drones {ca} / {cd} · owned by: {who}',
+  'fr.tip.skyNobody': 'nobody',
+  'fstate.refuel': 'Flying home to refuel at {place} · {eta}; then back on the mission',
+  'fstate.rearmResume': 'Refuelling · back on the mission in {eta}',
+  'fstate.overFuel': '{mode} over {place} · fuel for {eta}',
+  'effect.refuel': 'None while refuelling: its zone is uncovered until it flies back to the mission by itself',
 
-  'order.cap.tip': 'A 150 km patrol circle until recalled: shoots down bombers, drones and missiles crossing it and fights their fighters. Over a front, with more fighters than the enemy, it wins air superiority: +10 % to your advance and their drones stop counting.',
-  'order.support.tip': 'Close air support over a front: +15 % power and speed for your offensive there and attrition on their garrison. Does not count if the enemy owns the sky.',
+  'order.cap.tip': 'A 150 km patrol circle until recalled (about 24 h aloft minus the flight; then it refuels at its base and comes back by itself): shoots down bombers, drones and missiles crossing it and fights their fighters. Over a front, with more fighters than the enemy, it wins air superiority: +10 % to your advance and their drones stop counting.',
+  'order.support.tip': 'Close air support over a front: +15 % power and speed for your offensive there and attrition on their garrison. Does not count if the enemy owns the sky. About 36 h aloft minus the flight; then they refuel and come back by themselves.',
   'order.strike.tip': 'Flies at mission speed, strikes on arrival (building, division, ship or the front sector) and returns to rearm. With a fighter escort it survives enemy patrols far more often.',
 
   'air.hint.cap': 'Patrol: shoots down bombers, drones and missiles within {km} km. Over a front it gives air superiority (+10 % to your advance, cancels their drones).',
@@ -104,7 +119,7 @@ export const enF2: Record<string, string> = {
   'fr.airsend.what.cap': 'fighter · air superiority',
   'fr.airsend.what.support': 'drones · close support',
   'fr.airsend.what.strike': 'bomber · strike on the sector',
-  'fr.airsend.cap.tip': 'A {km} km patrol over the front until you recall it: shoots down enemy bombers, drones and missiles, fights their fighters and, with more fighters than the enemy, wins air superiority: +{pct} % to your advance here and their drones stop counting. Rotates with its base to refuel.',
+  'fr.airsend.cap.tip': 'A {km} km patrol over the front until you recall it: shoots down enemy bombers, drones and missiles, fights their fighters and, with more fighters than the enemy, wins air superiority: +{pct} % to your advance here and their drones stop counting. It stays about 24 h aloft minus the flight; then it refuels at its base and comes back by itself (the front is uncovered meanwhile: two squadrons take turns).',
   'fr.airsend.support.tip': 'The drones circle over the front: +{pct} % power and speed for your offensive (the enemy advances {pct} % slower) and they wear down the garrison. If the enemy owns the sky they do not count and its fighters shoot them down.',
   'fr.airsend.strike.tip': 'One sortie: bombs the enemy sector of the front (−{pct} % of their garrison there) and returns to rearm. Their SAMs and fighters can shoot it down.',
   'fr.airsend.threat': 'Threat',

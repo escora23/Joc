@@ -178,6 +178,20 @@ async function air() {
   await page.evaluate(() => __front.ctx.app.setSpeed(0));
   row('A6', 'with time running the AI flies its bombers/drones at us and our patrol shoots them down (enemy bombers/drones only fly on AI orders)', JSON.stringify(st), st && st.shot >= 1);
   await shot(page, 'a6-after');
+  // A7: the patrol's fuel. On station its Fuerzas row shows the fuel left; when it runs out the squadron flies home
+  // to refuel and goes back to the same station by itself (the row says so at each step).
+  const capId = await page.evaluate((o) => [...__front.ctx.sim.view.units.values()].find((u) => u.owner === 1 && u.type === 4 && u.order === o.cap)?.id ?? -1, ORDER);
+  const seen = [];
+  for (let i = 0; i < 40 && capId >= 0; i++) {
+    const r = await page.evaluate((id) => window.__fuForces.rows().find((x) => x.id === id)?.state ?? '(gone)', capId);
+    if (seen[seen.length - 1] !== r) seen.push(r);
+    if (seen.some((x) => /Repostando/.test(x)) && /combustible/.test(r) && seen.findIndex((x) => /Repostando/.test(x)) < seen.length - 1) break;
+    await page.evaluate(() => __front.ctx.sim.fastForward(15));
+    await sleep(700);
+  }
+  const iFuel = seen.findIndex((x) => /combustible/.test(x)), iHome = seen.findIndex((x) => /Vuelve a repostar/.test(x));
+  const iRearm = seen.findIndex((x) => /Repostando/.test(x)), iBack = seen.findLastIndex((x) => /combustible/.test(x));
+  row('A7', 'the patrol shows its fuel, flies home to refuel and goes back by itself', `unit ${capId}: ${seen.join(' → ')}`, iFuel >= 0 && iHome > iFuel && iRearm > iHome && iBack > iRearm);
   await page.close();
 }
 

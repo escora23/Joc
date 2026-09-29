@@ -71,6 +71,13 @@ export const MODE_IDS: Record<number, string> = {
 };
 
 /** An aircraft left by the player on a holding orbit over a spot (released from command mode, feedback #18). */
+/** An aircraft whose order is a station it keeps by rotating with its base (fighter patrol, drone support). */
+export function stationOrder(u: UnitView): boolean {
+  if (!UNIT_DEFS[u.type].airborne || u.order < 0) return false;
+  const k = UNIT_ORDER_KINDS[u.order];
+  return k === 'cap' || k === 'support';
+}
+
 export function holdingAir(u: UnitView): boolean {
   return !!UNIT_DEFS[u.type].airborne && u.mode === UnitMode.Patrol && u.order >= 0 && UNIT_ORDER_KINDS[u.order] === 'hold';
 }
@@ -124,6 +131,10 @@ export function stateLine(hs: HudShared, u: UnitView): string {
   const eta = u.etaTicks > 0 ? etaText(hs, u.etaTicks, false) : '';
   const front = frontName(hs, u.frontKey);
   const dest = () => describeXY(view, u.targetX, u.targetY).name;
+  // Owner feedback #2 item 25: a patrol / drone support out of fuel flies home, refuels and goes back by itself.
+  const rotating = stationOrder(u);
+  if (rotating && u.mode === UnitMode.Returning) return t('fstate.refuel', { place: homeName(hs, u), eta });
+  if (rotating && u.mode === UnitMode.Rearming) return t('fstate.rearmResume', { eta });
   switch (u.mode) {
     case UnitMode.Moving:
     case UnitMode.Rail:
@@ -137,11 +148,14 @@ export function stateLine(hs: HudShared, u: UnitView): string {
     case UnitMode.Patrol:
       // Released from command mode (owner feedback #18): holding over the spot with the fuel it has left.
       if (holdingAir(u)) return t('fstate.holding', { place: dest(), eta: etaText(hs, u.etaTicks, false) });
+      if (rotating && eta) return t('fstate.overFuel', { mode, place: dest(), eta });
       return t('fstate.over', { mode, place: dest() });
     case UnitMode.Support:
+      if (rotating && eta) return t('fstate.overFuel', { mode, place: front || dest(), eta });
+      return t('fstate.over', { mode, place: front || dest() });
     case UnitMode.Blockade:
     case UnitMode.Bombard:
-      return t('fstate.over', { mode, place: u.mode === UnitMode.Support && front ? front : dest() });
+      return t('fstate.over', { mode, place: dest() });
     case UnitMode.Rearming:
       return t('fstate.eta', { mode, eta });
     case UnitMode.Docked:
@@ -201,6 +215,7 @@ export function effectLine(hs: HudShared, u: UnitView): string {
   const front = frontName(hs, u.frontKey);
   const view = hs.ctx.sim.view;
   const place = () => describeXY(view, u.targetX, u.targetY).name;
+  if (stationOrder(u) && (u.mode === UnitMode.Returning || u.mode === UnitMode.Rearming)) return t('effect.refuel');
   switch (u.type) {
     case UnitType.ArmoredDivision:
       if (u.mode === UnitMode.Offensive) return t('effect.division.attack', { front: front || t('front.this') });
