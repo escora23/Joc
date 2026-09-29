@@ -121,6 +121,19 @@ function projectFn() {
 async function measureArrow(page, arrow) {
   await page.evaluate(projectFn);
   await page.evaluate(() => __front.ctx.app.setSpeed(0));
+  // Measure the arrow's own geometry, unoccluded: every layer drawn above it (the bands, icons, labels, markers:
+  // renderOrder >= 43) is switched off for these frames (material.visible), then restored.
+  await page.evaluate(() => {
+    window.__w6hidden = [];
+    // (and the DOM HUD: alert markers and badges stand over the map too)
+    for (const e of document.querySelectorAll('.fu-hud-root')) e.style.visibility = 'hidden';
+    __front.ctx.scene.traverse((o) => {
+      if (!(o.renderOrder >= 43) || !o.material) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (m.visible) { m.visible = false; window.__w6hidden.push(m); }
+      }
+    });
+  });
   await sleep(1500);
   const shotB64 = async () => (await page.screenshot({ timeout: 300000 })).toString('base64');
   const A = await shotB64();
@@ -133,6 +146,8 @@ async function measureArrow(page, arrow) {
   await sleep(1500);
   const C = await shotB64();
   fs.writeFileSync(path.join(out, 'front-orbit-noarrow.png'), Buffer.from(B, 'base64'));
+  fs.writeFileSync(path.join(out, 'front-orbit-arrowonly-layers.png'), Buffer.from(A, 'base64'));
+  await page.evaluate(() => { for (const m of window.__w6hidden ?? []) m.visible = true; window.__w6hidden = []; for (const e of document.querySelectorAll('.fu-hud-root')) e.style.visibility = ''; });
   return page.evaluate(async ({ A, B, B2, C, arrow }) => {
     const load = (src) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + src; });
     const imgs = await Promise.all([load(A), load(B), load(C), load(B2)]);
@@ -239,9 +254,9 @@ if (!only || only.has('orbit')) {
   // screen, the draw order under the bands, and the fade at 1,000 km.
   const geo = arrow ? await measureArrow(page, arrow) : null;
   row('V1b', 'operational arrow (#22): slim shaft, tip on the axis point, corridor <= front, under the bands, faint rails', geo
-    ? `shaft ${geo.shaftPx.toFixed(1)} px = ${geo.shaftKm.toFixed(0)} km (corridor ${arrow.corridorKm} km, rails ${arrow.railsKm} km, front ${arrow.frontKm} km); visible tip ${geo.tipErrPx.toFixed(1)} px / ${geo.tipErrKm.toFixed(0)} km from the axis point (its target icon ~12 px); arrow pixels ${(geo.cover * 100).toFixed(2)} % of the screen; order arrows ${o.st.order.arrows} < bands ${o.st.order.bands}`
+    ? `shaft ${geo.shaftPx.toFixed(1)} px = ${geo.shaftKm.toFixed(0)} km (corridor ${arrow.corridorKm} km, rails ${arrow.railsKm} km, front ${arrow.frontKm} km); drawn tip ${geo.tipErrPx.toFixed(1)} px / ${geo.tipErrKm.toFixed(0)} km from the axis point; arrow pixels ${(geo.cover * 100).toFixed(2)} % of the screen; order arrows ${o.st.order.arrows} < bands ${o.st.order.bands}`
     : 'none',
-  !!geo && geo.shaftPx >= 2.5 && geo.shaftPx <= 9 && geo.shaftKm <= 0.1 * arrow.corridorKm + 5 && (geo.tipErrKm <= 30 || geo.tipErrPx <= 16) && arrow.railsKm <= arrow.frontKm + 1
+  !!geo && geo.shaftPx >= 2.5 && geo.shaftPx <= 9 && geo.shaftKm <= 0.1 * arrow.corridorKm + 5 && geo.tipErrKm <= 30 && arrow.railsKm <= arrow.frontKm + 1
     && o.atk.fr * 25 <= arrow.frontKm + 25 && geo.cover < 0.012 && o.st.order.arrows < o.st.order.bands);
   if (arrow) {
     // Zoomed in to 1,000 km over the same front: the arrow is gone (the band and the borders tell the battle).
@@ -337,6 +352,7 @@ if (!only || only.has('orbit')) {
   // Offensive from the panel (#23): «Ofensiva…» opens the dialog, «Lanzar ofensiva» sends one order; the offensive must
   // still be running 40 ticks later with no further click; then «Retirar» brings the troops home with a 10 % loss,
   // measured in the browser on the tick they arrive.
+  await page.evaluate(() => { window.__w6msgs = []; __front.ctx.bus.on('message', (e) => window.__w6msgs.push(e.key)); });
   await page.click('.fu-war-front .fu-btn--amber');
   const dlg = await page.waitForSelector('.fu-offdlg', { timeout: 15000 }).catch(() => null);
   await sleep(6000);
@@ -364,7 +380,8 @@ if (!only || only.has('orbit')) {
     await sleep(2500);
     alive = await page.evaluate((o) => { const v = __front.ctx.sim.view; const a = v.attacks.find((x) => x.id === o.id); return a ? { state: a.state, troops: a.troops, ratio: a.ratio, intensity: a.intensity, tick: v.tick } : null; }, own);
   }
-  row('V4f1', 'Contraofensiva launches ours and it persists without further clicks (40 ticks later)', own ? `offensive ${own.id} (${own.troops}) at tick ${own.tick} -> ${alive ? `${alive.state}, intensity ${alive.intensity}, ratio ${alive.ratio} at tick ${alive.tick}` : 'gone'}` : 'none', !!own && !!alive && alive.state !== 'retreating');
+  const said = await page.evaluate(() => (window.__w6msgs ?? []).join(','));
+  row('V4f1', 'Contraofensiva launches ours and it persists without further clicks (40 ticks later)', own ? `offensive ${own.id} (${own.troops}) at tick ${own.tick} -> ${alive ? `${alive.state}, intensity ${alive.intensity}, ratio ${alive.ratio} at tick ${alive.tick}` : 'gone'}; messages [${said}]` : `none; messages [${said}]`, !!own && !!alive && alive.state !== 'retreating');
   // The panel row manages it: set «Mantener la línea», then Retirar.
   await sleep(1500);
   const holdBtn = await page.$('.fu-war-front .fu-war-int button[data-int="0"]');
@@ -379,6 +396,9 @@ if (!only || only.has('orbit')) {
   if (retreatVisible && own) {
     await page.click('.fu-war-front .fu-btn--danger');
     await sleep(1500);
+    // (Paused: the order is carried out on the next tick.)
+    await page.evaluate(() => __front.ctx.sim.fastForward(1));
+    await sleep(2000);
     back = await page.evaluate(async (o) => {
       const ctx = __front.ctx;
       const find = () => ctx.sim.view.attacks.find((x) => x.id === o.id);
@@ -549,11 +569,14 @@ if (!only || only.has('descent')) {
   // The camera at rest (a glide or the zoom damping finished): three equal readings 3 s apart (frames are slow here).
   const settle = async (maxMs) => {
     const t0 = Date.now();
-    let prev = '', same = 0;
+    let prev = null, same = 0;
     while (Date.now() - t0 < maxMs) {
       await sleep(3000);
-      const c = await page.evaluate(() => { const s = __front.ctx.cameraRig.getState(); return `${s.lat.toFixed(4)},${s.lon.toFixed(4)},${s.altitudeKm.toFixed(2)},${s.tilt.toFixed(2)}`; });
-      same = c === prev ? same + 1 : 0;
+      // Compared across rendered frames only (a frame can take several seconds here: two readings between the same
+      // two frames are always equal).
+      const c = await page.evaluate(() => { const s = __front.ctx.cameraRig.getState(); return { k: `${s.lat.toFixed(4)},${s.lon.toFixed(4)},${s.altitudeKm.toFixed(2)},${s.tilt.toFixed(2)}`, f: __front.ctx.frame.frame }; });
+      if (prev && c.f < prev.f + 2) continue;
+      same = prev && c.k === prev.k ? same + 1 : 0;
       prev = c;
       if (same >= 2) return true;
     }
@@ -631,6 +654,8 @@ if (!only || only.has('descent')) {
     await settle(400000);
     const builtC = await waitBattle(240000);
     await sleep(4000);
+    await settle(400000);
+    await waitBattle(240000);
     const oC = await onScreen();
     const gC = await page.evaluate(bannerState);
     await shot(page, 'descent-pointer-go');

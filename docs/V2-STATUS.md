@@ -310,6 +310,54 @@ on a no-HMR server gives **31/31**, 0 page errors (shots/W6-battle-clarity-fix/v
 - **Language switch (W1/W3).** The day label, alert buttons, ages and «Prioridad alta» labels repaint (V11b «DAY 3»,
   SHOW, HIGH PRIORITY). Alert titles and bodies keep the language they were reported in, like a news feed (W3's design).
 
+## W6-battle-clarity: fix pass 2 (2026-09-29) — owner items #22, #23 and FEEDBACK #11 in real play
+
+**Owner item #22 overrides the acceptance wording «an operational arrow as wide as the corridor (±15 %)»** (criterion 1
+and the brief's overlay bullet): the arrow must not hide the front. Built and verified (shots/W6-battle-clarity-fix2/):
+
+1. **Operational arrow** (`render/battle/overlay.ts`): a slim semi-transparent shaft (≤ 5 % of the corridor, clamped
+   to 3.6-6 px) with a proportional head (3×) whose tip lands ON the axis point (plus a small ring there), the corridor
+   as two faint dashed rails instead of a filled body, drawn under the front bands (renderOrder 42 < 43) and knocked out
+   wherever a border or coast passes under it (the fragment samples the territory owner texture, so every border stays
+   drawn), fading from 1,700 km and gone below 1,000 km. The corridor is never wider than its front
+   (`AttackSystem.frontageOf` caps it at `Front.length`, `predictOffensive` too; the 16-tile front of the evidence got a
+   40-tile corridor because frontage was bought with troops only). **V1b now measures the drawn pixels**: the arrows
+   batch alone is toggled (every layer above it and the DOM HUD hidden for those frames, two frames per state so
+   animation is excluded), then the shaft width across the stroke, the tip of the connected stroke against the projected
+   axis point, the screen share and the draw order. **V1d**: arrow alpha 0 at 1,000 km. Result: see the table below.
+2. **Contraofensiva / Retirar** (`sim/attacks.ts`): an offensive whose corridor loses contact (our own line fell back
+   behind its origin: the evidence's «cancelled, ratio 0.08») re-forms on the contact nearest its axis point
+   (`setAxis`) instead of dissolving; a launch with no contact in its corridor is refused up front with
+   `msg.offensiveNoContact`; any sim end of a human offensive other than Retirar is told (`msg.offensiveNoContactEnded`,
+   `msg.offensiveEndedPeace`); a broken human offensive (R < 0.5 for 60 ticks) no longer withdraws behind the player's
+   back: it halts and holds the line with `msg.offensiveHalted` (the AI and the human autopilot keep the retreat).
+   The panel's «Ofensiva…» aims 2-3 tiles into enemy land found along the front (never water or our own land), with the
+   reason in the tooltip when no stretch faces enemy land. **V4f is robust**: launch from the panel, check the
+   offensive is still running 40 ticks later (V4f1), change its intensity from the row (V4h), press Retirar and measure
+   the troops that come home on the tick they arrive, in the browser (V4f).
+3. **Owner item #23 (attack flow)**: `ui/hud/offensiveDialog.ts`. A click on enemy land at war (and the radial's
+   Atacar, and the panel row's «Ofensiva…») opens the offensive dialog: front and objective place, troops 25/50/75/100 %
+   of home troops, intensity (Sostenida / Asalto total; Mantener la línea for a running one), and the preview recomputed
+   live: troops, the enemy garrison on that front, force ratio, attack width, expected km/h on plains, time to the
+   objective, casualties per game day on both sides (§4.6), a verdict (advance / grind / will stall and hold). One
+   «Lanzar ofensiva» sends one order; the offensive persists by itself. The Guerra panel row shows «Tu ofensiva: 65.000
+   · Sostenida · relación 0,3 : 1 · manteniendo la línea» with Mantener la línea (= detener) / Sostenida / Asalto total
+   (`offensiveIntensity`, sim: hold = no push, a quarter of the casualties, no stall/break clock; assault = +25 % power,
+   +60 % own casualties), «Gestionar…» (reinforce with a chosen share, which also moves the axis) and Retirar. The badge
+   opens that row. Shift+click keeps the instant launch for experienced players (said in the hover card). Tutorial step
+   «Cómo se ataca» on the first war; tooltips on every control. `w6-audit` A7a-d (headless): corridor capped at the
+   front (12.0 tiles on a 12-tile front with 1.6 M troops), assault ×1.250 power, hold pushes 0, a broken offensive holds
+   with the message, and re-forms when its origin loses contact. **#23 is done** (W6 owns the fronts UI).
+4. **FEEDBACK #11 in real play** (`render/battle/index.ts`, `ui/hud/battleStrip.ts`): a battle is built only under the
+   view target (≤ max(8 km, 2.5 × altitude)) or in front of it on screen (≤ 5 × altitude + 4 km), never 44 km away
+   outside the view; the **battle pointer** («➤ Frente de Zaragoza · la batalla está a 32 km [Ir a la batalla]») names
+   and points to the battle when the camera is low and not looking at it, and its button glides down to 3 km facing the
+   line from our side; a low, still camera over a built battle whose line is out of view or far down the view settles
+   onto the line once per battle (keeping altitude, tilt and heading). The panel's Ir flies onto the published line.
+   **V14** (new, no shot framing): V14a «Ir» then the mouse wheel to ~2 km; V14b camera put down 35 km behind the line;
+   V14c the pointer's button. Soldiers counted on screen by projecting 200 per side with the game camera
+   (`__battleDebug.soldiersOnScreen()`), banners by the HUD state.
+
 ## W6-battle-clarity: brief
 
 **Landed (shared local forces):** `src/shared/localForces.ts` with `deriveLocalForces()` / `deriveLocalForcesAt()` /

@@ -609,8 +609,9 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
           const bl = arrowVert(P, T, R, -1, u / len, headHalfKm, kind, headMinPx, ph, headMaxPx);
           const br = arrowVert(P, T, R, 1, u / len, headHalfKm, kind, headMinPx, ph, headMaxPx);
           world(curveX[m - 1], curveY[m - 1], U);
-          const tl = arrowVert(U, T, R, -1, 1, 0.001, kind, 0.01, ph, 0.02);
-          const tr = arrowVert(U, T, R, 1, 1, 0.001, kind, 0.01, ph, 0.02);
+          // A blunt apex (1 px each side) so the head reads right up to the point it lands on.
+          const tl = arrowVert(U, T, R, -1, 1, 0.001, kind, 1, ph, 1);
+          const tr = arrowVert(U, T, R, 1, 1, 0.001, kind, 1, ph, 1);
           quad(arrows, bl, br, tl, tr);
         }
         break;
@@ -693,7 +694,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     const m = curve(sx, sy, ex, ey, 0.06, 20);
     const len0 = curveLen(m);
     const shaftHalfKm = Math.min(railsKm * 0.05, 12);
-    const shaftPx: [number, number] = [2 + 0.4 * emph, 3.5];
+    const shaftPx: [number, number] = [1.8 + 0.4 * emph, 3];
     const headHalfKm = shaftHalfKm * 3;
     const headPx: [number, number] = [shaftPx[0] * 3, shaftPx[1] * 3];
     const headLenKm = Math.min(len0 * 0.3, Math.max(45, headHalfKm * 2.4));

@@ -401,7 +401,10 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   const scrV = new THREE.Vector3(), scrD = new THREE.Vector3();
   function onScreen(x: number, y: number): boolean {
     tileXYToLatLon(x, y, ll);
-    latLonToVec3(ll.lat, ll.lon, ctx.globe.surfaceRadiusAt(ll.lat, ll.lon), scrV);
+    return onScreenLL(ll.lat, ll.lon);
+  }
+  function onScreenLL(lat: number, lon: number): boolean {
+    latLonToVec3(lat, lon, ctx.globe.surfaceRadiusAt(lat, lon), scrV);
     if (scrD.copy(scrV).sub(ctx.camera.position).dot(scrV) > 0) return false; // behind the limb
     scrV.project(ctx.camera);
     return scrV.z < 1 && Math.abs(scrV.x) < 0.92 && Math.abs(scrV.y) < 0.9;
@@ -422,9 +425,10 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   let stillSince = 0;
   const lastCam = { lat: 0, lon: 0, alt: 0, tilt: 0, hdg: 0 };
   function settleOnLine(nowMs: number, alt: number): void {
-    const moved = Math.abs(camState.lat - lastCam.lat) + Math.abs(camState.lon - lastCam.lon) > 1e-5
-      || Math.abs(camState.altitudeKm - lastCam.alt) > 0.005 || Math.abs(camState.tilt - lastCam.tilt) > 1e-3
-      || Math.abs(camState.heading - lastCam.hdg) > 1e-3;
+    // (Still = the player is not moving it: the zoom's damping tail of a few metres does not count.)
+    const moved = Math.abs(camState.lat - lastCam.lat) + Math.abs(camState.lon - lastCam.lon) > 3e-4
+      || Math.abs(camState.altitudeKm - lastCam.alt) > camState.altitudeKm * 0.01 || Math.abs(camState.tilt - lastCam.tilt) > 0.01
+      || Math.abs(camState.heading - lastCam.hdg) > 0.01;
     lastCam.lat = camState.lat;
     lastCam.lon = camState.lon;
     lastCam.alt = camState.altitudeKm;
@@ -435,8 +439,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     if (alt > 14 || nowMs - stillSince < 900) return;
     const km = gcKm(camState.lat, camState.lon, anchor.lat, anchor.lon);
     if (km < 0.6 || km > 12) return;
-    const t = latLonToTile(anchor.lat, anchor.lon);
-    if (onScreen((t % MAP_W) + 0.5, Math.floor(t / MAP_W) + 0.5)) {
+    // On screen and close enough to read (within ~0.8 × the altitude of the view target): nothing to do.
+    if (onScreenLL(anchor.lat, anchor.lon) && km <= Math.max(1.2, alt * 0.8)) {
       glidedAnchor = anchor;
       return;
     }
@@ -463,8 +467,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     let lat: number, lon: number, key: number, km: number, f: FrontView | null | undefined;
     if (shown && anchor) {
       // The battle is built: point at it only when the camera looks away from it.
-      const t = latLonToTile(anchor.lat, anchor.lon);
-      if (onScreen((t % MAP_W) + 0.5, Math.floor(t / MAP_W) + 0.5)) return;
+      if (onScreenLL(anchor.lat, anchor.lon)) return;
       lat = anchor.lat;
       lon = anchor.lon;
       key = anchor.frontKey;
@@ -491,8 +494,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     pointerState.km = km;
     pointerState.frontKey = key;
     pointerState.heading = Math.atan2(f.dirX * cl * sgn, -f.dirY * sgn);
-    const t = latLonToTile(lat, lon);
-    pointerState.onScreen = onScreen((t % MAP_W) + 0.5, Math.floor(t / MAP_W) + 0.5);
+    pointerState.onScreen = onScreenLL(lat, lon);
     pointerOn = true;
   }
 
@@ -1176,6 +1178,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         for (let k = 0; k < sample; k++) {
           if (!infantry.pickTarget(team, r, p)) break;
           n++;
+          p.y = heightAt(p.x, p.z);
           q.copy(p).setY(p.y + 1.8);
           p.applyMatrix4(near.matrixWorld);
           q.applyMatrix4(near.matrixWorld);
@@ -1373,7 +1376,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         // Keep the battle while the camera stays over it and its front still exists: the line may move under it
         // (observation time) without the battle re-anchoring, until it has left the patch.
         if (anchor && anchor.frontKey && view.frontByKey.has(anchor.frontKey)
-          && (gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM || (glidedAnchor === anchor && ctx.frame.frame < glideUntil && camState.altitudeKm < 16))
+          && (gcKm(camState.lat, camState.lon, anchor.camLat, anchor.camLon) < REANCHOR_KM || (glidedAnchor === anchor && ctx.frame.frame < glideUntil && camState.altitudeKm < 16 && gcKm(camState.lat, camState.lon, anchor.lat, anchor.lon) < 13))
           && Math.abs(front.drift) < LINE_LEAVE_M) {
           want = anchor;
           same = true;
