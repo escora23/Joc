@@ -32,6 +32,8 @@ import { ENT_DEFS, type Ent, type EntKind, type EntSource, type World } from './
 export const FORCES_RADIUS_KM: Record<CommandKind, number> = { tank: 30, jet: 150, ship: 40 };
 export const INFANTRY_CAP = 40;
 export const REAR_CAP = 12;
+/** Soldiers per side at most when the ground battle view hands its infantry over (the scene draws 320 per team). */
+export const HANDOFF_BUDGET = 300;
 const DIVISION_KM = 30;
 const SHIP_KM = 40;
 const POST_KM = 10;
@@ -87,6 +89,12 @@ export class Forces {
     this.kind = kind;
     this.controlledId = controlledId;
     this.handoff = null;
+  }
+
+  /** Scale of the battle view's infantry into the scene's budget (HANDOFF_BUDGET soldiers per side at most). */
+  handoffScale(): number {
+    if (!this.handoff || this.handoff.size === 0) return 1;
+    return Math.min(1, HANDOFF_BUDGET / Math.max(1, ...this.handoff.values()));
   }
 
   /** Relation of a nation to the human, as the sim sees it now. */
@@ -156,7 +164,10 @@ export class Forces {
         const reach = this.handoff ? 30 : 6;
         if (front && frontKm < reach && (side.owner === front.a || side.owner === front.b || friendly)) {
           const pool = side.pools.front + side.pools.offensive;
-          const cap = this.handoff?.get(side.owner) ?? (hostile ? INFANTRY_CAP : INFANTRY_CAP / 2);
+          // From the battle view: its count for this side, scaled into the scene's soldier budget with the sides'
+          // balance kept (a 1,600 v 500 battle becomes 300 v 94 here).
+          const ho = this.handoff?.get(side.owner);
+          const cap = ho !== undefined ? Math.round(ho * this.handoffScale()) : (hostile ? INFANTRY_CAP : INFANTRY_CAP / 2);
           const shown = Math.min(cap, Math.round(pool));
           entry.shownInfantry = shown;
           if (hostile) enemyShown += shown;
@@ -621,17 +632,26 @@ export class Forces {
         }
         if (!ENT_DEFS[e.kind].vehicle || ENT_DEFS[e.kind].air || ENT_DEFS[e.kind].naval) continue;
         const dist = e.pos.distanceTo(player.pos);
-        // Far away (or with time compressed) a vehicle follows its sim position on the road; within 2.5 km at ×1 the
-        // Brain drives it (escort stations, fighting) with real vehicle physics.
-        const far = dist > 2500 || rate > 1;
+        // Far away (or with time compressed) a vehicle follows its sim position on the road; close by at ×1 the Brain
+        // drives it (escort stations, fighting) with real vehicle physics. A quick-reaction vehicle is handed to the
+        // Brain at 800 m, so it covers the last stretch at driving speeds in plain view (owner feedback #20).
+        const handover = qrf ? 800 : 2500;
+        const far = dist > handover || rate > 1;
         if (!far) continue;
         const qp = qrf ? this.qrfPoint.get(e) : undefined;
-        const gx = qp ? qp.x : e.goal.x, gz = qp ? qp.z : e.goal.z;
+        let gx = qp ? qp.x : e.goal.x, gz = qp ? qp.z : e.goal.z;
+        if (qp && Math.hypot(gx - player.pos.x, gz - player.pos.z) < handover) {
+          // The sim has the force at you already: drive up to the hand-over distance on this side.
+          const ux = e.pos.x - player.pos.x, uz = e.pos.z - player.pos.z, ul = Math.hypot(ux, uz) || 1;
+          gx = player.pos.x + (ux / ul) * (handover - 20);
+          gz = player.pos.z + (uz / ul) * (handover - 20);
+        }
         const dx = gx - e.pos.x, dz = gz - e.pos.z;
         const d = Math.hypot(dx, dz);
         if (d < 5) continue;
-        // Road speed (the force's 80 km/h, a division's 40 km/h), up to 1.3× to catch up with the sim sample.
-        const vmax = (qrf ? 80 : 40) / 3.6 * 1.3;
+        // Road speed (the force's 80 km/h, a division's 40 km/h), up to 1.3× to catch up with the sim sample; in sight
+        // (inside 1.5 km) never faster than 55 km/h.
+        const vmax = dist < 1500 ? 15 : (qrf ? 80 : 40) / 3.6 * 1.3;
         const step = Math.min(d, vmax * dtFar);
         e.pos.x += (dx / d) * step;
         e.pos.z += (dz / d) * step;

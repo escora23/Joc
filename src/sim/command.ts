@@ -15,7 +15,7 @@
 // time ends it with a formal protest. Staying brings the interception: the victim sends real forces from its nearest
 // bases that arrive in a believable, short time (fighters scrambled from the nearest airbase in 1-3 min, patrol
 // vehicles and APCs from the nearest post, town or base in 1.5-5 min, a warship in 2-7 min); real divisions within
-// 30 km are ordered in too. When the force is there it escorts the intruder and gives a last warning (60 s on land,
+// 30 km are ordered in too. When the force is there it escorts the intruder and gives a last warning (90 s on land,
 // 45 s in the air, 90 s at sea, 30 s near the capital); ignoring it makes the victim open fire on the intruder
 // (`engage`: its forces and SAM sites fire at that unit only) or, by personality or when it already hates the
 // intruder, declare war. An armed incident that lasts 30 game minutes ends in war. A capital is never ignored.
@@ -52,7 +52,7 @@ export const QRF_ROAD_KMH = 80;
 export const QRF_AIR_KMS = 0.5;
 export const QRF_SEA_KMH = 70;
 /** The last warning once the force is there (game s), per vehicle; near the capital. */
-export const ESCORT_WARN_SEC: Record<'tank' | 'jet' | 'ship', number> = { tank: 60, jet: 45, ship: 90 };
+export const ESCORT_WARN_SEC: Record<'tank' | 'jet' | 'ship', number> = { tank: 90, jet: 45, ship: 90 };
 export const ESCORT_WARN_CAPITAL_SEC = 30;
 /** An armed incident (engage) that goes on this long becomes a war. */
 export const ENGAGE_WAR_SEC = 1800;

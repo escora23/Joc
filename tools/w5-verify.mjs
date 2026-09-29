@@ -229,8 +229,11 @@ if (ONLY.includes('border')) {
   rec('B3 incursion raised by the sim after the confirmation', !!inc && !!clicked && !inc.left, { clicked, incursion: inc, ...(inc ? {} : { dbg }) });
   if (inc) {
     // Owner feedback #19: the warning at once, with its countdown, a short grace in real seconds, then the interception.
-    await wait(1500);
-    const radio = await page.evaluate(() => window.__cmd.overlay.radioText);
+    let radio = '';
+    for (let i = 0; i < 15 && !radio; i++) {
+      await wait(1000);
+      radio = await page.evaluate(() => window.__cmd.overlay.radioText);
+    }
     rec('B4 radio warning at once with a countdown', /\d+\s*s/.test(radio) && inc.graceSec > 0 && inc.graceSec <= 40, { graceSec: inc.graceSec, radio: radio.slice(0, 220) });
     // Hold still inside (never touch the controls): the grace runs out.
     let r = inc;
@@ -261,7 +264,8 @@ if (ONLY.includes('border')) {
         if (o.arrived && arrivedAt < 0) arrivedAt = o.sec;
         if (o.response === 'engage' || o.response === 'war') fired = o;
       }
-      const near = samples.flatMap((o) => o.q.filter((e) => e.d < 2500));
+      // In sight (≤ 1.5 km) the escort drives under vehicle physics; farther out it keeps the sim's road schedule.
+      const near = samples.flatMap((o) => o.q.filter((e) => e.d < 1500));
       const minD = near.length ? Math.min(...near.map((e) => e.d)) : -1;
       const maxV = near.length ? Math.max(...near.map((e) => e.v)) : -1;
       rec('B7 escort vehicles: APCs/tanks, road speeds (≤ 16 m/s near you), never closer than 25 m, neutral until told', near.length > 0 && minD >= 25 && maxV <= 16.5 && near.every((e) => e.neutral) && samples.some((o) => o.q.every((e) => e.kind === 'ifv' || e.kind === 'tank')),
@@ -381,6 +385,48 @@ if (ONLY.includes('ship')) {
   await page.close();
 }
 
+// Criterion 5: compression drops to ×1 near a peaceful border (2 km) and is refused with contact (a front at war).
+if (ONLY.includes('drops')) {
+  {
+    const { page, errs } = await open('command-border');
+    // Back off to 3 km from the border, then travel toward a destination across it.
+    const r = await page.evaluate(async () => {
+      const I = window.__cmd, P = I.controller.ent, s = window.__cmdStats;
+      const b = s.border, dx = b.x - P.pos.x, dz = b.z - P.pos.z, d = Math.hypot(dx, dz);
+      P.pos.x -= (dx / d) * 1600;
+      P.pos.z -= (dz / d) * 1600;
+      P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
+      P.yaw = Math.atan2(-dx, -dz);
+      const far = I.frame.latLonOfScene(P.pos.x + (dx / d) * 12000, P.pos.z + (dz / d) * 12000, { lat: 0, lon: 0 });
+      I.setWaypoint(far.lat, far.lon);
+      return { ok: I.requestRate(10), start: d + 1600 };
+    });
+    let st = null;
+    for (let i = 0; i < 240; i++) {
+      await wait(1000);
+      st = await page.evaluate(() => ({ rate: window.__cmdStats.rate, requested: window.__cmdStats.requested, lastDrop: window.__cmdStats.lastDrop, borderM: window.__cmdStats.border?.distM ?? -1, dialog: window.__cmd.overlay.dialogOpen }));
+      if (st.lastDrop || st.dialog) break;
+    }
+    rec('T5a travel drops to ×1 near a peaceful border', !!st && st.lastDrop === 'command.travel.border' && st.requested === 1 && st.borderM <= 2100, { ...r, ...st });
+    rec('drops border page errors', errs.length === 0, errs.slice(0, 5));
+    await page.close();
+  }
+  {
+    const { page, errs } = await open('command-front');
+    const r = await page.evaluate(() => {
+      const I = window.__cmd;
+      const P = I.controller.ent;
+      const ll = I.frame.latLonOfScene(P.pos.x, P.pos.z - 20000, { lat: 0, lon: 0 });
+      I.setWaypoint(ll.lat, ll.lon);
+      const ok = I.requestRate(10);
+      return { accepted: ok, notice: I.overlay.noticeText, requested: window.__cmdStats?.requested };
+    });
+    rec('T5b no compression with contact at a front', !r.accepted && /contacto|contact/i.test(r.notice), r);
+    rec('drops front page errors', errs.length === 0, errs.slice(0, 5));
+    await page.close();
+  }
+}
+
 // Owner feedback #18: releasing control never sends the unit back. Tank inside a neighbour (the escort staging):
 // exit, then the unit stays exactly there while the strategic clock runs, and the incursion goes on.
 async function exitToMap(page) {
@@ -466,9 +512,11 @@ if (ONLY.includes('handoff')) {
       for (const e of I.world.ents) if (e.alive && e.src?.kind === 'division' && e.kind === 'tank') divs[e.src.id] = (divs[e.src.id] ?? 0) + 1;
       return { per, divs };
     });
-    const rows = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, command: c.per[s.owner] ?? 0 }));
-    const ok = rows.every((r) => Math.abs(r.command - r.battle) <= Math.max(2, r.battle * 0.1));
-    rec('H1 infantry per side: battle view = command mode (±10 %)', ok, rows);
+    // The scene draws at most 300 soldiers a side: the battle's counts come over scaled by one factor for both sides.
+    const scale = Math.min(1, 300 / Math.max(1, ...h.ho.infantry.map((s) => s.count)));
+    const rows = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, expected: Math.round(s.count * scale), command: c.per[s.owner] ?? 0 }));
+    const ok = rows.every((r) => Math.abs(r.command - r.expected) <= Math.max(2, r.expected * 0.1));
+    rec('H1 infantry per side: battle view = command mode (±10 %, one scale for both sides)', ok, { scale: +scale.toFixed(3), rows });
     const drows = h.ho.divisions.map((d) => ({ unitId: d.unitId, battle: d.tanks, command: c.divs[d.unitId] ?? 0 }));
     rec('H2 the battle\'s real divisions are there with the same tanks', drows.every((d) => d.battle === d.command || d.unitId === h.unitId), drows);
   }

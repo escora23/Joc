@@ -8,7 +8,7 @@
 //   M3  travel time checks against the strategic speed (40 km/h), tactical time against the tank's 65 km/h;
 //   I1  crossing into a nation at peace emits borderIncursion 'entered' with the warning's grace (30 game s on land,
 //       15 near the capital); staying past it brings the interception at once via sub-steps; the ground force
-//       arrives 1.5–5 game minutes after dispatch; its last warning (60 s) ignored → the victim opens fire or declares war;
+//       arrives 1.5–5 game minutes after dispatch; its last warning (90 s) ignored → the victim opens fire or declares war;
 //   I4  turning back within the grace ends it with a protest and no force;
 //   I2  with an alliance / open borders no incursion is raised;
 //   I3  releasing the unit inside foreign land leaves it exactly there (no walk back) and the incursion goes on;
@@ -170,7 +170,7 @@ function spawnDivision(g, x, y) {
   }
   const travel = arrived && q ? arrived.sec - q.dispatchSec : -1;
   ok(travel >= 90 && travel <= 300, `I1 it arrives ${(travel / 60).toFixed(1)} game min after dispatch (1.5–5)`);
-  ok(arrived?.deadlineSec === 60 || arrived?.deadlineSec === 30, `I1 on arrival, the last warning: ${arrived?.deadlineSec} s to leave`);
+  ok(arrived?.deadlineSec === 90 || arrived?.deadlineSec === 30, `I1 on arrival, the last warning: ${arrived?.deadlineSec} s to leave`);
   let fire = null;
   for (let i = 0; i < 200 && !fire; i++) {
     g.subStep(1);

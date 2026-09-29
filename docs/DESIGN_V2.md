@@ -1550,7 +1550,7 @@ If every pool is empty, the scene is peaceful. There is no fallback "strongest n
    nothing to send, it protests with a deadline.
 5. **Escort and last warning.** On arrival the force escorts the intruder (fighters on its wing rocking their wings, a
    vehicle ahead blocking the way and two beside, a ship abeam; road speeds, never closer than 35 m, no fire) and gives
-   a last warning: **60 s on land, 45 s in the air, 90 s at sea, 30 s near the capital**. Ignored: an aggressive victim,
+   a last warning: **90 s on land (the patrol covers its last 800 m at driving speed and takes station), 45 s in the air, 90 s at sea, 30 s near the capital**. Ignored: an aggressive victim,
    or one that hates the intruder (opinion ≤ −40), declares war; the others open fire on the intruding unit only
    (`engage`: its forces and SAM sites fire at it; firing back is self-defence). An armed incident that lasts 30 game
    minutes ends in war. A capital is never ignored. Every step is an `incursionResponse` alert (§8.2).
