@@ -1142,6 +1142,23 @@ waves, operation names, air strikes and `commandResult` are gone.
   speeds, 35 m keep-out); far escorts follow the sim's schedule (`track`). Real units are named where they stand
   (`forces.realUnitAnchors` → `CivilLabel.kind 'force'`). Shots `command-escort`, `command-jet-intercept`; verifier
   sections `border`, `release`, `jetrelease`, `handoff`.
+* **W5 fix pass 1 (2026-09-29).** Battle hand-off one for one: `render/battle/infantry.ts exportAlive` → `BattleApi.handoff()`
+  `soldiers [lat, lon, owner, …]` + `camera` (pose and look point) → `forces.ts setHandoff / spawnHandoff /
+  reconcileHandoff` (groups `battle:<owner>`, every soldier where it stood, the fallen replaced from behind the line);
+  `world.ts` crowd: `Ent.dormant` soldiers in two instanced meshes (`updateCrowd`: distance scale ≤ 7×, nation tint,
+  wake within `WAKE_M` 1 km, sleep beyond `SLEEP_M` 1.4 km, no AI, `soldiersByNation`); `index.ts` intro from the battle
+  camera (`introHold`/`introDur`), yaw toward the battle, `command.label.battle` world label, `showBattleNotice`;
+  `bootstrap.ts` keeps the camera on the battle when entering from it. Battle UI: `battleStrip.ts` division markers are
+  clickable (select), `selection.ts takeControl` with nothing selected takes your division nearest the battle's line.
+  Escorts: `ai.ts escortVehicle` (intruder frame; overtake in a 65 m lane, merge at ~45°, speed = intruder's + gap along
+  the course ≤ 15 m/s, wait at the roadside when ahead or facing it, back up only when it stopped, 40 m keep-out);
+  headless `npx tsx tools/w5-escort-sim.ts [a|b|c]`. Radio: `forces.qrfDistance` → «alongside» only within 150 m /
+  600 m / 1.5 km, else `command.radio.closing.*` with the distance. Alert strip (`overlay.pushAlert`): one row per
+  alert (repeat → ×n), top right under the exit button, 12 s. Move cadence: `MOVE_SEND_S` 0.5 local s, `__cmd.cadence()`
+  per local second. Released aircraft: `units.ts holdAfterControl` order `hold`, `Unit.holdUntil`
+  (`HOLD_ENDURANCE_TICKS`, fighters 3 h), orbit `HOLD_ORBIT_KM` 12 km, `eta` = fuel left, then home
+  (`forcesInfo.ts holdingAir`, `fstate.holding`, `effect.fighter.hold`; `render/units` draws the 12 km ring). Shot
+  `command-jet-sources` (criterion 11); verifier sections `jetsources`, B8b, B10b, D2, H0-H3, R3/R3b.
 
 ---
 

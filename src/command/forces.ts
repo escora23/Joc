@@ -20,7 +20,7 @@
 // until the victim of an incursion opens fire (`engage`) or war is declared.
 
 import * as THREE from 'three';
-import { HUMAN_ID, MAP_H, MAP_W } from '../shared/constants';
+import { CAP_RADIUS_TILES, HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../shared/constants';
 import type { GameView } from '../shared/api';
 import { deriveLocalForces, type LocalForces, type LocalRelation } from '../shared/localForces';
 import { StructureType, UnitMode, UnitType, type CommandKind } from '../shared/types';
@@ -222,7 +222,7 @@ export class Forces {
         this.reconcileDivision(want(`div:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.tanks, u.ifvs, u.mode, initial, player);
       } else if (u.type === UnitType.Warship && (this.kind === 'ship' || this.kind === 'tank') && u.distKm <= SHIP_KM) {
         this.reconcileShip(want(`ship:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.integrity);
-      } else if (u.type === UnitType.FighterSquadron && this.kind === 'jet' && u.airborne && (u.reason === 'cap' || u.distKm < 80)) {
+      } else if (u.type === UnitType.FighterSquadron && this.kind === 'jet' && u.airborne && (u.reason === 'cap' || u.distKm < 80 || this.capCovers(view, u.unitId, tp.x, tp.y))) {
         this.reconcileJets(want(`sq:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.jets, player);
       }
     }
@@ -231,7 +231,13 @@ export class Forces {
       for (const s of lf.structures) {
         if (s.type !== StructureType.Airbase || s.distKm > SCRAMBLE_KM || this.relationOf(view, s.owner) !== 'war') continue;
         for (const u of view.units.values()) {
-          if (u.type !== UnitType.FighterSquadron || u.home !== s.structureId || u.mode !== UnitMode.Docked || this.scrambled.has(u.id)) continue;
+          if (u.type !== UnitType.FighterSquadron || u.home !== s.structureId) continue;
+          // Already scrambled: its jets stay in the scene (the group is kept) until shot down or out of the area.
+          if (this.scrambled.has(u.id)) {
+            if (this.groups.has(`sq:${u.id}`)) want(`sq:${u.id}`);
+            continue;
+          }
+          if (u.mode !== UnitMode.Docked) continue;
           this.scrambled.add(u.id);
           const jets = Math.max(1, Math.round(u.hp * 3));
           const g = want(`sq:${u.id}`);
@@ -778,6 +784,16 @@ export class Forces {
       out.push({ key: g.key, unitId, owner: lead.nation, pos: lead.pos, hostile: lead.team === 1 && !lead.neutral, team: lead.team, qrf });
     }
     return out;
+  }
+
+  /** A fighter squadron on patrol whose circle (CAP_RADIUS_TILES around its station) covers the tile (x, y). */
+  private capCovers(view: GameView, unitId: number, x: number, y: number): boolean {
+    const u = view.units.get(unitId);
+    if (!u || u.mode !== UnitMode.Patrol) return false;
+    let dx = Math.abs(u.targetX - x);
+    if (dx > MAP_W / 2) dx = MAP_W - dx;
+    const lat = 90 - (y / MAP_H) * 180;
+    return Math.hypot(dx * TILE_KM * Math.cos((lat * Math.PI) / 180), (u.targetY - y) * TILE_KM) <= CAP_RADIUS_TILES * TILE_KM;
   }
 
   /** Distance (m) from a point to the nearest living vehicle of an incursion's quick-reaction force in the scene. */

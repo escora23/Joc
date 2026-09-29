@@ -447,11 +447,12 @@ export const DIVISION_FIELD_REPAIR = 0.0025;
 export const CAP_RADIUS_TILES = 6;
 /**
  * v2 (W5, owner feedback #18): an aircraft released from command mode holds over the spot where the player left it,
- * orbiting HOLD_ORBIT_KM around it (its patrol circle, CAP_RADIUS_TILES, keeps intercepting), for as long as its fuel
- * allows (ticks; 10 ticks = 1 game hour); then it flies back to its base to refuel.
+ * orbiting HOLD_ORBIT_KM around it (its patrol circle, CAP_RADIUS_TILES, keeps intercepting), for as long as its
+ * endurance allows — the squadron keeps a pair on station by rotating its aircraft with its base, like any patrol —
+ * (ticks; 10 ticks = 1 game hour = 1 real s at 1x); then it flies back to its base to refuel and rearm.
  */
 export const HOLD_ORBIT_KM = 12;
-export const HOLD_ENDURANCE_TICKS: Partial<Record<UnitType, number>> = { [UnitType.FighterSquadron]: 30, [UnitType.Bomber]: 50, [UnitType.DroneSwarm]: 80 };
+export const HOLD_ENDURANCE_TICKS: Partial<Record<UnitType, number>> = { [UnitType.FighterSquadron]: 120, [UnitType.Bomber]: 160, [UnitType.DroneSwarm]: 240 };
 export const CAP_HIT_AIRCRAFT = 0.6;
 export const CAP_HIT_CRUISE = 0.45;
 /** Aircraft rearm after landing (§2.4), ticks. */

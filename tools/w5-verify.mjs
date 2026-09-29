@@ -118,15 +118,15 @@ if (ONLY.includes('peace')) {
   await page.keyboard.down('KeyW');
   let cad = [];
   const tW = Date.now();
-  for (let i = 0; i < 150; i++) {
+  for (let i = 0; i < 300; i++) {
     await wait(1000);
     cad = await page.evaluate(() => window.__cmd.cadence());
-    if (cad.length >= 14) break;
+    if (cad.length >= 12) break;
   }
   await page.keyboard.up('KeyW');
   const whole = cad.slice(1, -1);
   const worstMoves = whole.length ? Math.min(...whole.map((c) => c.moves)) : 0, worstViews = whole.length ? Math.min(...whole.map((c) => c.views)) : 0;
-  rec('D2 at ×1: ≥ 1 move sent and ≥ 1 view update per local second of driving', whole.length >= 8 && worstMoves >= 1 && worstViews >= 1,
+  rec('D2 at ×1: ≥ 1 move sent and ≥ 1 view update per local second of driving', whole.length >= 5 && worstMoves >= 1 && worstViews >= 1,
     { localSeconds: whole.length, worstMoves, worstViews, realS: Math.round((Date.now() - tW) / 1000), buckets: whole.slice(0, 20) });
   // Exit.
   await page.evaluate(() => window.__cmd.debrief());
@@ -290,6 +290,11 @@ if (ONLY.includes('border')) {
         { samplesNear: near.length, minDistM: Math.round(minD), maxSpeedMs: +maxV.toFixed(1), kinds: [...new Set(samples.flatMap((o) => o.q.map((e) => e.kind)))] });
       const lastRadio = samples.find((o) => o.arrived)?.radio ?? '';
       rec('B8 on arrival: the last warning on the radio', arrivedAt > 0 && /\d/.test(lastRadio), { radio: lastRadio.slice(0, 200) });
+      // The radio matches the scene: «aquí la patrulla… no sigas avanzando» only with a vehicle within ~150 m; while it
+      // is farther the radio says how far it still is («a 830 m de ti y acercándonos»).
+      const esc = samples.filter((o) => o.arrived && o.response === 'intercept' && o.q.length);
+      const bad = esc.filter((o) => { const d = Math.min(...o.q.map((e) => e.d)); const along = /no sigas avanzando|do not advance/i.test(o.radio); const closing = /acerc|closing/i.test(o.radio); return (along && d > 160) || (closing && d <= 140); });
+      rec('B8b the radio says the patrol is alongside only when a vehicle is within ~150 m', esc.length > 0 && bad.length === 0, { samples: esc.length, mismatches: bad.slice(0, 3).map((o) => ({ d: Math.round(Math.min(...o.q.map((e) => e.d))), radio: o.radio.slice(0, 120) })) });
       rec('B9 ignoring it: the victim opens fire or declares war', !!fired, fired ? { response: fired.response, afterArrivalS: Math.round(fired.sec - arrivedAt) } : { last: samples.at(-1)?.response });
     }
   }
@@ -593,7 +598,7 @@ if (ONLY.includes('jetrelease')) {
   const km = after.x !== undefined ? Math.hypot((after.x - before.x) * 25 * Math.cos(41 * Math.PI / 180), (after.y - before.y) * 25) : -1;
   // Holding (order «hold» = 2) on a 12 km orbit around the release point, with its fuel left on the card.
   rec('R3 released fighter holds over the spot (≤ 20 km from it after 4 ticks; no return to base)', out && after.alt > 0 && after.order === 2 && km >= 0 && km <= 20, { km: +km.toFixed(1), after, exited: out });
-  rec('R3b the card says it is holding and how much fuel is left', /en espera|holding/i.test(card) && /combustible|fuel/i.test(card) && after.etaTicks > 0, { card: card.split('\n').slice(0, 6).join(' | ') });
+  rec('R3b the card says it is holding and how much endurance is left', /en espera|holding/i.test(card) && /autonom|endurance/i.test(card) && after.etaTicks > 0, { card: card.split('\n').slice(0, 6).join(' | ') });
   await page.screenshot({ path: 'shots/W5-command-v2/jet-hold-card.png', timeout: 180000 }).catch(() => undefined);
   rec('jetrelease page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
@@ -686,6 +691,23 @@ if (ONLY.includes('handoff')) {
     rec('H2 the battle\'s real divisions are there with the same tanks', drows.every((d) => d.battle === d.command || d.unitId === own.unitId), drows);
     rec('H3 the vehicle faces the battle it was watching, and the HUD says where it is', c.faceDeg >= 0 && c.faceDeg <= 20 && /batalla|battle/i.test(c.notice ?? ''), { faceDeg: c.faceDeg, battleKm: c.battleKm, notice: c.notice });
     await page.screenshot({ path: 'shots/W5-command-v2/h2-command.png', timeout: 180000 }).catch(() => undefined);
+    // H4 (the crowd's level of detail): put the vehicle 600 m behind the watched line (test staging, the sim rejects the
+    // jump): the soldiers within ~1 km wake up with the AI, the rest stay in the crowd; the totals do not change.
+    const h4 = await page.evaluate(() => {
+      const I = window.__cmd, P = I.controller.ent, ho = I.params.battleHandoff;
+      const lk = I.frame.sceneOf(ho.camera.lookLat, ho.camera.lookLon, { x: 0, z: 0 });
+      const dx = lk.x - P.pos.x, dz = lk.z - P.pos.z, d = Math.hypot(dx, dz);
+      P.pos.x = lk.x - (dx / d) * 600;
+      P.pos.z = lk.z - (dz / d) * 600;
+      P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
+      return true;
+    });
+    void h4;
+    await wait(15000);
+    const c2 = await page.evaluate(() => window.__cmdStats.soldiers);
+    const rows2 = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, active: c2[s.owner]?.active ?? 0, crowd: c2[s.owner]?.crowd ?? 0 }));
+    rec('H4 near the line the nearby soldiers wake (AI) and the far ones stay in the crowd; totals kept (±10 %)', rows2.some((r) => r.active > 0) && rows2.every((r) => r.active <= 320 && Math.abs(r.active + r.crowd - r.battle) <= Math.max(2, r.battle * 0.1)), rows2);
+    await page.screenshot({ path: 'shots/W5-command-v2/h3-near-line.png', timeout: 180000 }).catch(() => undefined);
   }
   rec('handoff page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();

@@ -559,7 +559,7 @@ export class World {
         else if (!e.dormant && d > SLEEP_M) this.setDormant(e, true);
       }
       wake.sort((a, b) => Math.hypot(a.pos.x - player.x, a.pos.z - player.z) - Math.hypot(b.pos.x - player.x, b.pos.z - player.z));
-      for (const e of wake) if (!this.setDormant(e, false)) break;
+      for (const e of wake) this.setDormant(e, false);
     }
     this.crowdAcc += realDt;
     const moved = cam.distanceToSquared(this.crowdCam) > 30 * 30;

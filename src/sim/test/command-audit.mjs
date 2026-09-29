@@ -391,9 +391,9 @@ function spawnDivision(g, x, y) {
     }
     ok(jet.order === UNIT_ORDER_KINDS.indexOf('hold') && maxKm <= 15 && jet.alt > 0,
       `J3 a released fighter holds over the spot: ${maxKm.toFixed(1)} km at most from it in 20 ticks (orbit 12 km), order ${UNIT_ORDER_KINDS[jet.order]}`);
-    ok(eta0 === 30 && jet.eta === 10, `J3 its fuel is published and runs down (eta ${eta0} → ${jet.eta} ticks)`);
-    for (let i = 0; i < 12; i++) g.tick1();
-    ok(jet.mode !== undefined && jet.holdUntil === 0 && (jet.state === UnitState.Returning || jet.state === UnitState.Docked), `J3 out of fuel after 3 game h it flies home to refuel (state ${jet.state})`);
+    ok(eta0 === 120 && jet.eta === 100, `J3 its endurance is published and runs down (eta ${eta0} → ${jet.eta} ticks)`);
+    for (let i = 0; i < 102; i++) g.tick1();
+    ok(!jet.dead && jet.holdUntil === 0 && (jet.state === UnitState.Returning || jet.state === UnitState.Docked), `J3 at the end of its 12 game h it flies home to refuel (state ${jet.state})`);
   } else ok(false, 'J3 fighter spawned');
 }
 

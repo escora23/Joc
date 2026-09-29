@@ -200,7 +200,7 @@ const es: Record<string, string> = {
 
   // Incursions (owner feedback #18-#20): the radio warning with its countdown, the interception, the last warning.
   'command.exit.foreign': 'Estás dentro de {nation}: la unidad se quedará aquí, sin volver sola, y la incursión seguirá: {nation} seguirá reaccionando hasta que salgas.',
-  'command.exit.bodyJet': 'El escuadrón se queda en espera sobre este punto, dando vueltas a 12 km de él, mientras le dure el combustible (su ficha muestra cuánto le queda); después vuelve a su base a repostar. Puedes darle otra orden cuando quieras. Todo lo que ha pasado aquí ya está aplicado en la simulación.',
+  'command.exit.bodyJet': 'El escuadrón se queda en espera sobre este punto, dando vueltas a 12 km de él, durante 12 horas de juego (relevando aviones con su base; su ficha muestra cuánto le queda); después vuelve a su base a repostar. Puedes darle otra orden cuando quieras. Todo lo que ha pasado aquí ya está aplicado en la simulación.',
   'command.dur.s': '{n} s',
   'command.dur.min': '{n} min',
   'command.dur.ms': '{m} min {s} s',
@@ -464,7 +464,7 @@ const en: Record<string, string> = {
 
   // Incursions (owner feedback #18-#20).
   'command.exit.foreign': 'You are inside {nation}: the unit will stay here, without driving home by itself, and the incursion goes on: {nation} will keep reacting until you are out.',
-  'command.exit.bodyJet': 'The squadron holds over this spot, circling 12 km around it, for as long as its fuel lasts (its card shows how much is left); then it flies back to its base to refuel. You can give it another order at any time. Everything that happened here is already applied to the simulation.',
+  'command.exit.bodyJet': 'The squadron holds over this spot, circling 12 km around it, for 12 game hours (rotating aircraft with its base; its card shows how long is left); then it flies back to its base to refuel. You can give it another order at any time. Everything that happened here is already applied to the simulation.',
   'command.dur.s': '{n} s',
   'command.dur.min': '{n} min',
   'command.dur.ms': '{m} min {s} s',

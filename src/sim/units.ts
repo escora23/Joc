@@ -1193,7 +1193,7 @@ export class UnitSystem {
       u.toY = u.y;
       u.targetTile = tileOf(u.x, u.y);
       u.order = orderCode('hold');
-      u.holdUntil = g.tick + (HOLD_ENDURANCE_TICKS[u.type] ?? 30);
+      u.holdUntil = g.tick + (HOLD_ENDURANCE_TICKS[u.type] ?? 120);
       u.eta = u.holdUntil - g.tick;
     } else {
       u.state = u.savedState === UnitState.Controlled ? UnitState.Idle : u.savedState;
@@ -2133,11 +2133,16 @@ export class UnitSystem {
     const holding = u.holdUntil > 0 && u.order === orderCode('hold');
     if (u.holdUntil > 0 && !holding) u.holdUntil = 0;
     if (holding && g.tick >= u.holdUntil) {
-      // Fuel: the holding ends and it flies home to refuel (its card then reads «volviendo a la base»).
-      u.holdUntil = 0;
-      u.order = -1;
-      this.goHome(u);
-      return;
+      // Endurance: the holding ends and it flies home to refuel (its card then reads «volviendo a la base»); to the
+      // nearest own airbase if its own is gone. With no airbase left anywhere it cannot land: it stays on station.
+      if (!g.structureMap.has(u.home)) u.home = this.nearestHome(u.owner, u.type, u.x, u.y);
+      if (g.structureMap.has(u.home)) {
+        u.holdUntil = 0;
+        u.order = -1;
+        this.goHome(u);
+        return;
+      }
+      u.holdUntil = g.tick + (HOLD_ENDURANCE_TICKS[u.type] ?? 120);
     }
     const d = tileKm(u.x, u.y, u.stationX, u.stationY);
     const orbitKm = holding ? HOLD_ORBIT_KM : CAP_RADIUS_TILES * TILE_KM * 0.6;
