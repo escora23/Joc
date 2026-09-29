@@ -42,7 +42,7 @@ async function open(shot) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errs = [];
   page.on('pageerror', (e) => errs.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 300)); });
+  page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 300)); if (/^\[command\] border/.test(m.text())) console.log('  ' + m.text()); });
   await page.goto(`${BASE}?shot=${shot}&live=1`, { waitUntil: 'load', timeout: 120000 });
   await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 560000, polling: 500 });
   await page.waitForFunction(() => !!window.__cmdStats && window.__cmdStats.phase === 'play', null, { timeout: 120000, polling: 500 }).catch(() => undefined);
@@ -182,15 +182,18 @@ if (ONLY.includes('border')) {
   const push = (m) => page.evaluate((m) => {
     const s = window.__cmdStats, I = window.__cmd, P = I.controller.ent;
     const b = s.border;
-    if (!b) return false;
-    const dx = b.x - P.pos.x, dz = b.z - P.pos.z, d = Math.hypot(dx, dz) || 1;
-    // Past the line: keep the last heading.
-    const ux = d > 1 ? dx / d : -Math.sin(P.yaw), uz = d > 1 ? dz / d : -Math.cos(P.yaw);
+    if (!b && !window.__w5dir) return false;
+    // The direction is fixed once, toward the nearest border point at the start: the drawn line can lie past that
+    // tile-edge point, and aiming at it again from beyond would turn the tank around.
+    if (!window.__w5dir) {
+      const dx = b.x - P.pos.x, dz = b.z - P.pos.z, d = Math.hypot(dx, dz) || 1;
+      window.__w5dir = { x: dx / d, z: dz / d };
+    }
+    const ux = window.__w5dir.x, uz = window.__w5dir.z;
     P.pos.x += ux * m;
     P.pos.z += uz * m;
     P.pos.y = I.ground.heightAt(P.pos.x, P.pos.z);
     P.yaw = Math.atan2(-ux, -uz);
-    window.__w5dir = { x: ux, z: uz };
     return true;
   }, m);
   let asked = false;
@@ -375,6 +378,101 @@ if (ONLY.includes('ship')) {
   const s = await stats(page);
   rec('S1 warship in own territorial waters, no hostiles at peace', /territoriales propias|own territorial/i.test(s.info) && s.hostiles === 0, { info: s.info.split('\n')[1]?.trim(), hostiles: s.hostiles });
   rec('ship page errors', errs.length === 0, errs.slice(0, 5));
+  await page.close();
+}
+
+// Owner feedback #18: releasing control never sends the unit back. Tank inside a neighbour (the escort staging):
+// exit, then the unit stays exactly there while the strategic clock runs, and the incursion goes on.
+async function exitToMap(page) {
+  await page.evaluate(() => window.__cmd.debrief());
+  for (let i = 0; i < 120; i++) {
+    await wait(1000);
+    if (await page.evaluate(() => window.__front?.app?.state === 'playing')) return true;
+  }
+  return false;
+}
+if (ONLY.includes('release')) {
+  const { page, errs } = await open('command-escort');
+  const before = await page.evaluate(() => {
+    const v = window.__cmd.ctx.sim.view, id = v.command.controlled[0].unitId, u = v.units.get(id);
+    window.__w5unit = id;
+    return { id, x: u.x, y: u.y, heading: u.heading, inc: v.command.incursions[0]?.response };
+  });
+  const out = await exitToMap(page);
+  await page.evaluate(() => window.__front.ctx.sim.setSpeed(1));
+  await wait(20000);
+  const after = await page.evaluate((id) => {
+    const v = window.__front.ctx.sim.view, u = v.units.get(id);
+    const inc = v.command?.incursions?.find((i) => i.unitId === id);
+    const feed = document.body.innerText.match(/sigue dentro de[^\n]*/i)?.[0] ?? '';
+    return { tick: v.tick, x: u?.x, y: u?.y, heading: u?.heading, mode: u?.mode, controlled: (v.command?.controlled ?? []).some((c) => c.unitId === id), inc: inc ? { response: inc.response, left: inc.left } : null, feed };
+  }, before.id);
+  const km = after.x !== undefined ? Math.hypot((after.x - before.x) * 25 * Math.cos(42.5 * Math.PI / 180), (after.y - before.y) * 25) : -1;
+  rec('R1 released inside foreign land: the division holds where it was left', out && !after.controlled && km >= 0 && km < 0.05, { km: +km.toFixed(3), before, after });
+  rec('R2 the incursion goes on on the strategic map (and says so)', !!after.inc && (!after.inc.left || after.inc.response === 'war') && /sigue dentro/i.test(after.feed), { inc: after.inc, feed: after.feed.slice(0, 120) });
+  rec('release page errors', errs.length === 0, errs.slice(0, 5));
+  await page.close();
+}
+if (ONLY.includes('jetrelease')) {
+  const { page, errs } = await open('command-jet-cap');
+  const before = await page.evaluate(() => {
+    const v = window.__cmd.ctx.sim.view, id = v.command.controlled[0].unitId, u = v.units.get(id);
+    return { id, x: u.x, y: u.y };
+  });
+  const out = await exitToMap(page);
+  await page.evaluate(() => window.__front.ctx.sim.setSpeed(1));
+  await wait(25000);
+  const after = await page.evaluate((id) => {
+    const v = window.__front.ctx.sim.view, u = v.units.get(id);
+    return { tick: v.tick, x: u?.x, y: u?.y, mode: u?.mode, alt: u?.alt, order: u?.order };
+  }, before.id);
+  const km = after.x !== undefined ? Math.hypot((after.x - before.x) * 25 * Math.cos(41 * Math.PI / 180), (after.y - before.y) * 25) : -1;
+  // A combat air patrol orbits its station at 0.6 × the 6-tile CAP radius (~90 km): it holds over the spot.
+  rec('R3 released fighter flies a holding orbit over the spot (no return to base)', out && after.alt > 0 && after.order === 4 && km >= 0 && km < 120, { km: +km.toFixed(1), after });
+  rec('jetrelease page errors', errs.length === 0, errs.slice(0, 5));
+  await page.close();
+}
+
+// Criterion 14 / owner feedback #21: T on a division inside a visible ground battle keeps that battle's forces.
+if (ONLY.includes('handoff')) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const errs = [];
+  page.on('pageerror', (e) => errs.push(e.message));
+  await page.goto(`${BASE}?shot=front-ground-real`, { waitUntil: 'load', timeout: 120000 });
+  await page.waitForFunction(() => window.__shotReady === true, null, { timeout: 900000, polling: 1000 });
+  const h = await page.evaluate(() => {
+    const { ctx } = window.__front;
+    const ho = ctx.battle.handoff?.() ?? null;
+    let best = null, bd = Infinity;
+    if (ho) {
+      for (const u of ctx.sim.view.units.values()) {
+        if (u.owner !== 1 || u.type !== 3 || !(u.hp > 0)) continue;
+        const lat = 90 - (u.y / 800) * 180, lon = (u.x / 1600) * 360 - 180;
+        const d = Math.hypot(lat - ho.lat, (lon - ho.lon) * Math.cos((lat * Math.PI) / 180));
+        if (d < bd) { bd = d; best = u.id; }
+      }
+    }
+    return { ho, unitId: best, degFromAnchor: bd };
+  });
+  if (!h.ho || !h.unitId) rec('H1 a visible ground battle with a human division to take', false, h);
+  else {
+    await page.evaluate((id) => window.__front.app.enterCommandMode(id), h.unitId);
+    await page.waitForFunction(() => window.__cmdStats?.phase === 'play' || window.__cmdStats?.phase === 'intro', null, { timeout: 300000, polling: 1000 }).catch(() => undefined);
+    await wait(8000);
+    const c = await page.evaluate(() => {
+      const I = window.__cmd, per = {};
+      for (const e of I.world.ents) if (e.alive && (e.kind === 'soldier' || e.kind === 'at') && e.src?.kind === 'pool') per[e.nation] = (per[e.nation] ?? 0) + 1;
+      const divs = {};
+      for (const e of I.world.ents) if (e.alive && e.src?.kind === 'division' && e.kind === 'tank') divs[e.src.id] = (divs[e.src.id] ?? 0) + 1;
+      return { per, divs };
+    });
+    const rows = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, command: c.per[s.owner] ?? 0 }));
+    const ok = rows.every((r) => Math.abs(r.command - r.battle) <= Math.max(2, r.battle * 0.1));
+    rec('H1 infantry per side: battle view = command mode (±10 %)', ok, rows);
+    const drows = h.ho.divisions.map((d) => ({ unitId: d.unitId, battle: d.tanks, command: c.divs[d.unitId] ?? 0 }));
+    rec('H2 the battle\'s real divisions are there with the same tanks', drows.every((d) => d.battle === d.command || d.unitId === h.unitId), drows);
+  }
+  rec('handoff page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();
 }
 

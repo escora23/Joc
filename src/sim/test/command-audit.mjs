@@ -315,6 +315,16 @@ function spawnDivision(g, x, y) {
       }
       entered ??= events.find((e) => e.type === 'borderIncursion' && e.stage === 'entered' && e.unitId === ship.id) ?? null;
       ok(!!entered && entered.kind === 'ship' && entered.victim === spot.victim, `S1 water next to ${spot.victim}'s coast at peace raises an incursion (${entered ? entered.kind + ' → ' + entered.victim : 'none'})`);
+      // S2: staying in its waters: a ship (or a patrol boat from a port) comes to shadow it, or a protest with a deadline.
+      let r = null;
+      for (let i = 0; i < 80 && !r; i++) {
+        g.subStep(1);
+        r = events.find((e) => e.type === 'borderIncursion' && e.stage === 'response' && e.unitId === ship.id) ?? null;
+      }
+      const inc = g.command.view(true).incursions.find((i) => i.unitId === ship.id);
+      const tt = inc?.qrf ? inc.qrf.arriveSec - inc.qrf.dispatchSec : -1;
+      ok(!!r && r.sec - entered.sec <= 41 && ((r.response === 'intercept' && r.qrfMode === 'sea' && tt >= 120 && tt <= 420) || (r.response === 'protest' && (r.deadlineSec ?? 0) > 0)),
+        `S2 after the 40 s grace at sea: ${r?.response} (${inc?.qrf ? `${inc.qrf.source}, ${(tt / 60).toFixed(1)} min` : 'nothing in reach'})`);
     }
   }
   // J1: a fighter squadron from own land into the neighbour's airspace.

@@ -1086,7 +1086,7 @@ waves, operation names, air strikes and `commandResult` are gone.
 * Entry (`bootstrap.ts enterCommandMode`): `unitControl` first, then `commandParams` from the latest unit view (lat,
   lon, heading, alt, integrity, formation), `context` and enemy from `deriveLocalForces` (enemy 0 is legal), and
   `battleHandoff` from `ctx.battle.handoff?.()` when a ground battle is on screen. Exit: `setClock('strategic')`,
-  `command.exit()`, `unitControl false` (the sim walks a unit left in foreign land home), fly to 2,500 km above the
+  `command.exit()`, `unitControl false` (the unit holds where it was left, #18), fly to 2,500 km above the
   unit's new tile.
 * Sim side `src/sim/command.ts` (`game.command`): `controlledMove` (clamp maxKmh × elapsed × 1.1, snap, reject jumps
   > 5 km and > 2× allowed), `commandCasualties`, `controlledDamage`, incursions (decision 30–90 game s via
@@ -1102,6 +1102,18 @@ waves, operation names, air strikes and `commandResult` are gone.
   `index.ts` (clock ×1/10/60/300/900 with contact and border drops, autopilot travel, sync, decisions, formation).
 * Tools: `window.__cmdStats` (every 10 frames), `window.__cmd` (internals), shots `command-*` (`&live=1` keeps the
   session running), `node tools/w5-verify.mjs` (browser checks per acceptance criterion).
+* **Owner feedback #18-#21 (W5, 2026-09-29).** Release: `units.ts holdAfterControl` (division holds or re-attaches on
+  its war front, warship keeps station, aircraft CAP over the spot); no walk back anywhere. Incursions
+  (`sim/command.ts`): warning at entry with `graceSec` (30 land / 25 air / 40 sea / 15 near the capital), then
+  `dispatch` of a real force (`QrfView.mode` ground/air/sea, `unitId` = the real squadron or warship carried along its
+  track), arrival 1.5-5 / 1-3 / 2-7 min, last warning (`deadlineSec`), then `engage` (the victim's local forces and SAMs
+  fire at the intruder) or war; strategic ticks advance the incursion in 10 s steps. Client: the radio panel
+  (`hud/overlay.ts setRadio`, `index.ts updateRadio`: message, countdown bar, nearest way out), no time compression
+  during an incursion, `alerts.ts` texts per stage and `releasedInsideAlert`; escorts in `forces.ts reconcileQrf`
+  (APCs / tank, fighters in ICAO positions, a ship abeam) driven by `ai.ts neutral()` at stations (`escortPoint`, road
+  speeds, 35 m keep-out); far escorts follow the sim's schedule (`track`). Real units are named where they stand
+  (`forces.realUnitAnchors` → `CivilLabel.kind 'force'`). Shots `command-escort`, `command-jet-intercept`; verifier
+  sections `border`, `release`, `jetrelease`, `handoff`.
 
 ---
 

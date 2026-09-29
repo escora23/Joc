@@ -866,6 +866,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       { label: t('command.incursion.back'), cls: 'pri', key: 'Esc' },
     ]);
     const P = player();
+    console.info(`[command] border crossing into ${owner}: ${i === 0 ? 'cross' : 'back'} (${i})`);
     if (i === 0) {
       confirmed.add(owner);
       return;
