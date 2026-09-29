@@ -369,6 +369,22 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         }
       }
     }
+    // The front publishes its contact line at sub-tile precision (FrontView.line, T41): a battle anchored there stands
+    // on the real contact, not on the tile-level line (which can be up to a tile, 25 km, behind it).
+    const L = hit.f?.line;
+    if (hit.f && L) {
+      const rE = wrapDX(tx, L.x) * kx, rN = (ty - L.y) * ky;
+      const along = rE * L.n - rN * L.e;
+      if (Math.abs(along) <= L.halfKm + 10) {
+        const carry = Math.max(-2, Math.min(L.focus ? 1.5 : 6, ctx.sim.view.simTime * 10 - L.tick));
+        const off = rE * L.e + rN * L.n + L.depthKm + (L.kmh / 10) * carry;
+        if (Math.abs(off) < 30) {
+          hit.px = tx + (off * L.e) / kx;
+          hit.py = ty - (off * L.n) / ky;
+          hit.dist = Math.abs(off);
+        }
+      }
+    }
     return hit.f ? hit : null;
   }
 
@@ -1029,7 +1045,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       return anchor ? { lat: anchor.lat, lon: anchor.lon } : null;
     },
     get built() {
-      return !!anchor && !job;
+      // Not while a new anchor waits to replace this one (the old battle is fading out before the new one streams in).
+      return !!anchor && !job && !pendingAnchor;
     },
     shadowCoverage() {
       return shadow ? shadow.coverage(ctx.renderer) : -1;
@@ -1048,7 +1065,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   const bannerL = new THREE.Vector3();
   /** Banner spots per side: along the line around where the camera looks (m) × behind the line (m), in preference order. */
   const BANNER_ALONG = [0, -1400, 1400, -2800, 2800, -4200, 4200];
-  const BANNER_BACK = [1100, 2300];
+  // 450 m last: a camera low over its own side's line (the line coming toward it) still sees that side's banner.
+  const BANNER_BACK = [1100, 2300, 450];
   const nSpots = BANNER_ALONG.length * BANNER_BACK.length;
   const mkSpots = () => Array.from({ length: nSpots }, () => ({ x: 0, y: 0, z: 0 }));
   const battleView: BattleView = {
@@ -1243,6 +1261,17 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         }
       }
       const visTarget = want ? 1 - smoothstep(NEAR_FADE_FULL, NEAR_FADE_START, alt) : 0;
+      if (pendingAnchor && anchor && !job && !forced && pendingAnchor.frontKey !== 0 && pendingAnchor.frontKey === anchor.frontKey
+        && alt < NEAR_FADE_FULL && nearFade > 0.99) {
+        // The same front, seen from low: the line (observation time) or the view has moved on along it. Swap the
+        // battlefield in one step instead of fading out and streaming in over several frames, which would bare the
+        // globe's coarse surface under a low camera for that time: one longer frame, no flat plane.
+        job = buildSteps(pendingAnchor, pendingDir.x, pendingDir.z);
+        builds++;
+        pendingAnchor = null;
+        focusWaitMs = -1;
+        while (!runJob()) { /* build every step now */ }
+      }
       if (pendingAnchor) {
         // Fade out the old battle (if any) before streaming the new one in.
         nearFade = Math.max(0, nearFade - frame.dt * 3);

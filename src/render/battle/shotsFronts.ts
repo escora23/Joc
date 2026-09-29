@@ -247,7 +247,7 @@ async function descend(s: ShotContext, st: StagedWar, alt: number, tilt: number)
  * screen no HUD panel covers, from as close as possible: headings every 15°, a few tilts, the distance growing by 8 %
  * steps (flat ground; at these distances the Earth's curvature is a few tens of metres).
  */
-function framePoints(points: { e: number; n: number }[], tilts: number[], aspect: number, maxD = 30): { d: number; tilt: number; heading: number } | null {
+function framePoints(points: { e: number; n: number }[], tilts: number[], aspect: number, maxD = 30, headingOk?: (h: number) => boolean): { d: number; tilt: number; heading: number } | null {
   const half = Math.tan((45 / 2) * (Math.PI / 180));
   // Screen box clear of the HUD at 1600x900 (alerts left, leaderboard right, top bar, news ticker and strip on top,
   // build bar below), with room above each point for its banner.
@@ -256,6 +256,7 @@ function framePoints(points: { e: number; n: number }[], tilts: number[], aspect
   let found = false;
   for (let hk = 0; hk < 24; hk++) {
     const h = (hk / 24) * Math.PI * 2;
+    if (headingOk && !headingOk(h)) continue;
     const fe = Math.sin(h), fn = Math.cos(h);
     for (const t of tilts) {
       for (let d = 1.5; d < best.d; d *= 1.08) {
@@ -376,6 +377,97 @@ async function frameGround(s: ShotContext, st: StagedWar): Promise<void> {
   await s.waitFrames(8);
 }
 
+/**
+ * The observation camera: behind the defenders, facing the attack, low enough for the soldiers of both sides to read.
+ * The frame holds the contact line (±0.45 km along it) where it stands now AND where it will stand after `seconds` of
+ * observation time (published speed × 60, at most 0.9 km), so the moving line, its infantry and both banners stay
+ * inside the part of the screen no HUD panel covers while it crosses the frame toward the camera.
+ */
+async function frameObservation(s: ShotContext, st: StagedWar, seconds: number): Promise<{ ae: number; an: number; lead: number } | null> {
+  const view = s.ctx.sim.view;
+  // The front as the sim publishes it now (its tiles move with the line).
+  const f = st.front && (view.frontByKey.get(st.front.key) ?? st.front);
+  if (!f) return null;
+  const { x, y } = await focusOnAxis(s, f);
+  const fr0 = deriveLocalForces(view, x, y, 40, HUMAN_ID).fronts.find((q) => q.key === f.key);
+  if (!fr0) {
+    await descend(s, st, 2, 1.2);
+    return null;
+  }
+  let L0 = { x: fr0.nearest.x, y: fr0.nearest.y, lat: fr0.nearest.lat };
+  let te = Math.sin(fr0.lineBearing), tn = Math.cos(fr0.lineBearing);
+  // A battle already standing on this front: its drawn line (= the sim's line, V8c) is where the contact is now.
+  const shown = battleDebug()?.shown();
+  if (shown && shown.frontKey === f.key && shown.subTile) {
+    const ne = Math.sin(shown.normalBearing), nn = Math.cos(shown.normalBearing);
+    const lat0 = 90 - (shown.anchorY / 800) * 180;
+    const km = shown.lineShift / 1000;
+    const x1 = shown.anchorX + (km * ne) / (25.02 * Math.cos((lat0 * Math.PI) / 180)), y1 = shown.anchorY - (km * nn) / 25.02;
+    L0 = { x: x1, y: y1, lat: 90 - (y1 / 800) * 180 };
+    te = nn;
+    tn = -ne;
+  }
+  // Direction the line moves: the published line's signed speed along its normal, else side a's advance.
+  const fl = view.frontByKey.get(f.key)?.line;
+  let ae = Math.sin(fr0.advanceBearing), an = Math.cos(fr0.advanceBearing), kmh = Math.abs(view.frontByKey.get(f.key)?.advanceKmh ?? 0);
+  if (fl && fl.kmh !== 0) {
+    ae = fl.e * Math.sign(fl.kmh);
+    an = fl.n * Math.sign(fl.kmh);
+    kmh = Math.abs(fl.kmh);
+  } else if (f.offensiveA === 0 && f.offensiveB !== 0) {
+    ae = -ae;
+    an = -an;
+  }
+  // Travel over the observation (observation clock: 60 game s per real s), capped so the frame stays close.
+  const travel = Math.min(0.9, (kmh * 60 * seconds) / 3600);
+  // Target half-way along the travel: the line crosses the middle of the frame during the observation.
+  const cLL = tileXYToLatLon(L0.x + ((travel / 2) * ae) / (25.02 * Math.cos((L0.lat * Math.PI) / 180)), L0.y - ((travel / 2) * an) / 25.02);
+  const pts: { e: number; n: number }[] = [];
+  for (const k of [-travel / 2, travel / 2]) for (const a of [-0.45, 0.45]) pts.push({ e: a * te + k * ae, n: a * tn + k * an });
+  const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+  // From the defenders' side, facing the attack: the line comes toward the camera, so it grows as it advances.
+  const advH = Math.atan2(-ae, -an);
+  const fwdOk = (h: number) => Math.cos(h - advH) > Math.cos((50 * Math.PI) / 180);
+  const fr = framePoints(pts, [1.2, 1.15, 1.1, 1.05, 1.0, 0.95], aspect, 5, fwdOk) ?? { d: 2.4, tilt: 1.15, heading: advH };
+  console.info(`[w6] frame observation: ${shown && shown.frontKey === f.key ? `on the drawn line (${Math.round(shown.lineShift)} m)` : 'on the sim line'} at ${L0.x.toFixed(3)},${L0.y.toFixed(3)}; line ${kmh.toFixed(2)} km/h, travel ${travel.toFixed(2)} km in ${seconds} s -> d ${fr.d.toFixed(2)} km tilt ${fr.tilt} hdg ${fr.heading.toFixed(2)} (advance ${advH.toFixed(2)})`);
+  s.ctx.cameraRig.setState({
+    lat: cLL.lat, lon: cLL.lon, altitudeKm: Number(s.params.get('alt') ?? fr.d), tilt: Number(s.params.get('tilt') ?? fr.tilt),
+    heading: Number(s.params.get('hdg') ?? fr.heading),
+  });
+  // Let the camera arrive (a move of a few km re-anchors the battle: the old one fades, the new one streams in).
+  await s.waitFrames(3);
+  const t0 = performance.now();
+  while (!battleDebug()?.built && performance.now() - t0 < 120_000) await s.waitFrames(1);
+  await s.waitFrames(8);
+  return { ae, an, lead: travel / 2 };
+}
+
+/**
+ * A cameraman for the observation shot: every frame the camera target keeps its lead on the drawn contact line (the
+ * battle's line = the sim's line, V8c), as a player watching would pan with a line moving 1-8 km per real minute.
+ * Altitude, tilt and heading stay as framed. Runs until the page closes; &follow=0 leaves the camera fixed.
+ */
+function followLine(s: ShotContext, frontKey: number, dir: { ae: number; an: number; lead: number }): void {
+  const cam = { lat: 0, lon: 0, altitudeKm: 0, tilt: 0, heading: 0 };
+  const step = () => {
+    const d = battleDebug()?.built ? battleDebug()?.shown() : null;
+    if (d && d.frontKey === frontKey && d.subTile) {
+      // The drawn line where it crosses the battle's normal through the anchor (continuous tile coordinates).
+      const ne = Math.sin(d.normalBearing), nn = Math.cos(d.normalBearing);
+      const lat0 = 90 - (d.anchorY / 800) * 180;
+      const kx = 25.02 * Math.cos((lat0 * Math.PI) / 180);
+      const km = d.lineShift / 1000;
+      const lx = d.anchorX + (km * ne) / kx + (dir.lead * dir.ae) / kx, ly = d.anchorY - (km * nn) / 25.02 - (dir.lead * dir.an) / 25.02;
+      const t = tileXYToLatLon(lx, ly);
+      s.ctx.cameraRig.getState(cam);
+      const moved = Math.hypot((t.lat - cam.lat) * 111.2, (t.lon - cam.lon) * 111.2 * Math.cos((t.lat * Math.PI) / 180));
+      if (moved > 0.01 && moved < 8) s.ctx.cameraRig.setState({ ...cam, lat: t.lat, lon: t.lon });
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 registerShot('front-ground-real', 'battle', 'W6: the ground battle composed from the real front: infantry per side from the local forces, the real divisions as 1 tank per 25 % integrity + 2 IFVs at their positions, the sub-tile line, banners and the HUD strip', async (s) => {
   // One division per side, attached where the offensive's axis crosses the front: the battle the camera frames.
   const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, div: 0 });
@@ -387,13 +479,17 @@ registerShot('front-ground-real', 'battle', 'W6: the ground battle composed from
 }, 10);
 
 registerShot('front-observation', 'battle', 'W6: the ground battle under observation time (1 s = 1 min): the line and the armies move with the sim, continuously', async (s) => {
-  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, theatre: 'plains', div: 0 });
+  const st = await stageFrontWar(s, { attacker: 'enemy', run: 220, div: 0 });
   await divisionsAtAxis(s, st);
-  // Close enough to see the soldiers on both sides of the line (1 km up, looking 2.4 km ahead along the line).
-  await descend(s, st, 2.6, 1.2);
+  // Behind the defenders facing the attack, close enough for the soldiers to read, the line a few hundred metres ahead
+  // of the camera target; the camera then pans with the line (a fixed camera loses a line moving 1-8 km per minute).
+  const dir = await frameObservation(s, st, Number(s.params.get('span') ?? 4));
+  if (dir && st.front && s.params.get('follow') !== '0') followLine(s, st.front.key, dir);
   // Let the world run: below 60 km the app switches the clock to observation time (60 game s per real s).
   s.ctx.sim.setSpeed(1);
+  const tk0 = s.ctx.sim.view.tick;
   await s.wait(Number(s.params.get('observe') ?? 20000));
+  console.info(`[w6] observed ticks ${tk0} -> ${s.ctx.sim.view.tick} rate ${s.ctx.sim.view.clock.rate} mode ${s.ctx.sim.view.clock.mode} line ${Math.round(battleDebug()?.shown()?.lineShift ?? NaN)} m`);
   console.info(`[w6] observation ${JSON.stringify(battleDebug()?.shown() ?? null)} clock=${s.ctx.sim.view.clock.mode}`);
 }, 10);
 

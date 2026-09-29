@@ -349,7 +349,15 @@ if (!only || only.has('obs')) {
     if (page) await page.close();
     page = await open('front-observation', '&quality=low&observe=4000');
     const samples = [];
+    let obsBanners = null, maxLineErr = 0, lineErrN = 0, lineErrAt = '';
     for (let i = 0; i < 44; i++) {
+      // The shot as the player sees it when the camera arrives, and again after 10 s and at the end of the window (the
+      // shot's camera pans with the line); banners and strip on the first.
+      if (i === 0) {
+        obsBanners = await page.evaluate(bannerState);
+        await shot(page, run === 1 ? 'front-observation' : `front-observation-${run}`);
+      }
+      if (i === 10) await shot(page, run === 1 ? 'front-observation-10s' : `front-observation-${run}-10s`);
       // The drawn line (battle debug) and, independently, what the sim publishes for that front (FrontView).
       const s = await page.evaluate(() => {
         const d = window.__battleDebug.shown();
@@ -358,9 +366,17 @@ if (!only || only.has('obs')) {
         return { t: performance.now() / 1000, d, mode: v.clock.mode, rate: v.clock.rate, tick: v.tick, kmh: f ? f.advanceKmh : 0, sign: f && f.line ? Math.sign(f.line.kmh) : 0, focus: !!(f && f.line && f.line.focus) };
       });
       samples.push(s);
+      // V8c through the observation: the drawn line against the independent FrontView reading, every sample.
+      const ind = s.d && s.d.subTile ? await page.evaluate(simLineAtAnchor) : null;
+      const d2 = ind ? await page.evaluate(() => window.__battleDebug.shown()?.lineShift ?? null) : null;
+      if (ind && d2 !== null) {
+        const e = Math.abs(d2 - ind.shiftM);
+        lineErrN++;
+        if (e > maxLineErr) { maxLineErr = e; lineErrAt = `drawn ${Math.round(d2)} m vs ${Math.round(ind.shiftM)} m at sample ${i}`; }
+      }
       await sleep(1000);
     }
-    await shot(page, run === 1 ? 'front-observation' : `front-observation-${run}`);
+    await shot(page, run === 1 ? 'front-observation-end' : `front-observation-${run}-end`);
     console.log('   V9 series', JSON.stringify(samples.map((s) => s.d && [+s.t.toFixed(1), Math.round(s.d.lineShift), s.tick, +s.kmh.toFixed(2), s.focus ? 1 : 0, s.d.builds])), JSON.stringify(samples[samples.length - 1]?.d?.reanchorWhy));
     // Least-squares slope of the drawn line over real time (m per real s), per battle build (a re-anchor re-centres the
     // battle on the line: offsets restart there), combined by the time each build covers.
@@ -393,6 +409,9 @@ if (!only || only.has('obs')) {
     const expected = used.length ? used.reduce((a, s) => a + (s.sign * s.kmh * s.rate) / 3.6, 0) / used.length : 0;
     const last = samples[samples.length - 1];
     const dTick = last.tick - samples[0].tick, dT = last.t - samples[0].t;
+    row(obsRuns > 1 ? `V8d.${run}` : 'V8d', 'observation: the drawn line stays within 2 km of the independent FrontView reading at every sample', `${lineErrN} samples, max Δ ${Math.round(maxLineErr)} m${lineErrAt ? ` (${lineErrAt})` : ''}`, lineErrN >= 20 && maxLineErr <= 2000);
+    const ob = obsBanners;
+    row(obsRuns > 1 ? `V11c.${run}` : 'V11c', 'observation shot: both nation banners on screen and clear of the HUD, strip shown', ob ? `${ob.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')} || ${ob.strip}` : 'none', !!ob && ob.banners.length === 2 && ob.banners.every((b) => b.state === 'clear') && ob.stripOn && /ataca/.test(ob.strip));
     row(obsRuns > 1 ? `V9.${run}` : 'V9', 'observation: clock observation, line speed = advanceKmh × rate / 3600 (±15 %), no 25 km jumps', `mode ${last?.mode} rate ${last?.rate}; drawn ${measured.toFixed(1)} m/s vs FrontView advanceKmh×rate/3.6 ${expected.toFixed(1)} m/s (${((measured / (expected || 1) - 1) * 100).toFixed(1)} %) over ${ok.length} samples in ${segs.size} build(s), ${used.filter((s) => s.focus).length} at the focus; sim ${dTick} ticks in ${dT.toFixed(0)} s (${((dTick * 360) / Math.max(1, dT)).toFixed(0)} game s per s); jumps ${jumps}`, last?.mode === 'observation' && expected !== 0 && wsum >= 20 && Math.abs(measured / expected - 1) <= 0.15 && jumps === 0);
   }
   // V10: battle animation clock per real second at 0.5x and 4x and paused.
