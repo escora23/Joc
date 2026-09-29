@@ -287,6 +287,59 @@ rebase can make the texture noise pop; enemy aircraft in the jet front shot depe
 Not changed: the verifier's handoff-real.mjs counted `world.ents` soldiers with `src.kind === 'pool'` — the hand-off
 soldiers are exactly that (`dormant` marks the far ones), so the same script now counts them.
 
+## W5-command-v2: fix pass 2 (2026-09-29) — verifier failures #18 (R1/R2), #20 (B7), 15, #24/#21
+
+> `git log --grep "W5 fix pass 2"`. CODEMAP §17 «W5 fix pass 2». Browser: `node tools/w5-verify.mjs --only
+> release,releaseout|border|handoff` (merged into shots/W5-command-v2/verify.json); headless
+> `npx tsx src/sim/test/command-audit.mjs` 35/35 (new I1b, I5, I6).
+
+1. **FEEDBACK #18 — a unit left inside foreign land.** Three causes, three fixes. (a) *Proportional fire*: the flat 5 %
+   per game minute is gone; a released unit under `engage` loses `1/90 × firepower ÷ its full strength` per game
+   minute, with firepower in tank equivalents of what is really there (patrol APC 0.25, the tank leading a force 1, the
+   squadron/warship carrying it, victim divisions within 3 km, SAM cover for aircraft). Two APCs take ~4 % of a
+   division before the half hour of fire turns into a war. (b) *Time to react*: releasing a unit inside raises the
+   critical row «Tu 1.ª División acorazada sigue dentro de Suiza» once the map is live and **pauses the game** (new
+   auto-pause kind «Tu unidad dentro de otra nación», on by default, in Ajustes › Juego); the last warning and the
+   opening of fire against a released unit are critical and pause too (the alert centre now also pauses when a
+   grouped row turns into a different event). The row's body says what is happening (warned / under fire / at war)
+   and how to get it out (click the alert to select it, right-click own land). (c) *Ordering it out works*: a released
+   unit whose order takes it out of the victim's land is «leaving» — the victim holds its fire and all its clocks
+   (grace, last warning, the half hour to war) while it drives out under escort; out, the rows clear and «Tu … ha
+   salido de Suiza» is said. The «sigue dentro» row clears when the unit leaves or dies (bus `alertResolve`); if the
+   incident became a war it stays, as a war row, until the unit is out or lost. An explicit «hold» is no longer
+   overridden by the idle front attach (the division stays where it was left even at war).
+   **R0** paused with «sigue dentro» on exit; **R1** 0.000 km moved after 20 s at ×1 (the verifier resumed without acting);
+   **R1b** integrity 0.96 after the patrol's fire; **R2** the incident became a war after its half hour, the unit is
+   still inside and the row says so; **R4** paused on exit, ordered home (unitOrder move, as a right-click on own land),
+   resumed with the banner's button: out of Suiza, integrity 100 %, no war, «ha salido de Suiza» shown.
+   Audit **I5** (36 game min under fire: ≤ 10 % lost or war), **I6** (ordered out: leaving, out, no damage, no war).
+2. **FEEDBACK #20 — the last warning waits for the escort.** In command mode the sim's arrival no longer starts the
+   countdown: the incursion waits (`awaitingAlongside`) until the client reports a vehicle of the force within station
+   range in the scene (`escortAlongside`: 150 m on land, 600 m in the air, 1.5 km at sea; a force the scene could not
+   place at all is reported after 20 s; the sim falls back after 30 game min). The radio says «a 2,2 km de ti y
+   acercándonos» with no countdown until then. `forces.ts track()`: within 3 km of the player a sim-driven vehicle
+   moves at most 55 km/h and only by the local frame's time (no catch-up jumps in view); a far catch-up step stops at
+   the edge of sight. Border run: **B7** PASS (448 samples within 1.4 km, max 15.3 m/s, min 54 m, APCs, neutral),
+   **B7b** PASS (countdown started with the nearest escort at 113 m, 212 game s after the sim's arrival, when it was
+   2.2 km out), **B9** engage 298 s after the sim's arrival (= 88 s after alongside, the 90 s warning).
+   Note: SwiftShader runs the local physics ~10× slower than real time while the sim's clock keeps real time; the
+   border loop now tops the local world up by one local second per wall second (`__cmd.simulate`, no rendering) and
+   samples after rendered frames. On a GPU the escort drives the last 3 km in ~3 min.
+3. **Criterion 15 — exit.** Behind the fade the camera is set 60 km above the unit before the climb (the entry pose at
+   3 km over the battle's hole in the globe rendered a void) and the fade lifts after three rendered frames: **X3** the
+   centre's mean luma after the fade lifts 106-121 in every frame. The debrief's game time is the sim's command clock
+   since entry: **X4** «0 min 56 s» vs 56.1 s.
+4. **FEEDBACK #24 / #21 — one distance, no repeats.** The distance to a watched battle is measured to one point, the
+   middle of the soldiers the battle view draws (`shared/geo.ts battleCentre`), and says so: the entry notice («a 15 km
+   al norte (distancia a su centro)»), the HUD line («Territorio propio · combate con Suiza a 15 km»), the battle's
+   world label («Combate · Suiza contra Comandante | 3226 soldados en la línea · 15 km», the overlay's distance to the same point) and the battle view's off-screen division marker («a 15 km del
+   combate»). Otherwise the HUD says «línea del frente con Suiza a X km». Entering from a battle more than 1.5 km
+   away sets the waypoint on its near edge at once. The command strip no longer re-pushes the same alert while the sim
+   stands still, and `news.ts` refreshes an offensive entry only when the sim tick has moved. The `command-front` shot
+   is staged on flat ground (41.8° N, 1.3° W): the sim reads the precise line under the unit before the walk, and the
+   frame faces enemy infantry in line of sight (a kill and the enemy's fire arc in frame, the real enemy division
+   labelled). **H5** (front-ground-real, T in the battle view): notice 15 km, HUD «combate con Suiza a 15 km», world label 15 km, measured 15.3 km, waypoint at 14.65 km (its near edge); H0-H4 still pass (2,627 / 599 soldiers one for one, 4 tanks, facing 0°, 274 / 199 woken near the line). The battle view's off-screen marker of the same division reads «▣ 1.ª División acorazada · Comandante · a 15 km del combate» (its centre distance 15.3 km; the Swiss division's «a 11 km del combate», 11.4 km — the old «12 km» was measured to the battle patch's origin).
+
 ## W6-battle-clarity: close-out (2026-09-28)
 
 > Built in full by the W6 owner; commits 8379fc2 … (see `git log --grep W6`). CODEMAP §6 «W6 battle clarity» maps the code.

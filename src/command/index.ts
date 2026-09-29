@@ -2030,7 +2030,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const f = battleFocus;
         labels.push({
           x: bp.x, y: ground.surfaceAt(bp.x, bp.z) + 60, z: bp.z, text: t('command.label.battle', { a: nationName(f.a), b: nationName(f.b) }),
-          sub: t('command.label.battleSub', { n: formatNumber(world.soldiersNear(bp.x, bp.z, 6000)), km: kmText(P ? Math.hypot(bp.x - P.pos.x, bp.z - P.pos.z) / 1000 : 0) }), kind: 'force', tone: 'hostile', color: colorCss(f.a === HUMAN_ID ? f.b : f.a), owner: f.a,
+          // (the overlay appends the distance, the same «a 15 km» as the notice and the HUD line)
+          sub: t('command.label.battleSub', { n: formatNumber(world.soldiersNear(bp.x, bp.z, 6000)) }), kind: 'force', tone: 'hostile', color: colorCss(f.a === HUMAN_ID ? f.b : f.a), owner: f.a,
         });
       }
       overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);

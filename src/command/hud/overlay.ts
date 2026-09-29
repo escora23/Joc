@@ -419,6 +419,8 @@ export class CommandOverlay {
   // ---------------------------------------------------------------------------------------------
   // Per frame
   // ---------------------------------------------------------------------------------------------
+  /** World labels drawn in the last frame («text | sub · distance»), for tools. */
+  readonly drawnLabels: string[] = [];
   update(dt: number, camera: THREE.PerspectiveCamera, labels: readonly CivilLabel[], waypoint: THREE.Vector3 | null, waypointText: string, hover: HoverInfo | null, kind: CommandKind): void {
     this.time += dt;
     if (this.noticeT && this.time > this.noticeT) {
@@ -448,6 +450,7 @@ export class CommandOverlay {
     const maxD = kind === 'jet' ? 120_000 : kind === 'ship' ? 60_000 : 32_000;
     const placed: { x: number; y: number; w: number }[] = [];
     const sorted = [...labels].map((l) => ({ l, d: camera.position.distanceTo(P.set(l.x, l.y, l.z)) })).filter((o) => o.d < maxD).sort((a, b) => rankOf(a.l) - rankOf(b.l) || a.d - b.d);
+    this.drawnLabels.length = 0;
     for (const { l, d } of sorted) {
       P.set(l.x, l.y, l.z).project(camera);
       if (P.z > 1 || P.z < -1) continue;
@@ -472,6 +475,7 @@ export class CommandOverlay {
         g.fillStyle = 'rgba(200,215,230,0.85)';
         g.fillText(`${l.sub} · ${d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d)} m`}`, x, y + 18);
       }
+      this.drawnLabels.push(`${l.text}${l.sub ? ` | ${l.sub} · ${d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d)} m`}` : ''}`);
     }
     // Destination marker.
     if (waypoint) {

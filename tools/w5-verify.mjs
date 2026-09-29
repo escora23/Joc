@@ -131,7 +131,7 @@ if (ONLY.includes('peace')) {
   // Exit.
   await page.evaluate(() => window.__cmd.debrief());
   let exited = false;
-  for (let i = 0; i < 120 && !exited; i++) {
+  for (let i = 0; i < 300 && !exited; i++) {
     await wait(1000);
     exited = await page.evaluate(() => window.__front?.app?.state === 'playing');
   }
@@ -798,9 +798,9 @@ if (ONLY.includes('handoff')) {
     // HUD's land line and the battle's world label all measure to the battle's centre, and a waypoint is set there.
     const texts = await page.evaluate(() => {
       const body = document.body.innerText;
-      return { notice: window.__cmdStats.notice ?? '', info: window.__cmdStats.info ?? '', label: body.match(/soldados en la l[ií]nea[^\n]*/i)?.[0] ?? '', waypointKm: window.__cmdStats.waypointKm };
+      return { notice: window.__cmdStats.notice ?? '', info: window.__cmdStats.info ?? '', label: (window.__cmd.overlay.drawnLabels ?? []).find((l) => /soldados en la l[ií]nea|soldiers on the line/i.test(l)) ?? '', waypointKm: window.__cmdStats.waypointKm };
     });
-    const kmOf = (str) => { const m = (str ?? '').match(/(\d+(?:[.,]\d+)?)\s*km/); return m ? Number(m[1].replace('.', '').replace(',', '.')) : null; };
+    const kmOf = (str) => { const m = (str ?? '').match(/(\d+(?:[.,]\d+)?)\s*km(?!.*km)/); return m ? Number(m[1].replace('.', '').replace(',', '.')) : null; };
     const markText = h.marks.find((m) => /del combate|from the battle/i.test(m.text ?? '') && !/Suiza|Switzerland/i.test(m.text ?? ''))?.text ?? '';
     const kms = { marker: kmOf(markText.match(/[\d.,]+\s*km del combate|[\d.,]+\s*km from the battle/i)?.[0]), notice: kmOf(texts.notice.match(/a [\d.,]+ km|[\d.,]+ km to/i)?.[0]), hud: kmOf(texts.info.match(/combate con[^\n]*|battle with[^\n]*/i)?.[0]), label: kmOf(texts.label), measured: c.battleKm };
     const vals = [kms.notice, kms.hud, kms.label, kms.marker].filter((v) => v !== null);
