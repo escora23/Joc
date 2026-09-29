@@ -563,7 +563,9 @@ export class Game implements SimGame {
       case 'spawn':
         return this.spawn(p, cmd.tile);
       case 'attack':
-        return this.attacks.command(p, cmd.target, cmd.ratio, cmd.tile);
+        return this.attacks.command(p, cmd.target, cmd.ratio, cmd.tile, cmd.intensity);
+      case 'offensiveIntensity':
+        return this.attacks.intensityCommand(p, cmd.attackId, cmd.intensity);
       case 'declareWar':
         return this.declareWarCommand(p, cmd);
       case 'setFrontPriority':

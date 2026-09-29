@@ -307,6 +307,9 @@ export function createGlobe(ctx: GameContext): GlobeApi {
     pickIsland(clientX, clientY) {
       return islands && islands.mesh.visible ? islands.pick(clientX, clientY) : null;
     },
+    ownerTexture() {
+      return territory.uniforms.uOwner.value;
+    },
     setBattleHole(lat, lon, radiusKm) {
       const h = planet.uBattleHole.value;
       if (!(radiusKm > 0)) {

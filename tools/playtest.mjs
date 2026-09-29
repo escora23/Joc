@@ -1161,6 +1161,10 @@ try {
           check(w, 'declaration confirmed but no warDeclared');
           return `declared war on ${w.target} first; offensive queued until tick ${w.mobilizeUntilTick}`;
         }
+        // At war across a border the click opens the offensive dialog (owner item #23): launch it with the chosen share.
+        if (await page.waitForSelector('.fu-offdlg', { timeout: 2500 }).catch(() => null)) {
+          await page.locator('.fu-offdlg .fu-offdlg-go').click();
+        }
         const ev = await lastEvent('attackStarted', 'e.attacker === 1', n0);
         if (ev) return `vs player ${ev.defender}: ${ev.troops} troops (${((ev.troops / troops0) * 100).toFixed(0)}% of ${troops0})`;
         // Clicking a nation we are already attacking reinforces that attack instead of opening a new one.

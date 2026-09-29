@@ -90,3 +90,36 @@
 .fu-bdiv::after { content: ''; position: absolute; left: 50%; top: 100%; width: 1px; height: 0.4rem; background: var(--c); }
 .fu-bdiv.is-edge { background: rgba(6, 11, 18, 0.86); color: #cfd8e3; }
 .fu-bdiv.is-edge::after { display: none; }
+
+/* ---------------------------------------------------------------------------------------------
+   Offensive management (owner item #23): our offensive's line and intensity in the panel row, and the dialog
+   --------------------------------------------------------------------------------------------- */
+.fu-war-ownbox { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.3rem 0.4rem; border: 1px solid rgba(255, 181, 61, 0.35); background: rgba(255, 181, 61, 0.06); }
+.fu-war-own { color: var(--fu-text); font-size: 0.72rem; }
+.fu-war-int > button { padding: 0.28rem 0.45rem; font-size: 0.64rem; }
+.fu-war-int > button.is-on { background: rgba(255, 181, 61, 0.22); color: var(--fu-text); box-shadow: inset 0 -2px 0 var(--fu-accent-2); }
+.fu-offdlg .fu-modal-body { display: flex; flex-direction: column; gap: 0.55rem; }
+.fu-offdlg-where { font: 600 0.86rem var(--fu-font-cond); letter-spacing: 0.04em; color: var(--fu-text); }
+.fu-offdlg-field { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.fu-offdlg-k { min-width: 5.5rem; font: 700 0.72rem var(--fu-font-cond); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fu-text-dim); }
+.fu-offdlg-field .fu-seg.is-disabled { opacity: 0.45; pointer-events: none; }
+.fu-offdlg-add { display: flex; align-items: center; gap: 0.35rem; font-size: 0.74rem; color: var(--fu-text-2); cursor: pointer; }
+.fu-offdlg-note { font-size: 0.72rem; color: var(--fu-text-dim); margin: 0; line-height: 1.35; }
+.fu-offdlg-table { display: grid; grid-template-columns: 1fr 1fr; gap: 0.15rem 1rem; padding: 0.45rem 0.55rem; border: 1px solid var(--fu-line); background: rgba(0, 0, 0, 0.22); }
+.fu-offdlg-row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.74rem; color: var(--fu-text-2); }
+.fu-offdlg-row b { color: var(--fu-text); }
+.fu-offdlg-row.is-go b { color: var(--fu-success); }
+.fu-offdlg-row.is-risky b { color: var(--fu-accent-2); }
+.fu-offdlg-row.is-bad b { color: var(--fu-danger); }
+.fu-offdlg-verdict { font-size: 0.78rem; padding: 0.4rem 0.55rem; border-left: 3px solid var(--fu-line-strong); color: var(--fu-text); }
+.fu-offdlg-verdict.is-advance { border-left-color: var(--fu-success); }
+.fu-offdlg-verdict.is-grind { border-left-color: var(--fu-accent-2); }
+.fu-offdlg-verdict.is-stall { border-left-color: var(--fu-danger); }
+@media (max-width: 720px) { .fu-offdlg-table { grid-template-columns: 1fr; } }
+
+/* The battle pointer: where the ground battle is when the camera is low but not over it */
+.fu-bpointer { position: absolute; left: 0; top: 0; z-index: 4; pointer-events: auto; display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.6rem;
+  background: rgba(6, 11, 18, 0.86); border: 1px solid rgba(255, 181, 61, 0.7); border-radius: 3px; font: 700 0.78rem var(--fu-font-cond); letter-spacing: 0.06em;
+  color: var(--fu-text); white-space: nowrap; will-change: transform; box-shadow: 0 0.3rem 1rem rgba(0, 0, 0, 0.5); }
+.fu-bpointer-arrow { display: inline-block; font-size: 1rem; color: var(--fu-accent-2); }
+.fu-bpointer .fu-btn { padding: 0.25rem 0.5rem; font-size: 0.68rem; }

@@ -1,6 +1,6 @@
 // W6 browser verifier (DESIGN_V2 §16.7 acceptance). Drives the real game in Chromium (SwiftShader) on staged but REAL
 // wars (the ?shot= stagers only issue sim commands and run real ticks) and measures each criterion.
-//   node tools/w6-verify.mjs [--url http://127.0.0.1:5440/] [--out shots/W6-battle-clarity/verify] [--only orbit,mob,600,plume,ground,obs]
+//   node tools/w6-verify.mjs [--url http://127.0.0.1:5440/] [--out shots/W6-battle-clarity/verify] [--only orbit,mob,600,plume,ground,descent,obs]
 // Headless sim criteria (A2 momentum reversal, A4 priority/T34/retreat, A5 key stability) are in src/sim/test/w6-audit.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -102,6 +102,87 @@ function simLineAtAnchor() {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Screen position (px) of lat/lon on the ground, as the game's camera projects it. */
+function projectFn() {
+  window.__proj = (lat, lon) => {
+    const g = __front.ctx.globe;
+    const r = g.surfaceRadiusAt(lat, lon);
+    const la = (lat * Math.PI) / 180, lo = (lon * Math.PI) / 180;
+    const cam = __front.ctx.camera;
+    const x = r * Math.cos(la) * Math.cos(lo), y = r * Math.sin(la), z = -r * Math.cos(la) * Math.sin(lo);
+    const e = cam.matrixWorldInverse.elements, p = cam.projectionMatrix.elements;
+    // view then projection (column-major)
+    const vx = e[0] * x + e[4] * y + e[8] * z + e[12], vy = e[1] * x + e[5] * y + e[9] * z + e[13], vz = e[2] * x + e[6] * y + e[10] * z + e[14];
+    const cx = p[0] * vx + p[4] * vy + p[8] * vz + p[12], cy = p[1] * vx + p[5] * vy + p[9] * vz + p[13], cw = p[3] * vx + p[7] * vy + p[11] * vz + p[15];
+    return { x: ((cx / cw + 1) / 2) * window.innerWidth, y: ((1 - cy / cw) / 2) * window.innerHeight };
+  };
+}
+
+async function measureArrow(page, arrow) {
+  await page.evaluate(projectFn);
+  await page.evaluate(() => __front.ctx.app.setSpeed(0));
+  await sleep(1500);
+  const shotB64 = async () => (await page.screenshot({ timeout: 300000 })).toString('base64');
+  const A = await shotB64();
+  await page.evaluate(() => window.__frontOverlay.setArrowsVisible(false));
+  await sleep(1500);
+  const B = await shotB64();
+  await page.evaluate(() => window.__frontOverlay.setArrowsVisible(true));
+  await sleep(1500);
+  const C = await shotB64();
+  fs.writeFileSync(path.join(out, 'front-orbit-noarrow.png'), Buffer.from(B, 'base64'));
+  return page.evaluate(async ({ A, B, C, arrow }) => {
+    const load = (src) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + src; });
+    const imgs = await Promise.all([load(A), load(B), load(C)]);
+    const cv = document.createElement('canvas'); cv.width = imgs[0].width; cv.height = imgs[0].height;
+    const g = cv.getContext('2d');
+    const px = imgs.map((im) => { g.drawImage(im, 0, 0); return g.getImageData(0, 0, cv.width, cv.height).data; });
+    const W = cv.width, H = cv.height, sx = W / window.innerWidth;
+    const mask = new Uint8Array(W * H);
+    let n = 0;
+    for (let i = 0; i < W * H; i++) {
+      const k = i * 4;
+      const ac = Math.abs(px[0][k] - px[2][k]) + Math.abs(px[0][k + 1] - px[2][k + 1]) + Math.abs(px[0][k + 2] - px[2][k + 2]);
+      const ab = Math.abs(px[0][k] - px[1][k]) + Math.abs(px[0][k + 1] - px[1][k + 1]) + Math.abs(px[0][k + 2] - px[1][k + 2]);
+      if (ac < 12 && ab > 30) { mask[i] = 1; n++; }
+    }
+    const P = (ll) => { const p = window.__proj(ll[0], ll[1]); return { x: p.x * sx, y: p.y * sx }; };
+    const tail = P(arrow.tail), tip = P(arrow.tip), axis = P(arrow.axis);
+    const dx = tip.x - tail.x, dy = tip.y - tail.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+    const at = (x, y) => (x >= 0 && y >= 0 && x < W && y < H ? mask[Math.round(y) * W + Math.round(x)] : 0);
+    // Shaft width: perpendicular profiles at 40-70 % of the way, the run of arrow pixels through the centre line.
+    const widths = [];
+    for (const f of [0.4, 0.5, 0.6, 0.7]) {
+      const cx = tail.x + dx * f, cy = tail.y + dy * f;
+      let best = 0;
+      for (let c = -4; c <= 4; c++) {
+        if (!at(cx - uy * c, cy + ux * c)) continue;
+        let a = c, b = c;
+        while (a > -40 && at(cx - uy * (a - 1), cy + ux * (a - 1))) a--;
+        while (b < 40 && at(cx - uy * (b + 1), cy + ux * (b + 1))) b++;
+        best = Math.max(best, b - a + 1);
+      }
+      if (best > 0) widths.push(best);
+    }
+    widths.sort((p, q) => p - q);
+    const shaftPx = widths.length ? widths[widths.length >> 1] / sx : 0;
+    // Tip: the farthest arrow pixel along the arrow's direction within 30 px of its line.
+    let far = -Infinity, fx = 0, fy = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!mask[y * W + x]) continue;
+      const rx = x - tail.x, ry = y - tail.y;
+      const along = rx * ux + ry * uy, perp = Math.abs(rx * uy - ry * ux);
+      if (perp > 30 * sx || along < 0) continue;
+      if (along > far) { far = along; fx = x; fy = y; }
+    }
+    const tipErrPx = Math.hypot(fx - axis.x, fy - axis.y) / sx;
+    // km per px at the axis point: project a point 50 km north.
+    const a2 = P([arrow.axis[0] + 50 / 111.2, arrow.axis[1]]);
+    const pxPerKm = Math.hypot(a2.x - axis.x, a2.y - axis.y) / sx / 50;
+    return { shaftPx, shaftKm: shaftPx / pxPerKm, tipErrPx, tipErrKm: tipErrPx / pxPerKm, cover: n / (W * H), pxPerKm, widths };
+  }, { A, B, C, arrow });
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // V1 / V13 / V4 / V12: orbit overlay, badge, Guerra panel, audio caps
 // ---------------------------------------------------------------------------------------------------------------
@@ -120,7 +201,29 @@ if (!only || only.has('orbit')) {
   const b = o.badges.find((x) => o.f && x.key === o.f.key);
   row('V1a', 'band in both colours with chevrons toward the side losing ground', o.f ? `front ${o.f.key} momentum ${o.f.m} chevron ${JSON.stringify(o.st.chevrons[o.f.key])}` : 'no front', !!o.f && o.st.fronts > 0 && o.st.chevrons[o.f.key]?.dir === Math.sign(o.f.m) && Math.abs(o.f.m) > 0.1);
   const arrow = o.atk ? o.st.arrows.find((a) => a.attackId === o.atk.id) : null;
-  row('V1b', 'operational arrow as wide as the corridor (±15 %)', arrow ? `${Math.round(arrow.widthKm)} km vs corridor ${Math.round(o.atk.fr * 25)} km, ${arrow.lengthKm} km long` : 'none', !!arrow && Math.abs(arrow.widthKm / (o.atk.fr * 25) - 1) <= 0.15);
+  // V1b measures the DRAWN arrow (owner item #22 overrides «as wide as the corridor»): pixels that change when the
+  // arrows batch alone is hidden (A on, B off, C on again: only pixels equal in A and C count, so animation is not the
+  // arrow), then the shaft's width across it, where its tip lands against the projected axis point, its share of the
+  // screen, the draw order under the bands, and the fade at 1,000 km.
+  const geo = arrow ? await measureArrow(page, arrow) : null;
+  row('V1b', 'operational arrow (#22): slim shaft, tip on the axis point, corridor <= front, under the bands, faint rails', geo
+    ? `shaft ${geo.shaftPx.toFixed(1)} px = ${geo.shaftKm.toFixed(0)} km (corridor ${arrow.corridorKm} km, rails ${arrow.railsKm} km, front ${arrow.frontKm} km); tip ${geo.tipErrPx.toFixed(1)} px / ${geo.tipErrKm.toFixed(0)} km from the axis point; arrow pixels ${(geo.cover * 100).toFixed(2)} % of the screen; order arrows ${o.st.order.arrows} < bands ${o.st.order.bands}`
+    : 'none',
+  !!geo && geo.shaftPx >= 2.5 && geo.shaftPx <= 9 && geo.shaftKm <= 0.1 * arrow.corridorKm + 5 && geo.tipErrKm <= 30 && arrow.railsKm <= arrow.frontKm + 1
+    && o.atk.fr * 25 <= arrow.frontKm + 25 && geo.cover < 0.012 && o.st.order.arrows < o.st.order.bands);
+  if (arrow) {
+    // Zoomed in to 1,000 km over the same front: the arrow is gone (the band and the borders tell the battle).
+    const z = await page.evaluate(async () => {
+      const c = __front.ctx.cameraRig.getState();
+      __front.ctx.cameraRig.setState({ ...c, altitudeKm: 1000 });
+      await new Promise((r) => setTimeout(r, 2500));
+      const fade = window.__frontOverlay.arrowFade();
+      __front.ctx.cameraRig.setState(c);
+      return fade;
+    });
+    await sleep(2000);
+    row('V1d', 'the operational arrow fades out when zoomed in (gone at 1,000 km)', `arrow alpha factor ${z.toFixed(3)} at 1,000 km`, z < 0.01);
+  }
   row('V1c', 'badge: both ISO3 codes, tug-of-war bar Pa/(Pa+Pd), measured km/h', b ? `${b.text} share ${b.share} (Pa/(Pa+Pd) ${(o.f.pa / (o.f.pa + o.f.pd)).toFixed(3)})` : 'no badge', !!b && b.text.includes(o.isoA) && b.text.includes(o.isoB) && /km\/h/.test(b.text) && Math.abs(b.share - o.f.pa / (o.f.pa + o.f.pd)) < 0.02);
   row('V13', 'overlay draw calls / allocation (2 batches, preallocated)', `${o.st.drawCalls} draw calls, ${o.st.bandVerts}+${o.st.arrowVerts} vertices, ${o.st.rebuilds} rebuilds`, o.st.drawCalls <= 4);
   // Guerra panel: G opens it; rows with garrisons; Ir; Prioridad alta; Proponer paz; Pedir ayuda; Retirar.
@@ -199,18 +302,55 @@ if (!only || only.has('orbit')) {
   }
   void sentBefore;
   row('V4e', 'Pedir ayuda sends a call to arms to the allies (W3 proposal flow)', asked ? `callToArms to ${help.ally}` : 'none', asked);
-  // Contraofensiva then Retirar: our own offensive on this front, ended with a 10 % loss.
+  // Offensive from the panel (#23): «Ofensiva…» opens the dialog, «Lanzar ofensiva» sends one order; the offensive must
+  // still be running 40 ticks later with no further click; then «Retirar» brings the troops home with a 10 % loss,
+  // measured in the browser on the tick they arrive.
   await page.click('.fu-war-front .fu-btn--amber');
-  await page.evaluate(() => __front.ctx.app.setSpeed(1));
-  await page.waitForTimeout(8000);
-  const own = await page.evaluate(() => { const a = __front.ctx.sim.view.attacks.find((x) => x.attacker === 1 && x.defender > 0); return a ? { id: a.id, troops: a.troops } : null; });
-  await page.evaluate(() => __front.ctx.app.setSpeed(0));
-  await page.waitForTimeout(1500);
+  const dlg = await page.waitForSelector('.fu-offdlg', { timeout: 15000 }).catch(() => null);
+  const dlgText = dlg ? await page.evaluate(() => document.querySelector('.fu-offdlg')?.textContent ?? '') : '';
+  await shot(page, 'offensive-dialog');
+  row('V4g', 'the offensive dialog (#23): troops, intensity, ratio, km/h, casualties per day and a verdict before launching', dlg ? dlgText.slice(0, 300) : 'no dialog', !!dlg && /Relación de fuerzas/.test(dlgText) && /km\/h|sin avance/.test(dlgText) && /Bajas propias por día/.test(dlgText) && /Intensidad/.test(dlgText));
+  if (dlg) await page.click('.fu-offdlg .fu-offdlg-go');
+  await sleep(2500);
+  const own = await page.evaluate(() => { const a = __front.ctx.sim.view.attacks.find((x) => x.attacker === 1 && x.defender > 0 && x.id > 0); return a ? { id: a.id, troops: a.troops, tick: __front.ctx.sim.view.tick } : null; });
+  let alive = null;
+  if (own) {
+    await page.evaluate(() => __front.ctx.sim.fastForward(40));
+    await sleep(2500);
+    alive = await page.evaluate((o) => { const v = __front.ctx.sim.view; const a = v.attacks.find((x) => x.id === o.id); return a ? { state: a.state, troops: a.troops, ratio: a.ratio, intensity: a.intensity, tick: v.tick } : null; }, own);
+  }
+  row('V4f1', 'Contraofensiva launches ours and it persists without further clicks (40 ticks later)', own ? `offensive ${own.id} (${own.troops}) at tick ${own.tick} -> ${alive ? `${alive.state}, intensity ${alive.intensity}, ratio ${alive.ratio} at tick ${alive.tick}` : 'gone'}` : 'none', !!own && !!alive && alive.state !== 'retreating');
+  // The panel row manages it: set «Mantener la línea», then Retirar.
+  await sleep(1500);
+  const holdBtn = await page.$('.fu-war-front .fu-war-int button[data-int="0"]');
+  if (holdBtn) await holdBtn.click();
+  await sleep(2000);
+  const held = own ? await page.evaluate((o) => __front.ctx.sim.view.attacks.find((x) => x.id === o.id)?.intensity ?? -1, own) : -1;
+  row('V4h', 'the panel row changes the offensive\'s intensity (Mantener la línea)', `intensity ${held}`, held === 0);
   const retreatVisible = await page.evaluate(() => { const b = document.querySelector('.fu-war-front .fu-btn--danger'); return !!b && !b.classList.contains('fu-hidden'); });
-  if (retreatVisible) await page.click('.fu-war-front .fu-btn--danger');
-  await page.waitForTimeout(1500);
-  const state = await page.evaluate((o) => __front.ctx.sim.view.attacks.find((a) => o && a.id === o.id)?.state ?? 'gone', own);
-  row('V4f', 'Contraofensiva launches ours; Retirar ends it (troops come home in 2 h, 10 % loss: w6-audit A4e)', `offensive ${own ? own.id : 'none'} -> ${state}`, !!own && retreatVisible && (state === 'retreating' || state === 'gone'));
+  let back = null;
+  if (retreatVisible && own) {
+    await page.click('.fu-war-front .fu-btn--danger');
+    await sleep(1500);
+    back = await page.evaluate(async (o) => {
+      const ctx = __front.ctx;
+      const find = () => ctx.sim.view.attacks.find((x) => x.id === o.id);
+      const st0 = find()?.state ?? 'gone';
+      for (let i = 0; i < 30; i++) {
+        const a = find();
+        if (!a) return { st0, err: 'ended before measuring' };
+        const inOff = a.troops, home = ctx.sim.view.human.troops;
+        await ctx.sim.fastForward(1);
+        await new Promise((r) => setTimeout(r, 300));
+        if (!find()) {
+          const got = ctx.sim.view.human.troops - home;
+          return { st0, inOff, got, loss: 1 - got / Math.max(1, inOff) };
+        }
+      }
+      return { st0, err: 'never came home' };
+    }, own);
+  }
+  row('V4f', 'Retirar ends our offensive: the troops come home 2 h later with a 10 % loss (measured in the browser)', back ? (back.err ? `${back.st0}: ${back.err}` : `${back.st0}; ${Math.round(back.inOff)} in the offensive, ${Math.round(back.got)} back = ${(back.loss * 100).toFixed(1)} % lost`) : `retreat button ${retreatVisible ? 'shown' : 'hidden'}`, !!back && !back.err && back.st0 === 'retreating' && Math.abs(back.loss - 0.1) <= 0.03);
   // Audio caps near a busy front: 60 real seconds at 300 km, running.
   await page.keyboard.press('g');
   await page.evaluate(() => { const v = __front.ctx.sim.view; const f = v.fronts.find((q) => !q.quiet); const s = f.samples; const m = (s.length >> 2) << 1; const x = s[m], y = s[m + 1]; __front.ctx.cameraRig.setState({ lat: 90 - y / 800 * 180, lon: x / 1600 * 360 - 180, altitudeKm: 300, tilt: 0.4 }); __front.ctx.app.setSpeed(4); });
@@ -336,6 +476,91 @@ if (!only || only.has('ground')) {
   const clock = await page.evaluate(() => document.querySelector('.fu-day-label')?.textContent ?? '');
   row('V11b', 'the strip, banners and the clock in English after the language switch', `${en.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')} || ${en.strip} || clock «${clock}»`, /attacking/.test(en.strip) && /day of fighting/.test(en.strip) && /advance/.test(en.strip) && en.banners.every((b) => /attacking|defending/.test(b.text) && b.state === 'clear') && /day/i.test(clock) && !/día/i.test(clock));
   await shot(page, 'front-ground-real-en');
+  await page.close();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// V14: the ground battle where the player looks, WITHOUT the shot's framing (FEEDBACK #11 «where they are»):
+//   V14a Guerra panel «Ir», then the mouse wheel at the centre of the screen down to ~3 km: the battle stands under the
+//        view target, soldiers of both sides and both banners on screen.
+//   V14b the camera put down 35 km behind the line, low and tilted like a player looking around: no battle is built
+//        far outside the view; the battle pointer says where it is; «Ir a la batalla» glides there and the soldiers
+//        and both banners are on screen.
+// ---------------------------------------------------------------------------------------------------------------
+if (!only || only.has('descent')) {
+  const page = await open('front-orbit', '&quality=medium');
+  await page.evaluate(() => __front.ctx.app.setSpeed(0));
+  const waitBattle = async (ms) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      const ok = await page.evaluate(() => { const d = window.__battleDebug; return !!d && d.built && !!d.shown() && __front.ctx.battle.active; });
+      if (ok) return true;
+      await sleep(2000);
+    }
+    return false;
+  };
+  const onScreen = () => page.evaluate(() => ({ soldiers: window.__battleDebug.soldiersOnScreen(200), cam: __front.ctx.cameraRig.getState(), anchor: window.__battleDebug.anchor }));
+  const gcKm = (a, b) => { const R = 6371, d = Math.PI / 180; const x = Math.sin(((b.lat - a.lat) * d) / 2) ** 2 + Math.cos(a.lat * d) * Math.cos(b.lat * d) * Math.sin(((b.lon - a.lon) * d) / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
+  const verdict = (o, g) => {
+    const both = !!o.soldiers && o.soldiers.every((x) => x.onScreen >= 10);
+    const banners = g.banners.length === 2 && g.banners.every((b) => b.state === 'clear');
+    return { both, banners, text: `soldiers on screen ${o.soldiers ? o.soldiers.map((x) => `${x.onScreen}/${x.sampled} (${x.medianPx} px)`).join(' vs ') : 'none'}; anchor ${o.anchor ? gcKm(o.anchor, o.cam).toFixed(1) : '-'} km from the view target (alt ${o.cam.altitudeKm.toFixed(1)} km, tilt ${o.cam.tilt.toFixed(2)}); banners ${g.banners.map((b) => `${b.text} [${b.state}]`).join(' | ')}` };
+  };
+  // V14a: Ir, then zoom with the wheel.
+  await page.mouse.move(800, 450);
+  await page.keyboard.press('g');
+  await sleep(1500);
+  await page.click('.fu-war-front .fu-war-actions button:first-child');
+  await sleep(4000);
+  await page.keyboard.press('g');
+  await sleep(1000);
+  for (let i = 0; i < 80; i++) {
+    const alt = await page.evaluate(() => __front.ctx.cameraRig.getState().altitudeKm);
+    if (alt < 3.2) break;
+    await page.mouse.move(800, 450);
+    await page.mouse.wheel(0, 300);
+    await sleep(700);
+  }
+  await sleep(3000);
+  const builtA = await waitBattle(240000);
+  await sleep(4000);
+  const oA = await onScreen();
+  const gA = await page.evaluate(bannerState);
+  await shot(page, 'descent-ir-zoom');
+  const vA = verdict(oA, gA);
+  row('V14a', 'Ir then wheel zoom to ~3 km (no shot framing): battle under the view, soldiers of both sides and both banners on screen', `${builtA ? 'built' : 'NOT built'}; ${vA.text}`, builtA && vA.both && vA.banners);
+  // V14b: put down 35 km behind our line, looking around.
+  const put = await page.evaluate(() => {
+    const v = __front.ctx.sim.view;
+    const f = v.fronts.find((q) => !q.quiet && (q.a === 1 || q.b === 1));
+    const n = f.samples.length >> 1, m = n >> 1;
+    const s = f.b === 1 ? 1 : -1; // into our land
+    const x = f.samples[m * 2] + f.dirX * (0.5 + 1.4 * s), y = f.samples[m * 2 + 1] + f.dirY * (0.5 + 1.4 * s);
+    const lat = 90 - (y / 800) * 180, lon = (x / 1600) * 360 - 180;
+    __front.ctx.cameraRig.setState({ lat, lon, altitudeKm: 2.5, tilt: 1.15, heading: 0.7 });
+    return { lat, lon };
+  });
+  await sleep(6000);
+  let ptr = null;
+  for (let i = 0; i < 30 && !ptr; i++) {
+    ptr = await page.evaluate(() => { const e = document.querySelector('.fu-bpointer'); return e && !e.classList.contains('fu-hidden') ? e.textContent : null; });
+    if (!ptr) await sleep(1500);
+  }
+  const far = await page.evaluate(() => { const a = window.__battleDebug.anchor; const c = __front.ctx.cameraRig.getState(); return a && __front.ctx.battle.active ? { a, c } : null; });
+  const farKm = far ? gcKm(far.a, far.c) : 0;
+  await shot(page, 'descent-offline');
+  row('V14b', 'camera low 35 km behind the line: no battle built outside the view, the pointer says where the battle is', `pointer «${ptr ?? 'none'}»; ${far ? `a battle is shown ${farKm.toFixed(1)} km away` : 'no battle built there'} (camera at ${put.lat.toFixed(2)}, ${put.lon.toFixed(2)})`, !!ptr && (!far || farKm <= 12));
+  if (ptr) {
+    await page.click('.fu-bpointer .fu-btn');
+    await sleep(5000);
+    const builtC = await waitBattle(240000);
+    await sleep(4000);
+    const oC = await onScreen();
+    const gC = await page.evaluate(bannerState);
+    await shot(page, 'descent-pointer-go');
+    const vC = verdict(oC, gC);
+    row('V14c', '«Ir a la batalla» glides down to the line: soldiers of both sides and both banners on screen', `${builtC ? 'built' : 'NOT built'}; ${vC.text}`, builtC && vC.both && vC.banners);
+  } else row('V14c', '«Ir a la batalla» glides down to the line', 'no pointer', false);
   await page.close();
 }
 

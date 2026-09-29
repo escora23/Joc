@@ -5,9 +5,13 @@
 //     line, side b ahead of it), 1.5 tiles wide in world space with a 14 px minimum. Chevrons scroll across it toward
 //     the side that is losing ground, at a speed proportional to the MEASURED advance (FrontView.advanceKmh); there
 //     are none while |momentum| <= 0.1. QUIET fronts (at war, no offensive) are a thin dashed two-colour line.
-//   * OPERATIONAL ARROW per offensive: from 3 tiles behind the attacker's line to the axis point (or past the line
-//     along the axis when the line already went beyond it), its shaft as wide as the offensive's corridor
-//     (frontageTiles × 25 km, 6 px minimum), attacker colour with a dark outline.
+//   * OPERATIONAL ARROW per offensive (owner item #22 overrides the older «as wide as the corridor»): a SLIM shaft
+//     (4-7 px, at most 5 % of the corridor) from 3 tiles behind the attacker's line to the axis point, whose tip lands on
+//     it (or 2 tiles past the line when the line already went beyond it), a proportional head, attacker colour,
+//     semi-transparent with a dark hairline. The corridor it pushes on (never wider than its front) is two faint dashed
+//     rails, not a filled body. It is drawn BELOW the front bands and lets every border line show through it (the
+//     territory owner texture knocks it out on borders), and fades out as the camera comes in: gone below 1,000 km,
+//     where the band, its chevrons and the borders tell the battle.
 //   * NAVAL INVASION arrows along the convoy's planned route, ending at the landing.
 //   * MOBILIZATION arrows: while a war's aggressor mobilizes (tick < mobilizeUntilTick), short pulsing arrows on its
 //     side of the border pointing at the target; they disappear with the mobilization window.
@@ -46,19 +50,50 @@ export interface FrontOverlay {
   readonly group: THREE.Group;
   update(visualDt: number, altKm: number, visible: boolean): void;
   clear(): void;
+  /** Verifiers: hide the arrows batch alone (the pixel difference is the drawn arrow). */
+  setArrowsVisible(v: boolean): void;
+  /** Verifiers: the arrows' fade at the current altitude (0 gone .. 1 full). */
+  arrowFade(): number;
   /** Shots and verifiers: what was drawn at the last rebuild. */
   stats(): OverlayStats;
+}
+
+/** One operational arrow as drawn (verifiers project these points and measure the pixels independently). */
+export interface ArrowStat {
+  attackId: number;
+  frontKey: number;
+  attacker: number;
+  /** Corridor as the sim publishes it, and as drawn (the rails' separation: never wider than the front). */
+  corridorKm: number;
+  railsKm: number;
+  /** The front's own contact length. */
+  frontKm: number;
+  /** Shaft: world half-width and its pixel clamp; head: the same, and its length. */
+  shaftHalfKm: number;
+  shaftPx: [number, number];
+  headHalfKm: number;
+  headPx: [number, number];
+  headLenKm: number;
+  lengthKm: number;
+  /** Where the symbol starts, where its tip lands and the offensive's axis point (lat, lon). */
+  tail: [number, number];
+  tip: [number, number];
+  axis: [number, number];
+  /** The shaft at its middle: a point and the next one along it (lat, lon), for a perpendicular pixel profile. */
+  mid: [number, number, number, number];
 }
 
 export interface OverlayStats {
   fronts: number;
   quiet: number;
-  arrows: { attackId: number; frontKey: number; attacker: number; widthKm: number; corridorKm: number; lengthKm: number }[];
+  arrows: ArrowStat[];
   naval: number;
   mobilization: number;
   /** Per front key: the chevron direction (+1 toward side b, -1 toward side a, 0 none) and their speed px/s. */
   chevrons: Record<number, { dir: number; speed: number }>;
   drawCalls: number;
+  /** Draw order: the arrows under the bands (#22). */
+  order: { bands: number; arrows: number };
   bandVerts: number;
   arrowVerts: number;
   rebuilds: number;
@@ -75,7 +110,7 @@ varying float vVis;
 // Screen-space extrusion of a centreline vertex p (world) across the projected tangent, toward the projected 'ref'
 // (a world direction across the line), by max(halfKm in pixels, minPx). Returns the clip position; outputs the pixel
 // half-width and the pixels per km at this vertex.
-vec4 extrude(vec3 p, vec3 tan, vec3 ref, float side, float halfKm, float minPx, out float halfPx, out float pxPerKm) {
+vec4 extrude(vec3 p, vec3 tan, vec3 ref, float side, float halfKm, float minPx, float maxPx, out float halfPx, out float pxPerKm) {
   mat4 pv = projectionMatrix * viewMatrix;
   vec4 c0 = pv * vec4(p, 1.0);
   const float EPS = 0.002; // world units (12.7 km)
@@ -90,7 +125,7 @@ vec4 extrude(vec3 p, vec3 tan, vec3 ref, float side, float halfKm, float minPx, 
   vec2 dr = s2 - s0;
   if (dot(nrm, dr) < 0.0) nrm = -nrm;
   pxPerKm = max(length(dr), lt) / (EPS * ${R_KM.toFixed(1)});
-  halfPx = max(minPx * uPx, halfKm * pxPerKm);
+  halfPx = min(max(minPx * uPx, halfKm * pxPerKm), maxPx * uPx);
   c0.xy += nrm * side * halfPx / h * c0.w;
   // Analytic horizon: fade what lies behind the limb.
   vec3 n = normalize(p);
@@ -117,7 +152,7 @@ void main() {
   bool quiet = aInfo.z > 0.5;
   float halfPx, pxPerKm;
   float minPx = quiet ? ${QUIET_MIN_HALF_PX.toFixed(2)} + aInfo.w * 0.8 : ${BAND_MIN_HALF_PX.toFixed(2)} + aInfo.w * 1.0;
-  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, minPx, halfPx, pxPerKm);
+  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, minPx, 1e5, halfPx, pxPerKm);
   vColA = aColA;
   vColB = aColB;
   vInfo = aInfo;
@@ -180,16 +215,22 @@ attribute vec3 aTan;
 attribute vec3 aRef;
 attribute vec3 aGeo;   // side (-1..1), u (0 at the tail .. 1 at the tip), half-width km
 attribute vec3 aCol;
-attribute vec4 aInfo;  // kind (0 operational, 1 naval, 2 mobilization), min half px, pulse phase, emphasis
+attribute vec4 aInfo;  // kind (0 operational, 1 naval, 2 mobilization, 3 corridor rail), min half px, phase (rail: length km), max half px
 varying vec3 vCol;
 varying vec4 vInfo;
 varying float vSide;
 varying float vU;
 varying float vHalfPx;
+varying vec3 vWorld;
 ${COMMON_VERT}
 void main() {
   float halfPx, pxPerKm;
-  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, aInfo.y, halfPx, pxPerKm);
+  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, aInfo.y, aInfo.w, halfPx, pxPerKm);
+  // The fragment's own ground point (the extrusion is in screen space): the border knock-out samples ownership there.
+  vec3 nn = normalize(position);
+  vec3 across = aRef - dot(aRef, nn) * nn;
+  float al = length(across);
+  vWorld = position + (al > 1e-9 ? across / al : vec3(0.0)) * aGeo.x * (halfPx / max(pxPerKm, 1e-6)) / ${R_KM.toFixed(1)};
   vCol = aCol;
   vInfo = aInfo;
   vSide = aGeo.x;
@@ -202,32 +243,56 @@ uniform float uTime;
 uniform float uAlpha;
 uniform float uArrowFill;
 uniform float uPx;
+uniform sampler2D uOwner;
+uniform float uOwnerOn;
 varying vec3 vCol;
 varying vec4 vInfo;
 varying float vSide;
 varying float vU;
 varying float vHalfPx;
 varying float vVis;
+varying vec3 vWorld;
 ${inverseToneGlsl()}
+float ownerAt(vec2 uv) {
+  vec4 o = texture2D(uOwner, uv);
+  return floor(o.r * 255.0 + 0.5) + mod(floor(o.g * 255.0 + 0.5), 8.0) * 256.0;
+}
+// 1 where a border (or a coast) passes within ~1.6 px of this fragment: the symbol lets it show through.
+float borderHere() {
+  vec3 n = normalize(vWorld);
+  float lat = asin(clamp(n.y, -1.0, 1.0));
+  float lon = atan(-n.z, n.x);
+  vec2 uv = vec2(lon / 6.2831853 + 0.5, 0.5 - lat / 3.1415927);
+  vec2 d = min(fwidth(uv) * 1.6, vec2(0.004));
+  float c = ownerAt(uv);
+  float b = 0.0;
+  b = max(b, step(0.5, abs(ownerAt(uv + vec2(d.x, 0.0)) - c)));
+  b = max(b, step(0.5, abs(ownerAt(uv - vec2(d.x, 0.0)) - c)));
+  b = max(b, step(0.5, abs(ownerAt(uv + vec2(0.0, d.y)) - c)));
+  b = max(b, step(0.5, abs(ownerAt(uv - vec2(0.0, d.y)) - c)));
+  return b * uOwnerOn;
+}
 void main() {
   float a = uAlpha * vVis;
   if (a < 0.003) discard;
   float edgePx = (1.0 - abs(vSide)) * vHalfPx;
-  float outline = 1.0 - smoothstep(1.2 * uPx, 2.4 * uPx, edgePx);
-  // A light inner stroke just inside the dark outline (the classic operational-map arrow): the arrow stays distinct
-  // even over land of its own colour.
-  float inner = smoothstep(2.4 * uPx, 3.0 * uPx, edgePx) * (1.0 - smoothstep(3.8 * uPx, 4.6 * uPx, edgePx));
-  vec3 col = mix(vCol, vec3(0.02), outline * 0.92);
-  col = mix(col, vec3(0.96, 0.95, 0.9), inner * (vInfo.x < 0.5 ? 0.75 : 0.0));
+  float outline = 1.0 - smoothstep(0.6 * uPx, 1.3 * uPx, edgePx);
+  vec3 col = mix(vCol, vec3(0.02), outline * 0.85);
   float alpha;
   if (vInfo.x < 0.5) {
-    // Operational arrow: solid rim, lighter body so the territory under a corridor-wide arrow stays readable; the
-    // tail fades in.
-    float rim = 1.0 - smoothstep(0.62, 0.8, 1.0 - abs(vSide));
-    // Closer in, a corridor-wide arrow would cover the whole view: its body fades away below ~1,800 km and only the
-    // outline and the light stroke remain.
-    float edge = max(max(rim, outline), inner);
-    alpha = mix(0.26 * uArrowFill, 0.74, edge) * mix(0.35 + 0.65 * uArrowFill, 1.0, max(outline, inner)) * smoothstep(0.0, 0.12, vU);
+    // Operational arrow (#22): a slim, semi-transparent shaft and head with a dark hairline; the tail fades in; the
+    // whole symbol fades out as the camera comes in (gone below 1,000 km) and never covers a border.
+    alpha = mix(0.58, 0.8, outline) * smoothstep(0.0, 0.15, vU) * uArrowFill;
+    if (alpha < 0.003) discard;
+    alpha *= 1.0 - 0.88 * borderHere();
+  } else if (vInfo.x > 2.5) {
+    // Corridor rail: a faint dashed hairline along each flank of the corridor.
+    float dash = fract(vU * vInfo.z / 22.0);
+    if (dash > 0.55) discard;
+    col = mix(vCol, vec3(0.97, 0.96, 0.92), 0.3);
+    alpha = 0.5 * uArrowFill;
+    if (alpha < 0.003) discard;
+    alpha *= 1.0 - 0.88 * borderHere();
   } else if (vInfo.x < 1.5) {
     alpha = 0.85 * smoothstep(0.0, 0.08, vU);
   } else {
@@ -306,6 +371,8 @@ function flush(b: Batch): void {
 // -------------------------------------------------------------------------------------------------
 
 export function createFrontOverlay(ctx: GameContext): FrontOverlay {
+  const ownerFallback = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  ownerFallback.needsUpdate = true;
   const group = new THREE.Group();
   group.name = 'front-overlay';
   const uniforms = {
@@ -314,6 +381,8 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     uTime: { value: 0 },
     uAlpha: { value: 1 },
     uArrowFill: { value: 1 },
+    uOwner: { value: ownerFallback as THREE.Texture },
+    uOwnerOn: { value: 0 },
   };
   const mk = (vs: string, fs: string, name: string) => new THREE.ShaderMaterial({
     name, uniforms, vertexShader: vs, fragmentShader: fs, transparent: true, depthTest: false, depthWrite: false,
@@ -321,6 +390,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
   });
   const bands = makeBatch(BAND_VERTS, true, mk(BAND_VERT, BAND_FRAG, 'front-bands'), 43);
   const arrows = makeBatch(ARROW_VERTS, false, mk(ARROW_VERT, ARROW_FRAG, 'front-arrows'), 42);
+  // (st.order is filled below from the meshes themselves.)
   group.add(arrows.mesh, bands.mesh);
 
   // ---- scratch (no allocation in the hot paths) ----
@@ -331,8 +401,10 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
   const curveX = new Float32Array(64), curveY = new Float32Array(64);
   const rgbA: [number, number, number] = [0, 0, 0];
   const rgbB: [number, number, number] = [0, 0, 0];
-  const st: OverlayStats = { fronts: 0, quiet: 0, arrows: [], naval: 0, mobilization: 0, chevrons: {}, drawCalls: 2, bandVerts: 0, arrowVerts: 0, rebuilds: 0 };
+  const st: OverlayStats = { fronts: 0, quiet: 0, arrows: [], naval: 0, mobilization: 0, chevrons: {}, drawCalls: 2, order: { bands: 43, arrows: 42 }, bandVerts: 0, arrowVerts: 0, rebuilds: 0 };
 
+  st.order.bands = bands.mesh.renderOrder;
+  st.order.arrows = arrows.mesh.renderOrder;
   let lastFronts: readonly FrontView[] | null = null;
   let lastAttacks: readonly AttackView[] | null = null;
   let lastWars: unknown = null;
@@ -370,14 +442,14 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     return i;
   }
   function arrowVert(p: THREE.Vector3, tan: THREE.Vector3, ref: THREE.Vector3, side: number, u: number, halfKm: number,
-    kind: number, minPx: number, phase: number, emph: number): number {
+    kind: number, minPx: number, phase: number, maxPx: number): number {
     const b = arrows;
     const i = b.nv++;
     b.pos[i * 3] = p.x; b.pos[i * 3 + 1] = p.y; b.pos[i * 3 + 2] = p.z;
     b.tan[i * 3] = tan.x; b.tan[i * 3 + 1] = tan.y; b.tan[i * 3 + 2] = tan.z;
     b.ref[i * 3] = ref.x; b.ref[i * 3 + 1] = ref.y; b.ref[i * 3 + 2] = ref.z;
     b.geoA[i * 3] = side; b.geoA[i * 3 + 1] = u; b.geoA[i * 3 + 2] = halfKm;
-    b.info[i * 4] = kind; b.info[i * 4 + 1] = minPx; b.info[i * 4 + 2] = phase; b.info[i * 4 + 3] = emph;
+    b.info[i * 4] = kind; b.info[i * 4 + 1] = minPx; b.info[i * 4 + 2] = phase; b.info[i * 4 + 3] = maxPx;
     b.colA[i * 3] = rgbA[0]; b.colA[i * 3 + 1] = rgbA[1]; b.colA[i * 3 + 2] = rgbA[2];
     return i;
   }
@@ -466,22 +538,28 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
   }
 
   // ---- arrows -------------------------------------------------------------------------------------
-  /**
-   * An arrow along the tile-space polyline curveX/Y[0..m): shaft half-width halfKm (pixel minimum minPx), head at the
-   * end. kind 0 operational, 1 naval, 2 mobilization.
-   */
-  function addArrow(m: number, halfKm: number, minPx: number, kind: number, phase: number, emph: number): number {
-    if (m < 2) return 0;
-    // Length (km) along the polyline.
+  /** Length (km) of the tile-space polyline curveX/Y[0..m). */
+  function curveLen(m: number): number {
     let len = 0;
     for (let k = 1; k < m; k++) {
       const cl = Math.cos(((90 - (curveY[k] / MAP_H) * 180) * Math.PI) / 180);
       len += Math.hypot(wrapDX(curveX[k - 1], curveX[k]) * cl, curveY[k] - curveY[k - 1]) * TILE_KM;
     }
+    return len;
+  }
+
+  /**
+   * An arrow along the tile-space polyline curveX/Y[0..m): shaft half-width halfKm clamped to [minPx, maxPx] on screen;
+   * a head of half-width headHalfKm ([headMinPx, headMaxPx]) and length headLenKm ending exactly on the last point
+   * (headLenKm 0: no head, a plain line). kind 0 operational, 1 naval, 2 mobilization, 3 corridor rail.
+   */
+  function addArrow(m: number, kind: number, halfKm: number, minPx: number, maxPx: number,
+    headHalfKm: number, headMinPx: number, headMaxPx: number, headLenKm: number, phase: number): number {
+    if (m < 2) return 0;
+    const len = curveLen(m);
     if (len < 1) return 0;
-    const headLen = Math.min(len * (kind === 2 ? 0.5 : 0.34), Math.max(halfKm * 2.1, kind === 0 ? 60 : 25));
-    const headHalf = halfKm * 1.55;
-    const headMinPx = minPx * 1.9;
+    const headLen = Math.min(len * 0.5, headLenKm);
+    const ph = kind === 3 ? len : phase;
     if (arrows.nv + m * 2 + 8 > arrows.cap) return 0;
     let acc = 0, prevL = -1, prevR = -1;
     const shaftEnd = len - headLen;
@@ -494,10 +572,10 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       }
       lastX = x;
       lastY = y;
-      const tailEnd = acc >= shaftEnd || k === m - 1;
+      const tailEnd = (headLen > 0 && acc >= shaftEnd) || k === m - 1;
       // Clamp this vertex to the head base.
       let px = x, py = y, u = acc;
-      if (tailEnd) {
+      if (tailEnd && headLen > 0) {
         // Interpolate the head base point on the previous segment.
         const over = acc - shaftEnd;
         if (k > 0) {
@@ -516,19 +594,21 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       T.sub(Q).normalize();
       N.copy(P).normalize();
       R.crossVectors(N, T).normalize();
-      const l = arrowVert(P, T, R, -1, u / len, halfKm, kind, minPx, phase, emph);
-      const r = arrowVert(P, T, R, 1, u / len, halfKm, kind, minPx, phase, emph);
+      const l = arrowVert(P, T, R, -1, u / len, halfKm, kind, minPx, ph, maxPx);
+      const r = arrowVert(P, T, R, 1, u / len, halfKm, kind, minPx, ph, maxPx);
       if (prevL >= 0) quad(arrows, prevL, prevR, l, r);
       prevL = l;
       prevR = r;
       if (tailEnd) {
-        // Head: base (wide) at the shaft end, tip at the last point.
-        const bl = arrowVert(P, T, R, -1, u / len, headHalf, kind, headMinPx, phase, emph);
-        const br = arrowVert(P, T, R, 1, u / len, headHalf, kind, headMinPx, phase, emph);
-        world(curveX[m - 1], curveY[m - 1], U);
-        const tl = arrowVert(U, T, R, -1, 1, 0.01, kind, 0.01, phase, emph);
-        const tr = arrowVert(U, T, R, 1, 1, 0.01, kind, 0.01, phase, emph);
-        quad(arrows, bl, br, tl, tr);
+        if (headLen > 0) {
+          // Head: base (wide) at the shaft end, tip exactly at the last point.
+          const bl = arrowVert(P, T, R, -1, u / len, headHalfKm, kind, headMinPx, ph, headMaxPx);
+          const br = arrowVert(P, T, R, 1, u / len, headHalfKm, kind, headMinPx, ph, headMaxPx);
+          world(curveX[m - 1], curveY[m - 1], U);
+          const tl = arrowVert(U, T, R, -1, 1, 0.001, kind, 0.01, ph, 0.02);
+          const tr = arrowVert(U, T, R, 1, 1, 0.001, kind, 0.01, ph, 0.02);
+          quad(arrows, bl, br, tl, tr);
+        }
         break;
       }
     }
@@ -583,20 +663,51 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
         }
       }
     }
-    // Tail 3 tiles behind the line; tip at the axis point, or 2 tiles past the line when the line went beyond it. A
-    // corridor wider than the arrow is long gets its tail extended behind the line (never past 12 tiles), so the
-    // symbol still reads as an arrow and not as a wedge.
+    // Tail 3 tiles behind the line; the tip lands ON the axis point (the place the offensive drives to), or 2 tiles
+    // past the line along the axis when the line already went beyond it.
     const corridorKm = Math.max(1, a.frontageTiles) * TILE_KM;
+    const frontKm = f ? Math.max(TILE_KM, f.length * TILE_KM) : corridorKm;
+    const railsKm = Math.min(corridorKm, frontKm);
     const axAlong = wrapDX(lx, a.x) * cosL * ux + (a.y - ly) * uy;
-    const reach = Math.max(2, axAlong);
-    const back = Math.min(12, Math.max(3, (1.15 * corridorKm) / TILE_KM - reach));
+    const onAxis = axAlong >= 2;
+    const reach = onAxis ? axAlong : 2;
+    const back = 3;
     const sx = lx - (ux * back) / cosL, sy = ly - uy * back;
-    const ex = lx + (ux * reach) / cosL, ey = ly + uy * reach;
-    const m = curve(sx, sy, ex, ey, 0.08, 20);
+    const ex = onAxis ? lx + wrapDX(lx, a.x) : lx + (ux * reach) / cosL, ey = onAxis ? a.y : ly + uy * reach;
     rgb(colorOf(a.attacker), rgbA);
     const emph = a.attacker === human || a.defender === human ? 1 : 0;
-    const len = addArrow(m, corridorKm / 2, 3 + emph, 0, 0, emph);
-    if (len > 0) st.arrows.push({ attackId: a.id, frontKey: a.frontKey, attacker: a.attacker, widthKm: corridorKm, corridorKm, lengthKm: Math.round(len) });
+    // The corridor: two faint dashed rails along its flanks, from a tile behind the line to the tip's depth.
+    const h = railsKm / 2 / TILE_KM;
+    const px = -uy, py = ux;
+    for (const sgn of [-1, 1]) {
+      const ox = (px * h * sgn) / cosL, oy = py * h * sgn;
+      const m2 = curve(lx - ux / cosL + ox, ly - uy + oy, lx + (ux * reach) / cosL + ox, ly + uy * reach + oy, 0, 6);
+      addArrow(m2, 3, 0.01, 0.75, 0.75, 0, 0, 0, 0, 0);
+    }
+    // The shaft: slim (at most 5 % of the corridor, 2-3.5 px half-width), a head three times as wide and tipped on
+    // the axis point.
+    const m = curve(sx, sy, ex, ey, 0.06, 20);
+    const len0 = curveLen(m);
+    const shaftHalfKm = Math.min(railsKm * 0.05, 12);
+    const shaftPx: [number, number] = [2 + 0.4 * emph, 3.5];
+    const headHalfKm = shaftHalfKm * 3;
+    const headPx: [number, number] = [shaftPx[0] * 3, shaftPx[1] * 3];
+    const headLenKm = Math.min(len0 * 0.3, Math.max(45, headHalfKm * 2.4));
+    const len = addArrow(m, 0, shaftHalfKm, shaftPx[0], shaftPx[1], headHalfKm, headPx[0], headPx[1], headLenKm, 0);
+    if (len > 0) {
+      const toLL = (x: number, y: number): [number, number] => {
+        tileXYToLatLon(((x % MAP_W) + MAP_W) % MAP_W, y, ll);
+        return [+ll.lat.toFixed(4), +ll.lon.toFixed(4)];
+      };
+      const mi = Math.floor(m * 0.4);
+      const tl = toLL(curveX[0], curveY[0]), tp = toLL(curveX[m - 1], curveY[m - 1]), ax = toLL(a.x, a.y);
+      const m0 = toLL(curveX[mi], curveY[mi]), m1 = toLL(curveX[mi + 1], curveY[mi + 1]);
+      st.arrows.push({
+        attackId: a.id, frontKey: a.frontKey, attacker: a.attacker, corridorKm, railsKm, frontKm: Math.round(frontKm),
+        shaftHalfKm: +shaftHalfKm.toFixed(2), shaftPx, headHalfKm: +headHalfKm.toFixed(2), headPx, headLenKm: Math.round(headLenKm),
+        lengthKm: Math.round(len), tail: tl, tip: tp, axis: ax, mid: [m0[0], m0[1], m1[0], m1[1]],
+      });
+    }
   }
 
   function addNaval(): void {
@@ -634,7 +745,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       }
       for (let k = 1; k < m; k++) curveX[k] = curveX[k - 1] + wrapDX(curveX[k - 1], curveX[k]);
       rgb(colorOf(u.owner), rgbA);
-      if (addArrow(m, 7, 3, 1, 0, 1) > 0) st.naval++;
+      if (addArrow(m, 1, 7, 3, 1e4, 7 * 1.55, 3 * 1.9, 1e4, Math.max(25, 7 * 2.1), 0) > 0) st.naval++;
     }
   }
 
@@ -659,7 +770,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
           // The border: half a tile from side a's contact tiles along dir.
           const bx = s[v * 2] + f.dirX * 0.5, by = s[v * 2 + 1] + f.dirY * 0.5;
           const m = curve(bx - dx * 3.6, by - dy * 3.6, bx - dx * 0.6, by - dy * 0.6, 0, 3);
-          if (addArrow(m, 13, 5, 2, c * 1.3 + f.key, emph) > 0) st.mobilization++;
+          if (addArrow(m, 2, 13, 5 + emph, 1e4, 13 * 1.55, (5 + emph) * 1.9, 1e4, 13 * 2.1, c * 1.3 + f.key) > 0) st.mobilization++;
         }
       }
     }
@@ -708,7 +819,15 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       uniforms.uPx.value = ctx.renderer.getPixelRatio();
       uniforms.uTime.value = time;
       uniforms.uAlpha.value = fade;
-      uniforms.uArrowFill.value = smoothstep(500, 1800, altKm);
+      // Operational arrows (#22): full from 1,700 km, gone below 1,000 km (the band and the borders tell it there).
+      uniforms.uArrowFill.value = smoothstep(1000, 1700, altKm);
+      if (!uniforms.uOwnerOn.value) {
+        const tex = ctx.globe.ownerTexture?.();
+        if (tex) {
+          uniforms.uOwner.value = tex;
+          uniforms.uOwnerOn.value = 1;
+        }
+      }
     },
     clear() {
       bands.nv = bands.ni = arrows.nv = arrows.ni = 0;
@@ -721,6 +840,12 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     },
     stats() {
       return st;
+    },
+    setArrowsVisible(v) {
+      arrows.mesh.visible = v;
+    },
+    arrowFade() {
+      return uniforms.uArrowFill.value;
     },
   };
 }

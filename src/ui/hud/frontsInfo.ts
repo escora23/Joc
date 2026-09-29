@@ -3,7 +3,8 @@
 // always tell the same story: who attacks whom, who is winning (the tug-of-war share and the momentum), the MEASURED
 // advance, the garrisons of both sides, and how long they have been fighting.
 
-import { HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_DAY } from '../../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_DAY, TILE_KM } from '../../shared/constants';
+import { publishedLineOffset } from '../../shared/localForces';
 import { formatNumber, getLanguage, t } from '../../shared/i18n';
 import type { GameView } from '../../shared/api';
 import type { AttackView, FrontView } from '../../shared/types';
@@ -115,6 +116,7 @@ export function advanceText(view: GameView, f: FrontView, s: FrontSides, arrow =
     case 'landing': return t('fr.adv.landing');
     case 'contact': return t('fr.adv.contact');
     case 'retreating': return t('fr.adv.retreating');
+    case 'holding': return `${arrow ? '‖ ' : ''}${t('fr.adv.holding')}`;
     default: break;
   }
   const kmh = f.advanceKmh;
@@ -138,6 +140,22 @@ export function frontAnchor(f: FrontView, out: { x: number; y: number } = { x: 0
   out.x = (((f.samples[m * 2] + f.dirX * 0.5) % MAP_W) + MAP_W) % MAP_W;
   out.y = Math.max(0, Math.min(MAP_H - 1e-3, f.samples[m * 2 + 1] + f.dirY * 0.5));
   return out;
+}
+
+/**
+ * Where to look at a front from low altitude: its anchor moved onto the front's published sub-tile line (FrontView.line,
+ * where the ground battle stands) when the anchor lies along that line, else the anchor itself.
+ */
+export function frontFocus(view: GameView, f: FrontView): { x: number; y: number } {
+  const p = frontAnchor(f);
+  const L = f.line;
+  if (!L) return p;
+  const o = publishedLineOffset(L, p.x, p.y, Math.max(L.tick, Math.min(L.tick + 6, view.simTime * 10)));
+  if (Math.abs(o.alongKm) > L.halfKm + 10 || Math.abs(o.offsetKm) > 40) return p;
+  const kmX = TILE_KM * Math.max(0.05, Math.cos(((90 - (p.y / MAP_H) * 180) * Math.PI) / 180));
+  p.x = (((p.x + (o.offsetKm * L.e) / kmX) % MAP_W) + MAP_W) % MAP_W;
+  p.y = Math.max(0, Math.min(MAP_H - 1e-3, p.y - (o.offsetKm * L.n) / TILE_KM));
+  return p;
 }
 
 /** Tiles each side took on this front (from the offensives that pushed on it). */

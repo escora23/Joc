@@ -252,6 +252,11 @@ export interface GlobeApi extends Subsystem {
    * globe's smoother relief never shows through it); radiusKm <= 0 restores it.
    */
   setBattleHole?(lat: number, lon: number, radiusKm: number): void;
+  /**
+   * v2 (W6, owner item #22): the territory owner texture (1600x800 RGBA8, nearest; R = owner low byte, G bits 0-2 =
+   * owner bits 8-10), so map symbols drawn above the globe can let the borders show through them.
+   */
+  ownerTexture?(): THREE.Texture;
   /** Small-island marker under a screen point (DESIGN_V2 §10.6): the island's tile and its hover line, or null. */
   pickIsland?(clientX: number, clientY: number): { tile: number; label: string } | null;
   /**
@@ -330,6 +335,21 @@ export interface BattleApi extends Subsystem {
   handoff?(): BattleHandoff | null;
   /** v2 (W6, §11.7): what the visible ground battle shows, for its HUD strip and nation banners; null when none. */
   view?(): BattleView | null;
+  /**
+   * v2 (W6, FEEDBACK #11): where the nearest ground battle is when the camera is low but not looking at it (or no
+   * battle could stand under the view): the HUD shows a pointer that glides the camera there. null when none.
+   */
+  pointer?(): BattlePointer | null;
+}
+
+/** v2 (W6): the battle pointer's target: a point on the front's line, its distance and a heading facing the line. */
+export interface BattlePointer {
+  lat: number;
+  lon: number;
+  km: number;
+  frontKey: number;
+  heading: number;
+  onScreen: boolean;
 }
 
 /** v2 (W6, §11.7): the visible ground battle as the HUD strip and the nation banners read it. */

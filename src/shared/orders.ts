@@ -60,6 +60,8 @@ export interface FrontLike {
   samples: Float32Array;
   garrisonA: number;
   garrisonB: number;
+  /** Contact length in tiles (an offensive's corridor never outgrows its front, §4.3). */
+  length?: number;
 }
 
 /** Implemented by Game (worker) and by an adapter over GameView (main thread). */
@@ -549,10 +551,15 @@ export function advanceKmh(ratio: number): number {
   return ADVANCE_MAX_KMH * Math.min(1, Math.max(0, (ratio - 1) / (ADVANCE_FULL_RATIO - 1)));
 }
 
-/** Corridor width in tiles bought by `committed` troops (§4.3). */
-export function frontageTiles(committed: number, neutral = false): number {
+/**
+ * Corridor width in tiles bought by `committed` troops (§4.3), never wider than the front it pushes on (`frontLen`,
+ * the contact length in tiles): troops beyond that width thicken the attack (a higher ratio), they cannot widen it past
+ * the border that exists.
+ */
+export function frontageTiles(committed: number, neutral = false, frontLen = Infinity): number {
   const per = neutral ? NEUTRAL_TROOPS_PER_FRONT_TILE : TROOPS_PER_FRONT_TILE;
-  return Math.min(FRONTAGE_MAX, Math.max(FRONTAGE_MIN, committed / per));
+  const cap = Math.max(FRONTAGE_MIN, Math.min(FRONTAGE_MAX, frontLen));
+  return Math.min(cap, Math.max(FRONTAGE_MIN, committed / per));
 }
 
 export interface OffensivePrediction {
@@ -573,7 +580,7 @@ export function predictOffensive(r: RulesView, attacker: number, defender: numbe
   if (defender <= 0) {
     return { ratio: 0, advanceKmh: NEUTRAL_ADVANCE_KMH, frontageTiles: frontageTiles(troops, true), startsInTicks: OFFENSIVE_CONTACT_TICKS, garrison: 0 };
   }
-  let garrison = -1, best = Infinity;
+  let garrison = -1, best = Infinity, len = Infinity;
   const tx = tileCx(tile), ty = tileCy(tile);
   for (const f of r.frontsOf(defender)) {
     if (!((f.a === attacker && f.b === defender) || (f.b === attacker && f.a === defender))) continue;
@@ -581,12 +588,13 @@ export function predictOffensive(r: RulesView, attacker: number, defender: numbe
     if (d < best) {
       best = d;
       garrison = f.a === defender ? f.garrisonA : f.garrisonB;
+      len = f.length ?? Infinity;
     }
   }
   if (garrison < 0) garrison = r.homeTroops(defender) * (1 - DEFENSE_REAR_SHARE) * 0.5;
   const ratio = troops / Math.max(1, garrison);
   const mob = Math.max(0, r.mobilizeUntil(attacker, defender) - r.tick);
-  return { ratio, advanceKmh: advanceKmh(ratio), frontageTiles: frontageTiles(troops), startsInTicks: mob + OFFENSIVE_CONTACT_TICKS, garrison };
+  return { ratio, advanceKmh: advanceKmh(ratio), frontageTiles: frontageTiles(troops, false, len), startsInTicks: mob + OFFENSIVE_CONTACT_TICKS, garrison };
 }
 
 // =================================================================================================

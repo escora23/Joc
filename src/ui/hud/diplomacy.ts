@@ -3,6 +3,7 @@
 // answers with events. `whyNot*` mirror the sim's rules (diplomacy.ts proposeError) so a disabled control can say why
 // before the player tries; the sim stays authoritative.
 
+import { openOffensiveDialog } from './offensiveDialog';
 import type { HudShared } from './shared';
 import { needsDeclaration, openDeclareWar } from './declare';
 import { HUMAN_ID } from '../../shared/constants';
@@ -90,8 +91,12 @@ export function whyNotPropose(hs: HudShared, to: number, kind: ProposalKind, gol
   return null;
 }
 
-/** Land attack toward `target` (or a naval invasion when there is no shared border); a nation at peace is declared on first. */
-export function attackNation(hs: HudShared, target: number, tile = -1): boolean {
+/**
+ * Land attack toward `target` (or a naval invasion when there is no shared border); a nation at peace is declared on
+ * first. Against an enemy at war across a shared border, the offensive dialog opens (owner item #23: one deliberate
+ * action with a chosen commitment and a preview); `quick` (Shift+click) launches at once with the slider share.
+ */
+export function attackNation(hs: HudShared, target: number, tile = -1, quick = false): boolean {
   const ctx = hs.ctx;
   const view = ctx.sim.view;
   const me = view.human;
@@ -109,6 +114,7 @@ export function attackNation(hs: HudShared, target: number, tile = -1): boolean 
     return true;
   }
   if (hs.borders(target)) {
+    if (target !== 0 && !quick && aim >= 0) return !!openOffensiveDialog(hs, target, aim);
     ctx.sim.send({ type: 'attack', target, ratio: hs.attackRatio, tile: aim });
     hs.sound('confirm');
     return true;

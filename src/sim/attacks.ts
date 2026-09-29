@@ -29,7 +29,7 @@ import {
   SIEGE_DEFENSE_MUL, THRESHOLD_JITTER, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE, BOMBARD_ATTACK_MUL, DRONE_ADVANCE_MUL,
   DRONE_ENEMY_ADVANCE_MUL, structureLevel,
 } from '../shared/constants';
-import { StructureType, TerrainClass, TerrainFlag, type AttackView } from '../shared/types';
+import { StructureType, TerrainClass, TerrainFlag, type AttackView, type OffensiveIntensity } from '../shared/types';
 import { NEUTRAL_LOSS_DIV, terrainCombat, type TerrainCombat } from './balance';
 import type { Front } from './fronts';
 import type { Game } from './game';
@@ -53,6 +53,12 @@ function inCapitalDistrict(t: number, capital: number): boolean {
   if (dx > MAP_W / 2) dx = MAP_W - dx;
   return dx <= 1 && Math.abs(((t / MAP_W) | 0) - ((capital / MAP_W) | 0)) <= 1;
 }
+
+/** Offensive intensity (#23): all-out assault power and casualty multipliers, and the engagement while holding. */
+const ASSAULT_POWER = 1.25;
+const ASSAULT_OWN_LOSS = 1.6;
+const ASSAULT_ENEMY_LOSS = 1.2;
+const HOLD_ENGAGEMENT = 0.25;
 
 /** Neutral offensives a player may run at once (further clicks reinforce the nearest). */
 const MAX_NEUTRAL_OFFENSIVES = 3;
@@ -133,7 +139,7 @@ export class AttackSystem {
   // =================================================================================================
   // Commands
   // =================================================================================================
-  command(p: Player, target: number, ratio: number, clickTile: number): boolean {
+  command(p: Player, target: number, ratio: number, clickTile: number, intensity?: OffensiveIntensity): boolean {
     const g = this.g;
     if (g.phase !== 'playing' || !p.spawned) {
       g.message(p.id, 'msg.notYet');
@@ -186,6 +192,7 @@ export class AttackSystem {
         existing.returnAt = -1;
         existing.lowTicks = existing.breakTicks = 0;
       }
+      if (intensity !== undefined) this.setIntensity(existing, intensity);
       g.attacksDirty = true;
       return true;
     }
@@ -196,10 +203,20 @@ export class AttackSystem {
       g.message(p.id, target === 0 ? 'msg.noNeutralLand' : 'msg.noBorder');
       return false;
     }
-    p.troops -= troops;
+    if (intensity !== undefined) a.intensity = intensity;
+    // The corridor never outgrows the front it pushes on (§4.3), so resolve the front before building the frontier.
+    const D0 = g.playerObj(target);
+    if (D0 && D0.kind !== 'tribe') a.frontKey = g.fronts.frontAt(p.id, target, a.originX, a.originY)?.key ?? 0;
+    a.frontage = this.frontageOf(a);
+    this.rebuildFrontier(a);
+    if (a.pressure.size === 0 && target !== 0) {
+      // No contact tile inside the corridor: refuse now, with the reason, instead of a silent cancel a tick later.
+      g.message(p.id, 'msg.offensiveNoContact', 'warning', { name: g.playerObj(target)?.name ?? '' });
+      return false;
+    }
     this.register(a);
     this.resolveFront(a);
-    this.rebuildFrontier(a);
+    p.troops -= troops;
     g.emit({
       type: 'attackStarted', tick: g.tick, attackId: a.id, attacker: p.id, defender: target, troops, tile: clickTile,
       naval: false, frontKey: a.frontKey, x: a.clickX, y: a.clickY,
@@ -343,9 +360,35 @@ export class AttackSystem {
     return true;
   }
 
+  /**
+   * Corridor width (tiles): bought with troops (§4.3), but never wider than the front it pushes on. A 16-tile front
+   * gets at most a 16-tile corridor however many troops are committed; the rest thicken the attack (a higher ratio).
+   */
   private frontageOf(a: Attack): number {
     const per = a.defender === 0 ? NEUTRAL_TROOPS_PER_FRONT_TILE : TROOPS_PER_FRONT_TILE;
-    return Math.min(FRONTAGE_MAX, Math.max(FRONTAGE_MIN, a.troops / per));
+    let cap = FRONTAGE_MAX;
+    if (a.frontKey) {
+      const f = this.g.fronts.get(a.frontKey);
+      if (f) cap = Math.max(FRONTAGE_MIN, Math.min(FRONTAGE_MAX, f.length));
+    }
+    return Math.min(cap, Math.max(FRONTAGE_MIN, a.troops / per));
+  }
+
+  /** How hard an own offensive fights (owner item #23): 0 hold the line, 1 sustained, 2 all-out assault. */
+  setIntensity(a: Attack, intensity: OffensiveIntensity): void {
+    const v = (intensity === 0 || intensity === 2 ? intensity : 1) as OffensiveIntensity;
+    if (a.intensity === v) return;
+    a.intensity = v;
+    a.lowTicks = a.breakTicks = 0;
+    if (a.stalled) a.stalled = false;
+    this.g.attacksDirty = true;
+  }
+
+  intensityCommand(p: Player, attackId: number, intensity: OffensiveIntensity): boolean {
+    const a = this.byIdMap.get(attackId);
+    if (!a || a.ended || a.attacker !== p.id || a.returnAt >= 0) return false;
+    this.setIntensity(a, intensity);
+    return true;
   }
 
   /** Is tile t (tile coords of its centre) inside the corridor? Returns the perpendicular distance, or -1. */
@@ -507,9 +550,13 @@ export class AttackSystem {
     this.endBetween(x, y);
   }
 
-  end(a: Attack, reason: EndReason, returnTroops: boolean): void {
+  end(a: Attack, reason: EndReason, returnTroops: boolean, why?: string): void {
     if (a.ended) return;
     const g = this.g;
+    // The player is always told when the sim ends one of their offensives (never a silent disappearance).
+    if (a.attacker === HUMAN_ID && a.defender > 0 && reason !== 'retreat' && why) {
+      g.message(HUMAN_ID, why, 'warning', { name: g.playerObj(a.defender)?.name ?? '', troops: Math.floor(a.troops) });
+    }
     a.ended = true;
     const p = g.playerObj(a.attacker);
     if (p && returnTroops && a.troops > 0) p.troops += a.troops;
@@ -585,7 +632,7 @@ export class AttackSystem {
         return;
       }
       if (D.kind !== 'tribe' && !g.war.atWar(a.attacker, a.defender)) {
-        this.end(a, 'cancelled', true);
+        this.end(a, 'cancelled', true, 'msg.offensiveEndedPeace');
         return;
       }
     }
@@ -597,8 +644,18 @@ export class AttackSystem {
       a.frontierDirty = true;
     }
     if (a.frontierDirty || tick - a.lastRebuildTick >= REBUILD_EVERY || a.pressure.size === 0) this.rebuildFrontier(a);
+    if (a.pressure.size === 0 && !neutral && a.sourceTile < 0) {
+      // The line moved away from the corridor's origin (our own line fell back, or the axis was taken): the offensive
+      // re-forms on the contact nearest its axis point instead of dissolving. Only with no contact left does it end.
+      const axisTile = Math.floor(a.clickY) * MAP_W + ((Math.floor(a.clickX) % MAP_W) + MAP_W) % MAP_W;
+      if (this.setAxis(a, axisTile)) {
+        this.resolveFront(a);
+        a.frontage = this.frontageOf(a);
+        this.rebuildFrontier(a);
+      }
+    }
     if (a.pressure.size === 0) {
-      this.end(a, neutral ? 'exhausted' : 'cancelled', true);
+      this.end(a, neutral ? 'exhausted' : 'cancelled', true, 'msg.offensiveNoContactEnded');
       return;
     }
     if (!neutral && !tribeDef && tick % 5 === 0) this.resolveFrontKeepCounter(a);
@@ -620,6 +677,8 @@ export class AttackSystem {
       const armorD = Math.min(2, 1 + 0.25 * this.defArmor.length);
       // §4.4: ×1.15 with drone support over the front, ×1.15 with naval bombardment of its coast.
       Pa = a.troops * atkPower * armorA * (this.dronesAtk > 0 ? 1.15 : 1) * (this.navalAtk > 0 ? BOMBARD_ATTACK_MUL : 1);
+      // All-out assault (#23): every reserve thrown in at once, +25 % attack power (paid in casualties below).
+      if (a.intensity === 2) Pa *= ASSAULT_POWER;
       if (tribeDef) {
         let n = 0;
         for (const o of g.attackList) if (!o.ended && o.defender === D.id && o.boatId === 0) n++;
@@ -646,6 +705,8 @@ export class AttackSystem {
       if (this.dronesAtk > 0) v *= DRONE_ADVANCE_MUL;
       if (this.dronesDef > 0) v *= DRONE_ENEMY_ADVANCE_MUL;
     }
+    // Holding the line (#23): the troops stay dug in on the contact, nothing is pushed.
+    if (a.intensity === 0) v = 0;
     a.pa = Pa;
     a.pd = Pd;
     // --- pressure (§4.5) -------------------------------------------------------------------------------
@@ -707,10 +768,12 @@ export class AttackSystem {
     // --- casualties (§4.6) -----------------------------------------------------------------------------
     let lostA = 0, lostD = 0;
     if (D && Pa > 0 && Pd > 0 && a.pressure.size > 0 && !(counter && counter.id < a.id)) {
-      const E = ENGAGEMENT_RATE * Math.min(Pa, Pd);
+      // Holding: patrols and shelling only (a quarter of the engagement); assault: the attacker pays for its tempo.
+      const E = ENGAGEMENT_RATE * Math.min(Pa, Pd) * (a.intensity === 0 ? HOLD_ENGAGEMENT : 1);
+      const atkMul = a.intensity === 2 ? ASSAULT_OWN_LOSS : 1, defMul = a.intensity === 2 ? ASSAULT_ENEMY_LOSS : 1;
       const fort = fortN ? fortSum / fortN : 1;
-      const atkPowLoss = E * Math.sqrt(Pd / Pa) * this.recentTerrainDefense() * fort;
-      const defPowLoss = E * Math.sqrt(Pa / Pd);
+      const atkPowLoss = E * Math.sqrt(Pd / Pa) * this.recentTerrainDefense() * fort * atkMul;
+      const defPowLoss = E * Math.sqrt(Pa / Pd) * defMul;
       lostA = Math.min(a.troops, (atkPowLoss * a.troops) / Pa);
       const defTroops = garrison + counterTroops;
       const defLoss = (defPowLoss * defTroops) / Pd;
@@ -773,8 +836,12 @@ export class AttackSystem {
     // --- state, stall and break (§4.9) -----------------------------------------------------------------
     if (a.state === 'landing' && a.sourceTile >= 0 && owner[a.sourceTile] !== att) a.state = 'landing';
     else if (a.consolidating) a.state = 'consolidating';
-    else if (a.state !== 'landing') a.state = a.stalled ? 'stalled' : 'advancing';
-    if (!neutral) {
+    else if (a.state !== 'landing') a.state = a.intensity === 0 ? 'holding' : a.stalled ? 'stalled' : 'advancing';
+    if (!neutral && a.intensity === 0) {
+      // Holding the line: no stall or break clock; the offensive persists until the player acts (or it bleeds out).
+      a.lowTicks = a.breakTicks = 0;
+      if (a.troops < a.committed * 0.1) this.startRetreat(a);
+    } else if (!neutral) {
       const R = a.ratio;
       if (R < 1) a.lowTicks++;
       else {
@@ -790,7 +857,16 @@ export class AttackSystem {
         g.emit({ type: 'offensive', tick, attackId: a.id, attacker: att, defender: def, stage: 'stalled', x: a.clickX, y: a.clickY, ratio: +R.toFixed(2) });
       }
       a.breakTicks = R < 0.5 ? a.breakTicks + 1 : 0;
-      if (a.breakTicks >= OFFENSIVE_BREAK_TICKS || a.troops < a.committed * 0.1) this.startRetreat(a);
+      if (a.troops < a.committed * 0.1) this.startRetreat(a);
+      else if (a.breakTicks >= OFFENSIVE_BREAK_TICKS) {
+        if (a.attacker === HUMAN_ID) {
+          // The player's offensive is never withdrawn behind their back (#23): broken, it halts on the line and holds,
+          // and the player decides (reinforce, change intensity, retreat) from the Guerra panel or the front badge.
+          this.setIntensity(a, 0);
+          a.state = 'holding';
+          g.message(HUMAN_ID, 'msg.offensiveHalted', 'warning', { name: D?.name ?? '', ratio: R.toFixed(1) });
+        } else this.startRetreat(a);
+      }
     }
     if (a.troops < 1 && !a.ended) this.end(a, 'exhausted', false);
   }
@@ -996,6 +1072,7 @@ export class AttackSystem {
       x: a.clickX, y: a.clickY, originX: a.originX, originY: a.originY, frontKey: a.frontKey, frontageTiles: +a.frontage.toFixed(1),
       tilesTaken: a.tilesTaken, tilesLost: a.tilesLost, ratio: +a.ratio.toFixed(2), advanceKmh: +a.advanceKmh.toFixed(2),
       committed: Math.floor(a.committed), etaTicks: eta, state: a.state, defensePower: Math.round(a.pd), attackPower: Math.round(a.pa),
+      intensity: a.intensity,
     };
   }
 
@@ -1012,7 +1089,7 @@ export class AttackSystem {
       out.push({
         id: -(++i), attacker: q.attacker, defender: q.target, troops: Math.floor(p.troops * q.ratio), naval: q.naval, startTick: w.mobilizeUntilTick,
         x, y, originX: x, originY: y, frontKey: 0, frontageTiles: 0, tilesTaken: 0, tilesLost: 0, ratio: 0, advanceKmh: 0,
-        committed: 0, etaTicks: Math.max(0, w.mobilizeUntilTick - g.tick), state: 'mobilizing', defensePower: 0, attackPower: 0,
+        committed: 0, etaTicks: Math.max(0, w.mobilizeUntilTick - g.tick), state: 'mobilizing', defensePower: 0, attackPower: 0, intensity: 1,
       });
     }
     return out;

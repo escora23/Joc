@@ -345,6 +345,8 @@ export class Attack implements SimAttack {
   lowTicks = 0;
   breakTicks = 0;
   stalled = false;
+  /** v2 (W6, #23): 0 hold the line, 1 sustained, 2 all-out assault. */
+  intensity: 0 | 1 | 2 = 1;
   /** Tiles ready to fall but held by the war's logistics bucket this tick. */
   consolidating = false;
   /** Retreat: troops are back home at this tick (-1 = not retreating). */

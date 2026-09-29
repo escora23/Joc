@@ -187,7 +187,10 @@ export interface SiegeView {
 }
 /** Offensive life cycle (§4.3–§4.11). */
 export type AttackState =
-  | 'mobilizing' | 'embarking' | 'sailing' | 'landing' | 'contact' | 'advancing' | 'consolidating' | 'stalled' | 'retreating';
+  | 'mobilizing' | 'embarking' | 'sailing' | 'landing' | 'contact' | 'advancing' | 'consolidating' | 'stalled' | 'holding' | 'retreating';
+
+/** v2 (W6, #23): 0 hold the line, 1 sustained, 2 all-out assault. */
+export type OffensiveIntensity = 0 | 1 | 2;
 
 export type Personality = 'conqueror' | 'turtle' | 'trader' | 'nuker' | 'opportunist';
 export const PERSONALITIES: readonly Personality[] = ['conqueror', 'turtle', 'trader', 'nuker', 'opportunist'];
@@ -470,6 +473,8 @@ export interface AttackView {
   /** The defender's garrison power facing this offensive (Pd), for the odds display. */
   defensePower: number;
   attackPower: number;
+  /** v2 (W6, #23): 0 hold the line, 1 sustained, 2 all-out assault. */
+  intensity: OffensiveIntensity;
 }
 
 export interface FrontView {

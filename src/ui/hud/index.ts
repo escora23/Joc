@@ -232,7 +232,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     spawn.el,
     crisis.edge,
   );
-  const el = h('div', { class: 'fu-hud-root' }, badges.el, strip.banners, strip.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
+  const el = h('div', { class: 'fu-hud-root' }, badges.el, strip.banners, strip.pointer, strip.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
 
   let state: AppState = 'boot';
   let acc10 = 0, acc4 = 0;

@@ -56,7 +56,7 @@ export function createSimRules(g: Game): SimRules {
       for (const f of g.fronts.frontsOf(owner)) {
         yield {
           key: f.key, a: f.a, b: f.b, x: f.x, y: f.y, samples: Float32Array.from(f.samples),
-          garrisonA: g.fronts.garrison(f, f.a), garrisonB: g.fronts.garrison(f, f.b),
+          garrisonA: g.fronts.garrison(f, f.a), garrisonB: g.fronts.garrison(f, f.b), length: f.length,
         };
       }
     },

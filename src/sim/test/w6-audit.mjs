@@ -11,6 +11,9 @@
 //     enemy's mobilization reproduces T34 (≥ 1.5× the passive garrison on the offensive's first tick); «Retirar» ends
 //     our offensive and brings the troops home with a 10 % loss.
 // A5  front keys are stable: over a 600-tick offensive the front it pushes keeps its key in ≥ 95 % of the samples.
+// A7  owner items #22/#23 (fix pass 2): the corridor never outgrows its front; a human offensive persists (it re-forms
+//     on the contact when its origin loses touch, and a broken one halts and holds the line with a message instead of
+//     withdrawing); intensity: all-out assault ×1.25 power, hold = no push and a quarter of the casualties.
 // A6  T41: the front's line published as one smoothed depth offset at the observation focus moves every tick by exactly
 //     its published speed, never jumps, sets the front's advanceKmh, and stays inside the tile being taken.
 
@@ -316,7 +319,69 @@ function depthLine() {
   row('A6b', 'T41: FrontView.advanceKmh = |line.kmh|; the line lies inside the tile being taken (depth − tile line)', `|Δ| ${kmhErr.toFixed(3)} km/h; ${lagMin.toFixed(1)} .. ${lagMax.toFixed(1)} km`, '0 .. 25 km', kmhErr <= 0.01 && lagMin >= -2 && lagMax <= 25);
 }
 
+// ---- A7: offensives that persist and are managed (#23), corridor capped at the front (#22) ------------------------
+function persistence() {
+  // A short front: the enemy is a 12-tile-high block beside the human's 41-tile one.
+  const { g, step } = controlledGame(12);
+  const H = HUMAN_ID;
+  stageLand(g, 0, (t) => g.owner[t] === H);
+  const c = latLonToTileXY(40, -98);
+  const cx = Math.floor(c.x), cy = Math.floor(c.y);
+  stageLand(g, H, (t) => inRect(t, cx - 30, cx - 1, cy - 20, cy + 20));
+  const E = g.addPlayer({ name: 'Enemigo', kind: 'nation', personality: 'conqueror', color: 0xcc3333, countryIndex: 0 });
+  stageLand(g, E, (t) => inRect(t, cx, cx + 29, cy - 6, cy + 5));
+  const D = g.playerById[H], P = g.playerById[E];
+  D.capitalTile = cy * W + cx - 18;
+  P.capitalTile = cy * W + cx + 18;
+  step();
+  const msgs = [];
+  const orig = g.message.bind(g);
+  g.message = (pid, key, sev, params) => { msgs.push({ tick: g.tick, key, params }); orig(pid, key, sev, params); };
+  g.war.declare(H, E, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+  for (let i = 0; i < 25; i++) step();
+  // (a) 1.6 M troops would buy 40 tiles of corridor (80 by troops): the front is ~12 tiles long.
+  D.troops = 3_200_000;
+  P.troops = 400_000;
+  g.issue(H, { type: 'attack', target: E, ratio: 0.5, tile: cy * W + cx + 8 });
+  let a = g.attackList.find((x) => !x.ended && x.attacker === H);
+  const f = a && a.frontKey ? g.fronts.get(a.frontKey) : null;
+  row('A7a', `the corridor never outgrows its front (${a ? Math.round(a.troops) : 0} troops committed)`, a && f ? `corridor ${a.frontage.toFixed(1)} tiles, front ${f.length} tiles` : 'no offensive', 'corridor <= front length', !!a && !!f && a.frontage <= Math.max(3, f.length) + 1e-6);
+  // (d) intensity: the same offensive at all-out assault has 1.25x its power; holding pushes nothing.
+  for (let i = 0; i < 15; i++) step();
+  const pa1 = a.pa;
+  g.issue(H, { type: 'offensiveIntensity', attackId: a.id, intensity: 2 });
+  step();
+  const pa2 = a.pa;
+  g.issue(H, { type: 'offensiveIntensity', attackId: a.id, intensity: 0 });
+  let pushHold = 0, lossHold = 0;
+  for (let i = 0; i < 10; i++) {
+    step();
+    pushHold += a.pushThisTick;
+    lossHold += a.lossThisTick;
+  }
+  row('A7d', 'intensity: all-out assault ×1.25 attack power; hold the line pushes nothing', `Pa ${Math.round(pa1)} -> ${Math.round(pa2)} (${(pa2 / Math.max(1, pa1)).toFixed(3)}x); holding: push ${pushHold.toFixed(3)}, state ${a.state}`, '1.25x (±3 %, same troops), push 0, holding', Math.abs(pa2 / Math.max(1, pa1) - 1.25) < 0.04 && pushHold === 0 && a.state === 'holding');
+  g.issue(H, { type: 'retreat', attackId: a.id });
+  for (let i = 0; i < 30; i++) step();
+  // (b) a hopeless human offensive (R ≈ 0.1): it breaks after 60 ticks at R < 0.5 and then HOLDS with a message.
+  D.troops = 200_000;
+  P.troops = 3_000_000;
+  const m0 = msgs.length;
+  g.issue(H, { type: 'attack', target: E, ratio: 0.5, tile: cy * W + cx + 8 });
+  a = g.attackList.find((x) => !x.ended && x.attacker === H);
+  for (let i = 0; i < 220 && a && !a.ended; i++) step();
+  const halted = msgs.slice(m0).find((m) => m.key === 'msg.offensiveHalted');
+  row('A7b', 'a broken human offensive halts and holds the line (with a message) instead of withdrawing', a ? `after 220 ticks: ${a.ended ? 'ended' : a.state}, intensity ${a.intensity}, ratio ${a.ratio.toFixed(2)}, message ${halted ? `«${halted.key}» at tick ${halted.tick}` : 'none'}` : 'no offensive', 'alive, holding, message', !!a && !a.ended && a.state === 'holding' && !!halted);
+  // (c) our own line falls back under the corridor's origin: the offensive re-forms on the new contact.
+  const ox = Math.floor(a.originX);
+  stageLand(g, E, (t) => inRect(t, ox - 4, cx - 1, cy - 8, cy + 7));
+  g.issue(H, { type: 'offensiveIntensity', attackId: a.id, intensity: 1 });
+  const o0 = a.originX;
+  for (let i = 0; i < 25 && !a.ended; i++) step();
+  row('A7c', 'the offensive re-forms on the contact when its origin loses touch (no silent cancel)', `${a.ended ? 'ended' : `alive (${a.state})`}, origin x ${o0.toFixed(1)} -> ${a.originX.toFixed(1)}, frontier ${a.pressure.size} tiles`, 'alive, origin moved back, frontier > 0', !a.ended && a.originX < o0 - 1 && a.pressure.size > 0);
+}
+
 reversal();
+persistence();
 depthLine();
 garrisons();
 priorityRise();

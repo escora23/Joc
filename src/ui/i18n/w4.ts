@@ -305,7 +305,7 @@ export const esW4: Record<string, string> = {
   'chip.hint.shift': 'Mayús+clic derecho en el mar: patrullar.',
 
   // ---- the offensive chip (§7.7) --------------------------------------------------------------------------------
-  'tt.offensive': 'CLIC: ofensiva con {n} ({p} %) · relación {r} : 1 · frente de {f} casillas ({km} km) · avance ≈ {v} km/h en llano',
+  'tt.offensive': 'CLIC: preparar ofensiva (con {n}, {p} %: relación {r} : 1 · frente de {f} casillas ({km} km) · avance ≈ {v} km/h en llano) · MAYÚS+CLIC: lanzarla ya',
   'tt.offensive.stall': 'la ofensiva se estancará',
   'tt.offensiveQueued': 'CLIC: ofensiva preparada con {n}; empezará en {h} h (fin de la movilización)',
   'tt.declare': 'CLIC: declarar la guerra a {name}…',
@@ -630,7 +630,7 @@ export const enW4: Record<string, string> = {
   'chip.hint.patrol': 'Shift: patrol the area instead of going.',
   'chip.hint.shift': 'Shift+right-click at sea: patrol.',
 
-  'tt.offensive': 'CLICK: offensive with {n} ({p} %) · ratio {r} : 1 · {f}-tile front ({km} km) · advance ≈ {v} km/h on plains',
+  'tt.offensive': 'CLICK: plan an offensive (with {n}, {p} %: ratio {r} : 1 · {f}-tile front ({km} km) · advance ≈ {v} km/h on plains) · SHIFT+CLICK: launch it now',
   'tt.offensive.stall': 'the offensive will stall',
   'tt.offensiveQueued': 'CLICK: offensive prepared with {n}; it starts in {h} h (end of mobilization)',
   'tt.declare': 'CLICK: declare war on {name}…',

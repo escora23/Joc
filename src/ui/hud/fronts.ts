@@ -23,11 +23,12 @@ import { tx } from '../tx';
 import { askHelp, whyNotPropose } from './diplomacy';
 import { etaText, frontName, unitName, placeOf } from './forcesInfo';
 import {
-  advanceText, combatDays, frontAnchor, frontTiles, humanFrontsByDanger, isoOf, sidesOf, troopsText, worldFronts,
+  advanceText, combatDays, frontAnchor, frontFocus, frontTiles, humanFrontsByDanger, isoOf, sidesOf, troopsText, worldFronts,
   type FrontSides,
 } from './frontsInfo';
 import type { HudShared } from './shared';
 import { openPeaceDialog } from './wardialogs';
+import { openOffensiveDialog } from './offensiveDialog';
 import { hexToCss } from '../../shared/color';
 import {
   DEFENSE_REDEPLOY_TICKS, FRONT_PRIORITY_WEIGHT, HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_DAY, UNIT_DEFS,
@@ -67,6 +68,9 @@ interface FrontRow {
   divs: HTMLElement;
   prio: HTMLButtonElement[];
   counter: HTMLButtonElement | null;
+  intSeg?: HTMLElement;
+  ownLine?: HTMLElement;
+  ownBox?: HTMLElement;
   retreat: HTMLButtonElement | null;
   send: HTMLButtonElement | null;
   sendList: HTMLElement | null;
@@ -135,7 +139,8 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
   const humanWars = (): WarView[] => view().wars.filter((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID);
   const pairOf = (f: FrontView, enemy: number) => (f.a === HUMAN_ID && f.b === enemy) || (f.b === HUMAN_ID && f.a === enemy);
   function fly(f: FrontView, alt = 900): void {
-    const p = frontAnchor(f);
+    // On the front's line (where the ground battle stands when the player then zooms in).
+    const p = frontFocus(view(), f);
     const ll = tileXYToLatLon(p.x, p.y);
     ctx.bus.emit('focusRequest', { lat: ll.lat, lon: ll.lon, altitudeKm: alt, durationMs: 1300 });
   }
@@ -146,6 +151,27 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     const x = (((p.x + f.dirX * depth * s) % MAP_W) + MAP_W) % MAP_W;
     const y = Math.max(0, Math.min(MAP_H - 1, p.y + f.dirY * depth * s));
     return Math.floor(y) * MAP_W + Math.floor(x);
+  }
+  /**
+   * The axis point of an offensive from this front: enemy land 2-3 tiles past the contact, found from the middle of the
+   * line outwards (-1 when no stretch of the front faces enemy land, the reason shown on the button).
+   */
+  function attackTile(f: FrontView, enemy: number): number {
+    const v = view();
+    const n = f.samples.length >> 1;
+    const s = enemy === f.b ? 1 : -1;
+    const mid = Math.floor(n / 2);
+    for (let k = 0; k < n; k++) {
+      const i = mid + (k % 2 ? 1 : -1) * Math.ceil(k / 2);
+      if (i < 0 || i >= n) continue;
+      for (const depth of [3, 2, 1.2]) {
+        const x = (((f.samples[i * 2] + f.dirX * (0.5 + depth * s)) % MAP_W) + MAP_W) % MAP_W;
+        const y = Math.max(0, Math.min(MAP_H - 1, f.samples[i * 2 + 1] + f.dirY * (0.5 + depth * s)));
+        const t0 = Math.floor(y) * MAP_W + Math.floor(x);
+        if (v.owner[t0] === enemy) return t0;
+      }
+    }
+    return -1;
   }
   const humanSide = (f: FrontView) => (f.a === HUMAN_ID ? 0 : f.b === HUMAN_ID ? 1 : -1);
   function ownOffensive(s: FrontSides) {
@@ -291,20 +317,46 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         const ff = view().frontByKey.get(key);
         if (!ff) return;
         const enemy = ff.a === HUMAN_ID ? ff.b : ff.a;
-        ctx.sim.send({ type: 'attack', target: enemy, ratio: hs.attackRatio, tile: tileInto(ff, enemy, 3) });
-        hs.sound('confirm');
+        const s = sidesOf(view(), ff);
+        const mine = ownOffensive(s);
+        // Our offensive keeps its axis; a new one aims 2-3 tiles into enemy land facing the middle of the front.
+        const tile = mine ? Math.floor(mine.y) * MAP_W + ((Math.floor(mine.x) % MAP_W) + MAP_W) % MAP_W : attackTile(ff, enemy);
+        if (tile < 0) {
+          hs.sound('error');
+          ctx.bus.emit('toast', { text: t('fr.offensive.none', { name: hs.name(enemy) }), kind: 'warning', durationMs: 3200 });
+          return;
+        }
+        hs.sound('click');
+        openOffensiveDialog(hs, enemy, tile);
       });
       tip(counter, () => {
         const ff = view().frontByKey.get(key);
-        const me = hs.human;
         const s = ff ? sidesOf(view(), ff) : null;
         const mine = s ? ownOffensive(s) : null;
-        return {
-          title: t(mine ? 'fr.reinforce' : 'fr.counter'), text: t(mine ? 'fr.reinforce.tip' : 'fr.counter.tip'),
-          now: [[t('fr.counter.troops'), me ? troopsText(me.troops * hs.attackRatio) : '0'], [t('fr.counter.ratio'), `${Math.round(hs.attackRatio * 100)} %`]],
-          lines: [t('fr.counter.line')],
-        };
+        const enemy = ff ? (ff.a === HUMAN_ID ? ff.b : ff.a) : 0;
+        const why = ff && !mine && attackTile(ff, enemy) < 0 ? t('fr.offensive.none', { name: hs.name(enemy) }) : null;
+        return { title: t(mine ? 'fr.offensive.manage' : 'fr.offensive'), text: t(mine ? 'fr.offensive.manage.tip' : 'fr.offensive.tip'), lines: [t('fr.counter.line')], whyNot: why };
       });
+      // Intensity of our offensive here (#23): hold the line (halt) / sustained / all-out assault, one click each.
+      const intSeg = h('div', { class: 'fu-seg fu-war-int' });
+      for (const lv of [0, 1, 2] as const) {
+        const b = h('button', null, tx(`off.int.${lv}`)) as HTMLButtonElement;
+        b.dataset.int = String(lv);
+        b.addEventListener('click', () => {
+          const ff = view().frontByKey.get(key);
+          const s = ff ? sidesOf(view(), ff) : null;
+          const mine = s ? ownOffensive(s) : null;
+          if (!mine) {
+            hs.sound('error');
+            return;
+          }
+          ctx.sim.send({ type: 'offensiveIntensity', attackId: mine.id, intensity: lv });
+          hs.sound('confirm');
+        });
+        tip(b, () => ({ title: t(`off.int.${lv}`), text: t(`off.int.${lv}.tip`) }));
+        intSeg.append(b);
+      }
+      row.intSeg = intSeg;
       const retreat = h('button', { class: 'fu-btn fu-btn--sm fu-btn--danger' }, icon('exit'), tx('fr.retreat')) as HTMLButtonElement;
       retreat.addEventListener('click', () => {
         const ff = view().frontByKey.get(key);
@@ -324,6 +376,8 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         return { title: t('fr.retreat'), text: t('fr.retreat.tip'), now: mine ? [[t('fr.retreat.troops'), troopsText(mine.troops)], [t('fr.retreat.loss'), troopsText(mine.troops * 0.1)]] : undefined, whyNot: mine ? null : t('fr.retreat.none') };
       });
       actions.append(seg, send, counter, retreat);
+      row.ownLine = h('div', { class: 'fu-war-line fu-war-own' });
+      row.ownBox = h('div', { class: 'fu-war-ownbox fu-hidden' }, row.ownLine, row.intSeg!);
       row.counter = counter;
       row.retreat = retreat;
       row.send = send;
@@ -332,7 +386,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     row.el = h('div', { class: 'fu-war-front' },
       h('div', { class: 'fu-war-fhead' }, name, age),
       h('div', { class: 'fu-war-tug' }, chipA, dir, chipB, h('div', { class: 'fu-fb-bar' }, barA, barB), adv),
-      gar, redeploy, h('div', { class: 'fu-war-line' }, divs, tiles), actions,
+      gar, redeploy, h('div', { class: 'fu-war-line' }, divs, tiles), ...(row.ownBox ? [row.ownBox] : []), actions,
       ...(row.sendList ? [row.sendList] : []),
     );
     row.el.dataset.key = String(key);
@@ -384,8 +438,21 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       const prio = hsd === 0 ? f.priorityA : f.priorityB;
       for (const b of row.prio) toggleClass(b, 'is-on', Number(b.dataset.prio) === prio);
       const mine = ownOffensive(s);
-      if (row.counter) setText(row.counter.querySelector('span')!, t(mine ? 'fr.reinforce' : 'fr.counter'));
+      if (row.counter) setText(row.counter.querySelector('span')!, t(mine ? 'fr.offensive.manage' : 'fr.offensive'));
       if (row.retreat) toggleClass(row.retreat, 'fu-hidden', !mine);
+      if (row.ownBox) {
+        toggleClass(row.ownBox, 'fu-hidden', !mine);
+        if (mine) {
+          setText(row.ownLine!, t('fr.own', {
+            troops: troopsText(mine.troops), intensity: t(`off.int.${mine.intensity}`), ratio: formatNumber(mine.ratio, 1),
+            state: t(`offensive.state.${mine.state}`),
+          }));
+          for (const b of row.intSeg!.querySelectorAll<HTMLButtonElement>('button')) {
+            toggleClass(b, 'is-on', Number(b.dataset.int) === mine.intensity);
+            b.disabled = mine.state === 'retreating';
+          }
+        }
+      }
     } else {
       setText(row.gar, t('fr.garrisons.world', { a: hs.name(s.att), ga: troopsText(s.garAtt), b: hs.name(s.def), gb: troopsText(s.garDef) }));
       toggleClass(row.redeploy, 'fu-hidden', true);

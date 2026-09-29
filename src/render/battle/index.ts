@@ -18,7 +18,7 @@
 // The layer crossfades with altitude (screen-door dissolve) and never pops.
 
 import * as THREE from 'three';
-import type { BattleApi, BattleView, CameraState, FrameInfo, GameContext } from '../../shared/api';
+import type { BattleApi, BattlePointer, BattleView, CameraState, FrameInfo, GameContext } from '../../shared/api';
 import { BATTLE_LAYER_ALT_KM, HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_HOUR, TILE_KM } from '../../shared/constants';
 import { latLonToTile, latLonToVec3, tangentFrame, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { smoothstep } from '../../shared/math';
@@ -130,6 +130,11 @@ export interface BattleDebug {
   groundAt(x: number, z: number): { splat: number[]; water: number; height: number } | null;
   /** Land cover of a 20 km square at lat/lon (mean splat weights) and the tile's biome: choosing shot theatres. */
   surveyGround(lat: number, lon: number): { biome: number; mean: number[] } | null;
+  /**
+   * W6 verifiers (FEEDBACK #11 «where they are»): a sample of each side's soldiers projected with the game camera — how
+   * many are on screen (and not behind the camera) and their median height in pixels.
+   */
+  soldiersOnScreen(sample?: number): { team: number; sampled: number; onScreen: number; medianPx: number }[] | null;
 }
 
 let currentDebug: BattleDebug | null = null;
@@ -386,6 +391,72 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       }
     }
     return hit.f ? hit : null;
+  }
+
+  /**
+   * A battle stands where the player looks (FEEDBACK #11 «where they are»): under the view target (within 8 km, or 2.5×
+   * the altitude), or in front of it when its anchor is on screen and not far (5× the altitude). Anything farther is
+   * not built there: the battle pointer shows where the fighting is and glides the camera to it.
+   */
+  const scrV = new THREE.Vector3(), scrD = new THREE.Vector3();
+  function onScreen(x: number, y: number): boolean {
+    tileXYToLatLon(x, y, ll);
+    latLonToVec3(ll.lat, ll.lon, ctx.globe.surfaceRadiusAt(ll.lat, ll.lon), scrV);
+    if (scrD.copy(scrV).sub(ctx.camera.position).dot(scrV) > 0) return false; // behind the limb
+    scrV.project(ctx.camera);
+    return scrV.z < 1 && Math.abs(scrV.x) < 0.92 && Math.abs(scrV.y) < 0.9;
+  }
+  function anchorAcceptable(x: number, y: number, distKm: number, alt: number): boolean {
+    if (distKm > 30 + alt * 1.2) return false;
+    if (distKm <= Math.max(8, alt * 2.5)) return true;
+    return distKm <= alt * 5 + 4 && onScreen(x, y);
+  }
+
+  // ---- the battle pointer (FEEDBACK #11): where the fighting is when the camera is low but not looking at it ----
+  const pointerState: BattlePointer = { lat: 0, lon: 0, km: 0, frontKey: 0, heading: 0, onScreen: false };
+  let pointerOn = false, pointerAcc = 1;
+  function updatePointer(dt: number, alt: number): void {
+    pointerAcc += dt;
+    if (pointerAcc < 0.25) return;
+    pointerAcc = 0;
+    pointerOn = false;
+    const view = ctx.sim.view;
+    if (ctx.app.state !== 'playing' || alt > 160 || view.phase !== 'playing') return;
+    const shown = anchor && active && nearFade > 0.3 && !job;
+    let lat: number, lon: number, key: number, km: number, f: FrontView | null | undefined;
+    if (shown && anchor) {
+      // The battle is built: point at it only when the camera looks away from it.
+      const t = latLonToTile(anchor.lat, anchor.lon);
+      if (onScreen((t % MAP_W) + 0.5, Math.floor(t / MAP_W) + 0.5)) return;
+      lat = anchor.lat;
+      lon = anchor.lon;
+      key = anchor.frontKey;
+      km = gcKm(camState.lat, camState.lon, lat, lon);
+      f = view.frontByKey.get(key);
+    } else {
+      const h = nearestFront(camState.lat, camState.lon, view.fronts);
+      if (!h || !h.f || h.dist > 180) return;
+      if (alt < NEAR_BUILD_ALT && anchorAcceptable(h.px, h.py, h.dist, alt)) return;
+      if (alt >= NEAR_BUILD_ALT && h.dist < alt * 0.6) return; // high up the band itself is in view
+      tileXYToLatLon(h.px, h.py, ll);
+      lat = ll.lat;
+      lon = ll.lon;
+      key = h.f.key;
+      km = h.dist;
+      f = h.f;
+    }
+    if (!f) return;
+    // Glide heading: looking across the line from the human's side (or side a's), toward the other side.
+    const cl = Math.cos((lat * Math.PI) / 180);
+    const sgn = f.b === HUMAN_ID ? -1 : 1;
+    pointerState.lat = lat;
+    pointerState.lon = lon;
+    pointerState.km = km;
+    pointerState.frontKey = key;
+    pointerState.heading = Math.atan2(f.dirX * cl * sgn, -f.dirY * sgn);
+    const t = latLonToTile(lat, lon);
+    pointerState.onScreen = onScreen((t % MAP_W) + 0.5, Math.floor(t / MAP_W) + 0.5);
+    pointerOn = true;
   }
 
   // ---------------------------------------------------------------------------------------------------------
@@ -1054,6 +1125,38 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     get frontDir() {
       return { tx: front.tx, tz: front.tz, nx: front.nx, nz: front.nz };
     },
+    soldiersOnScreen(sample = 200) {
+      if (!infantry || !anchor || job || !near.visible) return null;
+      near.updateMatrixWorld();
+      const cam = ctx.camera;
+      const r = new FastRng(99);
+      const out: { team: number; sampled: number; onScreen: number; medianPx: number }[] = [];
+      const p = new THREE.Vector3(), q = new THREE.Vector3();
+      const H = window.innerHeight;
+      for (const team of [0, 1]) {
+        let on = 0, n = 0;
+        const hs: number[] = [];
+        for (let k = 0; k < sample; k++) {
+          if (!infantry.pickTarget(team, r, p)) break;
+          n++;
+          q.copy(p).setY(p.y + 1.8);
+          p.applyMatrix4(near.matrixWorld);
+          q.applyMatrix4(near.matrixWorld);
+          const d = p.clone().sub(cam.position);
+          const fwd = new THREE.Vector3();
+          cam.getWorldDirection(fwd);
+          if (d.dot(fwd) <= 0) continue;
+          p.project(cam);
+          q.project(cam);
+          if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1) continue;
+          on++;
+          hs.push(Math.abs(q.y - p.y) * 0.5 * H);
+        }
+        hs.sort((a, b) => a - b);
+        out.push({ team, sampled: n, onScreen: on, medianPx: hs.length ? +hs[hs.length >> 1].toFixed(2) : 0 });
+      }
+      return out;
+    },
   };
   currentDebug = debug;
   try {
@@ -1084,6 +1187,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
         infantry: [{ owner: anchor.frontA, count: infantry?.deployed(0) ?? 0 }, { owner: anchor.frontB, count: infantry?.deployed(1) ?? 0 }],
         divisions: shownDivs.map((d) => ({ unitId: d.unitId, tanks: d.tanks, ifvs: d.ifvs })),
       };
+    },
+    pointer() {
+      return pointerOn ? pointerState : null;
     },
     view() {
       if (!anchor || job || !active) return null;
@@ -1205,6 +1311,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       ctx.cameraRig.getState(camState);
       const alt = camState.altitudeKm;
       updateFar(bdt);
+      updatePointer(Math.max(frame.dt, 0.016), alt);
 
       // ---- choose / stream the local battlefield (anchored by the front's stable key) ----
       let want: Anchor | null = null;
@@ -1233,7 +1340,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
           same = true;
         } else {
           const h = nearestFront(camState.lat, camState.lon, view.fronts);
-          if (h && h.f && h.dist < 30 + alt * 1.2) {
+          if (h && h.f && anchorAcceptable(h.px, h.py, h.dist, alt)) {
             tileXYToLatLon(h.px, h.py, ll);
             const cl = Math.cos((ll.lat * Math.PI) / 180);
             dirX = h.f.dirX * cl;

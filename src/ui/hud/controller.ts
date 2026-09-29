@@ -229,7 +229,7 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       return;
     }
     if (!isPlayableTerrain(world.terrain[e.tile])) return;
-    const ok = attackNation(hs, owner, e.tile);
+    const ok = attackNation(hs, owner, e.tile, !!e.shift);
     hooks.ripple(e.clientX, e.clientY, ok ? (owner === 0 ? 'expand' : 'attack') : 'bad');
   });
 

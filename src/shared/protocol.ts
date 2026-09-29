@@ -14,7 +14,7 @@ import type {
   AllianceRequestView, AllianceView, AttackView, Demand, OpinionView, ProposalKind, ProposalView, TreatyKind, TreatyView, BuildableUnit, ClockMode, ClockView, CommandKind, EmoteId, FrontView,
   GameConfig, GameOverReason, GamePhase, GameSpeed, PeaceTerms, PlayerKind, Personality, PlayerStatsCounters,
   ScarView, SiegeView, StructureType, StructureView, UnitType, WarGoal, WarView, WeaponType, WorldEventKind,
-  WorldEventView, WorldInit, UnitOrderKind, ProductionView,
+  WorldEventView, WorldInit, UnitOrderKind, ProductionView, OffensiveIntensity,
 } from './types';
 
 // =================================================================================================
@@ -27,7 +27,13 @@ export type PlayerCommand =
   | { type: 'spawn'; tile: number }
   /** Land attack. target = player id, or 0 for unclaimed land. ratio = fraction of current troops (0..1).
    *  tile: the clicked tile (the offensive's axis point). v2: rejected with msg.notAtWar against a nation at peace. */
-  | { type: 'attack'; target: number; ratio: number; tile: number }
+  | { type: 'attack'; target: number; ratio: number; tile: number; intensity?: OffensiveIntensity }
+  /**
+   * v2 (W6, owner item #23): how hard an own offensive fights. 0 = hold the line (no push, a quarter of the casualties,
+   * the offensive persists), 1 = sustained (the §4.5/§4.6 model), 2 = all-out assault (+25 % attack power, +60 % own
+   * casualties). The offensive keeps its troops and axis.
+   */
+  | { type: 'offensiveIntensity'; attackId: number; intensity: OffensiveIntensity }
   // --- v2 (W1): war ---
   /** Declare war (§4.2). The optional offensive is queued and starts by itself when the mobilization ends. */
   | { type: 'declareWar'; target: number; queuedAttack?: { tile: number; ratio: number }; goal?: WarGoal; reasonKey?: string }

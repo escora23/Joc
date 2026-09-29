@@ -75,6 +75,12 @@ export function createTutorial(hs: HudShared): Tutorial {
       when: () => true, done: () => acked.has('clock'),
     },
     {
+      // Owner item #23: the first war of the player explains how offensives work (one order, then managed).
+      n: 11, id: 'offensive', ico: 'attack', state: 'playing', interrupt: true, ack: true,
+      when: () => view().wars.some((w) => (w.aggressor === HUMAN_ID || w.target === HUMAN_ID) && view().tick >= w.mobilizeUntilTick),
+      done: () => acked.has('offensive') || view().attacks.some((a) => a.attacker === HUMAN_ID && a.defender > 0 && a.id > 0),
+    },
+    {
       n: 10, id: 'inbox', ico: 'inbox', state: 'playing', highlight: '.fu-nations-btn', interrupt: true,
       when: () => pendingProposal(), done: () => hs.flags.proposalAnswered,
     },
