@@ -23,6 +23,7 @@ import * as THREE from 'three';
 import { frontName } from './forcesInfo';
 import { advanceText, combatDays, frontAnchor, isoOf, sidesOf, troopsText } from './frontsInfo';
 import type { HudShared } from './shared';
+import { labelRects } from '../../render/globe/labels';
 
 /** Badges show above this camera altitude (km): the same threshold as the orbit overlay. */
 const BADGE_MIN_ALT = 150;
@@ -355,6 +356,8 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
           if (hitsPolyline(segB, rx0, ry0, rx1, ry1, mobHalf, false)) continue;
           if (hitsPolyline(segC, rx0, ry0, rx1, ry1, 9, true)) continue;
           if (placed.some((r) => rx0 < r.x1 && rx1 > r.x0 && ry0 < r.y1 && ry1 > r.y0)) continue;
+          // Nor over a nation's name on the map (the badge would cut «COMANDANTE» in two).
+          if (labelRects().some((r) => rx0 < r.x1 && rx1 > r.x0 && ry0 < r.y1 && ry1 > r.y0)) continue;
           cx = px;
           cy = py;
           reach = r0 + gap;
