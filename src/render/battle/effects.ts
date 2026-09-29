@@ -147,6 +147,9 @@ interface Light {
   i: number; radius: number;
   birth: number; decay: number; life: number;
   flicker: number;
+  /** Vertical speed (m/s: a flare sinking under its parachute) and always among the lights drawn. */
+  vy?: number;
+  keep?: boolean;
 }
 
 interface Fire {
@@ -199,6 +202,13 @@ export interface Effects {
   setBudgets(particles: number, decals: number): void;
   /** Pre-age the scene: craters and fires that exist before the camera arrives. */
   seedCrater(x: number, z: number, radius: number, birth: number, seed: number): void;
+  /**
+   * Night (W6 final, #29b): an illumination flare fired over no-man's-land, sinking under its parachute for ~30 s and
+   * lighting the line, the soldiers and the smoke around it for several hundred metres.
+   */
+  flare(x: number, y: number, z: number, now: number): void;
+  /** Flares still burning. */
+  readonly flares: number;
 }
 
 export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, host: EffectsHost, particleBudget: number, decalBudget: number): Effects {
@@ -220,6 +230,7 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       let w = 0, wi = Infinity;
       for (let k = 0; k < lights.length; k++) {
         const L = lights[k];
+        if (L.keep) continue;
         const cur = L.i * Math.exp(-(now - L.birth) * L.decay);
         if (cur < wi) { wi = cur; w = k; }
       }
@@ -228,12 +239,27 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
     lights.push({ x, y, z, r, g, b, i, radius, birth: now, decay, life, flicker });
   }
 
+  const FLARE_LIFE = 30, FLARE_SINK = 2.2;
   const fx: Effects = {
     alpha, add,
     decals: decals.mesh,
     sunView: sunView.value,
     get violence() {
       return violence;
+    },
+    get flares() {
+      let n = 0;
+      for (const L of lights) if (L.keep) n++;
+      return n;
+    },
+    flare(x, y, z, now) {
+      // The star: a bright, slightly flickering point sinking with the light, and a thin trail of its smoke above it.
+      add.emit(x, y, z, 0, -FLARE_SINK, 0, FLARE_LIFE, 7, 5, 0, 0, 1, 0.96, 0.86, 30, PK.Glow, 0, 0, now);
+      add.emit(x, y, z, 0, -FLARE_SINK, 0, FLARE_LIFE, 26, 20, 0, 0, 1, 0.9, 0.75, 1.6, PK.Glow, 0, 0, now);
+      for (let k = 0; k < 6; k++) {
+        alpha.emit(x, y + k * 6, z, rng.range(-0.3, 0.3), -FLARE_SINK * 0.6, rng.range(-0.3, 0.3), rng.range(10, 18), 3, 10, 0.4, 0, 0.5, 0.5, 0.5, 0.18, PK.Smoke, rng.range(0, 6), 0.05, now + k * 1.5);
+      }
+      lights.push({ x, y, z, r: 1, g: 0.96, b: 0.9, i: 0.6, radius: 460, birth: now, decay: 0.012, life: FLARE_LIFE, flicker: 0.08, vy: -FLARE_SINK, keep: true });
     },
     muzzle(x, y, z, dx, dz, scale, r, g, b, now) {
       const l = Math.hypot(dx, dz) || 1;
@@ -477,9 +503,13 @@ export function createEffects(uniforms: BattleUniforms, puff: THREE.Texture, hos
       };
       for (const L of lights) {
         const age = now - L.birth;
-        const i = L.i * Math.exp(-age * L.decay) * Math.min(1, age * 40 + 0.2);
-        const d = Math.hypot(L.x - camX, L.y - camY, L.z - camZ);
-        put(i / (1 + d * 0.002), L.x, L.y, L.z, L.r, L.g, L.b, i, L.radius);
+        let i = L.i * Math.exp(-age * L.decay) * Math.min(1, age * 40 + 0.2);
+        const y = L.vy ? L.y + L.vy * age : L.y;
+        if (L.flicker) i *= 1 - L.flicker + L.flicker * Math.sin(now * 17 + L.x) * Math.sin(now * 11.3 + L.z);
+        // The last seconds of a flare: it gutters out.
+        if (L.keep) i *= Math.min(1, (L.life - age) / 3);
+        const d = Math.hypot(L.x - camX, y - camY, L.z - camZ);
+        put(L.keep ? 1e6 + i : i / (1 + d * 0.002), L.x, y, L.z, L.r, L.g, L.b, i, L.radius);
       }
       for (const f of fires) {
         if (!f.light) continue;

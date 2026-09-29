@@ -205,7 +205,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   let farIntensity = 0;
   let frontIntensity = 0.5;
   let activity = 0.5;
-  const air: AirState = { muS: 1, sun: new THREE.Vector3() };
+  const air: AirState = { muS: 1, night: 0, sun: new THREE.Vector3() };
   // The orbit overlay (§11.2): front bands, operational / naval / mobilization arrows.
   const overlay: FrontOverlay = createFrontOverlay(ctx);
   ctx.scene.add(overlay.group);
@@ -227,7 +227,7 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
   const avoidLL: LatLon = { lat: 0, lon: 0 };
   const rng = new FastRng(12345);
   const splat = new Float32Array(8);
-  let shotAcc = 0, mortarAcc = 0, heavyAcc = 0, hazeAcc = 0;
+  let shotAcc = 0, mortarAcc = 0, heavyAcc = 0, hazeAcc = 0, flareAcc = 0;
   /** Along-front coordinate of the camera's target point: effects concentrate where the player looks. */
   let focusU = 0;
   const focusUV = new THREE.Vector2();
@@ -955,10 +955,25 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       const t0 = now + rng.range(0, dt);
       if (team === 0) effects.muzzle(mx, my, mz, fx, fz, 0.7 * ex, 1, 0.62, 0.3, t0);
       else effects.muzzle(mx, my, mz, fx, fz, 0.7 * ex, 1, 0.8, 0.45, t0);
-      if (rng.chance(0.22) && infantry.pickTarget(1 - team, rng, tmp2, focusU)) {
+      // At night the tracers draw the firing lines: more of them, and wide enough to read from a distance (#29b).
+      const night = air.night;
+      if (rng.chance(0.22 + 0.25 * night) && infantry.pickTarget(1 - team, rng, tmp2, focusU)) {
         const ty = heightAt(tmp2.x, tmp2.z) + rng.range(0.3, 2.5);
-        if (team === 0) effects.tracer(mx, my, mz, tmp2.x + rng.range(-6, 6), ty, tmp2.z + rng.range(-6, 6), 880, 1, 0.35, 0.12, 0.09, t0);
-        else effects.tracer(mx, my, mz, tmp2.x + rng.range(-6, 6), ty, tmp2.z + rng.range(-6, 6), 880, 0.45, 1, 0.3, 0.09, t0);
+        const tw = 0.09 * (1 + night * Math.min(3, ex - 1) * 0.6);
+        if (team === 0) effects.tracer(mx, my, mz, tmp2.x + rng.range(-6, 6), ty, tmp2.z + rng.range(-6, 6), 880, 1, 0.35, 0.12, tw, t0);
+        else effects.tracer(mx, my, mz, tmp2.x + rng.range(-6, 6), ty, tmp2.z + rng.range(-6, 6), 880, 0.45, 1, 0.3, tw, t0);
+      }
+    }
+    // Night (W6 final, owner #29b): both sides fire illumination flares over no-man's-land where the camera looks, a few
+    // in the air at a time: they light the line, the soldiers and the smoke for several hundred metres.
+    if (air.night > 0.3) {
+      flareAcc += dt * (0.14 + 0.12 * act) * air.night;
+      while (flareAcc >= 1) {
+        flareAcc -= 1;
+        if (effects.flares >= 3) continue;
+        const fu = Math.max(-front.halfLen * 0.8, Math.min(front.halfLen * 0.8, focusU + rng.gauss() * 700));
+        front.toXZ(fu, rng.range(-180, 180), tmp);
+        effects.flare(tmp.x, heightAt(tmp.x, tmp.z) + rng.range(230, 320), tmp.z, now + rng.range(0, dt));
       }
     }
     // Mortars / grenades on the firing lines.
@@ -1207,9 +1222,10 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
 
   const bannerL = new THREE.Vector3();
   /** Banner spots per side: along the line around where the camera looks (m) × behind the line (m), in preference order. */
-  const BANNER_ALONG = [0, -1400, 1400, -2800, 2800, -4200, 4200];
+  const BANNER_ALONG = [0, -1400, 1400, -2800, 2800, -4200, 4200, -600, 600];
   // 450 m last: a camera low over its own side's line (the line coming toward it) still sees that side's banner.
-  const BANNER_BACK = [1100, 2300, 450];
+  // (Close spots last: a camera a few hundred metres up, looking along the line, sees only the ground near it.)
+  const BANNER_BACK = [1100, 2300, 450, 200];
   const nSpots = BANNER_ALONG.length * BANNER_BACK.length;
   const mkSpots = () => Array.from({ length: nSpots }, () => ({ x: 0, y: 0, z: 0 }));
   const battleView: BattleView = {

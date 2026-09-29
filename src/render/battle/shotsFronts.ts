@@ -11,7 +11,7 @@
 // Params: &enemyTroops= &humanTroops= &run=<ticks> &alt= &tilt= &hdg= &attacker=enemy|human &div=<n divisions>
 
 import { HUMAN_ID, MAP_W } from '../../shared/constants';
-import { latLonToTile, tileXYToLatLon } from '../../shared/geo';
+import { latLonToTile, tileXYToLatLon, worldTimeForSubsolarLon } from '../../shared/geo';
 import { registerShot, type ShotContext } from '../../shared/shots';
 import { battleDebug } from './index';
 import { deriveLocalForces } from '../../shared/localForces';
@@ -59,7 +59,13 @@ export function pairFront(s: ShotContext, a: number, b: number, active = true): 
  */
 export async function stageFrontWar(s: ShotContext, opts: { attacker?: 'enemy' | 'human' | 'none'; mobilize?: number; run?: number; minKmh?: number; theatre?: 'iberia' | 'plains'; div?: number; attachAtAxis?: boolean } = {}): Promise<StagedWar> {
   const { ctx, params } = s;
-  await ctx.app.startScriptedGame({ ticks: Number(params.get('ticks') ?? 300), speed: 0, headStart: 10, autopilot: false });
+  // &night=1: the theatre in the middle of the night (the sun on the far side of the planet), for night readability.
+  const night = params.get('night') === '1';
+  const nightLon = (params.get('theatre') ?? opts.theatre) === 'plains' ? 3 : 0;
+  await ctx.app.startScriptedGame({
+    ticks: Number(params.get('ticks') ?? 300), speed: 0, headStart: 10, autopilot: false,
+    ...(night ? { worldTimeSec: worldTimeForSubsolarLon(nightLon + 180) } : {}),
+  });
   const view = ctx.sim.view;
   // The staged declaration must not stop the clock (auto-pause is the player's safety net, not the shot's).
   const ap = { ...ctx.settings.get().autoPause };

@@ -18,6 +18,14 @@ const MIE_G = 0.78;
 /** Globe shading constants this module mirrors (sun irradiance, sky inscatter gain). */
 const SUN_E = 1.9;
 const SKY_E = 7.5;
+/**
+ * Night readability (FEEDBACK #11 / owner #29b): a battle at night is lit by a full moon opposite the sun (never lower
+ * than 28° above the horizon), a cool blue-white light about 9 % of the sun's, with a matching sky fill. The line, the
+ * soldiers and the smoke read as a moonlit scene; flares, fires, muzzle flashes and tracers light it locally.
+ */
+const MOON_K = 0.09;
+const MOON_COL = [0.62, 0.72, 1.0];
+const MOON_MIN_ELEV = Math.sin((28 * Math.PI) / 180);
 
 function chapman(X: number, h: number, cosZ: number): number {
   const c = Math.sqrt(X + h);
@@ -102,6 +110,8 @@ const st = [0, 0, 0];
 export interface AirState {
   /** Sun elevation sine at the anchor. */
   muS: number;
+  /** 0 by day .. 1 in full night (the sun 7° below the horizon): the moon lights the battle (W6 final, #29b). */
+  night: number;
   /** Sun color (linear, HDR) at the anchor. */
   sun: THREE.Vector3;
 }
@@ -130,6 +140,26 @@ export function updateAir(
   u.uSunCol.value.set(st[0], st[1], st[2]).multiplyScalar(SUN_E * geo);
   out.sun.copy(u.uSunCol.value);
 
+  // The moon (night): opposite the sun, at least 28° up; the shading's one directional light turns to it as the sun
+  // sets (and its shadows with it).
+  const night = smoothstep(0.02, -0.12, muS);
+  out.night = night;
+  if (night > 0) {
+    let mx = -sx, my = Math.max(-sy, MOON_MIN_ELEV), mz = -sz;
+    const hm = Math.hypot(mx, mz), cm = Math.sqrt(Math.max(0, 1 - my * my));
+    if (hm > 1e-4) {
+      mx = (mx / hm) * cm;
+      mz = (mz / hm) * cm;
+    } else mx = cm;
+    const d = u.uSunDir.value;
+    d.set(d.x * (1 - night) + mx * night, d.y * (1 - night) + my * night, d.z * (1 - night) + mz * night).normalize();
+    const k = SUN_E * MOON_K * night;
+    u.uSunCol.value.x += MOON_COL[0] * k;
+    u.uSunCol.value.y += MOON_COL[1] * k;
+    u.uSunCol.value.z += MOON_COL[2] * k;
+    out.sun.copy(u.uSunCol.value);
+  }
+
   // Sky ambient: the globe's model plus a little extra fill (the ground layer has no multiple scattering).
   const dayK = smoothstep(-0.2, 0.25, muS);
   const tw = Math.exp(-Math.pow((muS + 0.02) / 0.075, 2));
@@ -138,6 +168,10 @@ export function updateAir(
   sky.x += 0.016 * 1.6 + 0.22 * tw * 1.0 + st[0] * 0.05 * dayK;
   sky.y += 0.026 * 1.6 + 0.22 * tw * 0.42 + st[1] * 0.05 * dayK;
   sky.z += 0.055 * 1.6 + 0.22 * tw * 0.16 + st[2] * 0.05 * dayK;
+  // Moonlit night sky: a cool fill so the shadowed sides of soldiers and vehicles still read.
+  sky.x += 0.022 * night;
+  sky.y += 0.032 * night;
+  sky.z += 0.06 * night;
   const g = u.uGndCol.value;
   const bounce = Math.max(muS, 0) * 0.07 * SUN_E * geo;
   g.set(sky.x * 0.35 + st[0] * bounce * 0.9, sky.y * 0.35 + st[1] * bounce * 0.75, sky.z * 0.35 + st[2] * bounce * 0.5);

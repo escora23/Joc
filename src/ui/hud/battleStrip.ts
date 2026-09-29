@@ -41,6 +41,9 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
     sub,
   );
   const bannerEls = [h('div', { class: 'fu-bbanner' }), h('div', { class: 'fu-bbanner' })];
+  // Each banner's text is kept apart so the edge arrow can be put in front of it (a banner whose side is out of view
+  // waits at the edge of the screen pointing at it: both sides always named).
+  const bannerText = ['', ''];
   // Markers over the real divisions on the battlefield (up to 6): «▣ 1.ª División acorazada · Suiza».
   const divEls = Array.from({ length: 6 }, () => h('div', { class: 'fu-bdiv' }));
   const divIds = divEls.map(() => 0);
@@ -181,7 +184,7 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
           bannerEls[k].style.setProperty('--c', hexToCss(p?.color ?? 0x888888));
           const f = view.frontByKey.get(bv.frontKey);
           const att = f ? sidesOf(view, f).att : 0;
-          setText(bannerEls[k], t(att === b.owner && f && !f.quiet ? 'fr.banner.attacks' : 'fr.banner.defends', { name: hs.name(b.owner) || '—' }));
+          bannerText[k] = t(att === b.owner && f && !f.quiet ? 'fr.banner.attacks' : 'fr.banner.defends', { name: hs.name(b.owner) || '—' });
         }
       }
       // Banners follow the camera every frame. Each stands at the first of its spots (behind its side's line) that is
@@ -213,6 +216,49 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
           found = true;
           break;
         }
+        let edge = '';
+        if (!found) {
+          // No spot of that side is in view (a low camera looking at the other side, W6 final): the banner waits at the
+          // edge of the screen toward its side's line, clear of the panels and of the other banner.
+          const sp = b.spots.length ? b.spots[0] : b;
+          v.set(sp.x, sp.y, sp.z);
+          vc.copy(v).project(cam);
+          const behind = !(vc.z < 1);
+          let dx = vc.x, dy = -vc.y;
+          if (behind) {
+            dx = -dx;
+            dy = Math.abs(dy) + 1;
+          }
+          const m = Math.max(Math.abs(dx) / 0.8, Math.abs(dy) / 0.7, 1e-6);
+          const ex = W / 2 + (dx / m) * (W / 2), ey = H / 2 + (dy / m) * (H / 2);
+          edge = Math.abs(dx) / 0.8 >= Math.abs(dy) / 0.7 ? (dx < 0 ? '◀ ' : '▶ ') : dy < 0 ? '▲ ' : '▼ ';
+          const alongX = edge === '▲ ' || edge === '▼ ';
+          // Along the edge first, then further in (the top and the sides are lined with HUD panels).
+          const inX = edge === '◀ ' ? 1 : edge === '▶ ' ? -1 : 0, inY = edge === '▲ ' ? 1 : edge === '▼ ' ? -1 : 0;
+          search: for (const inward of [0, 50, 100, 150, 200, 260, 330]) {
+            for (const off of [0, 60, -60, 120, -120, 200, -200, 300, -300]) {
+              const x = Math.max(12, Math.min(W - bw - 30, (alongX ? ex + off : ex) - (edge === '▶ ' ? bw + 20 : 0) + inX * inward));
+              const y = Math.max(52, Math.min(H - 12, (alongX ? ey : ey + off) + inY * inward));
+              const box = { l: x + 2, r: x + 14 + bw, t: y - 46, b: y - 34 + bh };
+              if (box.l < 4 || box.r > W - 4 || box.t < 4 || box.b > H - 4) continue;
+              const hit = (r: { left: number; right: number; top: number; bottom: number }) =>
+                box.l < r.right && box.r > r.left && box.t < r.bottom && box.b > r.top;
+              if (rects.some(hit) || (sr.width > 0 && hit(sr))) continue;
+              if (taken && box.l < taken.r && box.r > taken.l && box.t < taken.b && box.b > taken.t) continue;
+              px = x;
+              py = y;
+              taken = box;
+              found = true;
+              break search;
+            }
+          }
+        }
+        const text = `${edge}${bannerText[k]}`;
+        if (e.dataset.t !== text) {
+          e.dataset.t = text;
+          setText(e, text);
+        }
+        toggleClass(e, 'is-edge', !!edge);
         if (!found) {
           e.style.display = 'none';
           continue;
