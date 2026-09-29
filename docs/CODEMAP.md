@@ -1159,6 +1159,29 @@ waves, operation names, air strikes and `commandResult` are gone.
   (`HOLD_ENDURANCE_TICKS`, fighters 3 h), orbit `HOLD_ORBIT_KM` 12 km, `eta` = fuel left, then home
   (`forcesInfo.ts holdingAir`, `fstate.holding`, `effect.fighter.hold`; `render/units` draws the 12 km ring). Shot
   `command-jet-sources` (criterion 11); verifier sections `jetsources`, B8b, B10b, D2, H0-H3, R3/R3b.
+* **W5 fix pass 2 (2026-09-29).** Released inside foreign land (`sim/command.ts`): `firepower()` in tank equivalents
+  (patrol APC 0.25, the tank leading one 1, the carrying squadron/warship, victim divisions within
+  `ENGAGE_DIVISION_KM` 3 km, SAM cover 1.5) × `ENGAGE_KILL_PER_MIN` 1/90 ÷ `INTRUDER_STRENGTH` per game minute of
+  `engage`; `isLeaving()` (a released unit whose order takes it out) holds the grace, the last warning, the fire and the
+  half hour to war (`IncursionView.leaving`). Last warning only alongside: on the sim's arrival a controlled unit's
+  incursion sets `awaitAlong` (`IncursionView.awaitingAlongside`, deadline 0); the client sends
+  `{type:'escortAlongside', unitId}` from `index.ts updateRadio` when `forces.qrfDistance` ≤ 150 m / 600 m / 1.5 km (or
+  after 20 s with no vehicle of the force placed); `startLastWarning()` emits 'arrived'; released units start at once;
+  `ALONGSIDE_FALLBACK_SEC` 1800 as a last resort. `forces.ts track()`: inside `SIGHT_M` 3 km at most 55 km/h by the local
+  frame's time only, a far catch-up step stops at the edge of sight. Alerts (`command/alerts.ts`): new auto-pause kind
+  `incursion` (settings, default on); on `commandExit` a unit left inside gets the critical row `held:<unitId>`
+  («sigue dentro», body by response: warned / under fire / at war); 'arrived' and 'engage' for a released unit are
+  critical with that auto-pause (the alert centre also pauses when a grouped row changes title); 'left' resolves the rows
+  (bus `alertResolve`) and says «ha salido» when it got out; a unit still inside after the incident became a war keeps
+  its row until out or lost. `units.ts`: the idle front attach skips units with an explicit `hold`. Exit
+  (`bootstrap.ts exitCommandMode`): behind the fade the camera is set 60 km above the unit and the fade lifts after 3
+  rendered frames. Debrief game time = `view.command.sec` − `startCmdSec`. One battle distance (#24):
+  `shared/geo.ts battleCentre(handoff)` (the soldiers' middle) for command mode's notice, land line
+  (`command.land.ownBattle`), battle label and the battle view's off-screen division markers (`battle.div.fromBattle`);
+  `command.land.ownFront` says «línea del frente» otherwise; entering from a battle > 1.5 km away sets the waypoint on
+  its near edge. `news.ts` refreshes an offensive entry only when the sim tick moved; the command strip skips a repeat
+  with the same text in the same tick. Verifier: `release` (X3, X4, R0, R1, R1b, R2), `releaseout` (R4), `border` (B7b);
+  audit I1b, I5, I6.
 
 ---
 

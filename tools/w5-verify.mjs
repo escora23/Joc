@@ -267,6 +267,11 @@ if (ONLY.includes('border')) {
       const samples = [];
       let arrivedAt = -1, fired = null;
       for (let i = 0; i < 1800 && !fired; i++) {
+        // SwiftShader runs the local physics ~10× slower than real time while the sim's clock keeps real time; top the
+        // local world up by one local second per wall second (no rendering) so the escort's drive in the scene keeps
+        // roughly the pace it has on a GPU. Speeds are measured in local time either way. The sample is read after
+        // rendered frames, so the HUD (radio) has caught up with the top-up.
+        await page.evaluate(() => window.__cmd.simulate(30, 1 / 30));
         await wait(1000);
         const o = await page.evaluate(() => {
           const I = window.__cmd, v = I.ctx.sim.view, P = I.controller.ent;
@@ -789,6 +794,20 @@ if (ONLY.includes('handoff')) {
     const drows = h.ho.divisions.map((d) => ({ unitId: d.unitId, battle: d.tanks, command: c.divs[d.unitId] ?? 0 }));
     rec('H2 the battle\'s real divisions are there with the same tanks', drows.every((d) => d.battle === d.command || d.unitId === own.unitId), drows);
     rec('H3 the vehicle faces the battle it was watching, and the HUD says where it is', c.faceDeg >= 0 && c.faceDeg <= 20 && /batalla|battle/i.test(c.notice ?? ''), { faceDeg: c.faceDeg, battleKm: c.battleKm, notice: c.notice });
+    // H5 (owner #24): one distance to the battle everywhere — the battle view's marker (off screen), the entry notice, the
+    // HUD's land line and the battle's world label all measure to the battle's centre, and a waypoint is set there.
+    const texts = await page.evaluate(() => {
+      const body = document.body.innerText;
+      return { notice: window.__cmdStats.notice ?? '', info: window.__cmdStats.info ?? '', label: body.match(/soldados en la l[ií]nea[^\n]*/i)?.[0] ?? '', waypointKm: window.__cmdStats.waypointKm };
+    });
+    const kmOf = (str) => { const m = (str ?? '').match(/(\d+(?:[.,]\d+)?)\s*km/); return m ? Number(m[1].replace('.', '').replace(',', '.')) : null; };
+    const markText = h.marks.find((m) => /del combate|from the battle/i.test(m.text ?? '') && !/Suiza|Switzerland/i.test(m.text ?? ''))?.text ?? '';
+    const kms = { marker: kmOf(markText.match(/[\d.,]+\s*km del combate|[\d.,]+\s*km from the battle/i)?.[0]), notice: kmOf(texts.notice.match(/a [\d.,]+ km|[\d.,]+ km to/i)?.[0]), hud: kmOf(texts.info.match(/combate con[^\n]*|battle with[^\n]*/i)?.[0]), label: kmOf(texts.label), measured: c.battleKm };
+    const vals = [kms.notice, kms.hud, kms.label, kms.marker].filter((v) => v !== null);
+    const tol = Math.max(0.6, c.battleKm * 0.05);
+    rec('H5 one distance to the battle: notice = HUD = world label (= battle-view marker when shown) = measured (±max(0.6 km, 5 %)); waypoint set on it',
+      kms.notice !== null && kms.hud !== null && kms.label !== null && vals.every((v) => Math.abs(v - c.battleKm) <= tol) && (c.battleKm < 1.5 || (texts.waypointKm >= 0 && Math.abs(texts.waypointKm - (c.battleKm - 0.6)) <= tol)),
+      { kms, waypointKm: texts.waypointKm, markText, hud: texts.info.split('\n')[1]?.trim(), label: texts.label });
     await page.screenshot({ path: 'shots/W5-command-v2/h2-command.png', timeout: 180000 }).catch(() => undefined);
     // H4 (the crowd's level of detail): put the vehicle 600 m behind the watched line (test staging, the sim rejects the
     // jump): the soldiers within ~1 km wake up with the AI, the rest stay in the crowd; the totals do not change.
