@@ -37,7 +37,7 @@ import { tileXYToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
 import { orderCheck, tileKm } from '../../shared/orders';
 import { reasonText } from './orderCtl';
-import { UnitState, UnitType, type FrontView, type UnitView, type WarView } from '../../shared/types';
+import { UNIT_ORDER_KINDS, UnitState, UnitType, type FrontView, type UnitView, type WarView } from '../../shared/types';
 import { viewRules } from '../../sim/rulesView';
 
 export interface FrontsPanel {
@@ -257,53 +257,97 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
   }
 
   // ---- divisions to send -----------------------------------------------------------------------------
-  function candidates(f: FrontView): { u: UnitView; hours: number; why: string | null }[] {
+  /** A point (continuous tile coords) within `tiles` of a front's contact line. */
+  function nearFront(f: FrontView, x: number, y: number, tiles: number): boolean {
+    if (x < 0) return false;
+    for (let k = 0; k < f.samples.length; k += 2) {
+      let dx = f.samples[k] + f.dirX * 0.5 - x;
+      if (dx > MAP_W / 2) dx -= MAP_W;
+      if (dx < -MAP_W / 2) dx += MAP_W;
+      const dy = f.samples[k + 1] + f.dirY * 0.5 - y;
+      if (dx * dx + dy * dy <= tiles * tiles) return true;
+    }
+    return false;
+  }
+  type SendCandidate = { u: UnitView; hours: number; why: string | null; onWay: boolean };
+  function candidates(f: FrontView): SendCandidate[] {
     const v = view();
     const r = viewRules(v);
     const enemy = f.a === HUMAN_ID ? f.b : f.a;
     const tile = attachTile(f, enemy);
     if (tile < 0) return [];
-    const out: { u: UnitView; hours: number; why: string | null }[] = [];
+    const out: SendCandidate[] = [];
     const tx0 = (tile % MAP_W) + 0.5, ty0 = Math.floor(tile / MAP_W) + 0.5;
+    const attach = UNIT_ORDER_KINDS.indexOf('attach');
     for (const u of v.units.values()) {
       if (u.owner !== HUMAN_ID || u.type !== UnitType.ArmoredDivision || u.state === UnitState.Destroyed) continue;
       if (u.frontKey === f.key) continue;
       const km = tileKm(u.x, u.y, tx0, ty0);
-      const issue = orderCheck(r, u.id, 'attach', tile, 0);
-      out.push({ u, hours: km / UNIT_DEFS[u.type].speedKmh, why: issue && !issue.confirm ? reasonText(hs, issue) : null });
+      // Already ordered to this front (an attach aimed within 3 tiles of its line): listed «En camino», not offered again.
+      const onWay = u.order === attach && nearFront(f, u.targetX, u.targetY, 3);
+      const issue = onWay ? null : orderCheck(r, u.id, 'attach', tile, 0);
+      out.push({ u, hours: km / UNIT_DEFS[u.type].speedKmh, why: onWay ? t('fr.send.onWayWhy') : issue && !issue.confirm ? reasonText(hs, issue) : null, onWay });
     }
-    return out.sort((p, q) => (p.why ? 1 : 0) - (q.why ? 1 : 0) || p.hours - q.hours || p.u.id - q.u.id).slice(0, 6);
+    const rank = (c: SendCandidate): number => (!c.why ? 0 : c.onWay ? 1 : 2);
+    return out.sort((p, q) => rank(p) - rank(q) || p.hours - q.hours || p.u.id - q.u.id).slice(0, 6);
   }
+  /**
+   * The list of divisions to send. Rebuilt only when the set of divisions (or whether each may go) changes; otherwise
+   * each row's ETA and button are updated in place, so a row never changes under the pointer while the player clicks.
+   */
   function paintSendList(row: FrontRow, f: FrontView): void {
-    if (!row.sendList) return;
+    const listEl = row.sendList;
+    if (!listEl) return;
     const list = candidates(f);
-    row.sendList.replaceChildren();
+    // (The language is part of it: a switch re-labels the buttons.)
+    const sig = `${t('fr.send.go')}|` + (list.map((c) => `${c.u.id}:${c.onWay ? 2 : c.why ? 1 : 0}`).join(',') || 'none');
+    if (listEl.dataset.sig === sig) {
+      for (const c of list) {
+        const el = listEl.querySelector<HTMLElement>(`.fu-war-send[data-unit="${c.u.id}"]`);
+        const eta = el?.querySelector<HTMLElement>('.fu-war-send-eta');
+        if (eta) setText(eta, etaText(hs, Math.round(c.hours * 10), false));
+      }
+      return;
+    }
+    listEl.dataset.sig = sig;
+    listEl.replaceChildren();
     if (!list.length) {
-      row.sendList.append(h('div', { class: 'fu-war-note' }, t('fr.send.none')));
+      listEl.append(h('div', { class: 'fu-war-note' }, t('fr.send.none')));
       return;
     }
     for (const c of list) {
-      const btn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, icon('armoredDivision'), t('fr.send.go')) as HTMLButtonElement;
+      const btn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, icon('armoredDivision'), t(c.onWay ? 'fr.send.onWay' : 'fr.send.go')) as HTMLButtonElement;
       btn.disabled = !!c.why;
-      tip(btn, () => ({ title: unitName(c.u), text: t('fr.send.tip'), now: [[t('fr.send.eta'), etaText(hs, Math.round(c.hours * 10))], [t('fr.send.integrity'), `${Math.round(c.u.hp * 100)} %`]], whyNot: c.why }));
+      const unitId = c.u.id;
+      const current = (): SendCandidate | undefined => {
+        const ff = view().frontByKey.get(f.key);
+        return ff ? candidates(ff).find((q) => q.u.id === unitId) : undefined;
+      };
+      tip(btn, () => {
+        const q = current() ?? c;
+        return { title: unitName(q.u), text: t('fr.send.tip'), now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`]], whyNot: q.why };
+      });
       btn.addEventListener('click', () => {
         const ff = view().frontByKey.get(f.key);
-        if (!ff) return;
+        const q = current();
+        if (!ff || !q) return;
         const tile = attachTile(ff, ff.a === HUMAN_ID ? ff.b : ff.a);
-        if (tile < 0) {
+        if (tile < 0 || q.why) {
           hs.sound('error');
           return;
         }
-        ctx.sim.send({ type: 'unitOrder', unitIds: [c.u.id], order: 'attach', tile, targetId: 0 });
+        ctx.sim.send({ type: 'unitOrder', unitIds: [unitId], order: 'attach', tile, targetId: 0 });
         hs.sound('confirm');
-        ctx.bus.emit('toast', { text: t('fr.send.done', { unit: unitName(c.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(c.hours * 10), false) }), kind: 'info', durationMs: 3200 });
+        ctx.bus.emit('toast', { text: t('fr.send.done', { unit: unitName(q.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(q.hours * 10), false) }), kind: 'info', durationMs: 3200 });
         expanded.delete(f.key);
         listKey = '';
       });
-      row.sendList.append(h('div', { class: 'fu-war-send' },
+      const item = h('div', { class: 'fu-war-send' },
         h('div', { class: 'fu-war-send-name' }, h('b', null, unitName(c.u)), h('span', null, placeOf(hs, c.u))),
         h('span', { class: 'fu-mono fu-war-send-eta' }, etaText(hs, Math.round(c.hours * 10), false)),
-        btn));
+        btn);
+      item.dataset.unit = String(unitId);
+      listEl.append(item);
     }
   }
 

@@ -905,14 +905,16 @@ if (!only || only.has('obs')) await section('obs', async () => {
 //       with the rate tiles fall, and the ground battle at its contact shows the offensive's troops.
 // ---------------------------------------------------------------------------------------------------------------
 if (!only || only.has('advance')) await section('advance', async () => {
-  const page = await open('front-orbit', '&attacker=none&humanTroops=1400000&enemyTroops=150000&run=30');
+  // The plains theatre (Picardy / Artois): the §4.5 plains speed applies, so an offensive at ~3 : 1 covers 300+ km in
+  // 42 h. (Across the Pyrenees it crawls at 0.3-0.5 km/h and never reaches its axis point in 420 ticks.)
+  const page = await open('front-orbit', '&theatre=plains&attacker=none&humanTroops=1400000&enemyTroops=150000&run=30');
   await page.evaluate(() => {
     __front.ctx.app.setSpeed(0);
     window.__w6msgs = [];
     __front.ctx.bus.on('message', (e) => window.__w6msgs.push({ key: e.key, tick: __front.ctx.sim.view.tick }));
-    // A division of ours near Madrid, far from the Pyrenees front.
+    // A division of ours in the south of our land (Limousin), some 500 km from the front.
     const tile = (lat, lon) => Math.floor(((90 - lat) / 180) * 800) * 1600 + Math.floor(((lon + 180) / 360) * 1600);
-    __front.ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: tile(40.2, -3.7), targetTile: -1 });
+    __front.ctx.sim.debug({ type: 'spawnUnit', unit: 3, owner: 1, tile: tile(45.6, 1.4), targetTile: -1 });
   });
   await page.evaluate(() => __front.ctx.sim.fastForward(2));
   await sleep(2500);
