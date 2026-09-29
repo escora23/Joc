@@ -36,12 +36,37 @@ async function open(shot, params = '') {
 const shot = (page, name) => page.screenshot({ path: path.join(out, `${name}.png`), timeout: 300000 }).catch((e) => console.log(`   (screenshot ${name} failed: ${String(e?.message ?? e).split('\n')[0]})`));
 const errText = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 220);
 /**
+ * A real mouse click on a UI element that works on a starved renderer. Under SwiftShader with another browser busy the
+ * page can draw one frame every 5-10 s, and a panel still in its 0.3 s slide-in animation then never passes
+ * Playwright's "stable" test. So: the normal click first; if the element stays unstable, check that it is visible,
+ * enabled and the topmost element at its centre (elementFromPoint, i.e. what a player's click would hit) and click
+ * there with the mouse (force skips only the stability wait). `target` is a selector or a Locator.
+ */
+async function uiClick(page, target, timeout = 20000) {
+  const loc = typeof target === 'string' ? page.locator(target).first() : target.first();
+  try {
+    await loc.click({ timeout: Math.min(timeout, 8000) });
+    return;
+  } catch (e) {
+    if (!/not stable|Timeout/.test(String(e?.message ?? e))) throw e;
+  }
+  await loc.waitFor({ state: 'visible', timeout });
+  const hit = await loc.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return { hits: !!top && (top === el || el.contains(top)), disabled: !!el.disabled, what: top ? `${top.tagName}.${top.className}` : 'nothing' };
+  });
+  if (hit.disabled) throw new Error('element is disabled');
+  if (!hit.hits) throw new Error(`element is covered by ${hit.what}`);
+  await loc.click({ force: true, timeout });
+}
+/**
  * A click that cannot abort the run (W6 final, reproducibility): a missing or covered element (a war that ended, a slow
  * frame) is recorded as a failed row for that step and the run goes on.
  */
 async function safeClick(page, sel, id, what, timeout = 20000) {
   try {
-    await page.click(sel, { timeout });
+    await uiClick(page, sel, timeout);
     return true;
   } catch (e) {
     row(id, what, `step failed: could not click ${sel}: ${errText(e)}`, false);
@@ -727,7 +752,7 @@ if (!only || only.has('descent')) await section('descent', async () => {
   await page.mouse.move(800, 450);
   await page.keyboard.press('g');
   await sleep(1500);
-  await page.click('.fu-war-front .fu-war-actions button:first-child');
+  await uiClick(page, '.fu-war-front .fu-war-actions button:first-child');
   await sleep(4000);
   await page.keyboard.press('g');
   await sleep(1000);
@@ -778,7 +803,7 @@ if (!only || only.has('descent')) await section('descent', async () => {
   await shot(page, 'descent-offline');
   row('V14b', 'camera low 35 km behind the line: no battle built outside the view, the pointer says where the battle is', `pointer «${ptr ?? 'none'}»; ${far ? `a battle is shown ${farKm.toFixed(1)} km away` : 'no battle built there'} (camera at ${put.lat.toFixed(2)}, ${put.lon.toFixed(2)})`, !!ptr && (!far || farKm <= 12));
   if (ptr) {
-    await page.click('.fu-bpointer .fu-btn');
+    await uiClick(page, '.fu-bpointer .fu-btn');
     // The glide runs on the frame clock (slow under SwiftShader): wait for the camera to land.
     for (let i = 0; i < 300; i++) {
       await sleep(1500);
@@ -935,7 +960,7 @@ if (!only || only.has('advance')) await section('advance', async () => {
   const rowSel = `.fu-war-front[data-key="${st0.k}"]`;
   let v16 = null;
   try {
-    await page.locator(`${rowSel} .fu-war-actions > button`, { hasText: /Enviar divisiones/ }).first().click({ timeout: 20000 });
+    await uiClick(page, page.locator(`${rowSel} .fu-war-actions > button`, { hasText: /Enviar divisiones/ }));
     await sleep(3500);
     v16 = await page.evaluate((sel) => [...document.querySelectorAll(`${sel} .fu-war-send`)].map((e) => ({ text: e.textContent, eta: e.querySelector('.fu-war-send-eta')?.textContent ?? '', enabled: !e.querySelector('button').disabled })), rowSel);
   } catch (e) {
@@ -1001,6 +1026,7 @@ if (!only || only.has('advance')) await section('advance', async () => {
       tipOwner: ar ? v.owner[tileOf(ar.tip)] : -1, tipAlong: tipXY ? along(tipXY.x, tipXY.y) : NaN,
       axisOwner: v.owner[Math.floor(a.y) * 1600 + Math.floor(a.x)], axisAlong: along(a.x, a.y),
       contactAlong: a.contactX >= 0 ? along(a.contactX, a.contactY) : NaN, contact: [a.contactX, a.contactY],
+      axis: [+a.x.toFixed(2), +a.y.toFixed(2)], origin: [+a.originX.toFixed(2), +a.originY.toFixed(2)],
       kmh: f ? f.advanceKmh : -1, tiles: a.tilesTaken, frontage: a.frontageTiles, defender: a.defender, ux, uy, oy: a.originY,
       badge: badge && badge.style.display !== 'none' ? badge.textContent : '',
     };
@@ -1012,6 +1038,7 @@ if (!only || only.has('advance')) await section('advance', async () => {
     const s1 = await sample();
     if (!s1) break;
     if (s1.tick - a0.tick >= 40) S.push(s1);
+    if (args.trace) console.log(`   t${s1.tick} ${s1.state} key ${s1.key}/${s1.arrowKey} origin ${s1.origin} axis ${s1.axis} (along ${s1.axisAlong.toFixed(1)}, owner ${s1.axisOwner}) contact along ${s1.contactAlong.toFixed(1)} tip along ${s1.tipAlong.toFixed(1)} owner ${s1.tipOwner} kmh ${s1.kmh}`);
     if (s1.tick - a0.tick >= 420) break;
   }
   const last = S[S.length - 1];
@@ -1019,12 +1046,17 @@ if (!only || only.has('advance')) await section('advance', async () => {
   const firstAxis = S.length ? (() => { const s0 = S[0]; return (a0.x - a0.ox) * s0.ux + (a0.y - a0.oy) * s0.uy; })() : 0;
   const maxContact = Math.max(0, ...S.map((q) => q.contactAlong).filter(Number.isFinite));
   const keyOk = S.filter((q) => q.key === q.near && q.arrowKey === q.key).length;
-  const moved = await page.evaluate(() => window.__w6msgs.filter((m) => m.key === 'msg.offensiveObjective').length);
+  // Axis moves seen in the samples (the axis point jumped forward along the advance). The «objetivo» message the player
+  // gets each time is not counted here: fastForward (the verifier's exact-tick stepping) drops per-tick messages by
+  // design, so that check is headless (w6-audit A9b: moved N times, the player told each time).
+  let moved = 0;
+  for (let i = 1; i < S.length; i++) if ((S[i].axis[0] !== S[i - 1].axis[0] || S[i].axis[1] !== S[i - 1].axis[1]) && S[i].axisAlong > S[i - 1].axisAlong) moved++;
+  const movedMsgs = await page.evaluate(() => window.__w6msgs.filter((m) => m.key === 'msg.offensiveObjective').length);
   const badKey = S.filter((q) => !(q.key === q.near && q.arrowKey === q.key)).slice(0, 2).map((q) => `tick ${q.tick}: key ${q.key}, arrow ${q.arrowKey}, contact nearest ${q.near}`);
   row('V15a', 'offensive from the dialog, >= 300 ticks, far past its first axis point: attack and arrow on the front where it fights', `${ran} ticks, contact ${(maxContact * 25).toFixed(0)} km from the origin (first axis point ${(firstAxis * 25).toFixed(0)} km); key and arrow key = nearest front to the contact ${keyOk}/${S.length}${badKey.length ? ` [${badKey.join('; ')}]` : ''}`, ran >= 300 && maxContact > firstAxis + 4 && S.length > 0 && keyOk === S.length);
   const tipOk = S.filter((q) => q.tipOwner === q.defender && q.tipAlong >= q.contactAlong - 0.5 && q.axisOwner === q.defender).length;
   const badTip = S.filter((q) => !(q.tipOwner === q.defender && q.tipAlong >= q.contactAlong - 0.5 && q.axisOwner === q.defender)).slice(0, 2).map((q) => `tick ${q.tick}: tip owner ${q.tipOwner} along ${q.tipAlong.toFixed(1)} vs contact ${q.contactAlong.toFixed(1)}, axis owner ${q.axisOwner}`);
-  row('V15b', 'the arrow\'s tip and the axis point stay on enemy land ahead of the line (the axis moved forward, the player told)', `${tipOk}/${S.length} samples; axis moved ${moved} times${badTip.length ? ` [${badTip.join('; ')}]` : ''}`, S.length > 0 && tipOk === S.length && moved > 0);
+  row('V15b', 'the arrow\'s tip and the axis point stay on enemy land ahead of the line (the axis moved forward, the player told)', `${tipOk}/${S.length} samples; axis moved forward ${moved} times (${movedMsgs} messages outside fastForward)${badTip.length ? ` [${badTip.join('; ')}]` : ''}`, S.length > 0 && tipOk === S.length && moved > 0);
   const adv = S.filter((q) => q.state === 'advancing');
   const zero = adv.filter((q) => q.kmh < 0.05 || /(^|\D)0 km\/h/.test(q.badge)).length;
   let rateKmh = 0, meanKmh = 0;

@@ -688,14 +688,25 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
         }
       }
     }
-    // Tail 3 tiles behind the line; the tip lands ON the axis point (the place the offensive drives to), or 2 tiles
-    // past the line along the axis when the line already went beyond it.
+    // Tail 3 tiles behind the line; the tip lands ON the axis point (the place the offensive drives to) whenever it
+    // lies ahead of the line. When the line has just reached or passed it (the sim moves it forward half a tile past,
+    // or keeps it where the ray leaves the enemy's land), the tip points up to 2 tiles past the line along the axis,
+    // but only as far as the enemy's land goes: never onto the sea or a third nation's ground.
     const corridorKm = Math.max(1, a.frontageTiles) * TILE_KM;
     const frontKm = f ? Math.max(TILE_KM, f.length * TILE_KM) : corridorKm;
     const railsKm = Math.min(corridorKm, frontKm);
     const axAlong = wrapDX(lx, a.x) * cosL * ux + (a.y - ly) * uy;
-    const onAxis = axAlong >= 2;
-    const reach = onAxis ? axAlong : 2;
+    const onAxis = axAlong >= 0.5;
+    let reach = onAxis ? axAlong : 2;
+    if (!onAxis) {
+      const own = ctx.sim.view.owner;
+      for (; reach > 0.5; reach -= 0.25) {
+        const qy = Math.floor(ly + uy * reach);
+        if (qy < 0 || qy >= MAP_H) continue;
+        const qx = ((Math.floor(lx + (ux * reach) / cosL) % MAP_W) + MAP_W) % MAP_W;
+        if (own[qy * MAP_W + qx] === a.defender) break;
+      }
+    }
     const back = 3;
     const sx = lx - (ux * back) / cosL, sy = ly - uy * back;
     const ex = onAxis ? lx + wrapDX(lx, a.x) : lx + (ux * reach) / cosL, ey = onAxis ? a.y : ly + uy * reach;
