@@ -538,7 +538,9 @@
 .fu-chip-ico .fu-ico { width: 1.2rem; height: 1.2rem; color: var(--fu-accent); }
 .fu-chip-row b { font: 700 0.9rem var(--fu-font-display); letter-spacing: 0.08em; text-transform: uppercase; }
 .fu-chip-row .fu-mono { font-size: 0.75rem; color: #ffd27a; }
-.fu-chip-why { margin-top: 0.25rem; font: 600 0.66rem var(--fu-font-cond); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fu-success); }
+.fu-chip-why { margin-top: 0.25rem; max-width: 24rem; font: 600 0.66rem var(--fu-font-cond); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fu-success); }
+/* Feedback #2 (#25): an order's explanation (effect, risk) is a sentence: wrapped, sentence case, readable. */
+.fu-chip-why.is-long { max-width: 22rem; font: 500 0.74rem/1.35 var(--fu-font); letter-spacing: 0.01em; text-transform: none; }
 .fu-chip.is-weapon { border-left-color: #ff6a3a; }
 .fu-chip.is-weapon .fu-chip-ico .fu-ico { color: #ff8a5a; }
 .fu-chip.is-bad { border-left-color: var(--fu-danger); }

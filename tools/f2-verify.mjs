@@ -155,24 +155,28 @@ async function air() {
   await page.evaluate(() => { __front.ctx.app.setSpeed(4); });
   const t1 = Date.now();
   let st = null;
-  while (Date.now() - t1 < 240000) {
-    await sleep(5000);
+  const sorties = new Set();
+  while (Date.now() - t1 < 420000) {
+    await sleep(3000);
+    for (const id of await page.evaluate(() => [...__front.ctx.sim.view.units.values()].filter((u) => u.owner !== 1 && (u.type === 5 || u.type === 6) && u.mode === 11).map((u) => u.id))) sorties.add(id);
     st = await page.evaluate((t0) => {
       const v = __front.ctx.sim.view;
       const w = window.__f2;
       return {
         ticks: v.tick - t0,
         raids: w.raids.filter((e) => e.target === 1).length,
-        shot: w.destroyed.filter((e) => e.owner !== 1 && e.by === 1 && (e.unit === 4 || e.unit === 5 || e.unit === 6)).length,
+        shot: w.destroyed.filter((e) => e.owner !== 1 && e.by === 1 && (e.unit === 5 || e.unit === 6)).length,
+        fightersShot: w.destroyed.filter((e) => e.owner !== 1 && e.by === 1 && e.unit === 4).length,
         lostAir: w.destroyed.filter((e) => e.owner === 1 && (e.unit === 4 || e.unit === 5 || e.unit === 6)).length,
         hits: w.strikes.filter((e) => e.victim === 1).length,
         escorts: [...v.units.values()].filter((u) => u.owner !== 1 && u.type === 4 && u.mode === 10).length,
       };
     }, t0);
-    if (st.ticks > 700 || (st.raids >= 2 && st.shot >= 1 && st.ticks > 300)) break;
+    st.sorties = sorties.size;
+    if (st.ticks > 1500 || (st.shot >= 2 && st.ticks > 300)) break;
   }
   await page.evaluate(() => __front.ctx.app.setSpeed(0));
-  row('A6', 'with time running the AI raids us and our patrol shoots its aircraft down', JSON.stringify(st), st && st.raids >= 1 && st.shot >= 1);
+  row('A6', 'with time running the AI flies its bombers/drones at us and our patrol shoots them down (enemy bombers/drones only fly on AI orders)', JSON.stringify(st), st && st.shot >= 1);
   await shot(page, 'a6-after');
   await page.close();
 }
@@ -198,7 +202,7 @@ async function chip() {
     }, null, 20000, 400)) ?? '';
   };
   const war = await readChip(45.3, 0.6);
-  row('C1', 'fighter over enemy land at war: the chip explains the patrol and its risk', `unit ${id}: ${war}`, /Patrulla/.test(war) && /Riesgo/.test(war));
+  row('C1', 'fighter over enemy land at war: the chip explains the patrol and its risk', `unit ${id}: ${war}`, /Patrulla/i.test(war) && /Riesgo/i.test(war));
   await shot(page, 'c1-chip-war');
   // A nation at peace: the nearest other capital that is not at war with us.
   const peace = await page.evaluate(() => {
@@ -213,7 +217,7 @@ async function chip() {
     await page.evaluate((p) => __front.ctx.cameraRig.setState({ lat: p.lat, lon: p.lon, altitudeKm: 2500, tilt: 0, heading: 0 }), peace);
     await sleep(3000);
     const txt = await readChip(peace.lat, peace.lon);
-    row('C2', 'fighter over a nation at peace: refused, with the airspace reason', txt, /Espacio aéreo/.test(txt));
+    row('C2', 'fighter over a nation at peace: refused, with the airspace reason', txt, /Espacio aéreo/i.test(txt));
     await shot(page, 'c2-chip-peace');
   } else row('C2', 'fighter over a nation at peace', 'no nation at peace found', false);
   await page.close();

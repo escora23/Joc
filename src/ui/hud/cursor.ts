@@ -263,6 +263,7 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
         setText(chipName, t(`structure.${d.id}`));
         setText(chipCost, formatNumber(view.structureCost(m.structure)));
         setText(chipWhy, why ? t(why) : t('chip.place'));
+        toggleClass(chipWhy, 'is-long', false);
         toggleClass(chip, 'is-bad', !!why);
       }
       const pk = `b${m.structure}:${tile}:${!why}`;
@@ -288,6 +289,7 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
         setText(chipCost, formatNumber(view.unitCost(m.weapon)));
         const target = owner && owner !== HUMAN_ID ? hs.name(owner) : '';
         setText(chipWhy, why ? t(why) : target ? t('chip.fireAt', { name: target }) : t('chip.fire'));
+        toggleClass(chipWhy, 'is-long', false);
         toggleClass(chip, 'is-bad', !!why && why !== 'chip.ownTerritory');
         toggleClass(chip, 'is-warn', why === 'chip.ownTerritory');
         chip.classList.add('is-weapon');
@@ -324,6 +326,7 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
             setText(chipName, txt.title);
             setText(chipCost, m.kind === 'order' ? t('chip.leftClick') : t('chip.rightClick'));
             setText(chipWhy, txt.line);
+            toggleClass(chipWhy, 'is-long', txt.line.length > 70);
             toggleClass(chip, 'is-bad', txt.bad);
             toggleClass(chip, 'is-warn', !txt.bad && pv.n < pv.m);
           }

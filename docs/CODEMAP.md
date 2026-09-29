@@ -1185,6 +1185,23 @@ waves, operation names, air strikes and `commandResult` are gone.
 
 ---
 
+**Feedback #2 round, item 25 (air missions with real effects)** — `git log --grep "Feedback #2"`.
+* Air superiority: `units.ts frontSupport` counts each side's fighters on station on a CAP (`onCap`) whose circle
+  covers the corridor (`fightersAtk/Def`); `attacks.ts` gives the side with more of them the sky: attacker ×1.10
+  (`AIR_SUPERIORITY_ADVANCE_MUL`) or ×0.90 (`AIR_DENIAL_ADVANCE_MUL`), and the other side's drone support stops
+  counting. `Attack.air/casAtk/casDef` → `AttackView`; `units.airNear` → `FrontView.airA/airB/casA/casB`.
+* Escorts: an escort (`Mode.Chase`) stays with its bomber all the way home; an interception of an escorted aircraft
+  succeeds ×0.3 (`ESCORT_INTERCEPT_MUL`) and the escort dogfights the interceptor.
+* AI (`sim/ai/military.ts`): drones give close air support over its own running offensive (65 %), a free fighter
+  escorts each bomber strike when it has two or more, the first fighter patrols over its offensive, the next over the
+  front the enemy pushes.
+* Strategic map (#19): `orders.ts` refuses a `cap` over a nation at peace without alliance / open borders
+  (`order.err.airspace`).
+* UI: Guerra y frentes row «Cielo · …» and «Apoyo aéreo» list (`ui/hud/fronts.ts airLine / paintAirList`), the
+  offensive dialog's «Apoyo aéreo» row (the preview counts the sky and drones like the sim), right-click chip hints
+  with effect and risk (`orderCtl.ts hintFor / airThreat`), texts in `ui/i18n/f2.ts`.
+* Tests: headless `npx tsx src/sim/test/air-audit.mjs` (C1-C5), browser `node tools/f2-verify.mjs` (shot `air-front`).
+
 ## 18. Camera rig (context for all visual changes)
 
 `src/render/camera/index.ts`
