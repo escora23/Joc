@@ -250,6 +250,30 @@ audio + ground (17/17 except V9), mobilization (2/2) and observation (2/2) passe
 **Open:** the sim-side T41 follow-up above. (`BattleApi.handoff()` is already passed by the app into
 `CommandEnterParams.battleHandoff` and read by W5's command/forces.ts.)
 
+## W6-battle-clarity: fix pass 1 (2026-09-29)
+
+Verifier failures 8, 9, 11 and the language regression, fixed and re-verified: `node tools/w6-verify.mjs --obsRuns 3`
+on a no-HMR server gives **31/31**, 0 page errors (shots/W6-battle-clarity-fix/verify/results.json).
+
+- **T41 (criteria 8, 9).** `sim/frontLine.ts` publishes one smoothed depth offset per front (`FrontView.line`: every
+  tick at the observation focus, every 5 on the lead offensive's axis) and `advanceKmh` IS that offset's speed, so the
+  badge, panel, strip and battle agree by construction. The battle draws that line (interpolated to the drawn tick,
+  snapping when > 2 km off, the tile-level crossing when a front has no published line). New battle anchors, including
+  re-anchors while the line moves, now stand on the published line rather than on the tile-level one (up to a tile
+  behind it). V8c against an independent FrontView reading: Δ 0 m; new V8d re-checks it at every one of 44 samples
+  through each observation run: max Δ 0-4 m. V9 in 3 consecutive runs: −5.1 %, −7.4 %, −10.5 %, 0 jumps.
+- **Staging.** front-ground-real is the Zaragoza front every run (fastForward staging, a division per side at the
+  axis, HUD-aware framing). front-observation uses the same theatre: the camera 1.5 km behind the defenders facing the
+  attack, the contact line and its soldiers mid-frame, and (shot only) a cameraman that pans with the line, which moves
+  1-8 km per real minute under observation time. Fronts are named by a real place («Frente de Zaragoza»).
+- **Banners (criterion 11).** V11a fails on any hidden banner; the new V11c checks both banners and the strip in the
+  observation shot (3/3 clear). Banners get a third spot 450 m behind their line, for a camera low over its own side.
+- **Bare globe under a low camera.** A battle re-anchored on the same front below 24 km is now swapped in one frame
+  instead of fading out and streaming in over several frames, which showed the globe's flat, speckled surface.
+  Under SwiftShader that frame takes seconds; on a GPU it is one longer frame.
+- **Language switch (W1/W3).** The day label, alert buttons, ages and «Prioridad alta» labels repaint (V11b «DAY 3»,
+  SHOW, HIGH PRIORITY). Alert titles and bodies keep the language they were reported in, like a news feed (W3's design).
+
 ## W6-battle-clarity: brief
 
 **Landed (shared local forces):** `src/shared/localForces.ts` with `deriveLocalForces()` / `deriveLocalForcesAt()` /

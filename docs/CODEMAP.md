@@ -514,7 +514,10 @@ tiles per second, makes wars whiplash.
   plume, ground battle, observation, animation clock, audio), shots `front-orbit`, `front-600`, `front-mobilization`,
   `fronts-panel`, `front-ground-real`, `front-observation`, `plume-zoom` (`render/battle/shotsFronts.ts`; staged in
   exact ticks with `fastForward`, so every run stages the same front; the ground shots put one real division per side
-  where the offensive's axis crosses the line, focus the sim there and frame the line clear of the HUD).
+  where the offensive's axis crosses the line, focus the sim there and frame the line clear of the HUD;
+  `front-observation` frames it from behind the defenders and a shot-only cameraman, `followLine`, pans with the drawn
+  line; `&follow=0` keeps the camera fixed). Re-anchoring on the same front below 24 km swaps the battlefield in one
+  frame (`battle/index.ts`, no fade to the bare globe); `nearestFront` anchors on the published `FrontView.line`.
 
 **Risks**
 * Front ids flicker today.
