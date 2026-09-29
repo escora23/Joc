@@ -230,6 +230,63 @@ rebase can make the texture noise pop; enemy aircraft in the jet front shot depe
   (criterion 15), a 5-minute tactical sample (30 s sampled). D2 logs snapped moves during ×60 autopilot under
   SwiftShader (the catch-up step); the sim ends 0 km from the local unit.
 
+## W5-command-v2: fix pass 1 (2026-09-29) — verifier failures 14/#21, #20, #24, 3, #18 (air), 11
+
+> `git log --grep "W5 fix pass 1"`. CODEMAP §17 «W5 fix pass 1». Browser results merge into
+> shots/W5-command-v2/verify.json (`node tools/w5-verify.mjs --only handoff|escortsim|border|peace|jetrelease|jetsources`);
+> headless `npx tsx src/sim/test/command-audit.mjs` 32/32 and `npx tsx tools/w5-escort-sim.ts a|b|c`.
+
+1. **Criterion 14 / FEEDBACK #21 — the battle's entities, one for one (no rewording of the criterion).** The battle's
+   hand-off now carries every living soldier it draws with its position (`BattleHandoff.soldiers`, from
+   `infantry.exportAlive`) and the battle camera's pose. Command mode spawns all of them where they stood: the ones
+   within 1 km of the vehicle as full entities with the AI, the rest in a cheap instanced crowd (`world.ts
+   updateCrowd`, scaled with distance and tinted toward the nation colour like the battle view's masses) that wakes as
+   the vehicle comes near (and sleeps again beyond 1.4 km); the fallen are replaced from behind their line. Entry shows
+   the battle: the first view is the battle view itself (held 2.2 s, then a glide down to the vehicle), the vehicle
+   faces the battle, a world label «Combate · Suiza contra Comandante · 3.226 soldados en la línea · 15 km» stands on
+   it and a notice says where it is («La batalla que mirabas está a 15 km al norte…»). In the battle view a division's
+   marker is clickable (selects it) and T with nothing selected takes command of your division nearest the line.
+   Verified in real play (front-ground-real, live, T pressed in the battle view): **H0** T enters command mode;
+   **H1** battle 2,627 Swiss / 599 own soldiers → command mode 2,627 / 599 (0 %), side centroids 0 m apart;
+   **H2** division 90 with its 4 tanks; **H3** the vehicle faces the battle (0°), notice shown;
+   **H4** (vehicle put 600 m from the line) the nearby soldiers wake with the AI, the rest stay in the crowd, totals
+   kept — see the latest verify.json. The division itself is 15 km from the battle's centre in the sim (its real
+   position; a teleport would break the move clamp and the strategic map), which is why the entry frames the battle
+   and points the vehicle at it instead of moving the unit. Shots h0-battle / h1-first-view / h2-command / h3-near-line
+   in shots/W5-command-v2.
+2. **FEEDBACK #20 — escorts.** `ai.ts escortVehicle` rewritten in the intruder's frame: from behind or beside it the
+   escort overtakes in a lane 65 m to one side (never through the intruder), then merges into its station at ~45°;
+   its speed is the intruder's plus the gap along the course (≤ 55 km/h), so it closes on a moving station and then
+   holds it; ahead of its station or facing the intruder it pulls off to the roadside on its side, turns there and
+   lets it come up; it backs up only when the intruder has stopped; within 40 m it never moves toward it. The verifier's
+   old B10 moved the intruder twice (the tank controller's own coasting on top of the scripted 8.3 m/s: it was really
+   driving at ~60 km/h); now it moves exactly 30 km/h. **B10b** (new): both escorts ≤ 60 m from their stations from
+   45 to 60 local s — measured 0 / 0 m (lags 53 → 8 → 2 → 0 m by 30 s). **B10**: ram 0 m/s, ≤ 14.1 m/s, turns ≤ 34°/s.
+   The radio says «Aquí la patrulla… no sigas avanzando» only with a vehicle within 150 m (600 m air, 1.5 km sea); until
+   then «Patrulla de Suiza, a 2,9 km de ti y acercándonos…» — **B8b**: 90 samples, 0 mismatches in the wall-clock
+   border run (where SwiftShader's ~10× slow local physics still keeps the patrol ~800 m out).
+3. **FEEDBACK #24 — alert strip.** `overlay.pushAlert` keeps one row per alert (same severity and title): a repeat
+   refreshes the row with «×n»; at most 3 rows, each fading out after 12 s; the strip moved to the top right under
+   the exit button, clear of the compass tape and the heading (h2-command.png: one row «×15»).
+4. **Criterion 3 — measured in simulated time.** Moves go out every 200 m, every real second or every 0.5 local
+   second; `__cmd.cadence()` counts moves sent and changes of the unit in the sim view per local second of ×1 driving.
+   **D2** PASS: 8 whole local seconds, ≥ 7 moves and ≥ 5 view updates in every one of them.
+5. **FEEDBACK #18 (air) — holding at the spot, shown.** A released aircraft gets the order «hold»: it orbits 12 km around
+   the spot (its 150 km patrol circle keeps intercepting) for 12 game hours (fighters; bombers 16, drones 24: the
+   squadron rotates aircraft with its base), then flies home to refuel (to the nearest own airbase if its own is gone;
+   with none anywhere it stays on station). The card reads «En espera sobre Zaragoza · autonomía 12 h» and explains
+   it; the map draws the 12 km holding ring at the spot inside the patrol circle; the exit dialog says so. Verifier
+   waits on `commandExit`. **R3** 11.4 km from the release point, order hold, **R3b** card text PASS; audit **J3**
+   (12.0 km max in 20 ticks, endurance 120 → 100, home at the end).
+6. **Criterion 11 — both sources staged.** Shot `command-jet-sources`: at war, an enemy squadron docked at its
+   airbase 100 km away and another on patrol whose circle covers the fighter. Two fixes found by it: a scrambled
+   squadron's group was dropped (and its jets despawned) on the next 2 s refresh, and a covering patrol farther than
+   80 km was skipped because the shared derivation lists it as «near». **J2** PASS: 6 enemy jets, 3 from the scramble
+   (unit 48), 3 from the patrol (unit 49), none from anywhere else.
+
+Not changed: the verifier's handoff-real.mjs counted `world.ents` soldiers with `src.kind === 'pool'` — the hand-off
+soldiers are exactly that (`dormant` marks the far ones), so the same script now counts them.
+
 ## W6-battle-clarity: close-out (2026-09-28)
 
 > Built in full by the W6 owner; commits 8379fc2 … (see `git log --grep W6`). CODEMAP §6 «W6 battle clarity» maps the code.

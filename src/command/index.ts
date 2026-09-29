@@ -773,7 +773,21 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // Entered from a visible ground battle (§9.6): the point the battle camera looked at, for the first view, the
     // vehicle's facing and the battle's label in the world.
     const ho = p.battleHandoff;
-    battleFocus = ho ? { lat: ho.camera?.lookLat ?? ho.lat, lon: ho.camera?.lookLon ?? ho.lon, a: ho.infantry[0]?.owner ?? 0, b: ho.infantry[1]?.owner ?? 0 } : null;
+    // The battle's focus: the middle of the soldiers it was drawing (where the two lines meet), else where its camera
+    // looked, else its anchor.
+    let fLat = ho?.camera?.lookLat ?? ho?.lat ?? 0, fLon = ho?.camera?.lookLon ?? ho?.lon ?? 0;
+    const L = ho?.soldiers;
+    if (L && L.length >= 3) {
+      let la = 0, lo = 0, n = 0;
+      for (let i = 0; i + 2 < L.length; i += 3) {
+        la += L[i];
+        lo += L[i + 1];
+        n++;
+      }
+      fLat = la / n;
+      fLon = lo / n;
+    }
+    battleFocus = ho ? { lat: fLat, lon: fLon, a: ho.infantry[0]?.owner ?? 0, b: ho.infantry[1]?.owner ?? 0 } : null;
     // Terrain around the entry point first (the screen is faded out meanwhile).
     await waitFor(() => ground!.ringReady(0, 0, 1), ctx.app.isShot ? 90_000 : 30_000);
     // View distance and fog per vehicle.
@@ -1949,7 +1963,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       applyShake(realDt);
       camera.updateMatrixWorld();
       // The far crowd (soldiers handed over by a ground battle): scaled for this view, woken near the vehicle.
-      world.updateCrowd(camera.position, P && P.alive ? P.pos : null, realDt);
+      world.updateCrowd(camera.position, P && P.alive ? P.pos : null, now);
       sky?.update(camera, fr.time);
       water?.update(camera, fr.time);
       fx.listener.copy(camera.position);

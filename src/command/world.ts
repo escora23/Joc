@@ -538,6 +538,7 @@ export class World {
   nationColor: (owner: number) => number = () => 0x888888;
   private crowdAcc = 1;
   private lodAcc = 1;
+  private crowdWall = 0;
   private readonly crowdCam = new THREE.Vector3(1e9, 0, 0);
   private crowdDirty = true;
 
@@ -547,7 +548,10 @@ export class World {
    * them), tinted toward their nation's colour far away. Every second, soldiers within WAKE_M of the player wake up
    * (full instance, AI) and active ones beyond SLEEP_M go back to the crowd.
    */
-  updateCrowd(cam: THREE.Vector3, player: THREE.Vector3 | null, realDt: number): void {
+  updateCrowd(cam: THREE.Vector3, player: THREE.Vector3 | null, nowMs: number): void {
+    // Wall-clock pacing (a slow frame must not delay the wake-up of the soldiers in front of you).
+    const realDt = this.crowdWall > 0 ? Math.max(0, (nowMs - this.crowdWall) / 1000) : 1;
+    this.crowdWall = nowMs;
     this.lodAcc += realDt;
     if (player && this.lodAcc >= 1) {
       this.lodAcc = 0;

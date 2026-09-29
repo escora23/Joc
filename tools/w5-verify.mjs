@@ -680,7 +680,9 @@ if (ONLY.includes('handoff')) {
       for (const e of I.world.ents) if (e.alive && e.src?.kind === 'division' && e.kind === 'tank') divs[e.src.id] = (divs[e.src.id] ?? 0) + 1;
       // Facing: the vehicle's heading against the bearing to the battle's look point.
       const ho = I.params?.battleHandoff;
-      const lk = ho?.camera ? I.frame.sceneOf(ho.camera.lookLat, ho.camera.lookLon, { x: 0, z: 0 }) : null;
+      let la = 0, lo = 0, n = 0;
+      for (let i = 0; i + 2 < (ho?.soldiers?.length ?? 0); i += 3) { la += ho.soldiers[i]; lo += ho.soldiers[i + 1]; n++; }
+      const lk = n ? I.frame.sceneOf(la / n, lo / n, { x: 0, z: 0 }) : null;
       const face = lk ? Math.abs(((Math.atan2(-(lk.x - P.pos.x), -(lk.z - P.pos.z)) - P.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * 180 / Math.PI : -1;
       const battleKm = lk ? Math.hypot(lk.x - P.pos.x, lk.z - P.pos.z) / 1000 : -1;
       return { per, active, offM, divs, faceDeg: Math.round(face), battleKm: +battleKm.toFixed(1), notice: window.__cmdStats.notice, stats: { soldiers: window.__cmdStats.soldiers, handoff: window.__cmdStats.handoff } };
@@ -695,7 +697,9 @@ if (ONLY.includes('handoff')) {
     // jump): the soldiers within ~1 km wake up with the AI, the rest stay in the crowd; the totals do not change.
     const h4 = await page.evaluate(() => {
       const I = window.__cmd, P = I.controller.ent, ho = I.params.battleHandoff;
-      const lk = I.frame.sceneOf(ho.camera.lookLat, ho.camera.lookLon, { x: 0, z: 0 });
+      let la = 0, lo = 0, n = 0;
+      for (let i = 0; i + 2 < ho.soldiers.length; i += 3) { la += ho.soldiers[i]; lo += ho.soldiers[i + 1]; n++; }
+      const lk = I.frame.sceneOf(la / n, lo / n, { x: 0, z: 0 });
       const dx = lk.x - P.pos.x, dz = lk.z - P.pos.z, d = Math.hypot(dx, dz);
       P.pos.x = lk.x - (dx / d) * 600;
       P.pos.z = lk.z - (dz / d) * 600;
@@ -703,8 +707,15 @@ if (ONLY.includes('handoff')) {
       return true;
     });
     void h4;
-    await wait(15000);
-    const c2 = await page.evaluate(() => window.__cmdStats.soldiers);
+    // (read from the world itself: __cmdStats is refreshed every 10 frames, tens of seconds under SwiftShader)
+    let c2 = {};
+    for (let i = 0; i < 12; i++) {
+      await wait(5000);
+      c2 = await page.evaluate(() => window.__cmd.world.soldiersByNation());
+      if (Object.values(c2).some((v) => v.active > 0)) break;
+    }
+    await wait(5000);
+    c2 = await page.evaluate(() => window.__cmd.world.soldiersByNation());
     const rows2 = h.ho.infantry.map((s) => ({ owner: s.owner, battle: s.count, active: c2[s.owner]?.active ?? 0, crowd: c2[s.owner]?.crowd ?? 0 }));
     rec('H4 near the line the nearby soldiers wake (AI) and the far ones stay in the crowd; totals kept (±10 %)', rows2.some((r) => r.active > 0) && rows2.every((r) => r.active <= 320 && Math.abs(r.active + r.crowd - r.battle) <= Math.max(2, r.battle * 0.1)), rows2);
     await page.screenshot({ path: 'shots/W5-command-v2/h3-near-line.png', timeout: 180000 }).catch(() => undefined);
