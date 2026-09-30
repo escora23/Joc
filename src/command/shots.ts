@@ -547,6 +547,35 @@ registerShot('command-ship', 'command', 'Warship at war: enemy ships only where 
   await freezeAndWait(s, I);
 });
 
+registerShot('command-merchant', 'command', 'Owner item 30: a warship with a foreign merchant (container ship) and a troop convoy alongside: the stop panel (hail / warning shot / board / sink) (&war=1: at war with them, &act=hail|board)', async (s) => {
+  const war = s.params.get('war') === '1';
+  let foe = 0;
+  await stage(s, {
+    unit: UnitType.Warship, lat: 36.35, lon: -4.6, hour: 16.5, ownRadius: 8, neighbour: { lat: 35.2, lon: -3.0, radius: 3 }, war: war ? 40 : 0,
+    before: (st, f) => {
+      foe = f;
+      if (!f) return;
+      // A container ship 600 m off the bow heading west, a troop convoy further out.
+      st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.TradeShip, owner: f, tile: latLonToTile(36.354, -4.593), targetTile: latLonToTile(36.2, -9.5) });
+      st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.TransportShip, owner: f, tile: latLonToTile(36.35, -4.4), targetTile: latLonToTile(36.0, -9.5) });
+    },
+  });
+  if (live(s)) return;
+  const I = internalsOrThrow();
+  await settle(s, I, 3);
+  const act = s.params.get('act');
+  if (act && foe) {
+    const stats = (window as unknown as { __cmdStats?: { intercept?: { target?: { unitId: number } | null } } }).__cmdStats;
+    const target = stats?.intercept?.target?.unitId ?? [...s.ctx.sim.view.units.values()].find((u) => u.owner === foe && u.type === UnitType.TradeShip)?.id ?? 0;
+    const unitId = I.params?.unitId ?? 0;
+    if (act === 'board') s.ctx.sim.send({ type: 'navalIntercept', unitId, targetId: target, act: 'hail' });
+    s.ctx.sim.send({ type: 'navalIntercept', unitId, targetId: target, act: act === 'board' ? 'board' : 'hail' });
+    await s.ctx.sim.fastForward(2);
+    await settle(s, I, 3);
+  }
+  await freezeAndWait(s, I);
+});
+
 registerShot('command-intro', 'command', 'Take control: the swoop into the tank with the title card (unit, place, land status)', async (s) => {
   await stage(s, PEACE);
   const I = internalsOrThrow();

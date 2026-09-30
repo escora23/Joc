@@ -3271,3 +3271,96 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
   by themselves after dusk (L toggles), illumination flares over the fighting every 12 s while an enemy is within 4 km
   (25 s under a parachute, a strong point light), the fires of damaged structures, and **N**: night vision (green,
   amplified, exposure ×1.6) → thermal white-hot (vehicles and soldiers emissive against a dark ground) → off.
+
+## 20. War at sea: blockades, seizures, convoys (owner item 30)
+
+The one rule set is `src/shared/naval.ts` (worker-safe); the sim is `src/sim/naval.ts` (`NavalSystem`), the AI
+`src/sim/ai/navalwar.ts`; the UI reads the same constants. Headless proof: `npx tsx src/sim/test/naval-audit.mjs`; in the
+browser: `node tools/naval-verify.mjs`.
+
+### 20.1 What a blockade is
+* Ordered with **Bloquear** (warship card, right-click on water near a hostile coast or near a strait, «Cerrar» on a strait
+  in Guerra › Mar). The order is a `unitOrder` with an optional `blockade` spec; any stretch of sea of the ship's sea is
+  valid (a port, a strait, a route). An order within 6 tiles (150 km) of a strait of `CHOKEPOINTS` (Gibraltar, Suez,
+  Bosporus, Hormuz, Malacca, the Channel, Panama, Bab el-Mandeb) is moved onto the strait's narrows; warships ordered
+  within 4 tiles of one of their owner's blockades join it (the newest spec wins).
+* **Zone**: a disc of `BLOCKADE_RADIUS_TILES` (6 tiles = 150 km) around the centre. **In force** while at least one of its
+  warships holds the station (within 2.5 tiles of it). A warship given any other order leaves the blockade; the last
+  one leaving (or sunk) ends it (`blockade` event start / end). After a chase a blockading warship sails back to its station.
+* **Whom it stops** (`BlockadeSpec`): who = `war` (default: only nations at war with the owner) | `embargo` (at war or
+  embargoed by the owner) | `list` (the nations chosen) | `all` (everyone but allies); ships = `all` | `trade` |
+  `transports`; action = `seize` (default) | `sink`. Own and allied ships are never stopped; warships are never "stopped"
+  (at war they fight as before).
+* **Suez and Panama** are canals: their tiles (`canalTiles()`) are sailable in the sim's `WaterNav` and the client's sea
+  components (Med → Red Sea 1,770 km instead of 21,477 around Africa; Pacific → Caribbean 538 km instead of 19,063).
+
+### 20.2 Routing and income
+* A merchant (`launchTrade`) or convoy whose direct path crosses a zone that applies to it plans a detour around every
+  such zone (`WaterNav.findPathAvoid`: A* skipping coarse nodes within the discs, line of sight never crossing them;
+  cached per zone set). With no way around: a merchant does not sail to that partner (the port picks another; with none it
+  is **cut off**), a convoy runs the blockade. Facing a long detour a merchant may try its luck instead:
+  `runChance(ratio) = clamp((ratio − 1.5) / 2, 0, 0.6)` (never below 1.5× the direct trip; 50 % at 2.5×).
+* Ships already at sea re-check their route once whenever the set of zones in force changes (spread over 10 ticks).
+* **A merchant is paid for the direct trip** (`cargo` from the direct km; `slotRate` = port rate / ships), so a detour
+  costs its port income per hour: `slotRate × (1 − directKm / routeKm)` booked every game hour while it sails.
+* A port inside a zone that applies to its owner's trade sends **no merchants** (`portBlockade`); a blockaded or cut-off
+  port loses its idle ships' income every hour: `rate / ships × (wanted − at sea)`.
+
+### 20.3 Interception
+* A blockading warship goes for ships inside its zone that the spec applies to (after hostile warships): within
+  `INTERCEPT_TILES` (2 tiles) it boards or sinks.
+* **Seize**: a merchant changes flag (`prize`, `UnitMode.Prize`), sails to the captor's nearest port on that sea and pays
+  its whole cargo there (`prizeDelivered`); no port on that sea: paid at once. A convoy is forced back to where it came
+  from (its troops rejoin that reserve: «troops denied»).
+* **Sink**: a merchant goes down at once (its cargo lost to both); a convoy is shelled (2 hits; an escort ×1.5 survival)
+  and its troops die.
+* **Escorts**: a ship escorted by a warship of its owner or an ally (order `escort`, now also for merchants) cannot be
+  boarded: at war the blockade fights the escort first; at peace it lets the ship pass (`passed`: firing on a warship
+  would be an act of war).
+
+### 20.4 The ledger (per blockade and per player)
+* Per blockade: seized / sunk / turned back / rerouted / let through; seized gold delivered; the trade the stopped nations
+  lost (cargo taken or sunk, detour hours, idle ports) and troops denied; per nation, with a `piracy` flag. Per-hour
+  figures are the last 24 game hours (`BLOCKADE_WINDOW_HOURS`), divided by the hours since the blockade (or the ledger)
+  began when younger.
+* Per player (`NavalEconomyView`, sent for the human): trade lost to blockades per hour and in total, seized cargo gained,
+  merchants on a detour, ports blockaded or cut off. The port card shows its own loss per hour (`StructureView.tradeLoss`).
+
+### 20.5 Consequences: whose ships you actually stopped
+* Stopping ships of a nation **at war** with you costs nothing diplomatically.
+* Stopping ships of a nation **at peace** is **piracy** (each ship): its opinion of you −10 (seize / turn back), −20 (sink
+  a merchant), −25 (sink a convoy), −3 (a warning shot), capped at −80 (`REMEMBERED.piracy`); each of its allies −4 (cap
+  −16) and a casus belli; everyone else −2 (cap −8) only for sinkings. The victim holds a casus belli for 30 days.
+* The blockade dialog previews exactly this for the ships passing now (per nation: ships, opinion now → after, risk of
+  war: high at ≤ −55, medium at ≤ −25), the number of nations and allies angered, and our trade with them that an embargo
+  would cut.
+
+### 20.6 The AI
+* **Uses blockades**: a nation at war sends a warship to close the strait the enemy's ships sail through (the busiest one
+  within 320 tiles), else to blockade the enemy's nearest port (enemies only, seize); it keeps the blockade while the war
+  lasts.
+* **Answers** (`shipStopped` events): at peace, a public protest (`tension.piracy`, at most every 2 game days), an embargo
+  after the second stop or at opinion ≤ −25, escorts for its merchants and convoys near the offender's blockades, and war
+  (`retaliation`, `war.reason.piracy`, its allies called to arms) at opinion ≤ −55 when at least half as strong or with
+  allies (the war rules still apply: grace, tension lead, early-war cap). At war: escorts, and its free warships attack a
+  blockade that stops it when they are at least as many.
+
+### 20.7 On the map and in the panels
+* Zones: a hatched disc (style 4 ring) while in force, dashed while its warships are on the way; red when it stops our
+  ships, amber for ours, the owner's colour (fainter) for the rest; a chip over each zone names it, who holds it and what
+  it does («+1.012 oro/h · 3 apresados», «te cuesta −430 oro»), click → Guerra › Mar.
+* Merchants on a detour and prizes draw their planned route (dashed); a prize flies its captor's colour.
+* Guerra › **Mar**: the ledger; our blockades (spec, state, gains, stops, consequences per nation; Ir / Cambiar /
+  Levantar); blockades against us (loss, «Romper el bloqueo» at war, «Escoltar mercantes»); the straits with the ships
+  passing now and «Cerrar». Fuerzas: a one-line ledger that opens Mar. Port card: «Bloqueado por X · −N oro/h».
+* Located alerts: our blockade in force / ended; another's closing a lane to us; each ship of ours stopped, and each we
+  stop (piracy noted); our merchants rerouted (grouped per blockade, with the extra km and the gold); prizes reaching port.
+
+### 20.8 Command mode (a warship)
+* Merchants (a container ship model) and troop convoys (a grey ro-ro transport) of the sim within 40 km sail in the scene
+  toward the sim's position; hove to, they stop. The nearest foreign one within 12 km gets a panel: flag, at war / at
+  peace, distance, state, and **E** «Dar el alto» (≤ 8 km: the radio call; it heaves to for 2 game hours), **R**
+  «Disparo de advertencia» (≤ 6 km: a real shell into the water 250 m ahead of its bow), **F** «Abordar» (≤ 700 m, own
+  speed ≤ 12 kn, the ship stopped, no escort: an 8 s boarding party, then it is ours or turned back), **X** «Hundir» (at
+  peace the game asks first, with the costs). Shelling it until it sinks is the same «Hundir». All go to the sim as
+  `navalIntercept` (validated: hail 50 km, warning shot / sink 30 km, board 2 tiles, escorts) with the consequences of §20.5.

@@ -1827,8 +1827,14 @@ export class UnitSystem {
 
   /** Replace a ship's path (a detour) and publish it. */
   setPath(u: Unit, path: Int32Array, oldRemainingKm = 0): void {
-    u.path = path;
-    u.pathI = 1;
+    // The route drawn on the map stays one line: the waypoints already sailed, then the new way from here.
+    const old = u.path;
+    const done = old ? Math.min(u.pathI, old.length) : 0;
+    const merged = new Int32Array(done + path.length);
+    if (old && done) merged.set(old.subarray(0, done), 0);
+    merged.set(path, done);
+    u.path = merged;
+    u.pathI = done + 1;
     u.waitingPath = false;
     u.pathFailed = false;
     let km = 0, px = u.x, py = u.y;
@@ -1912,9 +1918,7 @@ export class UnitSystem {
       this.remove(ship, false);
       return;
     }
-    ship.path = path;
-    ship.pathI = 1;
-    this.publishRoute(ship);
+    this.setPath(ship, path);
   }
 
   /** A convoy (or a merchant) boarded and sent back where it came from; a convoy's troops rejoin its reserve there. */

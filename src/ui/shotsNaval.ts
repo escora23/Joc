@@ -9,11 +9,12 @@
 // World: we are Spain (ports at Barcelona and Valencia, two warships off Cádiz), at war with the North African nation
 // (ports at Algiers and Oran); the Italian, British and American nations trade through the strait.
 
+import * as THREE from 'three';
 import { getHud } from './index';
 import { enemyNear } from '../render/units/shots';
 import type { GameContext } from '../shared/api';
 import { HUMAN_ID, MAP_H, MAP_W } from '../shared/constants';
-import { latLonToTile, worldTimeForSubsolarLon } from '../shared/geo';
+import { latLonToTile, latLonToVec3, worldTimeForSubsolarLon } from '../shared/geo';
 import { CHOKEPOINTS, chokepointTile, type BlockadeSpec } from '../shared/naval';
 import { registerShot, type ShotContext } from '../shared/shots';
 import { isLandTerrain } from '../shared/terrain';
@@ -68,6 +69,17 @@ function sea(ctx: GameContext, lat: number, lon: number): number {
   return c;
 }
 
+/** Verification helper (tools/naval-verify.mjs): the screen px of a point on the globe. */
+function exposeHelpers(ctx: GameContext): void {
+  (window as unknown as { __fuNaval?: unknown }).__fuNaval = {
+    screen(lat: number, lon: number) {
+      const v = latLonToVec3(lat, lon, ctx.globe.surfaceRadiusAt(lat, lon), new THREE.Vector3()).project(ctx.camera);
+      const r = ctx.canvas.getBoundingClientRect();
+      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    },
+  };
+}
+
 interface SeaWorld {
   enemy: number;
   italy: number;
@@ -78,6 +90,7 @@ interface SeaWorld {
 
 async function stageSea(s: ShotContext): Promise<SeaWorld> {
   const { ctx } = s;
+  exposeHelpers(ctx);
   await ctx.app.startScriptedGame({ ticks: 200, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-10) });
   const sim = ctx.sim;
   const enemy = enemyNear(ctx, 36.4, 3.0);
@@ -124,6 +137,16 @@ function specOf(params: URLSearchParams): BlockadeSpec {
   const who = (params.get('who') ?? 'war') as BlockadeSpec['who'];
   return { who, ships: (params.get('ships') ?? 'all') as BlockadeSpec['ships'], action: (params.get('action') ?? 'seize') as BlockadeSpec['action'] };
 }
+
+registerShot('naval-sea', 'ui', 'Owner item 30 (verification staging): the sea world with our two warships off Cádiz selected, paused, the camera over the Strait of Gibraltar', async (s) => {
+  const { ctx, waitFrames, wait } = s;
+  await stageSea(s);
+  const ships = own(ctx, U.Warship);
+  getHud()?.shared.select({ kind: 'units', ids: ships.map((u) => u.id) });
+  ctx.cameraRig.setState({ lat: 36.5, lon: -4.5, altitudeKm: 2200, tilt: 0.15, heading: 0 });
+  await waitFrames(10);
+  await wait(800);
+}, 10);
 
 registerShot('naval-dialog', 'ui', 'Owner item 30: two warships ordered to blockade the Strait of Gibraltar — the dialog: whom it stops, which ships, board or sink, and the live preview of gains and costs (&who=war|embargo|all, &action=seize|sink)', async (s) => {
   const { ctx, params, waitFrames, wait } = s;

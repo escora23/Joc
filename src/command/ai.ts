@@ -62,6 +62,10 @@ export class Brain {
         case 'boat':
           this.ship(e, dt);
           break;
+        case 'merchant':
+        case 'transport':
+          this.merchant(e, dt);
+          break;
         case 'battery':
           this.battery(e, dt);
           break;
@@ -97,7 +101,8 @@ export class Brain {
   private groundTargets = (t: Ent) => !ENT_DEFS[t.kind].air && !ENT_DEFS[t.kind].naval;
   private vehicleTargets = (t: Ent) => ENT_DEFS[t.kind].vehicle && !ENT_DEFS[t.kind].air && !ENT_DEFS[t.kind].naval;
   private airTargets = (t: Ent) => ENT_DEFS[t.kind].air;
-  private navalTargets = (t: Ent) => ENT_DEFS[t.kind].naval;
+  // Merchants and troop transports are never picked by the AI: stopping or sinking them is the player's decision (owner item 30).
+  private navalTargets = (t: Ent) => ENT_DEFS[t.kind].naval && t.kind !== 'merchant' && t.kind !== 'transport';
 
   private shooterTeam: Team = 1;
   private aimError(dist: number): number {
@@ -914,10 +919,10 @@ export class Brain {
     e.quat.copy(Q);
     e.pos.y = Math.sin(t * 0.9) * 0.3 * s;
     // Wake & bow spray
-    const L = e.kind === 'ship' ? 60 : 20;
+    const L = e.kind === 'ship' || e.kind === 'merchant' || e.kind === 'transport' ? 62 : 20;
     T2.copy(e.pos).addScaledVector(T1, -L);
     T3.set(-T1.z, 0, T1.x);
-    w.fx.wake(T2, T3, e.speed, e.kind === 'ship' ? 16 : 7);
+    w.fx.wake(T2, T3, e.speed, e.kind === 'boat' ? 7 : 16);
     T2.copy(e.pos).addScaledVector(T1, L * 1.05);
     w.fx.bowSpray(T2, T1, e.speed);
   }
@@ -982,6 +987,18 @@ export class Brain {
         if (e.burst % 2 === 0) w.fx.playAt('gunfire', T3, 0.5);
       }
     }
+  }
+
+  /**
+   * Owner item 30: a merchant or troop transport steams toward its goal (the sim's position a little ahead of it) at
+   * the speed forces.ts asks for (slot.x, m/s): 0 when it has heaved to after a hail or a warning shot.
+   */
+  private merchant(e: Ent, dt: number): void {
+    const gx = e.goal.x - e.pos.x, gz = e.goal.z - e.pos.z;
+    const far = Math.hypot(gx, gz);
+    const want = e.slot.x;
+    const desired = far > 80 ? Math.atan2(-gx, -gz) : e.yaw;
+    this.steerShip(e, dt, desired, far > 80 ? want : 0, 0.05);
   }
 
   private battery(e: Ent, dt: number): void {

@@ -13,10 +13,12 @@ import type { CmdMaterials, Team } from './models/materials';
 import { buildAa, buildBattery, buildSam, buildTruck } from './models/vehicles';
 import { buildArmorIfv, buildArmorTank } from './models/armor';
 import { buildBombGeometry, buildJet, buildMissileGeometry } from './models/aircraft';
-import { buildDestroyer, buildPatrolBoat } from './models/ships';
+import { buildDestroyer, buildMerchant, buildPatrolBoat, buildTroopShip } from './models/ships';
 import { soldierGeometry } from './models/props';
 
-export type EntKind = 'tank' | 'ifv' | 'aa' | 'sam' | 'truck' | 'soldier' | 'at' | 'jet' | 'ship' | 'boat' | 'battery';
+export type EntKind = 'tank' | 'ifv' | 'aa' | 'sam' | 'truck' | 'soldier' | 'at' | 'jet' | 'ship' | 'boat' | 'battery'
+  // Owner item 30: merchant shipping (a container ship, a troop transport).
+  | 'merchant' | 'transport';
 
 export const ENT_DEFS: Record<EntKind, { hp: number; radius: number; height: number; troops: number; air: boolean; naval: boolean; vehicle: boolean }> = {
   tank: { hp: 100, radius: 3.6, height: 2.6, troops: 800, air: false, naval: false, vehicle: true },
@@ -30,6 +32,8 @@ export const ENT_DEFS: Record<EntKind, { hp: number; radius: number; height: num
   ship: { hp: 320, radius: 55, height: 10, troops: 2500, air: false, naval: true, vehicle: true },
   boat: { hp: 90, radius: 18, height: 5, troops: 500, air: false, naval: true, vehicle: true },
   battery: { hp: 160, radius: 7, height: 5, troops: 900, air: false, naval: false, vehicle: true },
+  merchant: { hp: 220, radius: 62, height: 20, troops: 0, air: false, naval: true, vehicle: true },
+  transport: { hp: 200, radius: 55, height: 18, troops: 500, air: false, naval: true, vehicle: true },
 };
 
 export interface Rig {
@@ -127,7 +131,7 @@ export type EntOrder = 'front' | 'hold' | 'goto' | 'follow' | 'escort' | 'patrol
 
 /** The simulation object a local entity represents. */
 export interface EntSource {
-  kind: 'pool' | 'division' | 'sam' | 'post' | 'qrf' | 'ship' | 'squadron' | 'formation';
+  kind: 'pool' | 'division' | 'sam' | 'post' | 'qrf' | 'ship' | 'squadron' | 'formation' | 'merchant';
   /** Unit id (division, ship, squadron), structure id (SAM, post), 0 for garrison pools. */
   id: number;
   /** Owner of the source (the nation that loses the troops or the unit). */
@@ -214,7 +218,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 /** Effect size multiplier for fires and damage smoke on big hulls. */
 function fxSize(kind: EntKind): number {
-  return kind === 'ship' ? 3 : kind === 'boat' ? 1.8 : kind === 'battery' ? 1.5 : 1;
+  return kind === 'ship' || kind === 'merchant' || kind === 'transport' ? 3 : kind === 'boat' ? 1.8 : kind === 'battery' ? 1.5 : 1;
 }
 
 export function forwardOf(yaw: number, out: THREE.Vector3): THREE.Vector3 {
@@ -282,6 +286,8 @@ export class World {
     this.templates.set('jet', buildJet());
     this.templates.set('ship', buildDestroyer());
     this.templates.set('boat', buildPatrolBoat());
+    this.templates.set('merchant', buildMerchant());
+    this.templates.set('transport', buildTroopShip());
     const sg = [soldierGeometry(0), soldierGeometry(1)];
     for (let t = 0; t < 2; t++) {
       for (let v = 0; v < 2; v++) {
@@ -329,7 +335,7 @@ export class World {
   warmup(on: boolean): void {
     if (on) {
       let x = -40;
-      for (const k of ['tank', 'ifv', 'aa', 'sam', 'truck', 'battery', 'jet', 'ship', 'boat'] as const) {
+      for (const k of ['tank', 'ifv', 'aa', 'sam', 'truck', 'battery', 'jet', 'ship', 'boat', 'merchant', 'transport'] as const) {
         for (const team of [0, 1] as const) {
           const rig = this.makeRig(k, team);
           rig.root.position.set(x, 0, -30);
@@ -363,7 +369,7 @@ export class World {
     const tpl = (this.templates.get(`${k}:${team}`) ?? this.templates.get(k))!;
     const root = tpl.clone(true);
     const meshes: THREE.Mesh[] = [];
-    const fam = kind === 'jet' ? this.mats.jetPaint : kind === 'ship' || kind === 'boat' ? this.mats.shipPaint : this.mats.paint;
+    const fam = kind === 'jet' ? this.mats.jetPaint : kind === 'ship' || kind === 'boat' || kind === 'merchant' || kind === 'transport' ? this.mats.shipPaint : this.mats.paint;
     root.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;

@@ -26,6 +26,7 @@ import { isWaterTerrain } from '../shared/terrain';
 import type { CommandKind } from '../shared/types';
 import { describePlace } from '../ui/places';
 import { unitLabel } from '../ui/hud/news';
+import { ShipIntercept } from './intercept';
 import { registerCommandStrings } from './strings';
 import { makeDecalAtlas, makeNoiseTexture, makeParticleAtlas } from './env/textures';
 import { computeAtmos, Sky, type Atmos } from './env/sky';
@@ -200,6 +201,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   // --- session state ---------------------------------------------------------------------------
   let active = false;
   let params: CommandEnterParams | null = null;
+  /** Owner item 30: hail / warning shot / board / sink from a warship. */
+  let intercept: ShipIntercept | null = null;
   let kind: CommandKind = 'tank';
   let phase: Phase = 'idle';
   let phaseT = 0;
@@ -871,6 +874,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   /** A kill: credit it to the sim when your formation made it; count your own losses. */
   function onKill(victim: Ent, killer: Ent | null, byPlayer: boolean): void {
     if (!hud || !params) return;
+    // Owner item 30: a merchant or troop convoy sunk by us (shells, missiles or «Hundir»): the sim sinks the real ship
+    // (at peace: piracy, with its consequences).
+    if (victim.src?.kind === 'merchant') {
+      if (byPlayer || killer?.formation) {
+        ctx.sim.send({ type: 'navalIntercept', unitId: params.unitId, targetId: victim.src.id, act: 'sink' });
+        hud.feedEntry('you', victim.kind, 0, '#ffb53d');
+      }
+      return;
+    }
     if (victim.formation) {
       vehiclesLost++;
       const share = victim.kind === 'ifv' ? 0.1 : kind === 'jet' ? 1 / 3 : kind === 'ship' ? integrity : 0.25;
@@ -1002,6 +1014,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!ground || !scatter || !world || !fx || !water || !mats || !hud || !overlay || !civil || !forces) return;
     const q = ctx.quality;
     kind = p.kind;
+    intercept?.dispose();
+    intercept = kind === 'ship' ? new ShipIntercept({
+      world, overlay, unitId: p.unitId, send: (cmd) => ctx.sim.send(cmd), nameOf: nationName, colorOf: colorCss,
+      shipName: unitLabel(p.unitType, ctx.sim.view.units.get(p.unitId)?.serial ?? 0),
+      sound: (k) => ctx.bus.emit('uiSound', { kind: k === 'radio' ? 'typewriter' : k === 'confirm' ? 'confirm' : 'error' }),
+    }) : null;
     frame.set(p.lat, p.lon);
     world.reset();
     world.rng = new Rng((p.seed >>> 0) || 1);
@@ -1890,6 +1908,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       controller.update(dt, allowInput);
       world.update(dt);
     }
+    const IP = intercept && dt > 0 ? player() : null;
+    if (IP && intercept) intercept.update(dt, ctx.sim.view, IP, input, allowInput && phase === 'play');
     world.syncRigs(dt);
     fx.update(dt);
     world.renderProjectiles();
@@ -2509,6 +2529,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       civil?.clear();
       controller = null;
       brain = null;
+      intercept?.dispose();
+      intercept = null;
       formation = [];
       ifvs = [];
       waypoint = null;
@@ -2805,6 +2827,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           kills: world.stats.kills, killsBy: Object.fromEntries(killsBy), unitHitN, structHitN,
           soldiers: world.soldiersByNation(), handoff: forces.handoff ? Object.fromEntries(forces.handoff.counts) : null,
           alertRows: overlay.alertRows,
+          // Owner item 30: the ship-stopping panel, its target (sim unit id, kind, distance) and the actions sent.
+          intercept: intercept ? { text: intercept.text, target: intercept.current ? { unitId: intercept.current.src?.id ?? 0, kind: intercept.current.kind, distM: Math.round(intercept.current.pos.distanceTo(P.pos)), speed: +intercept.current.speed.toFixed(1) } : null, log: intercept.log.slice(-8) } : null,
+          merchants: world.ents.filter((e) => e.alive && (e.kind === 'merchant' || e.kind === 'transport')).length,
           combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })),
           nearestHostileM: Math.round(forces.nearestHostile(P.pos).dist),
           night: +atmos.night.toFixed(2), vision: night.vision, lights: night.lightsOn, flares: night.flaresFired, fires: civil.fires.length,

@@ -226,6 +226,9 @@ export class Forces {
         this.reconcileDivision(want(`div:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.tanks, u.ifvs, u.mode, initial, player);
       } else if (u.type === UnitType.Warship && (this.kind === 'ship' || this.kind === 'tank') && u.distKm <= SHIP_KM) {
         this.reconcileShip(want(`ship:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.integrity);
+      } else if ((u.type === UnitType.TradeShip || u.type === UnitType.TransportShip) && this.kind === 'ship' && u.distKm <= SHIP_KM) {
+        // Owner item 30: merchants and troop convoys around a warship (hail, warning shot, boarding, sinking).
+        this.reconcileMerchant(want(`m:${u.unitId}`), u.unitId, u.type, u.owner, rel, u.lat, u.lon, u.heading, u.mode as UnitMode);
       } else if (u.type === UnitType.FighterSquadron && this.kind === 'jet' && u.airborne && (u.reason === 'cap' || u.distKm < 80 || this.capCovers(view, u.unitId, tp.x, tp.y))) {
         this.reconcileJets(want(`sq:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.jets, player);
       }
@@ -576,6 +579,44 @@ export class Forces {
       return;
     }
     for (const e of g.ents) if (e.alive) e.goal.copy(c);
+  }
+
+  /**
+   * Owner item 30: a merchant (container ship) or a troop convoy (transport) of the sim, sailing on its route: the ship
+   * steams toward the sim's position a little ahead of it; hove to (hailed / warned) it stops. A prize (it changed flag)
+   * is re-spawned in its new colours. Never neutral: the player's shells hit it (sinking it is sent to the sim).
+   */
+  private reconcileMerchant(g: Group, id: number, type: UnitType, owner: number, rel: LocalRelation, lat: number, lon: number, heading: number, mode: UnitMode): void {
+    const c = this.sceneOfLL(lat, lon, new THREE.Vector3());
+    const kind: EntKind = type === UnitType.TransportShip ? 'transport' : 'merchant';
+    for (const e of [...g.ents]) {
+      if (e.alive && e.nation !== owner) {
+        // Seized: the same hull under a new flag.
+        const x = e.pos.x, z = e.pos.z, yaw = e.yaw, speed = e.speed;
+        this.world.despawn(e);
+        g.ents.splice(g.ents.indexOf(e), 1);
+        const n = this.mk(kind, this.team(rel), x, z, yaw, owner, rel, { kind: 'merchant', id, owner, share: 0 });
+        n.neutral = false;
+        n.speed = speed;
+        n.order = 'goto';
+        g.ents.push(n);
+      }
+    }
+    if (g.ents.length === 0) {
+      if (this.ground.heightAt(c.x, c.z) > -3) return;
+      const e = this.mk(kind, this.team(rel), c.x, c.z, -heading, owner, rel, { kind: 'merchant', id, owner, share: 0 });
+      e.neutral = false;
+      e.order = 'goto';
+      e.speed = mode === UnitMode.HoveTo ? 0 : 7;
+      g.ents.push(e);
+    }
+    const ahead = new THREE.Vector3(Math.sin(heading), 0, -Math.cos(heading)).multiplyScalar(2500);
+    for (const e of g.ents) {
+      if (!e.alive) continue;
+      e.goal.copy(c).add(ahead);
+      // Speed (m/s) the AI steams at: 15 kn for merchants, 17 kn for convoys; stopped while hove to.
+      e.slot.x = mode === UnitMode.HoveTo ? 0 : kind === 'transport' ? 8.7 : 7.7;
+    }
   }
 
   private reconcileJets(g: Group, id: number, owner: number, rel: LocalRelation, lat: number, lon: number, heading: number, jets: number, player: Ent, scramble = false): void {

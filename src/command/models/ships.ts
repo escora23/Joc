@@ -29,6 +29,12 @@ interface HullOpts {
   draft: number;
   freeboard: number;
   stations: number;
+  /** Colors (owner item 30: merchants paint their hulls): topsides, deck, the antifouling below the waterline. */
+  topside?: number;
+  deck?: number;
+  bottom?: number;
+  /** Fuller hull lines (a merchant's block coefficient): 0 = the warship's fine lines, 1 = boxy. */
+  full?: number;
 }
 
 /** Lofted hull geometry with vertex colors: anti-fouling red, black boot top, gray topsides, deck gray. */
@@ -38,17 +44,19 @@ export function hullGeometry(o: HullOpts): THREE.BufferGeometry {
   const col: number[] = [];
   const c = new THREE.Color();
   const colorAt = (y: number, isDeck: boolean): THREE.Color => {
-    if (isDeck) return c.setHex(DECK);
-    if (y < -0.4) return c.setHex(0x6a2c24);
+    if (isDeck) return c.setHex(o.deck ?? DECK);
+    if (y < -0.4) return c.setHex(o.bottom ?? 0x6a2c24);
     if (y < 0.5) return c.setHex(0x1d1c1c);
-    return c.setHex(PAINT);
+    return c.setHex(o.topside ?? PAINT);
   };
+  const full = o.full ?? 0;
   const halfBeam = (t: number): number => {
-    // t: 0 = stern, 1 = bow
+    // t: 0 = stern, 1 = bow. A full hull keeps its beam longer and has a blunter entry.
     if (t < 0.12) return 0.86 + (t / 0.12) * 0.14;
-    if (t < 0.5) return 1;
-    const u = (t - 0.5) / 0.5;
-    return Math.max(0, Math.sqrt(Math.max(0, 1 - u * u * 1.02)) * (1 - u * 0.25));
+    const mid = 0.5 + 0.28 * full;
+    if (t < mid) return 1;
+    const u = (t - mid) / (1 - mid);
+    return Math.max(0, Math.sqrt(Math.max(0, 1 - u * u * 1.02)) * (1 - u * (0.25 - 0.1 * full)));
   };
   const depth = (t: number): number => (t > 0.8 ? 1 - ((t - 0.8) / 0.2) * 0.55 : t < 0.05 ? 0.75 + t * 5 : 1);
   const fb = (t: number): number => o.freeboard * (1 + 0.55 * Math.pow(Math.max(0, (t - 0.55) / 0.45), 2));
@@ -330,4 +338,131 @@ export function buildPatrolBoat(): THREE.Group {
   radar.position.set(0, F + 12, 2.5);
   root.add(radar);
   return root;
+}
+
+// -------------------------------------------------------------------------------------------------
+// Owner item 30: merchant shipping in command mode — a container ship and a military troop transport (sealift ro-ro).
+// Faces -Z, waterline at y = 0, like the warships. No weapons: their `mark` is the owner's funnel / hull band.
+// -------------------------------------------------------------------------------------------------
+
+/** Deterministic 0..1 hash (container colors, stack heights). */
+function hash(i: number): number {
+  const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+const BOX_COLORS = [0xa33a2a, 0x2e5d8c, 0xc98a2b, 0x3f7a4a, 0x8c8c8c, 0xd8d2c0, 0x6b3f7a, 0x1f6f78, 0xb5552f, 0x5a6a2a];
+
+export function buildMerchant(): THREE.Group {
+  const L = 150, B = 23, F = 9;
+  const root = new THREE.Group();
+  root.add(mesh(hullGeometry({ L, B, draft: 7.4, freeboard: F, stations: 40, topside: 0x233a5a, deck: 0x5b4c3e, bottom: 0x7a2a22, full: 1 }), 'paint', 'hull'));
+  const s = new GeoBuilder();
+  const y0 = F - 0.2;
+  // Accommodation block aft: five decks, a wide bridge deck with wings, window rows, a mast on top.
+  const acc = box2(-62, -48, 9.5, 0);
+  s.prism(acc, acc, y0, F + 15, 0xe9e6de);
+  s.prism(box2(-60, -49, 11.6, 0), box2(-60, -49, 11.6, 0), F + 15, F + 17.6, 0xe9e6de);
+  for (let d = 0; d < 5; d++) {
+    s.box(18.4, 0.9, 0.12, WINDOW, 0, F + 2.2 + d * 2.8, 47.9);
+    for (const sx of [-1, 1]) s.box(0.12, 0.9, 12.2, WINDOW, sx * 9.56, F + 2.2 + d * 2.8, 55);
+  }
+  s.box(22.6, 1.3, 0.14, WINDOW, 0, F + 16.4, 48.9);
+  s.cyl(0.18, 0.28, 9, 6, 0xe9e6de, 0, F + 22, 55);
+  s.box(6, 0.25, 0.25, 0xe9e6de, 0, F + 24.5, 55);
+  s.sphere(0.9, 10, 8, 0xf2f2f2, 2.4, F + 25.2, 55);
+  s.box(3.6, 0.25, 1.0, DARK, -2.2, F + 25.4, 55);
+  // Funnel behind the block (dark cap).
+  const fu = box2(-70, -63, 3.2, 1.2);
+  s.prism(fu, inset(fu, 0.3, 0.5), y0, F + 21, 0xd6d0c4);
+  s.box(6.8, 2.2, 7.5, DARK, 0, F + 20.2, 66.5);
+  // Orange free-fall lifeboat on its ramp at the stern.
+  s.box(3.2, 3.0, 9, 0xff7a1a, 0, F + 3.4, 71, -0.35, 0, 0);
+  // Hatch covers and container stacks: 7 bays of 40' boxes, 7 rows across, 2-5 tiers (a real load).
+  const bayL = 12.6, rowW = 2.55, tierH = 2.62;
+  for (let b = 0; b < 7; b++) {
+    const zc = -40 + b * 13.2 - 5;
+    s.box(19, 0.8, bayL + 0.3, 0x4d535a, 0, F + 0.4, zc);
+    // Lashing bridge between bays.
+    s.box(20, 5.4, 0.5, 0x7a7f86, 0, F + 2.7, zc + bayL / 2 + 0.3);
+    const tiersBay = 2 + Math.floor(hash(b * 3 + 1) * 3.99);
+    for (let r = 0; r < 7; r++) {
+      const tiers = Math.max(1, tiersBay - (r === 0 || r === 6 ? 1 : 0) - (hash(b * 17 + r) < 0.2 ? 1 : 0));
+      for (let k = 0; k < tiers; k++) {
+        const col = BOX_COLORS[Math.floor(hash(b * 101 + r * 13 + k * 7) * BOX_COLORS.length)];
+        s.box(rowW - 0.12, tierH - 0.08, bayL - 0.2, col, (r - 3) * rowW, F + 0.8 + tierH * (k + 0.5), zc);
+        // Corrugation hint: a darker band at mid-height.
+        s.box(rowW - 0.1, 0.18, bayL - 0.3, shadeHex(col, 0.7), (r - 3) * rowW, F + 0.8 + tierH * (k + 0.5), zc);
+      }
+    }
+  }
+  // Forecastle: raised deck, breakwater, bollards, windlasses, bow mast.
+  s.prism([[57, 10], [68, 6], [74, 0], [68, -6], [57, -10]], [[57, 10], [68, 6], [74, 0], [68, -6], [57, -10]], F + 0.1, F + 2.6, 0x5b4c3e);
+  s.box(19, 2.4, 0.4, 0xe9e6de, 0, F + 3.6, -56);
+  for (const sx of [-1, 1]) {
+    s.cyl(0.8, 0.9, 1.0, 10, DARK, sx * 3.2, F + 3.1, -66);
+    s.cyl(0.3, 0.3, 0.6, 8, DARK, sx * 7.5, F + 2.9, -60);
+    s.cyl(0.3, 0.3, 0.6, 8, DARK, sx * 8.5, F + 0.3, 64);
+  }
+  s.cyl(0.14, 0.2, 8, 6, 0xe9e6de, 0, F + 7, -64);
+  root.add(mesh(s.build(), 'paint', 'superstructure'));
+  // Nation marking: the funnel band and the flag at the stern (team color).
+  const m = new GeoBuilder();
+  const fb = box2(-69.6, -63.4, 3.35, 1.2);
+  m.prism(fb, fb, F + 14, F + 16.5, 0xffffff);
+  m.box(0.06, 1.2, 1.8, 0xffffff, 0, F + 5, 75.2);
+  root.add(mesh(m.build(), 'mark', 'mark'));
+  return root;
+}
+
+export function buildTroopShip(): THREE.Group {
+  const L = 132, B = 21, F = 9.5;
+  const root = new THREE.Group();
+  root.add(mesh(hullGeometry({ L, B, draft: 6.4, freeboard: F, stations: 36, topside: 0x6c747c, deck: 0x4b5055, bottom: 0x3c2a26, full: 0.8 }), 'paint', 'hull'));
+  const s = new GeoBuilder();
+  const y0 = F - 0.2;
+  const GRAY = 0x7b848c, GRAY_B = 0x8d959c;
+  // Long ro-ro superstructure (vehicle decks) with the bridge forward and a helicopter deck aft.
+  const body = box2(-44, 36, 9.6, 2.5);
+  s.prism(body, inset(body, 0.4, 0.8), y0, F + 11, GRAY);
+  const top = box2(-10, 34, 9.0, 3.5);
+  s.prism(top, inset(top, 0.5, 1.2), F + 11, F + 17, GRAY_B);
+  s.box(18.4, 1.2, 0.14, WINDOW, 0, F + 15.4, -34.6);
+  for (const sx of [-1, 1]) {
+    for (let w = 0; w < 14; w++) s.box(0.12, 0.7, 2.2, WINDOW, sx * 9.62, F + 9, 40 - w * 5.6);
+    // Grey lifeboats on davits.
+    for (let k = 0; k < 3; k++) s.sphere(1.2, 12, 6, 0x9aa1a7, sx * 10.2, F + 12.5, -2 + k * 9, 1, 0.8, 3.4);
+  }
+  s.cyl(0.25, 0.35, 12, 6, GRAY_B, 0, F + 23, -20);
+  s.box(7, 0.3, 0.3, GRAY_B, 0, F + 26, -20);
+  s.sphere(1.1, 12, 8, 0xeeeeee, 0, F + 29.5, -20);
+  // Twin funnels aft of the bridge block.
+  for (const sx of [-1, 1]) {
+    const f = box2(-12, -4, 1.8, 0.8).map(([a, b]) => [a, b + sx * 4] as Pt);
+    s.prism(f, f, F + 11, F + 21, GRAY_B);
+    s.box(3.6, 1.2, 8, DARK, sx * 4, F + 20.8, 8);
+  }
+  // Helicopter deck aft with its markings; stern ramp.
+  s.box(19, 0.4, 20, DECK_B, 0, F + 0.3, 54);
+  s.box(18.6, 3.2, 0.5, 0x3a3f44, 0, F - 1.8, 66.1, 0.25, 0, 0);
+  root.add(mesh(s.build(), 'paint', 'superstructure'));
+  const dm = new GeoBuilder();
+  const ring = new THREE.RingGeometry(5.2, 5.6, 32);
+  ring.rotateX(-Math.PI / 2);
+  dm.add(ring, 0xf0f0f0, 0, F + 0.52, 54);
+  dm.box(0.4, 0.02, 7, 0xf0f0f0, 0, F + 0.52, 54);
+  root.add(mesh(dm.build(), 'paint', 'deckMarks'));
+  // Nation marking: a band along the superstructure and on the funnels.
+  const m = new GeoBuilder();
+  for (const sx of [-1, 1]) {
+    m.box(0.08, 1.4, 30, 0xffffff, sx * 9.7, F + 4.2, 10);
+    m.box(1.2, 1.6, 0.08, 0xffffff, sx * 4, F + 17, 4.05);
+  }
+  root.add(mesh(m.build(), 'mark', 'mark'));
+  return root;
+}
+
+function shadeHex(hex: number, k: number): number {
+  const r = Math.min(255, Math.round(((hex >> 16) & 255) * k)), g = Math.min(255, Math.round(((hex >> 8) & 255) * k)), b = Math.min(255, Math.round((hex & 255) * k));
+  return (r << 16) | (g << 8) | b;
 }
