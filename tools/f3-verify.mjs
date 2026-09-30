@@ -169,7 +169,8 @@ async function missions() {
   }
   row('M3b', 'its tooltip: power and km/h before → after', tipJoin.slice(0, 300), /km\/h/.test(tipJoin) && /→/.test(tipJoin) && /Potencia/.test(tipJoin));
   await shot(page, 'm3-join-tip');
-  const div0 = await page.evaluate(() => __front.ctx.sim.view.attacks.find((a) => a.attacker === 1 && !a.naval)?.divAtk ?? 0);
+  const off0v = await page.evaluate(() => { const a = __front.ctx.sim.view.attacks.find((x) => x.attacker === 1 && !x.naval); return a ? { divAtk: a.divAtk, kmh: a.advanceKmh, plan: a.planKmh, cover: a.armorCover } : null; });
+  const div0 = off0v?.divAtk ?? 0;
   const joinedId = defId;
   if (await btn.count()) await uiClick(page, btn);
   const ordered = await until(page, (id) => __front.ctx.sim.view.units.get(id)?.order === 15 ? __front.ctx.sim.view.units.get(id).mission : null, joinedId, 10000);
@@ -180,7 +181,9 @@ async function missions() {
     const a = __front.ctx.sim.view.attacks.find((x) => x.attacker === 1 && !x.naval);
     return a ? { divAtk: a.divAtk, kmh: a.advanceKmh, plan: a.planKmh, taken: a.tilesTaken } : null;
   });
-  row('M4', 'the joined divisions add to the offensive (published divAtk)', `before ${div0}, after ${JSON.stringify(after)}`, after && after.divAtk > div0);
+  // (At the ×2 cap the model's plains speed `plan` is the same before and after: a change of the measured km/h over
+  // these 12 h is the ground ahead — mountains, rivers, towns — not the join; f3-audit M1c compares with and without.)
+  row('M4', 'the joined divisions add to the offensive (published divAtk)', `before ${JSON.stringify(off0v)}, after ${JSON.stringify(after)}`, after && after.divAtk > div0);
   // M5: the assault target loses hp (division artillery).
   const post = await page.evaluate((p0) => {
     if (!p0) return null;
@@ -319,13 +322,31 @@ async function bombard() {
     const { isWaterTerrain } = await import('/src/shared/terrain.ts');
     const W = 1600;
     const enemies = new Set(v.wars.filter((w) => w.aggressor === 1 || w.target === 1).map((w) => (w.aggressor === 1 ? w.target : w.aggressor)));
-    for (const s of v.structures.values()) {
-      if (!enemies.has(s.owner) || s.type === 0 || s.type === 4) continue;
-      const x = s.tile % W, y = Math.floor(s.tile / W);
+    const coastWater = (tile) => {
+      const x = tile % W, y = Math.floor(tile / W);
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
         const t = (y + dy) * W + x + dx;
-        if (isWaterTerrain(world.terrain[t])) return { sid: s.id, tile: s.tile, type: s.type, water: t, hp: s.hp, level: s.level, owner: s.owner };
+        if (isWaterTerrain(world.terrain[t])) return t;
       }
+      return -1;
+    };
+    for (const s of v.structures.values()) {
+      if (!enemies.has(s.owner) || s.type === 0 || s.type === 4) continue;
+      const w = coastWater(s.tile);
+      if (w >= 0) return { sid: s.id, tile: s.tile, type: s.type, water: w, hp: s.hp, level: s.level, owner: s.owner, built: false };
+    }
+    // None standing on the coast: the enemy builds a factory on a coastal tile of its own (a debug spawn, level 2).
+    for (let t = 0; t < v.owner.length; t++) {
+      if (!enemies.has(v.owner[t]) || isWaterTerrain(world.terrain[t]) || v.structures.size === 0) continue;
+      const w = coastWater(t);
+      if (w < 0 || [...v.structures.values()].some((s) => s.tile === t)) continue;
+      __front.ctx.sim.debug({ type: 'spawnStructure', structure: 2, owner: v.owner[t], tile: t, level: 2 });
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        const s = [...__front.ctx.sim.view.structures.values()].find((q) => q.tile === t);
+        if (s) return { sid: s.id, tile: t, type: s.type, water: w, hp: s.hp, level: s.level, owner: s.owner, built: true };
+      }
+      return null;
     }
     return null;
   });
