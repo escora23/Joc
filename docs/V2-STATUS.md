@@ -1015,7 +1015,9 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
 > audits `naval-audit` 22/22, `w4-audit` 43/43, `air-audit` 25/25, `command-audit` 35/35; `i18n-check` 0 missing es/en;
 > `npx tsc --noEmit` and `npm run build` clean. Browser (Chromium/SwiftShader, real UI, no-HMR dev server):
 > `node tools/f3c-entry-verify.mjs` **12/12 twice** (0 page errors), the verifier's own `tools/_v3_entry.mjs` **8/8**
-> (badge, mission, Esc exits); frames in `shots/feedback3-fix-2/`.
+> (badge, mission, Esc exits), `tools/f3c-verify.mjs --only panel,go,alert` **10/10**, `tools/f3-verify.mjs` **20/20**
+> on missions / card / civil / advisor (missions 8/8 again in a second run) plus the new `bombard` section **4/4** (0 page errors); frames in
+> `shots/feedback3-fix-2/`.
 
 ### #26 / #29e: taking control at a front puts you at the action — fixed
 * **Cause (confirmed).** Two faults stacked. (1) After the first leg the march aimed at the joined offensive's live
@@ -1056,21 +1058,29 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
 * **No second scene build**: `__cmdStats.builds` holds one entry (no `relocating` rebuild) in all four entries, twice.
 * On a GPU the intro is its 3.1 s and the fade/entry a second or two, so the same entries take about 20-30 s, well under
   the ~60 s criterion; the march part is sim-bound (9-14 real s on this 4-CPU container). The G path from 126 km behind
-  the line (f3c-verify go) is unchanged in shape (a march with its legs, then one rebuild): see the run below.
+  the line (f3c-verify go, G4) keeps its shape (the scene is first built where the unit stands, then one march and
+  one rebuild): 130 km, one march of 5 legs / 180 km in 19.8 real s stopped by an enemy in reach, contact at **88.6
+  real s** with 77 rendered frames (was 103.8 s). P1 (Guerra panel, f3c-verify) contact at 86.3 s with 30 frames, A2
+  («Al mando» on the alert about a damaged Swiss defence post) at 74.9 s, 3 legs / 40 km, enemy at 1.9 km.
 
 ### #29d / #28: a warship's bombardment is a mission that ends, with its report — fixed
 * `bombard` on a structure is now a mission on it (`missionTarget` = the structure; the card's «Al mando, a su misión»
   and the mission line see it). It ends by itself when the structure is **destroyed** or **taken**, when the **war
   ends**, when a **new order** replaces it, or when the ship is **sunk**; each emits `afterAction` (kind 'mission',
-  order 'bombard', result, duration, naval damage done) shown in the feed and REGISTRO («El destructor 3 terminó su
-  bombardeo: Fábrica destruida (cerca de …) — Duró 27 h. Daño del fuego naval: 135 puntos de integridad …»). The ship
-  then holds its station with no order (it no longer sits on «bombard» on rubble).
+  order 'bombard', result, duration, naval damage done) shown in the feed and REGISTRO, clickable to the place («2.º
+  Buque de guerra terminó su bombardeo: objetivo destruido (Fábrica, cerca de Burdeos) — Informe · Duró 14 h. Daño del
+  fuego naval: 75 puntos de integridad en las estructuras de la zona (100 = un nivel entero)…»). The ship then holds
+  its station with no order (it no longer sits on «bombard» on rubble).
 * **Lifted blockades** report too: when our blockade ends (or one that stopped our ships), an `afterAction` (order
   'blockade') gives how long it held, ships seized / sunk / turned back, the prize gold and the trade the blockaded
   lost; it replaces the «Bloqueo levantado» alert in place (same group).
 * CAP / support stations have no natural end (a patrol runs until another order; fuel is handled by the relief
   rotation), so they get no report; strikes already had theirs.
-* **Measured:** f3-audit M8 — a level-2 coastal factory: order accepted, mission target set, destroyed after 27 h, report
+* **Measured in real play** (f3-verify `bombard`): N0 an enemy level-2 factory on the Biscay coast near Bordeaux; N1
+  our warship's order makes it its mission (mission = the structure); N2 destroyed after 14 game hours, report
+  'destroyed' (damage 0.75), the ship's order −1 and no mission; N3 the report in the feed and REGISTRO in words
+  (frame `shots/feedback3-fix-2/f3/n3-bombard-report.png`).
+* **Headless:** f3-audit M8 — a level-2 coastal factory: order accepted, mission target set, destroyed after 27 h, report
   'destroyed' 0.9 h after the last hit (damage 1.35), the ship's order −1; a second bombardment cut short by peace:
   report 'ended'. M5b: a blockade lifted after 4 h: report with seized 0, sunk 0, the enemy's lost trade 1,200 gold.
 
@@ -1093,7 +1103,17 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
   **«Unirse · no acelera»**, and its tooltip, the card's «Unirse a la ofensiva» tooltip and the right-click chip say it
   plainly («… no la haría avanzar más deprisa (5,6 km/h con o sin ella). Mejor úsala para asaltar Puesto defensivo de
   X, cerca de la punta.»); the advisor proposes that assault instead of the join.
-* **Measured:** f3-audit M1c — 4 divisions joined, a 5th: preview 5.63 → ≈ 5.63 km/h, `gains` false; measured over
+* **Measured in real play** (f3-verify): M3 the Guerra panel lists «3.ª División acorazada … UNIRSE · NO ACELERA»;
+  M3b its tooltip «La ofensiva sobre Andorra la Vieja ya tiene la potencia al máximo (×2) y blindados en su punta
+  (empujan el 37 % del frente): esta división no la haría avanzar más deprisa (2,8 km/h con o sin ella). Mejor úsala
+  para asaltar Puesto defensivo …»; M6 the right-click chip says the same for the offensive on Toulouse; A1 the advisor
+  proposes «1 división: asaltar Puesto defensivo … en la punta de tu ofensiva» instead of the join.
+* Why the verifier saw 2.8 → 7.25 km/h after a join: at the cap the model's own speed does not move (M4 in real play:
+  `planKmh` 8 before and 8 after, `divAtk` 3 → 4, armour cover 0.375), while the measured speed climbs from 2.5-4.6
+  to 8.1 km/h in those 12 game hours as the spearhead comes down from the Pyrenees (the offensive «sobre Andorra la Vieja» becomes the one «sobre Toulouse»). The preview
+  starts from the measured speed on the ground it stands on and cannot see the terrain ahead; the join itself adds
+  nothing there, as the controlled comparison below shows.
+* **Headless:** f3-audit M1c — 4 divisions joined, a 5th: preview 5.63 → ≈ 5.63 km/h, `gains` false; measured over
   the same window with and without it: 5.62 vs 5.62 km/h (Δ 0.00, predicted Δ 0.00). M1 (2 divisions joining an
   unsupported offensive): preview 3.53 → ≈ 5.30, measured 5.07 (4 % off; was 5.59, 10 % off).
 
@@ -1102,5 +1122,8 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
   window of f3-verify D4 included the 2 h pause after the staged hit: 30 ticks − 20 of pause = 10 of repair, minus up to
   4 ticks of publication lag = the 6 ticks (+0.048) the verifier saw. D4 now measures the repair where it runs: the
   expected gain in the first window from the last hit's tick, and the rate over the next window (target 8 %/h ± 1).
+  **Real play:** hp 0.550 → 0.614 → 0.854 (ticks 227 → 257 → 287, last hit at 227): expected +0.064 in the first 3 h,
+  measured +0.064; **8.0 %/h** after the pause; gold paid. The button read «REPARAR · 50.600 · 7,7 H» = 2.1 h of pause left
+  + 0.45 / 0.08 = 5.6 h of repair, the time it takes.
 * The card's «Reparar · precio · N h» and «reparando, lista en …» now include what is left of the 2 h pause
   (`StructureView.hitTick`), so the hours it states are the hours it takes.
