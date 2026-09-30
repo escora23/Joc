@@ -356,7 +356,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
           return {
             title: unitName(q.u), text: t('fr.send.join.tip', { off: offensiveName(hs, own) }),
             now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`]],
-            next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
+            nextKey: 'tip.next.join', next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
             lines: [t('fr.send.join.risk', { wear: formatNumber(0.2, 1) })], whyNot: q.why,
           };
         }

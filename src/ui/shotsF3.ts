@@ -146,7 +146,7 @@ registerShot('f3-city-damage', 'units', 'Feedback #3 item 27: a level-8 city hea
   sim.debug({ type: 'spawnStructure', structure: S.City, owner: HUMAN_ID, tile: right, level: 8 });
   await until(s, () => !!structAt(ctx, left) && !!structAt(ctx, right), 30000);
   const lat = tileLat(left), lon = (tileLon(left) + tileLon(right)) / 2;
-  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.13), lon, altitudeKm: Number(params.get('alt') ?? 11), tilt: Number(params.get('tilt') ?? 1.0), heading: 0 });
+  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.0), lon, altitudeKm: Number(params.get('alt') ?? 11), tilt: Number(params.get('tilt') ?? 1.0), heading: 0 });
   await waitFrames(6);
   const hp = Number(params.get('hp') ?? 0.3);
   sim.debug({ type: 'damageStructure', tile: right, amount: 1 - hp, by: 0, block: 5 });

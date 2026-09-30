@@ -196,7 +196,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
           return {
             title: t('order.join'), text: t('order.join.tip'),
             now: [[t('card.join.target'), offensiveName(hs, a)], [t('card.join.eta'), etaText(hs, Math.round((km / UNIT_DEFS[cur.type].speedKmh) * 10))]],
-            next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
+            nextKey: 'tip.next.join', next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
             lines: [t('fr.send.join.risk', { wear: formatNumber(0.2, 1) })],
           };
         });

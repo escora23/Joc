@@ -217,7 +217,10 @@ export function createForces(hs: HudShared): ForcesPanel {
   function missionLine(u: UnitView): string {
     if (isIdle(u)) return t('forces.mission.none');
     const w = orderWord(u);
-    return w ? t('forces.mission', { m: w }) : t('forces.mission.default');
+    if (w) return t('forces.mission', { m: w });
+    // Doing its default duty: a division that attached itself to a front it stands on, a patrolling warship.
+    if (u.mode === UnitMode.Front || u.mode === UnitMode.Offensive) return t('forces.mission.autoFront');
+    return t('forces.mission.default');
   }
   /** A unit with nothing to do: a division waiting with no order, an aircraft docked and ready with no station, an
    * idle warship. (Holding, defending, refuelling for a station or rearming is doing something.) */

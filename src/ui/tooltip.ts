@@ -22,6 +22,8 @@ export interface TipData {
   now?: [string, string][];
   /** «Siguiente nivel». */
   next?: [string, string][];
+  /** i18n key of the «next» table's heading when it is not a level («Al unirse», Feedback 3). */
+  nextKey?: string;
   /** Free lines under the tables (formulas, breakdown notes). */
   lines?: string[];
   cost?: string;
@@ -77,7 +79,7 @@ function render(d: TipData): void {
     h('div', { class: 'fu-tip-title' }, d.title, d.hotkey ? h('span', { class: 'fu-kbd' }, d.hotkey) : null),
     d.text ? h('div', { class: 'fu-tip-text' }, d.text) : null,
     d.now && d.now.length ? rows('tip.now', d.now) : null,
-    d.next && d.next.length ? rows('tip.next', d.next) : null,
+    d.next && d.next.length ? rows(d.nextKey ?? 'tip.next', d.next) : null,
     ...(d.lines ?? []).map((l) => h('div', { class: 'fu-tip-line' }, l)),
     d.cost ? h('div', { class: 'fu-tip-cost' }, h('span', null, t('tip.cost')), h('b', { class: 'fu-mono' }, d.cost)) : null,
     d.whyNot ? h('div', { class: 'fu-tip-why' }, h('b', null, t('tip.whyNot')), ' ', d.whyNot) : null,

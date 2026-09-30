@@ -146,7 +146,17 @@ export function joinedOffensive(hs: HudShared, u: UnitView): AttackView | null {
 
 /** «Ofensiva sobre Zaragoza» — an offensive named by its axis point. */
 export function offensiveName(hs: HudShared, a: AttackView): string {
-  return t('off.named', { place: describeXY(hs.ctx.sim.view, a.x, a.y).name });
+  // By its axis point (§6.6 «Ofensiva sobre Lyon»); the axis runs ahead of the advance, so where it has no named place
+  // near, by the place of its live contact, else by its front.
+  const v = hs.ctx.sim.view;
+  const axis = describeXY(v, a.x, a.y);
+  if (axis.named) return t('off.named', { place: axis.name });
+  if (a.contactX >= 0) {
+    const c = describeXY(v, a.contactX, a.contactY);
+    if (c.named) return t('off.named', { place: c.name });
+  }
+  const fr = frontName(hs, a.frontKey);
+  return fr ? t('off.namedFront', { front: fr }) : t('off.named', { place: axis.name });
 }
 
 /** The structure an assault / raze mission targets (may be gone: destroyed or captured). */

@@ -109,12 +109,22 @@ async function missions() {
   const cards = await page.evaluate(async (idx) => {
     const v = __front.ctx.sim.view;
     const divs = [...v.units.values()].filter((u) => u.owner === 1 && u.type === 3);
-    const hud = (await import('/src/ui/index.ts')).getHud();
+    const hud = window.__fuHud;
     const out = {};
     for (const u of divs) {
       const kind = Object.keys(idx).find((k) => idx[k] === u.order) ?? String(u.order);
       hud.shared.select({ kind: 'unit', id: u.id });
-      await new Promise((r) => setTimeout(r, 900));
+      // The card rebuilds on the next rendered frame (slow under SwiftShader): wait for its own name in the title.
+      const name = await (async () => {
+        const t0 = performance.now();
+        while (performance.now() - t0 < 15000) {
+          const tt = document.querySelector('.fu-sel .fu-sel-title')?.textContent ?? '';
+          if (tt.startsWith(`${u.serial}.`)) break;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        await new Promise((r) => setTimeout(r, 1200));
+      })();
+      void name;
       out[`${u.id}:${kind}`] = (document.querySelector('.fu-sel')?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 400);
     }
     return out;
@@ -123,6 +133,11 @@ async function missions() {
   const has = (kind, re) => Object.entries(cards).some(([k2, v]) => k2.endsWith(`:${kind}`) && re.test(v));
   row('M2', 'unit cards say the mission and its effect', txt.slice(0, 900),
     has('join', /Con la ofensiva|Hacia la ofensiva/) && has('defend', /sector/) && has('assault', /Asaltando/) && has('assault', /Artillería/));
+  const post0 = await page.evaluate(() => {
+    const d = [...__front.ctx.sim.view.units.values()].find((u) => u.owner === 1 && u.order === 16);
+    const s = d ? __front.ctx.sim.view.structures.get(d.mission) : null;
+    return s ? { id: s.id, hp: s.hp, owner: s.owner } : null;
+  });
   // M3: «Enviar divisiones» offers «Unirse» with the km/h; one click orders the join.
   const spare = await page.evaluate(() => {
     const v = __front.ctx.sim.view;
@@ -139,21 +154,23 @@ async function missions() {
     const items = el ? [...el.querySelectorAll('.fu-war-send')] : [];
     return items.length ? items.map((i) => i.innerText.replace(/\s+/g, ' ')) : null;
   }, null, 20000);
-  row('M3', '«Enviar divisiones» offers «Unirse» to our offensive', (list ?? []).join(' | '), (list ?? []).some((x) => /Unirse/.test(x)));
-  const btn = page.locator('.fu-war-sendlist:not(.fu-hidden) .fu-war-send button', { hasText: 'Unirse' }).first();
+  row('M3', '«Enviar divisiones» offers «Unirse» to our offensive', (list ?? []).join(' | '), (list ?? []).some((x) => /Unirse/i.test(x)));
+  // The division defending its sector joins (the assaulting one keeps its mission for M5).
+  const defId = await page.evaluate((code) => [...__front.ctx.sim.view.units.values()].find((u) => u.owner === 1 && u.type === 3 && u.order === code)?.id ?? -1, idx.defend);
+  const btn = page.locator(`.fu-war-sendlist:not(.fu-hidden) .fu-war-send[data-unit="${defId}"] button`).first();
   let tipJoin = '';
   if (await btn.count()) {
     await btn.hover();
     await sleep(900);
-    tipJoin = await tipText(page);
+    tipJoin = (await until(page, () => {
+      const t = [...document.querySelectorAll('.fu-tip-title')].map((x) => x.parentElement?.textContent ?? '').find((x) => /km\/h/.test(x));
+      return t ? t.replace(/\s+/g, ' ') : null;
+    }, null, 10000)) ?? '';
   }
   row('M3b', 'its tooltip: power and km/h before → after', tipJoin.slice(0, 300), /km\/h/.test(tipJoin) && /→/.test(tipJoin) && /Potencia/.test(tipJoin));
   await shot(page, 'm3-join-tip');
   const div0 = await page.evaluate(() => __front.ctx.sim.view.attacks.find((a) => a.attacker === 1 && !a.naval)?.divAtk ?? 0);
-  const joinedId = await page.evaluate(() => {
-    const el = document.querySelector('.fu-war-sendlist:not(.fu-hidden) .fu-war-send');
-    return el ? Number(el.getAttribute('data-unit')) : -1;
-  });
+  const joinedId = defId;
   if (await btn.count()) await uiClick(page, btn);
   const ordered = await until(page, (id) => __front.ctx.sim.view.units.get(id)?.order === 15 ? __front.ctx.sim.view.units.get(id).mission : null, joinedId, 10000);
   row('M3c', 'one click: the division is ordered to join (mission = the offensive)', `unit ${joinedId} mission ${ordered}`, !!ordered);
@@ -165,19 +182,19 @@ async function missions() {
   });
   row('M4', 'the joined divisions add to the offensive (published divAtk)', `before ${div0}, after ${JSON.stringify(after)}`, after && after.divAtk > div0);
   // M5: the assault target loses hp (division artillery).
-  const post = await page.evaluate(() => {
-    const d = [...__front.ctx.sim.view.units.values()].find((u) => u.owner === 1 && u.order === 16);
-    const s = d ? __front.ctx.sim.view.structures.get(d.mission) : null;
-    return { unit: d?.id ?? -1, hp: s ? s.hp : null, gone: d ? !s : null, ruins: __front.ctx.sim.view.ruins.length };
-  });
-  row('M5', 'the assault target is shelled (hp < 1) or taken', JSON.stringify(post), post.hp !== null ? post.hp < 1 : post.gone === true || post.unit < 0);
+  const post = await page.evaluate((p0) => {
+    if (!p0) return null;
+    const s = __front.ctx.sim.view.structures.get(p0.id);
+    return { before: p0, hp: s ? +s.hp.toFixed(2) : null, owner: s ? s.owner : null, gone: !s, ruins: __front.ctx.sim.view.ruins.length, aar: window.__f3.aar.filter((a) => a.kind === 'mission').map((a) => a.result) };
+  }, post0);
+  row('M5', 'the assaulted defence post: shelled (hp < 1), then captured by us', JSON.stringify(post), !!post && (post.owner === 1 || (post.hp !== null && post.hp < post.before.hp)));
   await shot(page, 'm4-after');
   // M6: the right-click chip of a spare division over enemy land near the offensive.
   const chip = await page.evaluate(async (id) => {
     const v = __front.ctx.sim.view;
     const a = v.attacks.find((x) => x.attacker === 1 && !x.naval);
     if (!a || id < 0) return 'no offensive / division';
-    const hud = (await import('/src/ui/index.ts')).getHud();
+    const hud = window.__fuHud;
     hud.shared.select({ kind: 'unit', id });
     const x = a.contactX >= 0 ? a.contactX : a.x, y = a.contactX >= 0 ? a.contactY : a.y;
     let tile = -1;
