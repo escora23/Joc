@@ -8,7 +8,7 @@ import { attackNation } from './diplomacy';
 import { needsDeclaration, openDeclareWar } from './declare';
 import type { HudShared } from './shared';
 import { isListedForce } from './forcesInfo';
-import { issueOrders, previewOrders, selectedUnitIds } from './orderCtl';
+import { issueOrders, openCivilianConfirm, previewOrders, selectedUnitIds } from './orderCtl';
 import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon } from '../../shared/geo';
 import { t } from '../../shared/i18n';
@@ -159,7 +159,19 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         bus.emit('toast', { text: t('msg.cannotNukeAlly'), kind: 'warning', durationMs: 2200 });
         return;
       }
-      ctx.sim.send({ type: 'launch', weapon: m.weapon, targetTile: e.tile, siloId: -1 });
+      const fire = () => ctx.sim.send({ type: 'launch', weapon: m.weapon, targetTile: e.tile, siloId: -1 });
+      // Feedback 3 (#27): a cruise missile aimed at a city asks first, with the consequences.
+      const sid = e.structureId > 0 ? e.structureId : 0;
+      const city = [...view.structures.values()].find((s) => (s.id === sid || s.tile === e.tile) && s.type === StructureType.City && s.owner !== HUMAN_ID);
+      if (m.weapon === UnitType.CruiseMissile && city) {
+        openCivilianConfirm(hs, city, () => {
+          fire();
+          hooks.ripple(e.clientX, e.clientY, 'fire');
+        });
+        if (!e.shift) hs.setMode({ kind: 'none' });
+        return;
+      }
+      fire();
       hs.sound('confirm');
       hooks.ripple(e.clientX, e.clientY, 'fire');
       if (!e.shift) hs.setMode({ kind: 'none' });

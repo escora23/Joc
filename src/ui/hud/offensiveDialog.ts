@@ -19,15 +19,15 @@ import { openModal, type ModalHandle } from '../modal';
 import { tip } from '../tooltip';
 import { tx } from '../tx';
 import { describeXY } from '../places';
-import { etaText, frontName } from './forcesInfo';
-import { troopsText } from './frontsInfo';
+import { etaText, frontName, outlookOf } from './forcesInfo';
+import { offensiveKmh, offensiveStatus, troopsText } from './frontsInfo';
 import type { HudShared } from './shared';
 import {
   AIR_DENIAL_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, DRONE_ADVANCE_MUL, DRONE_ENEMY_ADVANCE_MUL, ENGAGEMENT_RATE, HUMAN_ID, MAP_W,
   TICKS_PER_GAME_DAY, TILE_KM,
 } from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
-import { advanceKmh as advanceAt, predictOffensive, tileKm } from '../../shared/orders';
+import { advanceKmh as advanceAt, offensiveOutlook, predictOffensive, tileKm } from '../../shared/orders';
 import type { AttackView, FrontView, OffensiveIntensity } from '../../shared/types';
 import { viewRules } from '../../sim/rulesView';
 
@@ -182,8 +182,7 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
       row(t('off.row.garrison', { name: hs.name(enemy) }), troopsText(p.garrison)),
       row(t('off.row.ratio'), `${formatNumber(p.ratio, 1)} : 1`, p.ratio >= 1.7 ? 'is-go' : p.ratio >= 1 ? 'is-risky' : 'is-bad'),
       row(t('off.row.corridor'), `${formatNumber(Math.round(p.corridorKm))} km`),
-      row(t('off.row.speed'), p.kmh > 0 ? t('off.kmh', { v: formatNumber(p.kmh, 1) }) : t('off.kmh0')),
-      row(t('off.row.eta'), p.kmh > 0.2 && distKm > 0 ? etaText(hs, Math.round((distKm / p.kmh) * 10), false) : '—'),
+      ...speedRows(cur, p, send, distKm),
       row(t('off.row.lossOwn'), `≈ ${troopsText(p.ownLossDay)}`),
       row(t('off.row.lossEnemy'), `≈ ${troopsText(p.enemyLossDay)}`),
       row(t('off.row.air'), t(p.air > 0 ? 'off.air.own' : p.air < 0 ? 'off.air.their' : 'off.air.none', { own: p.casOwn, their: p.casTheir }), p.air > 0 ? 'is-go' : p.air < 0 ? 'is-bad' : ''),
@@ -195,6 +194,31 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
     const noop = cur && !addTroops && intensity === cur.intensity;
     setText(launch.querySelector('span')!, t(cur ? 'off.go.reinforce' : 'off.go'));
     launch.disabled = (!cur && send < 1) || !!noop;
+  }
+
+  /**
+   * Feedback 3 (29a): a running offensive shows the km/h the badge and the Guerra panel show (measured, the same
+   * status text) and what the reinforcement / intensity change would make of it (offensiveOutlook, the same scaling the
+   * unit cards and «Unirse a la ofensiva» use); a new offensive shows the plains forecast.
+   */
+  function speedRows(cur: AttackView | null, p: OffensivePreview, send: number, distKm: number): HTMLElement[] {
+    if (!cur) {
+      return [
+        row(t('off.row.speed'), p.kmh > 0 ? t('off.kmh', { v: formatNumber(p.kmh, 1) }) : t('off.kmh0')),
+        row(t('off.row.eta'), p.kmh > 0.2 && distKm > 0 ? etaText(hs, Math.round((distKm / p.kmh) * 10), false) : '—'),
+      ];
+    }
+    const v = ctx.sim.view;
+    const now = offensiveKmh(v, cur);
+    const next = offensiveOutlook({ ...outlookOf(cur) }, { troopsMul: (cur.troops + send) / Math.max(1, cur.troops), intensity });
+    const out = [
+      row(t('off.row.now'), offensiveStatus(v, cur, now, 1, false)),
+      row(t('off.row.support'), t('off.support', { d: cur.divAtk ?? 0, c: cur.casAtk ?? 0, n: cur.navalAtk ?? 0 })),
+    ];
+    if (send > 0 || intensity !== cur.intensity) out.push(row(t('off.row.next'), next.kmh > 0.05 ? `≈ ${formatNumber(next.kmh, 1)} km/h` : t('off.kmh0'), next.kmh > now ? 'is-go' : ''));
+    const k = send > 0 || intensity !== cur.intensity ? next.kmh : now;
+    out.push(row(t('off.row.eta'), k > 0.2 && distKm > 0 ? etaText(hs, Math.round((distKm / k) * 10), false) : '—'));
+    return out;
   }
 
   launch.addEventListener('click', () => {

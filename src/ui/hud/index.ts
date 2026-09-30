@@ -20,6 +20,7 @@ import { createLeaderboard } from './leaderboard';
 import { createMinimap } from './minimap';
 import { wireNews } from './news';
 import { wireForcesNews } from './forcesNews';
+import { wireAfterAction } from './aar';
 import { createRadial } from './radial';
 import { createSelectionPanel } from './selection';
 import { HudShared } from './shared';
@@ -146,6 +147,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
 
   wireNews(hs, ticker, alerts);
   wireForcesNews(hs, alerts);
+  wireAfterAction(hs, alerts);
   alerts.onPing = (lat, lon, sev) => mm.ping(lat, lon, sev);
   ctx.bus.on('languageChanged', () => {
     tut.relabel();

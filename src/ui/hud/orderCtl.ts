@@ -10,7 +10,8 @@ import { h } from '../dom';
 import { openModal } from '../modal';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
-import { etaText, unitName } from './forcesInfo';
+import { etaText, offensiveName, outlookOf, structureName, unitName } from './forcesInfo';
+import { kmhText, offensiveKmh } from './frontsInfo';
 import { viewRules } from '../../sim/rulesView';
 import {
   ARMOR_RAIL_KMH, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, BOMBER_GARRISON_SHARE, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES,
@@ -18,9 +19,13 @@ import {
 } from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
 import {
-  hostileTo, inferOrder, orderCheck, planDivision, strikeTarget, tileCx, tileCy, tileKm, type OrderIssue,
+  ASSAULT_FLOOR_HP, DEFEND_TILES, DIVISION_ARTILLERY_TILES, DIVISION_SHELL_PER_HOUR, JOIN_NEAR_TILES, RAZE_SHELL_MUL, hostileTo, inferOrder,
+  offensiveNear, offensiveOutlook, orderCheck, planDivision, strikeTarget, tileCx, tileCy, tileKm, type OrderIssue,
 } from '../../shared/orders';
-import { StructureType, UnitMode, UnitType, type UnitOrderKind, type UnitView } from '../../shared/types';
+import { StructureType, UnitMode, UnitType, type StructureView, type UnitOrderKind, type UnitView } from '../../shared/types';
+import {
+  CASUS_BELLI_TICKS, CIVILIAN_OPINION_ALLY, CIVILIAN_OPINION_VICTIM, CIVILIAN_OPINION_WORLD, cityCivilianLoss, cityTroopLoss,
+} from '../../shared/damage';
 
 export interface UnitOrderPlan {
   unitId: number;
@@ -72,7 +77,19 @@ function measure(hs: HudShared, u: UnitView, order: UnitOrderKind, tile: number,
       const p = planDivision(r, u, target);
       return { km: p.km, hours: p.hours, rail: p.rail };
     }
-    const km = tileKm(u.x, u.y, tx, ty);
+    if (order === 'defend') {
+      const p = planDivision(r, u, tile);
+      return { km: p.km, hours: p.hours, rail: p.rail };
+    }
+    let gx = tx, gy = ty;
+    if (order === 'join') {
+      const a = r.offensive(targetId);
+      if (a) { gx = a.x; gy = a.y; }
+    } else if (order === 'assault' || order === 'raze') {
+      const s = view.structures.get(targetId);
+      if (s) { gx = tileCx(s.tile); gy = tileCy(s.tile); }
+    }
+    const km = tileKm(u.x, u.y, gx, gy);
     return { km, hours: km / d.speedKmh, rail: false };
   }
   let fx = u.x, fy = u.y;
@@ -114,13 +131,23 @@ export function previewOrders(hs: HudShared, ids: number[], tile: number, hoverU
   const r = viewRules(view);
   const plans: UnitOrderPlan[] = [];
   const count = new Map<UnitOrderKind, number>();
+  // A card button's order (touchpads): its target under the cursor. Feedback 3: an assault / raze aims at the structure
+  // on the tile, a join at our offensive whose contact is nearest the click.
+  const forcedTarget = (order: UnitOrderKind, id: number): number => {
+    if (order === 'join') {
+      const o = view.owner[tile] ?? 0;
+      return offensiveNear(r, HUMAN_ID, o, tile, JOIN_NEAR_TILES * 3)?.id ?? 0;
+    }
+    if (order === 'assault' || order === 'raze') return hoverStructure > 0 ? hoverStructure : r.structureAt(tile)?.id ?? 0;
+    return hoverStructure > 0 ? hoverStructure : hoverUnit > 0 && hoverUnit !== id ? hoverUnit : 0;
+  };
   let why: string | null = null;
   let confirm = false;
   for (const id of ids) {
     const u = view.units.get(id);
     if (!u) continue;
     const o = forced
-      ? { order: forced, targetId: hoverStructure > 0 ? hoverStructure : hoverUnit > 0 && hoverUnit !== id ? hoverUnit : 0 }
+      ? { order: forced, targetId: forcedTarget(forced, id) }
       : inferOrder(r, id, tile, hoverUnit, hoverStructure, shift);
     const issue = orderCheck(r, id, o.order, tile, o.targetId);
     const m = issue && !issue.confirm ? { km: 0, hours: 0, rail: false } : measure(hs, u, o.order, tile, o.targetId);
@@ -162,7 +189,11 @@ export function chipText(hs: HudShared, pv: OrderPreview): { title: string; line
   if (pv.m > 1) line = t('chip.nOfM', { n: pv.n, m: pv.m });
   if (pv.n === 0 && pv.why) line = pv.m > 1 ? `${line} · ${pv.why}` : pv.why;
   else if (pv.why && pv.m > 1) line = `${line} · ${pv.why}`;
-  if (pv.confirm && pv.n > 0) line = line ? `${line} · ${t('order.err.needsL2')}` : t('order.err.needsL2');
+  if (pv.confirm && pv.n > 0) {
+    const c = pv.plans.find((p) => p.issue?.confirm)?.issue;
+    const why = c ? reasonText(hs, c) : t('order.err.needsL2');
+    line = line ? `${line} · ${why}` : why;
+  }
   if (!line && lead && pv.m === 1) {
     const u = view.units.get(lead.unitId);
     if (u) line = hintFor(hs, pv.order, u, lead.targetId, pv.tile);
@@ -173,6 +204,20 @@ export function chipText(hs: HudShared, pv: OrderPreview): { title: string; line
 function hintFor(hs: HudShared, order: UnitOrderKind, u: UnitView, targetId: number, tile: number): string {
   switch (order) {
     case 'attach': return t('chip.hint.attach');
+    case 'defend': return t('chip.hint.defend', { km: Math.round(DEFEND_TILES * TILE_KM) });
+    case 'join': {
+      const a = hs.ctx.sim.view.attacks.find((x) => x.id === targetId);
+      if (!a) return t('chip.hint.joinNone');
+      const now = offensiveKmh(hs.ctx.sim.view, a), next = offensiveOutlook(outlookOf(a), { divisions: 1 });
+      return t('chip.hint.join', { off: offensiveName(hs, a), pct: Math.round((next.armorMul / Math.min(2, 1 + 0.25 * (a.divAtk ?? 0)) - 1) * 100), from: kmhText(now), to: kmhText(next.kmh) });
+    }
+    case 'assault':
+    case 'raze': {
+      const s = hs.ctx.sim.view.structures.get(targetId);
+      const perH = DIVISION_SHELL_PER_HOUR * (order === 'raze' ? RAZE_SHELL_MUL : 1);
+      const civil = s && s.type === StructureType.City ? ` ${t('chip.hint.civil')}` : '';
+      return t(`chip.hint.${order}`, { km: Math.round(DIVISION_ARTILLERY_TILES * TILE_KM), pct: Math.round(perH * 100), floor: Math.round(ASSAULT_FLOOR_HP * 100) }) + civil;
+    }
     case 'attack': return t('chip.hint.attack');
     case 'cap': return `${t('air.hint.cap', { km: formatNumber(Math.round(CAP_RADIUS_TILES * TILE_KM / 10) * 10) })} ${airRisk(hs, tile, u)}`;
     case 'strike': {
@@ -253,11 +298,14 @@ export function issueOrders(hs: HudShared, pv: OrderPreview, tile: number): void
   const lead = pv.plans.find((p) => p.issue?.confirm);
   const u = lead ? hs.ctx.sim.view.units.get(lead.unitId) : undefined;
   const target = hs.ctx.sim.view.owner[tile] ?? 0;
+  // Feedback 3 (#27): a city is a civilian target: the dialog spells out the price before anything is sent.
+  const city = lead ? civilianTarget(hs, lead, tile) : null;
   const m = openModal({
-    titleKey: 'order.confirmL2.title',
-    kickerKey: 'order.confirmL2.kicker',
+    titleKey: city ? 'order.civil.title' : 'order.confirmL2.title',
+    kickerKey: city ? 'order.civil.kicker' : 'order.confirmL2.kicker',
     narrow: true,
-    body: [h('p', null, t('order.confirmL2.body', { unit: u ? unitName(u) : '', name: hs.name(target) }))],
+    className: city ? 'fu-civil-confirm' : undefined,
+    body: city ? civilianBody(hs, u, city) : [h('p', null, t('order.confirmL2.body', { unit: u ? unitName(u) : '', name: hs.name(target) }))],
     foot: [
       (() => {
         const b = h('button', { class: 'fu-btn' }, tx('common.cancel'));
@@ -265,9 +313,74 @@ export function issueOrders(hs: HudShared, pv: OrderPreview, tile: number): void
         return b;
       })(),
       (() => {
-        const b = h('button', { class: 'fu-btn fu-btn--danger' }, tx('order.confirmL2.go'));
+        const b = h('button', { class: 'fu-btn fu-btn--danger' }, tx(city ? 'order.civil.go' : 'order.confirmL2.go'));
         b.addEventListener('click', () => {
           send(true);
+          hs.sound('confirm');
+          m.close();
+        });
+        return b;
+      })(),
+    ],
+  });
+}
+
+/** The city a confirmed order would hit (a strike or a raze on a City), if any. */
+function civilianTarget(hs: HudShared, p: UnitOrderPlan, tile: number): StructureView | null {
+  const view = hs.ctx.sim.view;
+  if (p.order === 'raze' || p.order === 'assault') {
+    const s = view.structures.get(p.targetId);
+    return s && s.type === StructureType.City ? s : null;
+  }
+  if (p.order !== 'strike') return null;
+  const st = strikeTarget(viewRules(view), tile, p.targetId);
+  if (!st || st.kind !== 'structure' || st.structure !== StructureType.City) return null;
+  return view.structures.get(st.id) ?? null;
+}
+
+/**
+ * Feedback 3 (#27): the consequences of striking a city, in numbers (shared/damage.ts): civilians and troops killed
+ * per hit, the opinion of the victim, of its allies and of the rest of the world, the casus belli it hands them, and
+ * the escalation to L2. The same figures the sim applies.
+ */
+function civilianBody(hs: HudShared, u: UnitView | undefined, city: StructureView): HTMLElement[] {
+  const view = hs.ctx.sim.view;
+  const hit = u && u.type === UnitType.DroneSwarm ? DRONE_DIRECT_DMG : u && u.type === UnitType.ArmoredDivision ? DIVISION_SHELL_PER_HOUR * RAZE_SHELL_MUL * 10 : BOMBER_DIRECT_DMG;
+  const civ = cityCivilianLoss(city.level, Math.min(1, hit));
+  const owner = view.players[city.owner];
+  const troops = cityTroopLoss(city.level, Math.min(1, hit), owner?.troops ?? 0);
+  const allies = owner?.allies.length ?? 0;
+  const li = (k: string, p: Record<string, string | number> = {}) => h('li', null, t(k, p));
+  const name = hs.name(city.owner);
+  return [
+    h('p', null, t(u ? 'order.civil.body' : 'order.civil.bodyMissile', { unit: u ? unitName(u) : '', city: structureName(hs, city), name, level: city.level })),
+    h('ul', { class: 'fu-civil-list' },
+      li('order.civil.deaths', { civ: formatNumber(Math.round(civ / 1000) * 1000), troops: formatNumber(Math.round(troops / 100) * 100) }),
+      li('order.civil.opinionVictim', { name, v: Math.abs(CIVILIAN_OPINION_VICTIM) }),
+      allies > 0 ? li('order.civil.opinionAllies', { n: allies, v: Math.abs(CIVILIAN_OPINION_ALLY) }) : null,
+      li('order.civil.opinionWorld', { v: Math.abs(CIVILIAN_OPINION_WORLD) }),
+      li('order.civil.casusBelli', { name, days: Math.round(CASUS_BELLI_TICKS / 240) }),
+      li('order.civil.escalation'),
+    ),
+    h('p', { class: 'fu-civil-note' }, t('order.civil.note')),
+  ];
+}
+
+/** Feedback 3: confirm a cruise missile (or any weapon without a unit) on a city, with the same consequences. */
+export function openCivilianConfirm(hs: HudShared, city: StructureView, go: () => void): void {
+  const m = openModal({
+    titleKey: 'order.civil.title', kickerKey: 'order.civil.kicker', narrow: true, className: 'fu-civil-confirm',
+    body: civilianBody(hs, undefined, city),
+    foot: [
+      (() => {
+        const b = h('button', { class: 'fu-btn' }, tx('common.cancel'));
+        b.addEventListener('click', () => m.close());
+        return b;
+      })(),
+      (() => {
+        const b = h('button', { class: 'fu-btn fu-btn--danger' }, tx('order.civil.go'));
+        b.addEventListener('click', () => {
+          go();
           hs.sound('confirm');
           m.close();
         });

@@ -49,7 +49,7 @@ export const STRUCT_MODELS = [
   'cityBase', 'port', 'factory', 'defensePost', 'samSite', 'silo', 'airbase', 'armyBase', 'navalYard', 'radar',
   'port2', 'factory2', 'defensePost2', 'samSite2', 'silo2', 'airbase2', 'armyBase2', 'navalYard2', 'radar2',
   'port3', 'factory3', 'defensePost3', 'samSite3', 'silo3', 'airbase3', 'armyBase3', 'navalYard3', 'radar3',
-  'radarDish', 'beacon', 'pad', 'padRound',
+  'radarDish', 'beacon', 'pad', 'padRound', 'rubble',
 ] as const;
 export type StructModelKey = (typeof STRUCT_MODELS)[number];
 
@@ -1240,6 +1240,61 @@ function beacon(): THREE.BufferGeometry {
   return m.build();
 }
 
+/**
+ * Feedback 3 (#27): rubble — what a destroyed structure leaves, and the debris piled around a heavily damaged one. A
+ * scorched ground disc, broken concrete slabs tilted at random, collapsed wall stubs with a charred top, twisted steel
+ * beams and a few still-glowing embers (heat), all in dust greys and soot (no nation colour: nobody owns a ruin).
+ * Deterministic (fixed seed) so every ruin looks the same from the same angle; footprint -0.5..0.5, height ≤ 0.22.
+ */
+function rubble(): THREE.BufferGeometry {
+  const m = new ModelBuilder();
+  let seed = 7919;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const DUST = [0x8b8478, 0x77716a, 0x6a655f, 0x5a5550, 0x9a9387];
+  // Scorched, ash-grey ground.
+  m.cyl(0.47, 0.5, 0.06, 0, -0.056, 0, 0x2f2c29, 24);
+  m.cyl(0.44, 0.44, 0.004, 0, 0, 0, 0x3b3733, 24);
+  m.cyl(0.26, 0.3, 0.005, 0.05, 0.001, -0.03, 0x211f1d, 16);
+  // Collapsed wall stubs: short broken boxes with a soot-black top.
+  for (let i = 0; i < 7; i++) {
+    const a = rnd() * Math.PI * 2, r = 0.08 + rnd() * 0.3;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const w = 0.05 + rnd() * 0.08, d = 0.04 + rnd() * 0.07, hgt = 0.04 + rnd() * 0.12;
+    m.push().translate(x, 0, z).rotateY(rnd() * Math.PI).rotateZ((rnd() - 0.5) * 0.35);
+    m.block(w, hgt, d, 0, 0, 0, DUST[i % DUST.length], { flat: true });
+    m.block(w * 0.92, 0.012, d * 0.92, 0, hgt, 0, 0x1d1b19, { flat: true });
+    m.pop();
+  }
+  // Broken slabs tilted into the pile.
+  for (let i = 0; i < 16; i++) {
+    const a = rnd() * Math.PI * 2, r = rnd() * 0.36;
+    m.push().translate(Math.cos(a) * r, 0.01 + rnd() * 0.05, Math.sin(a) * r)
+      .rotateY(rnd() * Math.PI).rotateX((rnd() - 0.5) * 1.1).rotateZ((rnd() - 0.5) * 1.1);
+    m.box(0.04 + rnd() * 0.1, 0.012 + rnd() * 0.012, 0.03 + rnd() * 0.08, 0, 0, 0, DUST[(i + 2) % DUST.length], { flat: true });
+    m.pop();
+  }
+  // Loose debris: small chunks.
+  for (let i = 0; i < 26; i++) {
+    const a = rnd() * Math.PI * 2, r = rnd() * 0.42;
+    const k = 0.012 + rnd() * 0.022;
+    m.push().translate(Math.cos(a) * r, 0, Math.sin(a) * r).rotateY(rnd() * 3).rotateX(rnd() * 0.8);
+    m.block(k, k * 0.8, k * 1.2, 0, 0, 0, DUST[i % DUST.length], { flat: true });
+    m.pop();
+  }
+  // Twisted steel beams sticking out of the pile.
+  for (let i = 0; i < 6; i++) {
+    const a = rnd() * Math.PI * 2, r = 0.05 + rnd() * 0.22;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    m.beam(x, 0.01, z, x + (rnd() - 0.5) * 0.12, 0.08 + rnd() * 0.12, z + (rnd() - 0.5) * 0.12, 0.006, 0x4a3b30);
+  }
+  // Embers still glowing in the ashes (read at night).
+  for (let i = 0; i < 5; i++) {
+    const a = rnd() * Math.PI * 2, r = rnd() * 0.25;
+    m.sphere(0.012, Math.cos(a) * r, 0.01, Math.sin(a) * r, 0xff6a1a, 5, 3, { heat: 0.55 });
+  }
+  return m.build();
+}
+
 const UNIT_BUILDERS: Record<UnitModelKey, () => THREE.BufferGeometry> = {
   transport, trade, warship, tank, fighter, bomber, drone, cruise, icbm, warhead, sam, loco, wagon,
 };
@@ -1247,7 +1302,7 @@ const UNIT_BUILDERS: Record<UnitModelKey, () => THREE.BufferGeometry> = {
 const LEVEL_BUILDERS: Record<LevelledKey, (L: number) => THREE.BufferGeometry> = {
   port, factory, defensePost, samSite, silo, airbase, armyBase, navalYard, radar,
 };
-const STRUCT_BUILDERS: Partial<Record<StructModelKey, () => THREE.BufferGeometry>> = { cityBase, radarDish, beacon, pad, padRound };
+const STRUCT_BUILDERS: Partial<Record<StructModelKey, () => THREE.BufferGeometry>> = { cityBase, radarDish, beacon, pad, padRound, rubble };
 
 export function buildUnitModel(k: UnitModelKey): THREE.BufferGeometry {
   return UNIT_BUILDERS[k]();

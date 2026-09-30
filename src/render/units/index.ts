@@ -24,7 +24,8 @@ import { angleDelta, clamp, lerp, lerpAngle } from '../../shared/math';
 import { hash3 } from '../../shared/rng';
 import { isWaterTerrain } from '../../shared/terrain';
 import { StructureType, UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type LatLon, type StructureView, type UnitView } from '../../shared/types';
-import { EFFECT_TILES, radarCovers, reachKm, tileCx, tileCy } from '../../shared/orders';
+import { CITY_BLOCKS, collapsedBlocks, damageState, standingShare } from '../../shared/damage';
+import { DEFEND_TILES, DIVISION_ARTILLERY_TILES, EFFECT_TILES, radarCovers, reachKm, tileCx, tileCy } from '../../shared/orders';
 import { viewRules } from '../../sim/rulesView';
 import { fxInternal, type FxInternal } from '../fx';
 import { PK } from '../fx/particles';
@@ -54,7 +55,7 @@ const UNIT_CAP: Record<UnitModelKey, number> = {
 const STRUCT_CAP = ((): Record<StructModelKey, number> => {
   const base: Record<string, number> = {
     cityBase: 1536, port: 1024, factory: 1024, defensePost: 1536, samSite: 768, silo: 768, airbase: 768, armyBase: 768,
-    navalYard: 768, radar: 768, radarDish: 768, beacon: 6144, pad: 8192, padRound: 4096,
+    navalYard: 768, radar: 768, radarDish: 768, beacon: 6144, pad: 8192, padRound: 4096, rubble: 4096,
   };
   const out = {} as Record<StructModelKey, number>;
   for (const k of STRUCT_MODELS) out[k] = base[k.replace(/[23]$/, '')] ?? 512;
@@ -1465,8 +1466,10 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     spires!.n = 0;
     radarList.length = 0;
     factoryList.length = 0;
+    const ruinIds = new Set<number>();
+    for (const r of view.ruins) ruinIds.add(-(r.tile + 1));
     for (const id of structAnchor.keys()) {
-      if (!view.structures.has(id)) {
+      if (!view.structures.has(id) && !ruinIds.has(id)) {
         structAnchor.delete(id);
         structHeading.delete(id);
         cityCache.delete(id);
@@ -1507,21 +1510,37 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         Q.copy(P).addScaledVector(g.back, 0.2 * S);
         put(structMeshes.pad, Q, g.right, g.up, g.back, S * 1.02, g.pad, S * 0.62, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
       } else put(structMeshes.pad, P, g.right, g.up, g.back, S * 1.03, g.pad, S * 1.03, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
-      put(structMeshes[levelKey(info.key, st.level)], anchor, g.right, g.up, g.back, S, S, S, col, st.built, sel, st.hp, seed, anchor, aS);
+      // Feedback 3 (#27): a damaged structure shows it — partly collapsed (its height drawn at 85 % / 60 %), debris
+      // piled around it, smoke (damaged) and fire (heavily damaged, see updateAmbient); a city loses whole blocks.
+      const dst = st.built >= 1 ? damageState(st.hp) : 0;
+      const stand = st.built >= 1 ? standingShare(st.hp) : 1;
+      put(structMeshes[levelKey(info.key, st.level)], anchor, g.right, g.up, g.back, S, S * (st.type === StructureType.City ? 1 : stand), S, col, st.built, sel, st.hp, seed, anchor, aS);
+      if (dst >= 1 && st.type !== StructureType.City) {
+        const k = dst >= 2 ? 0.95 : 0.7;
+        put(structMeshes.rubble, anchor, g.right, g.up, g.back, S * k, S * (dst >= 2 ? 0.9 : 0.55), S * k, col, 1, sel, 1, seed, anchor, aS);
+      }
       if (st.type === StructureType.City) {
         const capital = view.players[st.owner]?.capitalTile === st.tile;
         const cs = citySpec(st, capital);
+        const down = collapsedBlocks(st.id, st.hp, st.blocks ?? 0);
         let sp = 0;
         for (let i = 0; i < cs.n; i++) {
           const o = i * 8;
-          const bx = cs.b[o], bz = cs.b[o + 1], w = cs.b[o + 2] * S, d = cs.b[o + 3] * S, hh = cs.b[o + 4] * S, rot = cs.b[o + 5];
+          const bx = cs.b[o], bz = cs.b[o + 1], w = cs.b[o + 2] * S, d = cs.b[o + 3] * S, rot = cs.b[o + 5];
+          let hh = cs.b[o + 4] * S;
+          const fallen = (down & (1 << (i % CITY_BLOCKS))) !== 0;
           const cr = Math.cos(rot), sr = Math.sin(rot);
           bR.copy(g.right).multiplyScalar(cr).addScaledVector(g.back, sr);
           bB.copy(g.back).multiplyScalar(cr).addScaledVector(g.right, -sr);
           Q.copy(anchor).addScaledVector(g.right, bx * S).addScaledVector(g.back, bz * S).addScaledVector(g.up, 0.004 * S);
-          tmpColor.setHex(BUILDING_COLORS[cs.b[o + 6] | 0]);
-          put(buildings!, Q, bR, g.up, bB, w, hh, d, tmpColor, st.built, sel, cs.b[o + 7], 2 + (i % 2), anchor, aS);
-          if (hh > 0.2 * S && sp < cs.spires) {
+          tmpColor.setHex(fallen ? 0x4a4540 : BUILDING_COLORS[cs.b[o + 6] | 0]);
+          if (fallen) {
+            // A collapsed block: a charred stub and its rubble spread around it.
+            hh = Math.min(hh, 0.035 * S);
+            put(structMeshes.rubble, Q, bR, g.up, bB, Math.max(w, d) * 2.2, Math.max(w, d) * 1.2, Math.max(w, d) * 2.2, col, 1, sel, 1, seed, anchor, aS);
+          }
+          put(buildings!, Q, bR, g.up, bB, w, hh, d, tmpColor, st.built, sel, fallen ? 0.15 : cs.b[o + 7], 2 + (i % 2), anchor, aS);
+          if (!fallen && hh > 0.2 * S && sp < cs.spires) {
             sp++;
             T.copy(Q).addScaledVector(g.up, hh);
             put(spires!, T, bR, g.up, bB, w, w * 1.4, d, col, st.built, sel, st.hp, seed, anchor, aS);
@@ -1533,6 +1552,26 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       } else if (st.type === StructureType.Factory && st.built >= 1) {
         F.copy(g.back).negate();
         factoryList.push({ anchor, e: g.right.clone(), n: F.clone(), u: g.up.clone(), S, k: STRUCT_PX_K[st.type], acc: Math.random(), level: Math.max(1, Math.min(3, st.level)) });
+      }
+    }
+    // Feedback 3 (#27): rubble where a structure was destroyed (TickUpdate.ruins), on its own scorched pad.
+    if (structModelsOn && detailMode) {
+      for (const r of view.ruins) {
+        const fake: StructureView = { id: -(r.tile + 1), type: r.type, owner: 0, tile: r.tile, level: r.level, hp: 0, built: 1, cooldown: 0 };
+        const h = headingFor(fake);
+        const S = (structKm(r.type, r.level) / EARTH_RADIUS_KM) * (drawStep.get(fake.id) ?? 1);
+        const g = groundOf(fake, S, h);
+        let anchor = structAnchor.get(fake.id);
+        if (!anchor) {
+          anchor = new THREE.Vector3();
+          structAnchor.set(fake.id, anchor);
+        }
+        anchor.copy(g.anchor);
+        const aS = S / STRUCT_PX_K[r.type];
+        tmpColor.setHex(0x3a3632);
+        P.copy(anchor).addScaledVector(g.up, -0.006 * S);
+        put(structMeshes.padRound, P, g.right, g.up, g.back, S, g.pad, S, tmpColor, 1, 0, 0.3, 0, anchor, aS);
+        put(structMeshes.rubble, anchor, g.right, g.up, g.back, S, S, S, tmpColor, 1, 0, 1, (r.tile * 0.618) % 1, anchor, aS);
       }
     }
     for (const key of STRUCT_MODELS) if (key !== 'radarDish') commit(structMeshes[key]);
@@ -1593,14 +1632,35 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       fx.particles.emit(PK.Smoke, Q.x, Q.y, Q.z, f.u.x * s * 0.6 + f.e.x * s * 0.3, f.u.y * s * 0.6 + f.e.y * s * 0.3, f.u.z * s * 0.6 + f.e.z * s * 0.3,
         5 + fx.particles.rand() * 3, s * 0.6, s * 4, 0.3, s * 0.05);
     }
-    // Damaged structures smoulder.
+    // Feedback 3 (#27): damaged structures smoke (a grey-black column), heavily damaged ones burn; fresh rubble smoulders
+    // for two game days.
     for (const st of view.structures.values()) {
-      if (st.hp > 0.55) continue;
-      if (fx.particles.rand() > dt * 3) continue;
+      if (st.built < 1) continue;
+      const dst = damageState(st.hp);
+      if (dst === 0) continue;
       const anchor = structAnchor.get(st.id);
       if (!anchor) continue;
-      fx.burn(anchor, fx.visKm(anchor, structKm(st.type, st.level) * 0.3, 8), 1.5);
+      const km = structKm(st.type, st.level);
+      if (dst >= 2 && fx.particles.rand() < dt * 3) fx.burn(anchor, fx.visKm(anchor, km * 0.3, 8), 1.5);
+      if (fx.particles.rand() < dt * (dst >= 2 ? 6 : 3)) smokeAt(fx, anchor, km, dst >= 2 ? 1.3 : 0.9);
     }
+    for (const r of view.ruins) {
+      if (view.tick - r.tick > 480) continue;
+      const anchor = structAnchor.get(-(r.tile + 1));
+      if (anchor && fx.particles.rand() < dt * 2) smokeAt(fx, anchor, structKm(r.type, r.level), 0.8);
+    }
+  }
+
+  const U2 = new THREE.Vector3();
+  /** A puff of dark smoke rising from a damaged structure (size from its footprint, a pixel floor from afar). */
+  function smokeAt(fx: FxInternal, anchor: THREE.Vector3, km: number, k: number): void {
+    T.subVectors(env.camPos, anchor);
+    if (T.dot(anchor) < 0) return;
+    const s = fx.visKm(anchor, km * 0.18 * k, 5) / EARTH_RADIUS_KM;
+    U2.copy(anchor).normalize();
+    const jx = (fx.particles.rand() - 0.5) * s * 2, jz = (fx.particles.rand() - 0.5) * s * 2;
+    fx.particles.emit(PK.Smoke, anchor.x + jx + U2.x * s * 0.5, anchor.y + U2.y * s * 0.5, anchor.z + jz + U2.z * s * 0.5, U2.x * s * 0.5, U2.y * s * 0.5, U2.z * s * 0.5,
+      6 + fx.particles.rand() * 4, s * 0.8, s * 5, 0.25, s * 0.04);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1706,9 +1766,27 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const oc = tmpColor.copy(ownerColor(u.owner)).lerp(white, 0.3).getHex();
       tileXYToLatLon(u.x, u.y, ll);
       switch (u.type) {
-        case UnitType.ArmoredDivision:
+        case UnitType.ArmoredDivision: {
           zone(ll.lat, ll.lon, EFFECT_TILES.attach * TILE_KM, oc, 0.55, 3);
+          // Feedback 3 (#28): the mission's zone — the defended sector, the spearhead it follows, its artillery reach
+          // and the structure it assaults.
+          const k = u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : null;
+          const m = u.mission ?? 0;
+          if (k === 'defend' && m < 0) {
+            tileToLatLon(-m - 1, ll2);
+            zone(ll2.lat, ll2.lon, DEFEND_TILES * TILE_KM, 0x6ab8ff, 0.85, 3);
+            zone(ll2.lat, ll2.lon, DEFEND_TILES * TILE_KM, 0x6ab8ff, 0.7, 2, 44);
+          } else if (k === 'join' && m > 0) {
+            const a = view.attacks.find((x) => x.id === m);
+            if (a) {
+              tileXYToLatLon(a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y, ll2);
+              zone(ll2.lat, ll2.lon, 18, 0xffd24a, 0.95, 2, 16);
+            }
+          } else if ((k === 'assault' || k === 'raze') && m > 0) {
+            zone(ll.lat, ll.lon, DIVISION_ARTILLERY_TILES * TILE_KM, 0xff7a3d, 0.6, 2, 36);
+          }
           break;
+        }
         case UnitType.Warship:
           if (u.mode === UnitMode.Blockade || (u.order >= 0 && UNIT_ORDER_KINDS[u.order] === 'blockade')) {
             tileXYToLatLon(u.targetX, u.targetY, ll2);
@@ -1735,6 +1813,18 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           break;
         }
       }
+    }
+    // Feedback 3 (#28): every structure under assault by one of our divisions carries a red target ring (the razed ones
+    // double), so the player sees where his missions strike without selecting anything.
+    for (const u of view.units.values()) {
+      if (u.owner !== HUMAN_ID || u.type !== UnitType.ArmoredDivision || !(u.mission && u.mission > 0) || u.order < 0) continue;
+      const k = UNIT_ORDER_KINDS[u.order];
+      if (k !== 'assault' && k !== 'raze') continue;
+      const st = view.structures.get(u.mission);
+      if (!st) continue;
+      tileToLatLon(st.tile, ll2);
+      ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: structKm(st.type, st.level) * 1.4, minPx: 18, style: 0, color: 0xff3b1f, alpha: 0.95, dashes: 8, spin: 0.3 }, radiusAt);
+      if (k === 'raze') ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: structKm(st.type, st.level) * 2, minPx: 24, style: 1, color: 0xff3b1f, alpha: 0.8 }, radiusAt);
     }
     if (selectedStructure >= 0) {
       const st = view.structures.get(selectedStructure);
@@ -2069,7 +2159,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (view.tick !== lastSigTick) {
         lastSigTick = view.tick;
         let sig = 0;
-        for (const st of view.structures.values()) sig = (sig * 31 + st.id * 7 + st.level * 131 + Math.round(st.built * 40) * 17 + Math.round(st.hp * 20) * 3 + st.owner) >>> 0;
+        for (const st of view.structures.values()) sig = (sig * 31 + st.id * 7 + st.level * 131 + Math.round(st.built * 40) * 17 + Math.round(st.hp * 20) * 3 + st.owner + (st.blocks ?? 0) * 13) >>> 0;
+        // Feedback 3: rubble appears and clears.
+        for (const r of view.ruins) sig = (sig * 31 + r.tile * 5 + r.type) >>> 0;
         if (sig !== lastStructSig) {
           lastStructSig = sig;
           structDirty = true;

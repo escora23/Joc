@@ -18,16 +18,19 @@ import { tx } from '../tx';
 import { attackNation, breakAlliance, donate, focusNation, nationRelation, requestAlliance, toggleEmbargo } from './diplomacy';
 import {
   effectLine, enduranceLine, etaText, goldPerHour, homeName, hostedUnits, integrityHelp, levelEffects, maxLevel, placeOf,
-  reachLine, speedLine, speedRealLine, stateLine, stationOrder, structId, structureName, structurePurpose, unitId, unitName,
+  offensiveName, outlookOf, reachLine, speedLine, speedRealLine, stateLine, stationOrder, structId, structureName, structurePurpose, unitId, unitName,
 } from './forcesInfo';
 import { selectedUnitIds } from './orderCtl';
+import { kmhText, offensiveKmh } from './frontsInfo';
+import { DAMAGE_IDS, LEVEL_LOSS_HP, REPAIR_PER_HOUR, damageState, functionFactor, repairCost, repairHours } from '../../shared/damage';
+import { offensiveOutlook, tileKm } from '../../shared/orders';
 import type { HudShared } from './shared';
 import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS, structureLevel, upgradeCost, upgradeTicks } from '../../shared/constants';
 import { hexToCss } from '../../shared/color';
 import { tileXYToLatLon } from '../../shared/geo';
 import { formatCompact, formatNumber, t } from '../../shared/i18n';
 import {
-  StructureType, UnitMode, UnitState, UnitType, type BuildableUnit, type StructureView, type UnitOrderKind, type UnitView, type WeaponType,
+  StructureType, UnitMode, UnitState, UnitType, type AttackView, type BuildableUnit, type StructureView, type UnitOrderKind, type UnitView, type WeaponType,
 } from '../../shared/types';
 
 export interface SelectionPanel {
@@ -47,7 +50,7 @@ const HOSTS = new Set<StructureType>([StructureType.ArmyBase, StructureType.Airb
 
 /** Card buttons that put the next left click into order mode (touchpads, §7.2), per unit type. */
 const CARD_ORDERS: Partial<Record<UnitType, UnitOrderKind[]>> = {
-  [UnitType.ArmoredDivision]: ['move', 'attack'],
+  [UnitType.ArmoredDivision]: ['move', 'defend', 'attack', 'assault'],
   [UnitType.Warship]: ['move', 'patrol', 'blockade', 'bombard'],
   [UnitType.FighterSquadron]: ['cap'],
   [UnitType.Bomber]: ['strike'],
@@ -55,6 +58,7 @@ const CARD_ORDERS: Partial<Record<UnitType, UnitOrderKind[]>> = {
 };
 const ORDER_ICON: Partial<Record<UnitOrderKind, string>> = {
   move: 'move', attack: 'attack', patrol: 'patrol', blockade: 'shield', bombard: 'target', cap: 'patrol', strike: 'target', support: 'bolt',
+  defend: 'shield', assault: 'target', join: 'attack',
 };
 
 interface Why { gold: boolean; text: string }
@@ -173,6 +177,31 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
         acts.append(b);
       }
       if (u.type === UnitType.ArmoredDivision) {
+        // Feedback 3 (#28): one click joins our nearest running offensive (the button says which, and what it adds).
+        const join = actionBtn('attack', 'order.join', () => {
+          const a = nearestOwnOffensive(u);
+          if (!a) {
+            hs.sound('error');
+            return;
+          }
+          ctx.sim.send({ type: 'unitOrder', unitIds: [u.id], order: 'join', tile: -1, targetId: a.id });
+          hs.sound('confirm');
+        });
+        tip(join, () => {
+          const cur = view().units.get(u.id) ?? u;
+          const a = nearestOwnOffensive(cur);
+          if (!a) return { title: t('order.join'), text: t('order.join.tip'), whyNot: t('order.err.joinNone') };
+          const now = offensiveKmh(view(), a), next = offensiveOutlook(outlookOf(a), { divisions: 1 });
+          const km = tileKm(cur.x, cur.y, a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y);
+          return {
+            title: t('order.join'), text: t('order.join.tip'),
+            now: [[t('card.join.target'), offensiveName(hs, a)], [t('card.join.eta'), etaText(hs, Math.round((km / UNIT_DEFS[cur.type].speedKmh) * 10))]],
+            next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
+            lines: [t('fr.send.join.risk', { wear: formatNumber(0.2, 1) })],
+          };
+        });
+        live.join = join;
+        acts.append(join);
         const hold = actionBtn('shield', 'order.hold', () => sendOrder([u.id], 'hold'));
         tip(hold, () => ({ title: t('order.hold'), text: t('order.hold.tip') }));
         acts.append(hold);
@@ -188,6 +217,20 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     el.replaceChildren(...children.filter((c): c is HTMLElement => !!c));
   }
 
+  /** Our running land offensive whose live contact is nearest to the unit (Feedback 3 «Unirse a la ofensiva»). */
+  function nearestOwnOffensive(u: UnitView): AttackView | null {
+    let best: AttackView | null = null, bd = Infinity;
+    for (const a of view().attacks) {
+      if (a.attacker !== HUMAN_ID || a.naval || a.defender <= 0 || a.state === 'retreating') continue;
+      const d = tileKm(u.x, u.y, a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y);
+      if (d < bd) {
+        bd = d;
+        best = a;
+      }
+    }
+    return best;
+  }
+
   function refreshUnit(u: UnitView): void {
     setText(live.state, stateLine(hs, u));
     setMeter('hp', u.hp, `${Math.round(u.hp * 100)} %`);
@@ -197,6 +240,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     if (live.endurance) setText(live.endurance, enduranceLine(u));
     if (live.place) setText(live.place, placeOf(hs, u));
     if (live.tc) toggleClass(live.tc, 'is-disabled', u.state === UnitState.Controlled);
+    if (live.join) toggleClass(live.join, 'is-disabled', !nearestOwnOffensive(u));
     if (live.back) toggleClass(live.back, 'is-disabled', (u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming) && !stationOrder(u));
     const m = hs.mode;
     for (const b of el.querySelectorAll<HTMLElement>('[data-order]')) toggleClass(b, 'is-on', m.kind === 'order' && m.order === b.dataset.order);
@@ -303,6 +347,16 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       meter('upg', 'card.upgrading', 'is-amber'),
       meter('hp', 'hud.sel.hp', '', () => t('card.structHp.tip')),
     ];
+    // Feedback 3 (#27): damage state, the share of its effects it still delivers, who hit it, the repair.
+    const dmg = h('div', { class: 'fu-w4-dmg' });
+    live.dmg = dmg;
+    tip(dmg, () => {
+      const cur = view().structures.get(s.id);
+      if (!cur) return null;
+      const st = damageState(cur.hp);
+      return { title: t(`card.dmg.${DAMAGE_IDS[st]}`), text: t('card.dmg.tip'), lines: [t('card.dmg.rule', { lv: LEVEL_LOSS_HP * 100 })] };
+    });
+    children.push(dmg);
     const gold = h('div', { class: 'fu-w4-gold' });
     live.gold = gold;
     children.push(gold);
@@ -311,6 +365,28 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     live.now = now;
     live.next = next;
     children.push(now, next);
+    if (own) {
+      const rep = h('button', { class: 'fu-btn fu-btn--sm fu-w4-repair' }, icon('upgrade'), h('span')) as HTMLButtonElement;
+      rep.addEventListener('click', () => {
+        const cur = view().structures.get(s.id);
+        if (!cur || rep.classList.contains('is-disabled')) {
+          hs.sound('error');
+          return;
+        }
+        ctx.sim.send({ type: 'repairStructure', structureId: s.id });
+        hs.sound('build');
+      });
+      tip(rep, () => {
+        const cur = view().structures.get(s.id);
+        if (!cur) return null;
+        return {
+          title: t('card.repair.title'), text: t('card.repair.tip', { p: Math.round(REPAIR_PER_HOUR * 100) }), cost: formatNumber(repairCost(cur.type, cur.level, cur.hp)),
+          now: [[t('card.repair.time'), etaText(hs, Math.round(repairHours(cur.hp) * 10))]], whyNot: repairWhy(cur),
+        };
+      });
+      live.repair = rep;
+      children.push(h('div', { class: 'fu-sel-actions' }, rep));
+    }
     if (own && max > 1) {
       const up = h('button', { class: 'fu-btn fu-btn--sm fu-btn--success fu-w4-up' }, icon('upgrade'), h('span'));
       up.addEventListener('click', () => {
@@ -420,6 +496,16 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     el.replaceChildren(...children);
   }
 
+  function repairWhy(s: StructureView): string | null {
+    if (s.built < 1) return t('card.upgrade.building');
+    if (s.hp >= 0.999) return t('card.repair.none');
+    if (s.repairing) return t('card.repair.busy');
+    const cost = repairCost(s.type, s.level, s.hp);
+    const gold = view().human?.gold ?? 0;
+    if (gold < cost) return t('card.missingGold', { n: formatNumber(Math.ceil(cost - gold)) });
+    return null;
+  }
+
   function upgradeWhy(s: StructureView): string | null {
     const max = maxLevel(s.type);
     if (s.level >= max) return t('card.upgrade.max');
@@ -457,6 +543,22 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       live.pips.replaceChildren(pips(s.level, max));
     }
     setMeter('hp', s.hp, `${Math.round(s.hp * 100)} %`);
+    {
+      const st = damageState(s.hp);
+      const parts = [t(`card.dmg.${DAMAGE_IDS[st]}`), t('card.dmg.fn', { p: Math.round(functionFactor(s.hp) * 100) })];
+      if (s.repairing) parts.push(t('card.repairing', { eta: etaText(hs, Math.round(repairHours(s.hp) * 10), false) }));
+      else if (s.hitBy && st > 0) parts.push(t('card.dmg.hitBy', { name: hs.name(s.hitBy) }));
+      if (s.blockadedBy) parts.push(t('card.blockaded', { name: hs.name(s.blockadedBy) }));
+      setText(live.dmg, parts.join(' · '));
+      live.dmg.dataset.state = String(st);
+      toggleClass(live.dmg, 'fu-hidden', s.built < 1);
+      if (live.repair) {
+        const why = repairWhy(s);
+        setText(live.repair.lastElementChild as HTMLElement, s.repairing ? t('card.repair.busy') : s.hp >= 0.999 ? t('card.repair.none') : t('card.repair.btn', { cost: formatNumber(repairCost(s.type, s.level, s.hp)), h: formatNumber(repairHours(s.hp), 1) }));
+        toggleClass(live.repair, 'is-disabled', !!why);
+        toggleClass(live.repair, 'fu-hidden', s.hp >= 0.999 && !s.repairing);
+      }
+    }
     setMeter('build', s.built, s.built >= 1 ? t('hud.sel.operational') : `${Math.round(s.built * 100)} %`);
     toggleClass(live.buildBox, 'fu-hidden', s.built >= 1);
     const up = s.upgrade ?? 0;

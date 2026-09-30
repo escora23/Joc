@@ -1,0 +1,17 @@
+/* FRONT ULTRA — owner feedback #3: damage states on cards, the civilian-strike confirmation, the operations advisor
+   in the Fuerzas panel, after-action reports. */
+.fu-w4-dmg { font-size: 0.74rem; padding: 0.3rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: var(--fu-text); }
+.fu-w4-dmg[data-state="0"] { color: #9fe0a8; border-color: rgba(120, 220, 140, 0.25); }
+.fu-w4-dmg[data-state="1"] { color: #ffd27a; border-color: rgba(255, 200, 80, 0.35); background: rgba(255, 200, 80, 0.07); }
+.fu-w4-dmg[data-state="2"] { color: #ff8a6a; border-color: rgba(255, 110, 80, 0.45); background: rgba(255, 90, 60, 0.09); }
+.fu-w4-repair { width: 100%; justify-content: center; }
+.fu-civil-list { margin: 0.4rem 0 0.4rem 1.1rem; padding: 0; font-size: 0.8rem; line-height: 1.45; }
+.fu-civil-list li { margin: 0.12rem 0; }
+.fu-civil-note { font-size: 0.72rem; color: var(--fu-text-dim); }
+.fu-fo-mission { font-size: 0.68rem; color: #9cc8ff; display: block; }
+.fu-fo-advisor { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.45rem 0.55rem; margin: 0 0 0.4rem; border: 1px solid rgba(255, 200, 80, 0.35); background: rgba(255, 200, 80, 0.07); font-size: 0.74rem; }
+.fu-fo-advisor b { color: #ffd27a; }
+.fu-fo-advisor .fu-fo-adv-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.fu-fo-advisor .fu-fo-adv-row span { flex: 1; min-width: 0; }
+.fu-aar { font-size: 0.74rem; line-height: 1.4; }
+.fu-aar b { font-weight: 600; }

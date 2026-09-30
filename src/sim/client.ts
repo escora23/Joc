@@ -415,7 +415,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
           troops: U[o + UF.troops], targetX: U[o + UF.targetX], targetY: U[o + UF.targetY],
           originX: U[o + UF.originX], originY: U[o + UF.originY], bornTick: u.tick,
           mode: U[o + UF.mode] as UnitMode, order: U[o + UF.order], etaTicks: U[o + UF.eta], frontKey: U[o + UF.frontKey],
-          home: U[o + UF.home], serial: U[o + UF.serial],
+          home: U[o + UF.home], serial: U[o + UF.serial], mission: U[o + UF.mission],
         };
         view.units.set(id, un);
       } else {
@@ -460,6 +460,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
         un.frontKey = U[o + UF.frontKey];
         un.home = U[o + UF.home];
         un.serial = U[o + UF.serial];
+        un.mission = U[o + UF.mission];
       }
     }
     for (const id of view.units.keys()) {

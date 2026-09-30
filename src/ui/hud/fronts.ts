@@ -21,10 +21,10 @@ import { icon } from '../icons';
 import { tip, type TipData } from '../tooltip';
 import { tx } from '../tx';
 import { askHelp, whyNotPropose } from './diplomacy';
-import { etaText, frontName, unitName, placeOf } from './forcesInfo';
+import { etaText, frontName, offensiveName, outlookOf, unitName, placeOf } from './forcesInfo';
 import {
-  advanceText, combatDays, frontAnchor, frontFocus, frontTiles, humanFrontsByDanger, isoOf, sidesOf, troopsText, worldFronts,
-  type FrontSides,
+  advanceText, combatDays, frontAnchor, frontFocus, frontTiles, humanFrontsByDanger, isoOf, kmhText, offensiveKmh, offensiveStatus, sidesOf,
+  troopsText, worldFronts, type FrontSides,
 } from './frontsInfo';
 import type { HudShared } from './shared';
 import { openPeaceDialog } from './wardialogs';
@@ -36,9 +36,9 @@ import {
 } from '../../shared/constants';
 import { tileXYToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
-import { orderCheck, tileKm } from '../../shared/orders';
+import { offensiveOutlook, orderCheck, tileKm } from '../../shared/orders';
 import { airThreat, reasonText } from './orderCtl';
-import { UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type FrontView, type UnitView, type WarView } from '../../shared/types';
+import { UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type AttackView, type FrontView, type UnitView, type WarView } from '../../shared/types';
 import { viewRules } from '../../sim/rulesView';
 
 export interface FrontsPanel {
@@ -218,6 +218,16 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     return null;
   }
 
+  /** Feedback 3 (#28): « · apoyo: 2 divisiones (+50 % de potencia), 1 enjambre, 1 buque» (empty with no support). */
+  function supportText(a: AttackView): string {
+    const parts: string[] = [];
+    const d = a.divAtk ?? 0, c = a.casAtk ?? 0, n = a.navalAtk ?? 0;
+    if (d) parts.push(t('fr.support.div', { n: d, pct: Math.round((Math.min(2, 1 + 0.25 * d) - 1) * 100) }));
+    if (c) parts.push(t('fr.support.cas', { n: c }));
+    if (n) parts.push(t('fr.support.naval', { n }));
+    return parts.length ? ` · ${t('fr.support', { list: parts.join(', ') })}` : ` · ${t('fr.support.none')}`;
+  }
+
   // ---- priority ----------------------------------------------------------------------------------
   /** The share this front would target if the human set it to `p` (the other fronts' weights unchanged). */
   function targetShareIf(f: FrontView, p: number): number {
@@ -285,14 +295,19 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     if (tile < 0) return [];
     const out: SendCandidate[] = [];
     const tx0 = (tile % MAP_W) + 0.5, ty0 = Math.floor(tile / MAP_W) + 0.5;
-    const attach = UNIT_ORDER_KINDS.indexOf('attach');
+    const attach = UNIT_ORDER_KINDS.indexOf('attach'), join = UNIT_ORDER_KINDS.indexOf('join');
+    // Feedback 3 (#28): with our offensive on this front the division JOINS it (follows its spearhead, its power adds to
+    // the offensive and the row shows the km/h it would bring); else it attaches to hold the line.
+    const mine = ownOffensive(sidesOf(v, f));
+    const order = mine ? 'join' : 'attach';
     for (const u of v.units.values()) {
       if (u.owner !== HUMAN_ID || u.type !== UnitType.ArmoredDivision || u.state === UnitState.Destroyed) continue;
-      if (u.frontKey === f.key) continue;
+      if (u.frontKey === f.key && !(mine && u.order !== join)) continue;
+      if (mine && u.order === join && u.mission === mine.id && u.mode === UnitMode.Offensive) continue;
       const km = tileKm(u.x, u.y, tx0, ty0);
       // Already ordered to this front (an attach aimed within 3 tiles of its line): listed «En camino», not offered again.
-      const onWay = u.order === attach && nearFront(f, u.targetX, u.targetY, 3);
-      const issue = onWay ? null : orderCheck(r, u.id, 'attach', tile, 0);
+      const onWay = (u.order === attach && nearFront(f, u.targetX, u.targetY, 3)) || (!!mine && u.order === join && u.mission === mine.id);
+      const issue = onWay ? null : orderCheck(r, u.id, order, tile, mine ? mine.id : 0);
       out.push({ u, hours: km / UNIT_DEFS[u.type].speedKmh, why: onWay ? t('fr.send.onWayWhy') : issue && !issue.confirm ? reasonText(hs, issue) : null, onWay });
     }
     const rank = (c: SendCandidate): number => (!c.why ? 0 : c.onWay ? 1 : 2);
@@ -307,7 +322,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     if (!listEl) return;
     const list = candidates(f);
     // (The language is part of it: a switch re-labels the buttons.)
-    const sig = `${t('fr.send.go')}|` + (list.map((c) => `${c.u.id}:${c.onWay ? 2 : c.why ? 1 : 0}`).join(',') || 'none');
+    const sig = `${t('fr.send.go')}|${ownOffensive(sidesOf(view(), f))?.id ?? 0}|` + (list.map((c) => `${c.u.id}:${c.onWay ? 2 : c.why ? 1 : 0}`).join(',') || 'none');
     if (listEl.dataset.sig === sig) {
       for (const c of list) {
         const el = listEl.querySelector<HTMLElement>(`.fu-war-send[data-unit="${c.u.id}"]`);
@@ -323,7 +338,8 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       return;
     }
     for (const c of list) {
-      const btn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, icon('armoredDivision'), t(c.onWay ? 'fr.send.onWay' : 'fr.send.go')) as HTMLButtonElement;
+      const ownOff = ownOffensive(sidesOf(view(), f));
+      const btn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, icon('armoredDivision'), t(c.onWay ? 'fr.send.onWay' : ownOff ? 'fr.send.join' : 'fr.send.go')) as HTMLButtonElement;
       btn.disabled = !!c.why;
       const unitId = c.u.id;
       const current = (): SendCandidate | undefined => {
@@ -332,6 +348,18 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       };
       tip(btn, () => {
         const q = current() ?? c;
+        const ff = view().frontByKey.get(f.key);
+        const own = ff ? ownOffensive(sidesOf(view(), ff)) : null;
+        if (own) {
+          // Feedback 3 (#28): the preview of joining: its power and the km/h the offensive would reach.
+          const now = offensiveKmh(view(), own), next = offensiveOutlook(outlookOf(own), { divisions: 1 });
+          return {
+            title: unitName(q.u), text: t('fr.send.join.tip', { off: offensiveName(hs, own) }),
+            now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`]],
+            next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
+            lines: [t('fr.send.join.risk', { wear: formatNumber(0.2, 1) })], whyNot: q.why,
+          };
+        }
         return { title: unitName(q.u), text: t('fr.send.tip'), now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`]], whyNot: q.why };
       });
       btn.addEventListener('click', () => {
@@ -343,9 +371,10 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
           hs.sound('error');
           return;
         }
-        ctx.sim.send({ type: 'unitOrder', unitIds: [unitId], order: 'attach', tile, targetId: 0 });
+        const own = ownOffensive(sidesOf(view(), ff));
+        ctx.sim.send({ type: 'unitOrder', unitIds: [unitId], order: own ? 'join' : 'attach', tile, targetId: own ? own.id : 0 });
         hs.sound('confirm');
-        ctx.bus.emit('toast', { text: t('fr.send.done', { unit: unitName(q.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(q.hours * 10), false) }), kind: 'info', durationMs: 3200 });
+        ctx.bus.emit('toast', { text: t(own ? 'fr.send.joinDone' : 'fr.send.done', { unit: unitName(q.u), front: frontName(hs, f.key), eta: etaText(hs, Math.round(q.hours * 10), false) }), kind: 'info', durationMs: 3200 });
         expanded.delete(f.key);
         listKey = '';
       });
@@ -651,10 +680,11 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       if (row.ownBox) {
         toggleClass(row.ownBox, 'fu-hidden', !mine);
         if (mine) {
+          // Feedback 3 (29a): the same status and km/h as the front row, the badge and the strip.
           setText(row.ownLine!, t('fr.own', {
             troops: troopsText(mine.troops), intensity: t(`off.int.${mine.intensity}`), ratio: formatNumber(mine.ratio, 1),
-            state: t(`offensive.state.${mine.state}`),
-          }));
+            state: offensiveStatus(v, mine, offensiveKmh(v, mine), 1, false),
+          }) + supportText(mine));
           for (const b of row.intSeg!.querySelectorAll<HTMLButtonElement>('button')) {
             toggleClass(b, 'is-on', Number(b.dataset.int) === mine.intensity);
             b.disabled = mine.state === 'retreating';

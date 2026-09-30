@@ -108,7 +108,17 @@ export function advanceText(view: GameView, f: FrontView, s: FrontSides, arrow =
     }
     return t('fr.adv.quiet');
   }
-  const a = s.lead!;
+  return offensiveStatus(view, s.lead!, f.advanceKmh, s.gaining, arrow);
+}
+
+/**
+ * Feedback 3 (29a): the one status text of an offensive, from its state and ONE measured km/h (the front's line speed
+ * when the offensive leads its front, else its own; see offensiveKmh). Every place that describes an offensive (badge,
+ * Guerra panel front row and «Tu ofensiva» line, battle strip, dialogs, unit cards) calls it, so an offensive shown as
+ * advancing never sits next to 0 km/h: below 0.05 km/h it reads «presionando: aún sin avance» (pressure building, no
+ * tile fallen yet) or «estancado» when the sim marks it stalled.
+ */
+export function offensiveStatus(view: GameView, a: AttackView, kmh: number, gaining = 1, arrow = true): string {
   const sym = (g: number) => (arrow ? (g < 0 ? '◀ ' : '▶ ') : '');
   switch (a.state) {
     case 'mobilizing': return t('fr.adv.mobilizing');
@@ -119,16 +129,20 @@ export function advanceText(view: GameView, f: FrontView, s: FrontSides, arrow =
     case 'holding': return `${arrow ? '‖ ' : ''}${t('fr.adv.holding')}`;
     default: break;
   }
-  // The measured line speed (on the offensive's live axis): «estancado» only when that line really stops (never «▶ 0
-  // km/h» next to an offensive that is taking ground), «consolidando» when the logistics hold it.
-  const kmh = f.advanceKmh;
-  if (a.state === 'stalled' || kmh < 0.05) {
-    return `${arrow ? '‖ ' : ''}${t(a.state === 'consolidating' ? 'fr.adv.consolidating' : 'fr.adv.stalled')}`;
-  }
-  const g = s.gaining === 0 ? 1 : s.gaining;
+  void view;
+  if (a.state === 'stalled') return `${arrow ? '‖ ' : ''}${t('fr.adv.stalled')}`;
+  if (kmh < 0.05) return `${arrow ? '‖ ' : ''}${t(a.state === 'consolidating' ? 'fr.adv.consolidating' : 'fr.adv.pressing')}`;
+  const g = gaining === 0 ? 1 : gaining;
   const base = `${sym(g)}${t('fr.adv.kmh', { v: kmhText(kmh) })}`;
   if (a.state === 'consolidating') return `${base} · ${t('fr.adv.consolidating')}`;
   return base;
+}
+
+/** The measured km/h of an offensive (29a): its front's line speed when it leads that front, else its own EMA. */
+export function offensiveKmh(view: GameView, a: AttackView): number {
+  const f = a.frontKey ? view.frontByKey.get(a.frontKey) : undefined;
+  if (f && (f.offensiveA === a.id || f.offensiveB === a.id) && sidesOf(view, f).lead?.id === a.id) return f.advanceKmh;
+  return a.advanceKmh;
 }
 
 /** The point of the front a badge / camera uses: the middle of the contact line (continuous tile coords). */

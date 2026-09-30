@@ -24,7 +24,7 @@ import type {
 } from '../shared/simapi';
 import { isPlayableTerrain, isShoreTerrain, isWaterTerrain } from '../shared/terrain';
 import {
-  StructureType, UnitState, UnitType, type AttackView, type Difficulty, type GameConfig, type GameOverReason,
+  StructureType, UNIT_ORDER_KINDS, UnitState, UnitType, type AttackView, type Difficulty, type GameConfig, type GameOverReason,
   type GamePhase, type GameSpeed, type PairState, type ScarView, type RuinView, type StructureView, type WorldEventKind,
   type WorldEventView, type WorldInit,
 } from '../shared/types';
@@ -69,6 +69,8 @@ export const FF_EVENT_TYPES = new Set<SimEvent['type']>([
  * (neutral specks, eliminated players), 'staging' = debug/shots, 'none' = anything else (spawn, neutral expansion).
  */
 export type TransferContext = 'none' | 'attack' | 'treaty' | 'rebellion' | 'cleanup' | 'staging';
+
+const DEFEND_CODE = UNIT_ORDER_KINDS.indexOf('defend');
 
 export class Game implements SimGame {
   readonly rng: Rng;
@@ -1678,6 +1680,8 @@ export class Game implements SimGame {
       a[o + UF.frontKey] = u.frontKey;
       a[o + UF.home] = u.home;
       a[o + UF.serial] = u.serial;
+      // A defended sector is published as its anchor tile, negative (-(tile + 1)).
+      a[o + UF.mission] = u.missionTarget || (u.order === DEFEND_CODE && u.anchorTile >= 0 ? -(u.anchorTile + 1) : 0);
       o += UNIT_STRIDE;
     };
     for (const u of this.unitMap.values()) put(u, u.state);

@@ -696,14 +696,18 @@ const nearMul = (n: number, frontage: number): number => 1 + 0.5 * Math.min(1, (
  * speed scaled by the square root of the model's change (so the badge, the Guerra panel, the unit card and every dialog
  * start from one number); before the first measurement it is the plains speed.
  */
-export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; drones?: number; naval?: number } = {}): OffensiveOutlook {
+export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; drones?: number; naval?: number; troopsMul?: number; intensity?: number } = {}): OffensiveOutlook {
   const d0 = a.divAtk ?? 0, d1 = d0 + Math.max(0, add.divisions ?? 0);
+  const int1 = add.intensity ?? a.intensity;
   const cas0 = a.casAtk ?? 0, cas1 = (a.air ?? 0) < 0 ? 0 : cas0 + Math.max(0, add.drones ?? 0);
   const nav0 = a.navalAtk ?? 0, nav1 = nav0 + Math.max(0, add.naval ?? 0);
-  let ratio = a.ratio * (armorMul(d1) / armorMul(d0));
+  let ratio = a.ratio * (armorMul(d1) / armorMul(d0)) * Math.max(0, add.troopsMul ?? 1);
+  // All-out assault ×1.25 power (sim/attacks.ts ASSAULT_POWER), relative to the intensity it runs at now.
+  if (int1 === 2 && a.intensity !== 2) ratio *= 1.25;
+  if (int1 !== 2 && a.intensity === 2) ratio /= 1.25;
   if (cas0 === 0 && cas1 > 0) ratio *= 1.15;
   if (nav0 === 0 && nav1 > 0) ratio *= 1.15;
-  let plan = a.intensity === 0 ? 0 : advanceKmh(ratio);
+  let plan = int1 === 0 ? 0 : advanceKmh(ratio);
   if (cas1 > 0) plan *= 1.15;
   if ((a.casDef ?? 0) > 0 && (a.air ?? 0) <= 0) plan *= 0.85;
   if ((a.air ?? 0) > 0) plan *= 1.1;
@@ -713,7 +717,8 @@ export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; dro
   let kmh: number;
   // The measured speed answers the model's with an elasticity of ½ (terrain, forts, the mop-up and the war's logistics
   // bucket absorb part of any extra power; calibrated in src/sim/test/f3-audit.mjs M1).
-  if (a.advanceKmh > 0.05 && plan0 > 0.05) kmh = a.advanceKmh * Math.sqrt((plan / plan0) * near);
+  if (int1 === 0) kmh = 0;
+  else if (a.advanceKmh > 0.05 && plan0 > 0.05) kmh = a.advanceKmh * Math.sqrt((plan / plan0) * near);
   else kmh = plan * nearMul(d1, a.frontageTiles);
   return { ratio, planKmh: plan, kmh: Math.min(ADVANCE_MAX_KMH * 1.5, kmh), divisions: d1, armorMul: armorMul(d1) };
 }

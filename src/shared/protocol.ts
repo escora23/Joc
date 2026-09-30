@@ -295,8 +295,11 @@ export const UF = {
   frontKey: 17,
   home: 18,
   serial: 19,
+  // --- Feedback 3 ---
+  /** The mission's target: the offensive joined (attack id) or the structure assaulted / razed (structure id), 0 = none. */
+  mission: 20,
 } as const;
-export const UNIT_STRIDE = 20;
+export const UNIT_STRIDE = 21;
 
 /** Slow-changing player info; sent for a player on its first update and whenever any field changes. */
 export interface PlayerMeta {

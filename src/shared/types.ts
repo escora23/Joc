@@ -420,6 +420,11 @@ export interface UnitView {
   home: number;
   /** Ordinal of its type for its owner («1.ª División Acorazada»), 0 = unnamed (missiles, trade ships). */
   serial: number;
+  /**
+   * Feedback 3: the mission's target (attack id for 'join', structure id for 'assault' / 'raze'; for 'defend' the
+   * sector's anchor tile encoded as -(tile + 1)), 0 = none.
+   */
+  mission?: number;
 }
 
 export interface StructureView {

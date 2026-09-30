@@ -152,6 +152,11 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
       [t('fr.tip.days'), formatNumber(combatDays(view, f), 1)],
       [t('fr.tip.divisions'), `${s.divAtt} / ${s.divDef}`],
     ];
+    // Feedback 3 (#28): what supports the lead offensive, and its power from them (the same numbers as the Guerra panel).
+    if (s.lead && !s.quiet) {
+      const d = s.lead.divAtk ?? 0;
+      now.push([t('fr.tip.support'), t('fr.tip.supportV', { d, pct: Math.round((Math.min(2, 1 + 0.25 * d) - 1) * 100), dd: s.lead.divDef ?? 0 })]);
+    }
     const air = skyOf(f, s.att);
     if (air.any) now.push([t('fr.tip.sky'), t('fr.tip.skyV', { a: air.att, d: air.def, ca: air.casAtt, cd: air.casDef, who: air.owner ? hs.name(air.owner) : t('fr.tip.skyNobody') })]);
     return { title: name, text: t(s.quiet ? 'fr.tip.quiet' : 'fr.tip.text'), now, lines: [t('fr.tip.click')], hotkey: 'G' };

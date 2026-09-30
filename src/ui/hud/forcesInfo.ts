@@ -8,6 +8,7 @@
 import type { HudShared } from './shared';
 import { unitLabel } from './news';
 import { describeXY, frontPlace } from '../places';
+import { kmhText, offensiveKmh } from './frontsInfo';
 import {
   ARMOR_RAIL_KMH, BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
   DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HOLD_ORBIT_KM, HUMAN_ID,
@@ -15,9 +16,11 @@ import {
   STRUCTURE_LEVELS, TILE_KM, UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, structureLevel, upgradeCost, upgradeTicks,
 } from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
-import { isForce, reachKm } from '../../shared/orders';
 import {
-  StructureType, UnitMode, UnitType, UNIT_ORDER_KINDS, type StructureView, type UnitView,
+  DEFEND_TILES, DIVISION_ARTILLERY_TILES, DIVISION_SHELL_PER_HOUR, RAZE_SHELL_MUL, isForce, offensiveOutlook, reachKm, type OutlookInput,
+} from '../../shared/orders';
+import {
+  StructureType, UnitMode, UnitType, UNIT_ORDER_KINDS, type AttackView, type StructureView, type UnitView,
 } from '../../shared/types';
 
 export const STRUCT_IDS = ['city', 'port', 'factory', 'defensePost', 'samSite', 'missileSilo', 'airbase', 'armyBase', 'navalYard', 'radar'];
@@ -124,9 +127,56 @@ export function placeOf(hs: HudShared, u: UnitView): string {
   return describeXY(hs.ctx.sim.view, u.x, u.y).text;
 }
 
+// =================================================================================================
+// Feedback 3 (#28): missions
+// =================================================================================================
+export type MissionKind = 'join' | 'defend' | 'assault' | 'raze';
+
+/** The division mission the unit carries out, if any. */
+export function missionOf(u: UnitView): MissionKind | null {
+  const k = u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : null;
+  return k === 'join' || k === 'defend' || k === 'assault' || k === 'raze' ? k : null;
+}
+
+/** The offensive a 'join' mission follows (its attack view), if it still runs. */
+export function joinedOffensive(hs: HudShared, u: UnitView): AttackView | null {
+  if (missionOf(u) !== 'join' || !u.mission) return null;
+  return hs.ctx.sim.view.attacks.find((a) => a.id === u.mission) ?? null;
+}
+
+/** «Ofensiva sobre Zaragoza» — an offensive named by its axis point. */
+export function offensiveName(hs: HudShared, a: AttackView): string {
+  return t('off.named', { place: describeXY(hs.ctx.sim.view, a.x, a.y).name });
+}
+
+/** The structure an assault / raze mission targets (may be gone: destroyed or captured). */
+export function missionStructure(hs: HudShared, u: UnitView): StructureView | null {
+  const m = missionOf(u);
+  if ((m !== 'assault' && m !== 'raze') || !u.mission) return null;
+  return hs.ctx.sim.view.structures.get(u.mission) ?? null;
+}
+
 /** «→ Frente de Lyon · 6 h» — the state line of a row and a card. */
 export function stateLine(hs: HudShared, u: UnitView): string {
   const view = hs.ctx.sim.view;
+  // Feedback 3 (#28): a division on a mission says which one, with its target.
+  const mission = missionOf(u);
+  if (mission && u.type === UnitType.ArmoredDivision) {
+    const moving = u.mode === UnitMode.Moving || u.mode === UnitMode.Rail;
+    const eta = moving && u.etaTicks > 0 ? ` · ${etaText(hs, u.etaTicks, false)}` : '';
+    if (mission === 'join') {
+      const a = joinedOffensive(hs, u);
+      return t(moving ? 'fstate.join.to' : 'fstate.join', { off: a ? offensiveName(hs, a) : t('fr.front') }) + eta;
+    }
+    if (mission === 'defend') {
+      const at = (u.mission ?? 0) < 0 ? -(u.mission ?? 0) - 1 : -1;
+      const px = at >= 0 ? (at % 1600) + 0.5 : u.targetX, py = at >= 0 ? Math.floor(at / 1600) + 0.5 : u.targetY;
+      return t(moving ? 'fstate.defend.to' : u.mode === UnitMode.Front ? 'fstate.defend.fight' : 'fstate.defend', { place: describeXY(view, px, py).name }) + eta;
+    }
+    const s = missionStructure(hs, u);
+    const name = s ? structureName(hs, s) : t('fstate.target');
+    return t(`fstate.${mission}`, { target: name, hp: s ? Math.round(s.hp * 100) : 0 }) + eta;
+  }
   const mode = t(`fmode.${MODE_IDS[u.mode] ?? 'idle'}`);
   const eta = u.etaTicks > 0 ? etaText(hs, u.etaTicks, false) : '';
   const front = frontName(hs, u.frontKey);
@@ -217,11 +267,30 @@ export function effectLine(hs: HudShared, u: UnitView): string {
   const place = () => describeXY(view, u.targetX, u.targetY).name;
   if (stationOrder(u) && (u.mode === UnitMode.Returning || u.mode === UnitMode.Rearming)) return t('effect.refuel');
   switch (u.type) {
-    case UnitType.ArmoredDivision:
+    case UnitType.ArmoredDivision: {
+      const mission = missionOf(u);
+      if (mission === 'join') {
+        const a = joinedOffensive(hs, u);
+        if (a && u.mode === UnitMode.Offensive) {
+          const now = offensiveOutlook(outlookOf(a));
+          return t('effect.division.join', { off: offensiveName(hs, a), n: a.divAtk ?? 0, pct: Math.round((now.armorMul - 1) * 100), kmh: kmhText(liveKmh(hs, a)) });
+        }
+        if (a) return t('effect.division.joinMoving', { off: offensiveName(hs, a) });
+      }
+      if (mission === 'defend') {
+        if (u.mode === UnitMode.Front) return t('effect.division.defendFight', { front: front || t('front.this'), km: Math.round(DEFEND_TILES * TILE_KM) });
+        return t('effect.division.defendSector', { km: Math.round(DEFEND_TILES * TILE_KM) });
+      }
+      if (mission === 'assault' || mission === 'raze') {
+        const st = missionStructure(hs, u);
+        const dmg = DIVISION_SHELL_PER_HOUR * (mission === 'raze' ? RAZE_SHELL_MUL : 1);
+        if (st) return t(`effect.division.${mission}`, { target: structureName(hs, st), km: Math.round(DIVISION_ARTILLERY_TILES * TILE_KM), dmg: Math.round(dmg * 100) });
+      }
       if (u.mode === UnitMode.Offensive) return t('effect.division.attack', { front: front || t('front.this') });
       if (u.mode === UnitMode.Front) return t('effect.division.defend', { front: front || t('front.this') });
       if (u.mode === UnitMode.Moving || u.mode === UnitMode.Rail) return t('effect.division.moving');
       return t('effect.division.idle', { r: Math.round(DIVISION_ATTACH_TILES * TILE_KM) });
+    }
     case UnitType.FighterSquadron:
       if (u.mode === UnitMode.Patrol && holdingAir(u)) return t('effect.fighter.hold', { r: HOLD_ORBIT_KM, km: Math.round(CAP_RADIUS_TILES * TILE_KM), eta: etaText(hs, u.etaTicks, true) });
       if (u.mode === UnitMode.Patrol) return t('effect.fighter.cap', { km: Math.round(CAP_RADIUS_TILES * TILE_KM), place: place(), p: Math.round(CAP_HIT_AIRCRAFT * 100) });
@@ -249,6 +318,19 @@ export function effectLine(hs: HudShared, u: UnitView): string {
     default:
       return '';
   }
+}
+
+/** The live figures of an offensive for offensiveOutlook. */
+export function outlookOf(a: AttackView): OutlookInput {
+  return {
+    ratio: a.ratio, advanceKmh: a.advanceKmh, planKmh: a.planKmh, intensity: a.intensity, frontageTiles: a.frontageTiles,
+    divAtk: a.divAtk, casAtk: a.casAtk, casDef: a.casDef, air: a.air, navalAtk: a.navalAtk,
+  };
+}
+
+/** Feedback 3 (29a): the one km/h of an offensive every panel shows (frontsInfo.offensiveKmh). */
+export function liveKmh(hs: HudShared, a: AttackView): number {
+  return offensiveKmh(hs.ctx.sim.view, a);
 }
 
 /** The order the unit is carrying out, as a word («Patrulla aérea»). */

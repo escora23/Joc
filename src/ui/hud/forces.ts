@@ -13,14 +13,19 @@ import { tx } from '../tx';
 import { unitLabel } from './news';
 import type { HudShared } from './shared';
 import {
-  domainOf, effectLine, etaText, frontName, groupOf, isListedForce, placeOf, stateLine, stationOrder, structureName, unitName,
-  type Domain, type ForceGroup,
+  domainOf, effectLine, etaText, frontName, groupOf, isListedForce, offensiveName, orderWord, placeOf, stateLine, stationOrder, structureName,
+  unitId, unitName, type Domain, type ForceGroup,
 } from './forcesInfo';
+import { frontAnchor, humanFrontsByDanger } from './frontsInfo';
+import { tileAt } from './orderCtl';
+import { viewRules } from '../../sim/rulesView';
+import { hostileTo, tileKm } from '../../shared/orders';
+import { isNavigableTerrain } from '../../shared/terrain';
 import { selectedUnitIds } from './orderCtl';
-import { HUMAN_ID, UNIT_DEFS, structureLevel } from '../../shared/constants';
+import { HUMAN_ID, MAP_W, UNIT_DEFS, structureLevel } from '../../shared/constants';
 import { tileXYToLatLon } from '../../shared/geo';
-import { formatNumber, t } from '../../shared/i18n';
-import { StructureType, UnitMode, UnitState, UnitType, type ProductionView, type UnitView } from '../../shared/types';
+import { formatNumber, getLanguage, t } from '../../shared/i18n';
+import { StructureType, UnitMode, UnitState, UnitType, type AttackView, type ProductionView, type UnitOrderKind, type UnitView } from '../../shared/types';
 
 export interface ForcesPanel {
   el: HTMLElement;
@@ -37,6 +42,7 @@ const TABS: Tab[] = ['land', 'air', 'sea', 'all'];
 
 interface Row {
   el: HTMLElement;
+  mission: HTMLElement;
   place: HTMLElement;
   state: HTMLElement;
   bar: HTMLElement;
@@ -71,11 +77,13 @@ export function createForces(hs: HudShared): ForcesPanel {
     tabsEl.append(b);
   }
   const body = h('div', { class: 'fu-nt-body fu-fo-body' });
+  // Feedback 3 (29c): the operations advisor — idle units by type, each group with a one-click mission.
+  const advisor = h('div', { class: 'fu-fo-advisor fu-hidden' });
   const foot = h('div', { class: 'fu-fo-foot' });
   const hint = h('div', { class: 'fu-fo-hint' }, icon('mouse'), tx('forces.hint'));
   const el = h('div', { class: 'fu-forces fu-glass fu-brackets fu-interactive fu-hidden' },
     h('div', { class: 'fu-nt-head' }, h('div', { class: 'fu-panel-title' }, icon('armoredDivision'), tx('forces.title')), h('span', { class: 'fu-kbd' }, 'U'), closeBtn),
-    tabsEl, body, hint, foot,
+    tabsEl, advisor, body, hint, foot,
   );
   el.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -115,6 +123,7 @@ export function createForces(hs: HudShared): ForcesPanel {
   function makeRow(u: UnitView): Row {
     const def = UNIT_DEFS[u.type];
     const place = h('small', { class: 'fu-fo-place' });
+    const mission = h('small', { class: 'fu-fo-mission' });
     const state = h('span', { class: 'fu-fo-state' });
     const bar = h('i');
     const pctEl = h('span', { class: 'fu-mono' });
@@ -148,6 +157,7 @@ export function createForces(hs: HudShared): ForcesPanel {
       h('span', { class: 'fu-fo-ico' }, icon(UNIT_ICON[u.type])),
       h('div', { class: 'fu-fo-main' },
         h('div', { class: 'fu-fo-line' }, name, front),
+        mission,
         state,
         place,
         h('div', { class: 'fu-fo-hp' }, h('div', { class: 'fu-sel-bar' }, bar), pctEl),
@@ -161,7 +171,7 @@ export function createForces(hs: HudShared): ForcesPanel {
       if (!cur) return null;
       return { title: unitName(cur), text: t(UNIT_DEFS[cur.type].roleKey), lines: [effectLine(hs, cur), t('forces.row.tip')] };
     });
-    return { el: rowEl, place, state, bar, pctEl, front, back };
+    return { el: rowEl, mission, place, state, bar, pctEl, front, back };
   }
 
   function prodKey(q: ProductionView): string {
@@ -200,6 +210,136 @@ export function createForces(hs: HudShared): ForcesPanel {
       ctx.bus.emit('focusRequest', { lat: ll.lat, lon: ll.lon, altitudeKm: 900, durationMs: 1200 });
     });
     return { el: r, bar, eta };
+  }
+
+  // ---- missions (Feedback 3, 29c) ----------------------------------------------------------------
+  /** «Misión: Unirse a la ofensiva» / «Sin misión» — what the unit was ordered to do. */
+  function missionLine(u: UnitView): string {
+    if (isIdle(u)) return t('forces.mission.none');
+    const w = orderWord(u);
+    return w ? t('forces.mission', { m: w }) : t('forces.mission.default');
+  }
+  /** A unit with nothing to do: a division waiting with no order, an aircraft docked and ready with no station, an
+   * idle warship. (Holding, defending, refuelling for a station or rearming is doing something.) */
+  function isIdle(u: UnitView): boolean {
+    if (u.state === UnitState.Controlled) return false;
+    if (u.type === UnitType.ArmoredDivision) return u.mode === UnitMode.Idle && u.order < 0;
+    if (u.type === UnitType.Warship) return u.mode === UnitMode.Idle && u.order < 0;
+    if (u.type === UnitType.TransportShip) return false;
+    return u.mode === UnitMode.Docked && !stationOrder(u);
+  }
+  interface Suggestion { ids: number[]; type: UnitType; order: UnitOrderKind; tile: number; targetId: number; text: string }
+  /** The mission the advisor proposes for idle units of a type (null: nothing sensible now, e.g. at peace). */
+  function suggest(type: UnitType, ids: number[]): Suggestion | null {
+    const v = view();
+    const fronts = humanFrontsByDanger(v);
+    const f = fronts[0];
+    const mine = v.attacks.find((a) => a.attacker === HUMAN_ID && !a.naval && a.defender > 0 && a.state !== 'retreating') ?? null;
+    const contactTile = (a: AttackView) => tileAt(a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y);
+    if (type === UnitType.ArmoredDivision) {
+      if (mine) return { ids, type, order: 'join', tile: -1, targetId: mine.id, text: t('adv.s.join', { off: offensiveName(hs, mine) }) };
+      if (f) {
+        const p = frontAnchor(f);
+        const own = ownSideTile(p.x, p.y);
+        if (own >= 0) return { ids, type, order: 'defend', tile: own, targetId: 0, text: t('adv.s.defend', { front: frontName(hs, f.key) }) };
+      }
+      return null;
+    }
+    if (type === UnitType.FighterSquadron) {
+      if (mine) return { ids, type, order: 'cap', tile: contactTile(mine), targetId: 0, text: t('adv.s.capOff', { off: offensiveName(hs, mine) }) };
+      if (f) {
+        const p = frontAnchor(f);
+        return { ids, type, order: 'cap', tile: tileAt(p.x, p.y), targetId: 0, text: t('adv.s.capFront', { front: frontName(hs, f.key) }) };
+      }
+      const cap = v.human?.capitalTile ?? -1;
+      return cap >= 0 ? { ids, type, order: 'cap', tile: cap, targetId: 0, text: t('adv.s.capHome') } : null;
+    }
+    if (type === UnitType.DroneSwarm) {
+      if (mine) return { ids, type, order: 'support', tile: contactTile(mine), targetId: 0, text: t('adv.s.support', { off: offensiveName(hs, mine) }) };
+      if (f) return { ids, type, order: 'support', tile: tileAt(frontAnchor(f).x, frontAnchor(f).y), targetId: 0, text: t('adv.s.supportFront', { front: frontName(hs, f.key) }) };
+      return null;
+    }
+    if (type === UnitType.Bomber) {
+      // A bomber's target is the player's choice: the advisor puts it in target mode.
+      return fronts.length ? { ids, type, order: 'strike', tile: -1, targetId: 0, text: t('adv.s.strike') } : null;
+    }
+    if (type === UnitType.Warship) {
+      const r = viewRules(v);
+      let best: { tile: number; d: number } | null = null;
+      const u0 = v.units.get(ids[0]);
+      for (const s of v.structures.values()) {
+        if (s.type !== StructureType.Port || !hostileTo(r, HUMAN_ID, s.owner) || !u0) continue;
+        const w = waterNear(s.tile);
+        if (w < 0) continue;
+        const d = tileKm(u0.x, u0.y, (w % MAP_W) + 0.5, Math.floor(w / MAP_W) + 0.5);
+        if (!best || d < best.d) best = { tile: w, d };
+      }
+      if (best) return { ids, type, order: 'blockade', tile: best.tile, targetId: 0, text: t('adv.s.blockade') };
+      return null;
+    }
+    return null;
+  }
+  function ownSideTile(x: number, y: number): number {
+    const v = view();
+    for (let r = 0; r <= 3; r++) {
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        const t0 = tileAt(x + dx, y + dy);
+        if (v.owner[t0] === HUMAN_ID) return t0;
+      }
+    }
+    return -1;
+  }
+  function waterNear(tile: number): number {
+    const v = view();
+    const x = tile % MAP_W, y = Math.floor(tile / MAP_W);
+    for (let r = 1; r <= 3; r++) {
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        const t0 = tileAt(x + dx + 0.5, y + dy + 0.5);
+        if (v.world && isNavigableTerrain(v.world.terrain[t0])) return t0;
+      }
+    }
+    return -1;
+  }
+  let advSig = '';
+  function paintAdvisor(list: UnitView[]): void {
+    const byType = new Map<UnitType, number[]>();
+    for (const u of list) if (isIdle(u)) (byType.get(u.type) ?? byType.set(u.type, []).get(u.type)!).push(u.id);
+    const rows: { s: Suggestion | null; type: UnitType; n: number }[] = [];
+    for (const [type, ids] of byType) rows.push({ s: suggest(type, ids), type, n: ids.length });
+    const sig = `${getLanguage()}|${rows.map((r) => `${r.type}:${r.n}:${r.s?.order ?? ''}:${r.s?.targetId ?? ''}:${r.s?.tile ?? ''}`).join(',')}`;
+    if (sig === advSig) return;
+    advSig = sig;
+    toggleClass(advisor, 'fu-hidden', rows.length === 0);
+    if (!rows.length) {
+      advisor.replaceChildren();
+      return;
+    }
+    const total = rows.reduce((a, r) => a + r.n, 0);
+    const els: HTMLElement[] = [h('b', null, t('adv.title', { n: total }))];
+    for (const r of rows) {
+      const label = t(`adv.idle.${unitId(r.type)}`, { n: r.n });
+      const row = h('div', { class: 'fu-fo-adv-row' }, h('span', null, r.s ? `${label}: ${r.s.text}` : `${label}: ${t('adv.s.none')}`));
+      if (r.s) {
+        const sg = r.s;
+        const btn = h('button', { class: 'fu-btn fu-btn--xs fu-btn--primary', 'data-adv': String(r.type) }, t('adv.go')) as HTMLButtonElement;
+        tip(btn, () => ({ title: t('adv.go'), text: sg.text, lines: [t('adv.go.tip')] }));
+        btn.addEventListener('click', () => {
+          if (sg.order === 'strike') {
+            hs.select({ kind: 'units', ids: sg.ids });
+            hs.setMode({ kind: 'order', unitId: sg.ids[0], order: 'strike' });
+            ctx.bus.emit('toast', { text: t('adv.strike.pick'), kind: 'info', durationMs: 3500 });
+          } else {
+            ctx.sim.send({ type: 'unitOrder', unitIds: sg.ids, order: sg.order, tile: sg.tile, targetId: sg.targetId });
+            ctx.bus.emit('toast', { text: t('adv.done', { n: sg.ids.length, what: sg.text }), kind: 'info', durationMs: 3000 });
+          }
+          hs.sound('confirm');
+          advSig = '';
+        });
+        row.append(btn);
+      }
+      els.push(row);
+    }
+    advisor.replaceChildren(...els);
   }
 
   // ---- capacity footer ---------------------------------------------------------------------------
@@ -262,6 +402,7 @@ export function createForces(hs: HudShared): ForcesPanel {
       counts.all++;
     }
     for (const [k, b] of tabBtns) setText(b.n, counts[k] ? String(counts[k]) : '');
+    paintAdvisor(list);
     const shown = list.filter((u) => inTab(u.type));
     const prod = v.production.filter((q) => inTab(q.unit));
     const key = `${tab}|${shown.map((u) => `${u.id}:${groupOf(u)}`).join(',')}|${prod.map(prodKey).join(',')}`;
@@ -299,6 +440,8 @@ export function createForces(hs: HudShared): ForcesPanel {
     for (const u of shown) {
       const r = rows.get(u.id);
       if (!r) continue;
+      setText(r.mission, missionLine(u));
+      toggleClass(r.mission, 'is-idle', isIdle(u));
       setText(r.state, stateLine(hs, u));
       setText(r.place, placeOf(hs, u));
       setStyle(r.bar, 'transform', `scaleX(${Math.max(0, Math.min(1, u.hp)).toFixed(3)})`);
@@ -359,6 +502,9 @@ export function createForces(hs: HudShared): ForcesPanel {
       return out;
     },
     count: () => forces().length,
+    idle: () => forces().filter((u) => isIdle(u)).map((u) => ({ id: u.id, type: u.type, name: unitName(u) })),
+    advisor: () => advisor.innerText,
+    missions: () => forces().map((u) => ({ id: u.id, mission: missionLine(u) })),
     production: () => view().production.map((q) => ({ ...q, eta: q.readyTick - view().tick, name: unitLabel(q.unit, q.serial) })),
     dom: () => [...body.querySelectorAll('.fu-fo-row')].map((r) => (r as HTMLElement).innerText.replace(/\s+/g, ' ').trim()),
     capacity,
