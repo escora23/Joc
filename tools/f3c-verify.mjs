@@ -157,6 +157,36 @@ async function panel() {
   return page;
 }
 
+/** #29e: «Al mando» on an alert about the war at a place: in at the action, out looking at it. */
+async function alert() {
+  const page = await open('f3-missions', '&run=10&panel=0');
+  // The live war raises its own alerts (offensives, losses, strikes); wait for one that offers «Al mando».
+  let ok = await until(page, () => !!document.querySelector('.fu-alert-take'), null, 240000, 1000);
+  if (!ok) {
+    await page.evaluate(() => __front.ctx.sim.setSpeed?.(3));
+    ok = await until(page, () => !!document.querySelector('.fu-alert-take'), null, 240000, 1000);
+  }
+  const title = await page.evaluate(() => document.querySelector('.fu-alert-take')?.closest('.fu-alert')?.innerText.replace(/\s+/g, ' ').slice(0, 160) ?? '');
+  row('A1', 'an alert about the war at a place offers «Al mando»', title || 'no alert with the button', !!ok);
+  if (!ok) return page;
+  await shot(page, 'alert-0');
+  const place = await page.evaluate(() => { const b = document.querySelector('.fu-alert-take'); return b ? true : false; });
+  const t0 = Date.now();
+  await uiClick(page, '.fu-alert-take');
+  const inPlay = await until(page, () => window.__cmdStats?.phase === 'play' ? window.__cmdStats : null, null, 300000, 500);
+  const c = await waitContact(page, 300000);
+  const s = await stats(page);
+  row('A2', 'in at the action: an enemy within 4 km without driving', c ? `${((Date.now() - t0) / 1000).toFixed(1)} real s; enemy at ${c.m} m; marches ${JSON.stringify((s?.transits ?? []).map((x) => Math.round(x.km)))}` : `${inPlay ? 'in play' : 'not in play'}; no contact; target ${JSON.stringify(s?.target)}`, !!c && place);
+  await shot(page, 'alert-1-contact');
+  const where = await page.evaluate(() => window.__cmd.where());
+  await page.evaluate(() => window.__cmd.debrief());
+  await until(page, (w) => { const c = __front.ctx.cameraRig.getState(); return __front.ctx.app.state === 'playing' && c.altitudeKm > 850 && c.altitudeKm < 950 && Math.abs(c.lon - w.lon) < 1.5 && Math.abs(c.lat - w.lat) < 1.5; }, where, 180000, 500);
+  const cam = await page.evaluate(() => __front.ctx.cameraRig.getState());
+  row('A3', 'exit: the strategic camera looks at the place of the action', `cam ${cam.lat.toFixed(2)}, ${cam.lon.toFixed(2)} @ ${Math.round(cam.altitudeKm)} km; unit ${where.lat.toFixed(2)}, ${where.lon.toFixed(2)}`, Math.abs(cam.lat - where.lat) < 1 && Math.abs(cam.lon - where.lon) < 1 && cam.altitudeKm < 1500);
+  await shot(page, 'alert-2-exit');
+  return page;
+}
+
 async function frameLight(page) {
   const b64 = (await page.screenshot({ timeout: 300000 })).toString('base64');
   return page.evaluate(async (src) => {
@@ -252,15 +282,16 @@ async function city() {
   await fireAt(page, 1);
   let dlg = null;
   // The round flies ~1.5 s of local time: many SwiftShader frames.
-  for (let i = 0; i < 900 && !dlg; i++) {
-    dlg = page.__logs.find((l) => /civilian target: asking/.test(l)) ?? null;
+  // (a slow SwiftShader frame can hold the round in the air for minutes of real time: wait up to 15 min)
+  for (let i = 0; i < 2250 && !dlg; i++) {
+    dlg = page.__logs.find((l) => /civilian target: asking/.test(l)) ?? (await page.evaluate(() => window.__asks?.[0] ?? null).catch(() => null));
     if (!dlg) await sleep(400);
   }
   row('C1', 'the first shot at a city asks first, with the consequences in numbers', dlg ?? 'no dialog', !!dlg && /civil/i.test(dlg));
   await shot(page, 'city-0-confirm');
   await page.keyboard.press('Enter');
   await sleep(1500);
-  await fireAt(page, 33);
+  await fireAt(page, 19);
   await sleep(5000);
   const s1 = await until(page, (h) => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return s && s.hp < h - 0.01 ? s : null; }, s0?.hp ?? 1, 60000, 500);
   const s2 = await structNow(page);
@@ -270,7 +301,21 @@ async function city() {
   const op1 = await page.evaluate(() => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return __front.ctx.sim.view.opinions.get(s.owner)?.score ?? null; });
   row('C3', 'diplomatic consequence: the victim thinks worse of us', `${op0} → ${op1}`, op0 === null || (op1 !== null && op1 < op0));
   await page.evaluate(() => window.__cmd.simulate(150, 1 / 30));
-  await sleep(4000);
+  // Look through the gunner's sight at the part of the city that was hit (as the player would).
+  await page.evaluate(() => {
+    const I = window.__cmd;
+    const hs = I.civil.houseRecs.filter((h) => h.cityId === window.__strikeTarget);
+    const down = hs.filter((h) => h.down);
+    const pick = down.length ? down : hs;
+    if (!pick.length) return;
+    const V = I.camera.position.constructor;
+    const x = pick.reduce((a, h) => a + h.x, 0) / pick.length, z = pick.reduce((a, h) => a + h.z, 0) / pick.length;
+    I.controller.aimAt(new V(x, pick[0].y + 6, z));
+    I.controller.snapTurret?.();
+    I.controller.setZoom?.(true);
+    I.simulate(4, 1 / 30);
+  });
+  await sleep(6000);
   await shot(page, 'city-1-collapse');
   return page;
 }
@@ -300,7 +345,7 @@ async function night() {
   return page;
 }
 
-const sections = { strike, city, night, go, panel };
+const sections = { strike, city, night, go, panel, alert };
 for (const [name, fn] of Object.entries(sections)) {
   if (only && !only.has(name)) continue;
   console.log(`--- ${name}`);

@@ -1638,6 +1638,28 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   /**
+   * During a march: where the next leg goes, judged from the sim alone (the scene is not rebuilt yet). The action the
+   * player was sent to while it is not reached, else the nearest action (a defended sector never pulls away from a
+   * fight); null when the unit is there, an enemy unit is in reach or no route exists.
+   */
+  function nextLegFromSim(): { route: Route; c: CombatTarget } | null {
+    const uv = unitView();
+    if (!uv) return null;
+    if (enemyNearTile(uv.x, uv.y, kind === 'tank' ? 4 : kind === 'ship' ? 12 : 15)) return null;
+    targets = combatTargets(ctx.sim.view, uv.x, uv.y, kind, uv);
+    targetsWall = performance.now();
+    if (entryGoal) entryGoal.km = tileKm(uv.x, uv.y, entryGoal.tx, entryGoal.ty);
+    if (entryGoal && entryGoal.km < STOP_KM[kind] + HOP_KM[kind]) entryGoal = null;
+    const { nearest, mission } = targets;
+    const c = entryGoal ?? (mission && mission.order !== 'defend' && mission.km > STOP_KM[kind] + HOP_KM[kind] && (!nearest || mission.km <= nearest.km * 1.5 + 5) ? mission : nearest);
+    if (!c) return null;
+    const stop = c.kind === 'unit' && c.unitId ? STOP_KM[kind] * 2 : STOP_KM[kind];
+    if (c.km - stop < HOP_KM[kind]) return null;
+    const route = planRoute(uv.x, uv.y, c.tx, c.ty, stop, passableTile, kind === 'jet' ? 4000 : 2500);
+    return route && route.km >= 0.5 ? { route, c } : null;
+  }
+
+  /**
    * The march: the unit really moves in the sim along the route at its strategic speed while the clock runs fast
    * (×300 … ×3600: the whole world with it, as a strategic move would), behind a fade with a progress card; then the
    * scene is rebuilt where it stopped. Stops on arrival, an enemy unit in reach, a critical alert or Esc.
@@ -1645,10 +1667,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   async function marchTo(route: Route, c: CombatTarget, prebuild: boolean): Promise<{ x: number; y: number; heading: number } | null> {
     if (!params || !overlay) return null;
     const p0 = params;
-    const title = targetTitle(c);
+    let title = targetTitle(c);
     const speed = UNIT_DEFS[p0.unitType].speedKmh;
-    const hours = route.km / speed;
-    const rate = Math.round(Math.max(TRANSIT_RATE_MIN, Math.min(TRANSIT_RATE_MAX, (hours * 3600) / TRANSIT_REAL_S)));
+    let hours = route.km / speed;
+    let rate = Math.round(Math.max(TRANSIT_RATE_MIN, Math.min(TRANSIT_RATE_MAX, (hours * 3600) / TRANSIT_REAL_S)));
     const wall0 = performance.now();
     const prevPhase = phase;
     phase = 'transit';
@@ -1670,6 +1692,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     let pt = alongRoute(route, 0);
     const reachKm = kind === 'tank' ? 5 : kind === 'ship' ? 25 : 60;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let legSec0 = sec0, kmDone = 0;
+    for (let leg = 0; ; leg++) {
     for (;;) {
       await sleep(80);
       if (!active) {
@@ -1685,7 +1709,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       // last one, and snaps a move beyond it); the next move asks for the point the clock allows by now.
       km = routeProgress(route, uv.x, uv.y);
       const cv = ctx.sim.view.command;
-      const gs = cv ? Math.max(0, cv.sec - sec0) : 0;
+      const gs = cv ? Math.max(0, cv.sec - legSec0) : 0;
       const want = Math.min(route.km, Math.max(km, (speed * gs) / 3600));
       pt = alongRoute(route, want);
       const now = performance.now();
@@ -1726,6 +1750,29 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         foot: t('command.transit.foot'),
       });
     }
+    kmDone += km;
+    // Arrived, but the line moved during the march (fronts are alive) or the far view of it was coarse: the next leg
+    // goes on behind the same fade, from where the sim has the unit (no scene rebuild in between; at most 4 legs).
+    if (stopBy !== 'arrived' || leg >= 3) break;
+    const nx = nextLegFromSim();
+    if (!nx) break;
+    console.info(`[command] march goes on to ${targetTitle(nx.c)}: ${nx.route.km.toFixed(1)} km more`);
+    route = nx.route;
+    c = nx.c;
+    title = targetTitle(c);
+    hours = route.km / speed;
+    // A follow-on leg is short: it gets less real time than the first (the player is already waiting behind the card).
+    rate = Math.round(Math.max(TRANSIT_RATE_MIN, Math.min(TRANSIT_RATE_MAX, (hours * 3600) / (TRANSIT_REAL_S * 0.4))));
+    requested = effRate = rate;
+    ctx.sim.setClock('travel', rate, { x: route.pts[0].x, y: route.pts[0].y }, false);
+    sentClock = { mode: 'travel', rate, throttled: false, at: performance.now() };
+    legSec0 = ctx.sim.view.command?.sec ?? legSec0;
+    km = 0;
+    lastKm = -1;
+    stallSince = performance.now();
+    pt = alongRoute(route, 0);
+    }
+    km = kmDone;
     // Tactical time again, where the sim has the unit.
     requested = effRate = 1;
     const uEnd = unitView();
