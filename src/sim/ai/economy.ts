@@ -9,6 +9,7 @@
 import { STRUCTURE_DEFS } from '../../shared/constants';
 import type { SimPlayer, SimStructure } from '../../shared/simapi';
 import { StructureType } from '../../shared/types';
+import { REPAIR_PAUSE_TICKS, repairCost } from '../../shared/damage';
 import { alive, home, landShare, type AiContext } from './context';
 import { depthOf, dist2, ownTileNear, sampleSet } from './mapindex';
 import type { Brain } from './state';
@@ -22,12 +23,32 @@ interface Want {
 
 const wants: Want[] = [];
 
+/** How much an AI wants each structure type repaired (air defence and cities first). */
+const REPAIR_VALUE: Partial<Record<number, number>> = {
+  [StructureType.City]: 3, [StructureType.SamSite]: 3, [StructureType.Airbase]: 2.5, [StructureType.Factory]: 2, [StructureType.Port]: 1.8,
+  [StructureType.ArmyBase]: 2, [StructureType.MissileSilo]: 2, [StructureType.Radar]: 1.5, [StructureType.NavalYard]: 1.5, [StructureType.DefensePost]: 1.5,
+};
+
 export function thinkBuild(ctx: AiContext, b: Brain, p: SimPlayer): void {
   const g = ctx.g;
   const rng = ctx.rng;
   const diff = b.diff, w = b.prof.build;
   if (rng.next() < diff.sloppiness) return;
   const mine = g.structures(p.id);
+  // Feedback 3: repair what the enemy damaged before building more (most valuable first; only when the hits stopped
+  // and the gold covers the repair twice, keeping money for the war).
+  {
+    let best: (typeof mine)[number] | null = null, bestV = 0;
+    for (const s of mine) {
+      if (s.built < 1 || s.hp >= 0.75 || s.repairing || g.tick - s.lastDamageTick < REPAIR_PAUSE_TICKS) continue;
+      const v = (REPAIR_VALUE[s.type] ?? 1) * (1 - s.hp) * s.level;
+      if (v > bestV) {
+        bestV = v;
+        best = s;
+      }
+    }
+    if (best && p.gold >= repairCost(best.type, best.level, best.hp) * 2 && g.issue(p.id, { type: 'repairStructure', structureId: best.id })) return;
+  }
   const count = new Int32Array(10);
   let cityLevels = 0;
   for (const s of mine) {

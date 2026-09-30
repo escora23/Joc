@@ -24,6 +24,7 @@ import {
   kmhToKmPerTick, structureLevel, ARMOR_RAIL_KMH,
 } from '../shared/constants';
 import {
+  ASSAULT_DEPTH_TILES, DEFEND_TILES, DIVISION_ARTILLERY_TILES, DIVISION_SHELL_PER_HOUR, RAZE_SHELL_MUL,
   baseCapacity, bombardStation, canTransit, hostileTo, shipComponent, homeTypeOf, inferOrder, isAircraft, orderCheck, planDivision, strikeTarget, tileCx,
   tileCy, tileKm, type StationLike,
 } from '../shared/orders';
@@ -148,6 +149,14 @@ export class UnitSystem {
       }
     }
     if (destroyed) {
+      // Feedback 3 (29d): a mission cut short by the unit's loss has its report too.
+      if ((u.owner === HUMAN_ID || u.enemy === HUMAN_ID) && u.type === UnitType.ArmoredDivision && u.missionTarget) this.missionEnd(u, 'lost');
+      else if (u.mode === Mode.Strike && (u.owner === HUMAN_ID || g.owner[u.targetTile] === HUMAN_ID) && u.targetTile >= 0) {
+        g.emit({
+          type: 'afterAction', tick: g.tick, kind: 'strike', owner: u.owner, enemy: g.owner[u.targetTile] ?? 0, result: 'lost', x: u.x, y: u.y,
+          startTick: u.missionStart || g.tick, tilesTaken: 0, tilesLost: 0, lossesOwn: 100, lossesEnemy: 0, unitId: u.id, unitType: u.type, order: 'strike', damage: 0,
+        });
+      }
       g.dyingUnits.push(u);
       const k = g.playerById[by];
       if (k && by !== u.owner) k.stats.unitsDestroyed++;
@@ -327,6 +336,21 @@ export class UnitSystem {
     return s;
   }
 
+  /**
+   * Feedback 3 (#28): is port `s` blockaded? An enemy warship at war holding a blockade station within
+   * WARSHIP_ENGAGE_TILES of it: no trade ship leaves (its trade income stops) and its invasions cannot embark.
+   */
+  blockaded(s: Structure): number {
+    const g = this.g;
+    let by = 0;
+    g.unitGrid.query(s.x, s.y, WARSHIP_ENGAGE_TILES / Math.max(0.2, latCos(s.y)), (o) => {
+      if (by || o.dead || o.type !== UnitType.Warship || o.mode !== Mode.Blockade || o.owner === s.owner) return;
+      if (tileKm(o.x, o.y, s.x, s.y) > WARSHIP_ENGAGE_TILES * TILE_KM) return;
+      if (hostileTo(g.rules, o.owner, s.owner)) by = o.owner;
+    });
+    return by;
+  }
+
   /** A fighter squadron on station on its combat air patrol (within its orbit, not transiting or out of fuel). */
   private onCap(u: Unit): boolean {
     if (u.type !== UnitType.FighterSquadron || u.mode !== Mode.Cap || u.dead) return false;
@@ -415,7 +439,10 @@ export class UnitSystem {
         if (confirm && order === 'strike') strategicConfirmed = true;
       }
     }
-    if (accepted.length && order === 'attack' && ratio !== undefined && ratio > 0) this.launchFromDivision(p, tile, ratio);
+    if (accepted.length && (order === 'attack' || order === 'assault' || order === 'raze') && ratio !== undefined && ratio > 0) {
+      const s = order === 'attack' ? null : g.structureMap.get(targetId) ?? g.structureMap.get(g.structAt[tile] ?? 0);
+      this.launchFromDivision(p, s ? s.tile : tile, ratio);
+    }
     if (strategicConfirmed) {
       const tgt = strikeTarget(g.rules, tile, targetId);
       if (tgt && tgt.strategic && g.war.escalation(p.id, tgt.owner) < 2) g.war.raiseEscalation(p.id, tgt.owner, 2, 'escalation.reason.player');
@@ -430,8 +457,9 @@ export class UnitSystem {
   /** Carry out a validated order. */
   private apply(p: Player, u: Unit, order: UnitOrderKind, tile: number, targetId: number): boolean {
     u.order = orderCode(order);
+    u.missionStart = this.g.tick;
     switch (u.type) {
-      case UnitType.ArmoredDivision: return this.orderDivision(p, u, order, tile);
+      case UnitType.ArmoredDivision: return this.orderDivision(p, u, order, tile, targetId);
       case UnitType.Warship: return this.orderWarship(p, u, order, tile, targetId);
       default: return this.orderAircraft(p, u, order, tile, targetId);
     }
@@ -452,9 +480,71 @@ export class UnitSystem {
   }
 
   // --- divisions ---------------------------------------------------------------------------------------
-  private orderDivision(p: Player, u: Unit, order: UnitOrderKind, tile: number): boolean {
+  private orderDivision(p: Player, u: Unit, order: UnitOrderKind, tile: number, targetId = 0): boolean {
     const g = this.g;
+    if (u.missionTarget && (order !== 'raze' && order !== 'assault')) this.clearRaze(u);
+    u.missionTarget = 0;
+    u.missionStart = g.tick;
+    u.missionDealt = 0;
     switch (order) {
+      case 'defend': {
+        // Feedback 3 (#28): hold a border sector or a city. The anchor is the order's tile; the division drives there
+        // and fights on any front within DEFEND_TILES of it, never following the line away from its sector.
+        u.enemy = 0;
+        u.frontKey = 0;
+        u.anchorTile = tile;
+        if (dist2(u.x, u.y, tileCx(tile), tileCy(tile)) <= 1) {
+          this.stopDivision(u);
+          u.order = orderCode('defend');
+          this.defendStep(u);
+          return true;
+        }
+        return this.marchTo(u, tile, Mode.Deploy);
+      }
+      case 'join': {
+        // Feedback 3 (#28): join our offensive `targetId` at its live contact and follow its spearhead.
+        const a = g.attacks.byId(targetId);
+        if (!a || a.ended) return false;
+        const cx = a.liveX >= 0 ? a.liveX : a.clickX, cy = a.liveY >= 0 ? a.liveY : a.clickY;
+        const rally = this.rallyTile(u.owner, a.defender, tileOf(cx, cy));
+        if (rally < 0) return false;
+        u.enemy = a.defender;
+        u.missionTarget = a.id;
+        u.frontKey = a.frontKey;
+        if (dist2(u.x, u.y, tileCx(rally), tileCy(rally)) <= DIVISION_ATTACH_TILES ** 2) {
+          this.attach(u, a.defender);
+          return true;
+        }
+        return this.marchTo(u, rally, Mode.Deploy);
+      }
+      case 'assault':
+      case 'raze': {
+        // Feedback 3 (#27, #28): take (or raze) an enemy structure near the front. The division goes to the stretch of
+        // line nearest to it, shells it with its artillery once within DIVISION_ARTILLERY_TILES, and our offensive on
+        // that front (if any) aims its axis at it; when the tile falls the structure is captured (or destroyed).
+        const s = g.structureMap.get(targetId) ?? g.structureMap.get(g.structAt[tile] ?? 0);
+        if (!s) return false;
+        const rally = this.rallyTile(u.owner, s.owner, s.tile);
+        if (rally < 0) return false;
+        u.enemy = s.owner;
+        u.missionTarget = s.id;
+        u.anchorTile = s.tile;
+        if (order === 'raze' && !s.razeBy.includes(u.owner)) s.razeBy.push(u.owner);
+        if (order === 'assault') this.clearRazeOf(s, u.owner, u.id);
+        for (const a of g.attackList) {
+          if (!a.ended && !a.naval && a.attacker === p.id && a.defender === s.owner && a.returnAt < 0) {
+            g.attacks.setAxis(a, s.tile);
+            break;
+          }
+        }
+        const f = g.fronts.frontAt(u.owner, s.owner, tileCx(rally), tileCy(rally));
+        u.frontKey = f?.key ?? 0;
+        if (dist2(u.x, u.y, tileCx(rally), tileCy(rally)) <= DIVISION_ATTACH_TILES ** 2) {
+          this.attach(u, s.owner);
+          return true;
+        }
+        return this.marchTo(u, rally, Mode.Deploy);
+      }
       case 'hold':
         this.stopDivision(u);
         u.order = orderCode('hold');
@@ -984,7 +1074,7 @@ export class UnitSystem {
     let embark = EMBARK_SHORE_TICKS;
     for (const s of g.structByOwner.get(p.id) ?? []) {
       if (s.type === StructureType.Port && s.operational && distKm(s.x, s.y, bx, by) <= EMBARK_PORT_RANGE_KM) {
-        embark = Math.min(embark, structureLevel(s.type, s.level).embarkTicks ?? embark);
+        embark = Math.min(embark, Math.round((structureLevel(s.type, s.level).embarkTicks ?? embark) / Math.max(0.25, s.fn)));
       }
     }
     u.embarkUntil = g.tick + embark;
@@ -1140,6 +1230,16 @@ export class UnitSystem {
     for (const s of g.structureMap.values()) {
       if (s.queue.length === 0) continue;
       const q = s.queue[0];
+      // Feedback 3: a damaged base builds at its function (60 % / 25 % speed): the remaining time stretches, and the
+      // units queued behind it move back with it.
+      if (g.tick >= q.startTick && g.tick < q.readyTick && s.fn < 1) {
+        const lag = 1 - s.fn;
+        for (const r of s.queue) {
+          if (r !== q) r.startTick += lag;
+          r.readyTick += lag;
+        }
+        if (s.owner === HUMAN_ID && g.tick % 10 === 0) this.productionDirty = true;
+      }
       if (g.tick < q.readyTick) continue;
       s.queue.shift();
       const p = g.playerById[s.owner];
@@ -1707,7 +1807,7 @@ export class UnitSystem {
         if (s.owner !== u.owner || !s.operational) return;
         if (s.type !== StructureType.NavalYard && s.type !== StructureType.Port) return;
         const lv = structureLevel(s.type, s.level);
-        if (tileKm(u.x, u.y, s.x, s.y) <= (lv.repairTiles ?? 3) * TILE_KM + 12) rate = Math.max(rate, lv.repairPerHour ?? 0);
+        if (tileKm(u.x, u.y, s.x, s.y) <= (lv.repairTiles ?? 3) * TILE_KM + 12) rate = Math.max(rate, (lv.repairPerHour ?? 0) * s.fn);
       });
       if (rate > 0) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * rate);
     }
@@ -1900,7 +2000,7 @@ export class UnitSystem {
     // Every 10 ticks: one hour of attrition on the garrison of the nearest front of the victim.
     this.bleedGarrison(victim, u.owner, tx, ty, BOMBARD_GARRISON_PER_HOUR);
     g.structGrid.query(tx, ty, 1.6, (st) => {
-      if (st.owner === victim) g.weapons.damageStructure(st, 0.05, u.owner);
+      if (st.owner === victim) g.weapons.damageStructure(st, 0.05, u.owner, 'naval');
     });
   }
 
@@ -1930,7 +2030,7 @@ export class UnitSystem {
       g.structGrid.query(u.x, u.y, 6 / Math.max(0.2, latCos(u.y)), (s) => {
         if (s.owner !== u.owner || s.type !== StructureType.ArmyBase || !s.operational) return;
         const lv = structureLevel(s.type, s.level);
-        if (tileKm(u.x, u.y, s.x, s.y) <= (lv.repairTiles ?? 5) * TILE_KM) rate = Math.max(rate, lv.repairPerHour ?? 0);
+        if (tileKm(u.x, u.y, s.x, s.y) <= (lv.repairTiles ?? 5) * TILE_KM) rate = Math.max(rate, (lv.repairPerHour ?? 0) * s.fn);
       });
       if (rate > 0) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * rate);
     }
@@ -1951,7 +2051,8 @@ export class UnitSystem {
           return;
         }
         if (!done) return;
-        const wasAttach = u.order === orderCode('attach') || u.order === orderCode('attack');
+        const wasAttach = u.order === orderCode('attach') || u.order === orderCode('attack') || u.order === orderCode('join')
+          || u.order === orderCode('assault') || u.order === orderCode('raze');
         u.path = null;
         u.pathRail = null;
         u.eta = -1;
@@ -1959,7 +2060,8 @@ export class UnitSystem {
         else {
           u.mode = Mode.None;
           u.state = UnitState.Idle;
-          if (u.order !== orderCode('hold')) this.autoAttach(u);
+          if (u.order === orderCode('defend')) this.defendStep(u);
+          else if (u.order !== orderCode('hold')) this.autoAttach(u);
         }
         return;
       }
@@ -1969,8 +2071,11 @@ export class UnitSystem {
       default:
         u.state = UnitState.Idle;
         u.eta = -1;
-        // An explicit «hold» (a unit released from command mode, owner feedback #18) stands until another order.
-        if ((g.tick + u.id) % 20 === 0 && u.order !== orderCode('hold')) this.autoAttach(u);
+        // An explicit «hold» (a unit released from command mode, owner feedback #18) stands until another order; a
+        // division defending a sector engages any front that reaches it (Feedback 3).
+        if (u.order === orderCode('defend')) {
+          if ((g.tick + u.id) % 5 === 0) this.defendStep(u);
+        } else if ((g.tick + u.id) % 20 === 0 && u.order !== orderCode('hold')) this.autoAttach(u);
     }
   }
 
@@ -1984,32 +2089,43 @@ export class UnitSystem {
   private stepAttached(u: Unit): void {
     const g = this.g;
     if (!hostileTo(g.rules, u.owner, u.enemy)) {
-      // The war ended (or the enemy is gone): the division stands down where it is.
+      // The war ended (or the enemy is gone): the division stands down where it is (a defender keeps its sector).
+      if (u.missionTarget) this.missionEnd(u, 'cancelled');
       u.mode = Mode.None;
       u.state = UnitState.Idle;
       u.enemy = 0;
       u.frontKey = 0;
       u.onOffensive = false;
-      u.order = -1;
+      if (u.order !== orderCode('defend')) u.order = -1;
       return;
     }
     u.state = UnitState.Attacking;
-    // Every 5 ticks: the nearest own tile touching the enemy (the line moves at most 8 km/h, 4 tiles a day).
+    // Every 5 ticks: the nearest own tile touching the enemy (the line moves at most 8 km/h, 4 tiles a day); a mission
+    // picks its own point of the line (the spearhead it joined, the structure it assaults, its sector).
     if ((g.tick + u.id) % 5 === 0) {
-      const t = this.lineTileNear(u, 6);
+      const aim = this.missionAim(u);
+      if (aim === null) return;
+      const t = aim ? this.lineTileNearPoint(u.owner, u.enemy, aim.x, aim.y, aim.r) : this.lineTileNear(u, 6);
       if (t >= 0) {
         u.toX = tileCx(t);
         u.toY = tileCy(t);
       } else {
-        const far = this.rallyTile(u.owner, u.enemy, tileOf(u.x, u.y));
+        if (u.order === orderCode('defend')) {
+          // The front left the sector: back to the anchor, and wait there.
+          u.enemy = 0;
+          u.frontKey = 0;
+          this.marchTo(u, u.anchorTile >= 0 ? u.anchorTile : tileOf(u.x, u.y), Mode.Deploy);
+          return;
+        }
+        const far = this.rallyTile(u.owner, u.enemy, aim ? tileOf(aim.x, aim.y) : tileOf(u.x, u.y));
         if (far < 0) {
           u.mode = Mode.None;
           u.state = UnitState.Idle;
           u.enemy = 0;
           return;
         }
-        // The front moved away: march to it and attach again.
-        u.order = orderCode('attach');
+        // The front moved away: march to it and attach again (a mission keeps its order).
+        if (!u.missionTarget) u.order = orderCode('attach');
         this.marchTo(u, far, Mode.Deploy);
         return;
       }
@@ -2017,6 +2133,8 @@ export class UnitSystem {
       if (f) u.frontKey = f.key;
     }
     if (dist2(u.x, u.y, u.toX, u.toY) > 0.25) this.moveToward(u, u.toX, u.toY, KM_PER_TICK[UnitType.ArmoredDivision]);
+    // Feedback 3: an assault shells its target once the artillery reaches it (every game hour).
+    if ((u.order === orderCode('assault') || u.order === orderCode('raze')) && (g.tick + u.id) % 10 === 0) this.shellTarget(u);
     // Integrity (§6.3): engaged −0.2 %/h, −0.5 %/h while our offensive advances at the cap, +0.25 %/h on a quiet front.
     let engaged = false, atCap = false, ours = false;
     for (const a of g.attackList) {
@@ -2064,6 +2182,126 @@ export class UnitSystem {
     return best;
   }
 
+  /** The own tile touching `enemy` nearest to (x, y) within `r` tiles (-1 = none): a mission's point of the line. */
+  private lineTileNearPoint(owner: number, enemy: number, x: number, y: number, r: number): number {
+    const g = this.g;
+    const cx = Math.floor(x), cy = Math.floor(y);
+    let best = -1, bd = Infinity;
+    for (let dy = -r; dy <= r; dy++) {
+      const yy = cy + dy;
+      if (yy < 1 || yy >= MAP_H - 1) continue;
+      for (let dx = -r; dx <= r; dx++) {
+        const xx = (((cx + dx) % MAP_W) + MAP_W) % MAP_W;
+        const t = yy * MAP_W + xx;
+        if (g.owner[t] !== owner || !g.playable[t]) continue;
+        const l = xx === 0 ? t + MAP_W - 1 : t - 1, rr = xx === MAP_W - 1 ? t - MAP_W + 1 : t + 1;
+        if (g.owner[l] !== enemy && g.owner[rr] !== enemy && g.owner[t - MAP_W] !== enemy && g.owner[t + MAP_W] !== enemy) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bd) {
+          bd = d;
+          best = t;
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Feedback 3 (#28): where on the line a division on a mission stands. join: the offensive's live contact (it follows
+   * the spearhead); assault / raze: the target structure; defend: its anchor. undefined = no mission (nearest line tile);
+   * null = the mission ended this tick (handled).
+   */
+  private missionAim(u: Unit): { x: number; y: number; r: number } | undefined | null {
+    const g = this.g;
+    const o = u.order;
+    if (o === orderCode('join')) {
+      const a = g.attacks.byId(u.missionTarget);
+      if (!a || a.ended || a.returnAt >= 0) {
+        // The offensive ended: the division stays on this front, attached (its report is the offensive's).
+        u.missionTarget = 0;
+        u.order = orderCode('attach');
+        return undefined;
+      }
+      u.frontKey = a.frontKey || u.frontKey;
+      return { x: a.liveX >= 0 ? a.liveX : a.clickX, y: a.liveY >= 0 ? a.liveY : a.clickY, r: 8 };
+    }
+    if (o === orderCode('assault') || o === orderCode('raze')) {
+      const s = g.structureMap.get(u.missionTarget);
+      if (!s || s.owner === u.owner || s.owner !== u.enemy) {
+        this.missionEnd(u, !s ? (g.ruins.get(this.missionTile(u))?.cause === 'raze' ? 'razed' : 'destroyed') : s.owner === u.owner ? 'captured' : 'cancelled');
+        u.order = orderCode('attach');
+        return undefined;
+      }
+      return { x: s.x, y: s.y, r: ASSAULT_DEPTH_TILES + 2 };
+    }
+    if (o === orderCode('defend') && u.anchorTile >= 0) return { x: tileCx(u.anchorTile), y: tileCy(u.anchorTile), r: DEFEND_TILES + 1 };
+    return undefined;
+  }
+
+  private missionTile(u: Unit): number {
+    return u.anchorTile;
+  }
+
+  /** A defending division with no front yet: engage a front within DEFEND_TILES of its anchor. */
+  private defendStep(u: Unit): void {
+    const anchor = u.anchorTile >= 0 ? u.anchorTile : tileOf(u.x, u.y);
+    const enemy = this.enemyNear(u.owner, anchor, DEFEND_TILES);
+    if (enemy > 0) {
+      const t = this.lineTileNearPoint(u.owner, enemy, tileCx(anchor), tileCy(anchor), DEFEND_TILES + 1);
+      if (t >= 0) {
+        this.attach(u, enemy);
+        u.toX = tileCx(t);
+        u.toY = tileCy(t);
+      }
+    }
+  }
+
+  /** Division artillery on its assault target: DIVISION_SHELL_PER_HOUR (×1.5 to raze) while within range. */
+  private shellTarget(u: Unit): void {
+    const g = this.g;
+    const s = g.structureMap.get(u.missionTarget);
+    if (!s || s.owner !== u.enemy) return;
+    if (tileKm(u.x, u.y, s.x, s.y) > (DIVISION_ARTILLERY_TILES + 0.5) * TILE_KM) return;
+    const dmg = DIVISION_SHELL_PER_HOUR * (u.order === orderCode('raze') ? RAZE_SHELL_MUL : 1) * Math.max(0.25, u.hp / u.maxHp);
+    g.emit({ type: 'combat', tick: g.tick, kind: 'artillery', owner: u.owner, fromX: u.x, fromY: u.y, toX: s.x + (this.rnd() - 0.5) * 0.6, toY: s.y + (this.rnd() - 0.5) * 0.6, hit: true });
+    const before = s.hp;
+    g.economy.damage(s, dmg, u.owner, 'artillery');
+    u.missionDealt += Math.max(0, before - Math.max(0, s.hp)) || dmg;
+  }
+
+  /** Remove this division's raze mark from its target (another division of ours may still hold one). */
+  private clearRaze(u: Unit): void {
+    const s = this.g.structureMap.get(u.missionTarget);
+    if (s) this.clearRazeOf(s, u.owner, u.id);
+  }
+
+  private clearRazeOf(s: Structure, owner: number, exceptUnit: number): void {
+    const raze = orderCode('raze');
+    for (const o of this.g.unitsByOwner.get(owner) ?? []) {
+      if (o.id !== exceptUnit && !o.dead && o.order === raze && o.missionTarget === s.id) return;
+    }
+    const i = s.razeBy.indexOf(owner);
+    if (i >= 0) s.razeBy.splice(i, 1);
+  }
+
+  /** Feedback 3 (29d): a division mission ended: the after-action report for the player. */
+  private missionEnd(u: Unit, result: 'captured' | 'destroyed' | 'razed' | 'cancelled' | 'lost'): void {
+    const g = this.g;
+    const s = g.structureMap.get(u.missionTarget);
+    const tile = s ? s.tile : u.anchorTile;
+    const ord = u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : 'attach';
+    if (u.owner === HUMAN_ID || u.enemy === HUMAN_ID) {
+      g.emit({
+        type: 'afterAction', tick: g.tick, kind: 'mission', owner: u.owner, enemy: u.enemy, result,
+        x: tile >= 0 ? tileCx(tile) : u.x, y: tile >= 0 ? tileCy(tile) : u.y, startTick: u.missionStart, tilesTaken: 0, tilesLost: 0,
+        lossesOwn: Math.round((1 - u.hp / u.maxHp) * 100), lossesEnemy: 0, unitId: u.id, unitType: u.type, order: ord,
+        structure: s ? s.type : g.ruins.get(tile)?.type ?? -1, damage: +u.missionDealt.toFixed(2),
+      });
+    }
+    if (ord === 'raze' && s) this.clearRazeOf(s, u.owner, u.id);
+    u.missionTarget = 0;
+  }
+
   // --- aircraft -------------------------------------------------------------------------------------------
   private stepAircraft(u: Unit): void {
     const g = this.g;
@@ -2093,7 +2331,7 @@ export class UnitSystem {
         u.x = base.x;
         u.y = base.y;
       }
-      if (u.hp < u.maxHp && (g.tick + u.id) % 10 === 0) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * (base ? structureLevel(base.type, base.level).repairPerHour ?? 0.1 : 0.1));
+      if (u.hp < u.maxHp && (g.tick + u.id) % 10 === 0) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * (base ? (structureLevel(base.type, base.level).repairPerHour ?? 0.1) * base.fn : 0.1));
       u.eta = u.readyTick > g.tick ? u.readyTick - g.tick : -1;
       if (u.resumeOrder >= 0 && u.readyTick <= g.tick) {
         this.resumeStation(u);
@@ -2338,7 +2576,7 @@ export class UnitSystem {
     if (!base || !base.operational) return;
     const lv = structureLevel(base.type, base.level);
     const radar = g.economy.radarCovers(u.owner, base.x, base.y);
-    const r = (lv.scrambleTiles ?? 16) * (radar ? RADAR_SCRAMBLE_MUL : 1);
+    const r = (lv.scrambleTiles ?? 16) * (radar ? RADAR_SCRAMBLE_MUL : 1) * base.fn;
     let best: Unit | null = null, bd = Infinity;
     g.unitGrid.query(base.x, base.y, r / Math.max(0.2, latCos(base.y)), (o) => {
       if (o.dead || (o.type !== UnitType.Bomber && o.type !== UnitType.DroneSwarm && o.type !== UnitType.CruiseMissile)) return;
@@ -2436,8 +2674,9 @@ export class UnitSystem {
         g.structGrid.query(s.x, s.y, 1.6, (o) => {
           if (o.owner === victim && o !== s) near.push(o);
         });
-        for (const o of near) g.weapons.damageStructure(o, splash, u.owner);
-        g.weapons.damageStructure(s, direct, u.owner);
+        const cause = bomb ? 'bomber' : 'drone';
+        for (const o of near) g.weapons.damageStructure(o, splash, u.owner, cause);
+        g.weapons.damageStructure(s, direct, u.owner, cause);
         damage = Math.min(before, direct);
         destroyed = !g.structureMap.has(s.id);
       }
@@ -2461,6 +2700,14 @@ export class UnitSystem {
       type: 'strikeResult', tick: g.tick, unitId: u.id, unit: u.type, owner: u.owner, victim, kind, targetId, structure: stype,
       damage: +damage.toFixed(3), destroyed, x: u.toX, y: u.toY,
     });
+    // Feedback 3 (29d): the strike's after-action report (the aircraft's integrity lost on the way counts as its losses).
+    if (u.owner === HUMAN_ID || victim === HUMAN_ID) {
+      g.emit({
+        type: 'afterAction', tick: g.tick, kind: 'strike', owner: u.owner, enemy: victim, result: destroyed ? 'destroyed' : 'hit',
+        x: u.toX, y: u.toY, startTick: u.missionStart || g.tick, tilesTaken: 0, tilesLost: 0, lossesOwn: Math.round((1 - u.hp / u.maxHp) * 100),
+        lossesEnemy: kind === 'front' ? Math.round(damage) : 0, unitId: u.id, unitType: u.type, order: 'strike', structure: stype, damage: +damage.toFixed(3),
+      });
+    }
   }
 
   /** Drone swarm over a front (§6.3): loiters on station; its support is read by frontSupport; bleeds the garrison. */

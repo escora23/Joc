@@ -30,6 +30,7 @@ import {
   DRONE_ENEMY_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, AIR_DENIAL_ADVANCE_MUL, structureLevel,
 } from '../shared/constants';
 import { StructureType, TerrainClass, TerrainFlag, type AttackView, type OffensiveIntensity } from '../shared/types';
+import { ARMOR_REACH_TILES } from '../shared/orders';
 import { NEUTRAL_LOSS_DIV, terrainCombat, type TerrainCombat } from './balance';
 import type { Front } from './fronts';
 import type { Game } from './game';
@@ -67,7 +68,7 @@ const MAX_PAIR_OFFENSIVES = 3;
 const REBUILD_EVERY = 20;
 /** Tiles around the axis ray that get the full axis factor. */
 const AXIS_CORE = 3;
-const ARMOR_REACH = 3;
+const ARMOR_REACH = ARMOR_REACH_TILES;
 /**
  * The player's axis point moves ahead of the advance (W6): once it is taken (or the line went past it by this many
  * tiles), it moves AXIS_LEAD tiles ahead of the live contact along the same ray.
@@ -582,6 +583,18 @@ export class AttackSystem {
     this.byIdMap.delete(a.id);
     g.attacksDirty = true;
     g.emit({ type: 'attackEnded', tick: g.tick, attackId: a.id, attacker: a.attacker, defender: a.defender, reason });
+    // Feedback 3 (29d): the after-action report of an offensive the human fought (either side).
+    if (a.defender > 0 && (a.attacker === HUMAN_ID || a.defender === HUMAN_ID) && !(a.naval && a.tilesTaken === 0 && a.attackerLosses === 0)) {
+      const result = reason === 'defenderEliminated' ? 'won' : a.tilesTaken > 0 ? (reason === 'cancelled' && a.tilesTaken > 20 ? 'won' : 'held')
+        : reason === 'cancelled' ? 'cancelled' : 'failed';
+      const sup = g.unitSys.frontSupport(a.id);
+      const x = a.liveX >= 0 ? a.liveX : a.clickX, y = a.liveY >= 0 ? a.liveY : a.clickY;
+      g.emit({
+        type: 'afterAction', tick: g.tick, kind: 'offensive', owner: a.attacker, enemy: a.defender, result, x, y, startTick: a.startTick,
+        tilesTaken: a.tilesTaken, tilesLost: a.tilesLost, lossesOwn: Math.round(a.attackerLosses), lossesEnemy: Math.round(a.defenderLosses),
+        attackId: a.id, units: sup.atk.map((u) => u.id), reason: why ?? reason,
+      });
+    }
     if (a.defender > 0 && a.attacker > 0) {
       g.emit({ type: 'offensive', tick: g.tick, attackId: a.id, attacker: a.attacker, defender: a.defender, stage: 'ended', x: a.clickX, y: a.clickY, ratio: +a.ratio.toFixed(2) });
     }
@@ -702,6 +715,10 @@ export class AttackSystem {
       a.air = skyAtk ? 1 : skyDef ? -1 : 0;
       a.casAtk = this.dronesAtk;
       a.casDef = this.dronesDef;
+      // Feedback 3 (29a, #28): what supports it, published so every preview scales the same measured figure.
+      a.divAtk = this.atkArmor.length;
+      a.divDef = this.defArmor.length;
+      a.navalAtk = this.navalAtk;
       // §4.4: ×1.15 with drone support over the front, ×1.15 with naval bombardment of its coast.
       Pa = a.troops * atkPower * armorA * (this.dronesAtk > 0 ? 1.15 : 1) * (this.navalAtk > 0 ? BOMBARD_ATTACK_MUL : 1);
       // All-out assault (#23): every reserve thrown in at once, +25 % attack power (paid in casualties below).
@@ -736,6 +753,7 @@ export class AttackSystem {
     }
     // Holding the line (#23): the troops stay dug in on the contact, nothing is pushed.
     if (a.intensity === 0) v = 0;
+    a.planKmh = v;
     a.pa = Pa;
     a.pd = Pd;
     // --- pressure (§4.5) -------------------------------------------------------------------------------
@@ -1087,7 +1105,8 @@ export class AttackSystem {
       if (s.type !== StructureType.DefensePost || !s.operational) continue;
       const lv = structureLevel(s.type, s.level);
       const r = lv.radiusTiles ?? 3;
-      this.posts.push({ x: s.x, y: s.y, r2: r * r, mul: lv.timeMul ?? 1.5 });
+      // Feedback 3: a damaged post slows and bleeds the attacker with its function (×1.5 at 60 % → ×1.3).
+      this.posts.push({ x: s.x, y: s.y, r2: r * r, mul: 1 + ((lv.timeMul ?? 1.5) - 1) * s.fn });
     }
   }
 
@@ -1141,6 +1160,7 @@ export class AttackSystem {
       committed: Math.floor(a.committed), etaTicks: eta, state: a.state, defensePower: Math.round(a.pd), attackPower: Math.round(a.pa),
       intensity: a.intensity,
       air: a.air, casAtk: a.casAtk, casDef: a.casDef,
+      divAtk: a.divAtk, divDef: a.divDef, navalAtk: a.navalAtk, planKmh: +a.planKmh.toFixed(2),
     };
   }
 

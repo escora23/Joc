@@ -11,11 +11,16 @@ import { tileKm } from '../shared/orders';
 import { STRUCTURE_TYPES, StructureType, UnitType } from '../shared/types';
 import {
   CIVILIANS_PER_CITY_LEVEL, CIVILIANS_PER_TILE, DEMOLISH_REFUND, GOLD_BASE_PER_TICK, GOLD_PER_CITY_LEVEL_PER_TICK,
-  GOLD_PER_TILE_PER_TICK, RAIL_MAX_LINK, RAIL_MAX_LINKS_PER_STATION, STRUCTURE_REPAIR_DELAY, STRUCTURE_REPAIR_PER_TICK,
+  GOLD_PER_TILE_PER_TICK, RAIL_MAX_LINK, RAIL_MAX_LINKS_PER_STATION,
   TRADE_MIN_DISTANCE, baseMaxTroops, kindCapMul, kindGoldMul, kindGrowthMul, troopGrowthPerTick,
 } from './balance';
 import type { Game } from './game';
 import { Mode, Player, Structure } from './state';
+import {
+  CAPTURE_MAX_HP, LEVEL_LOSS_HP, REPAIR_PAUSE_TICKS, REPAIR_PER_TICK, RUIN_TICKS, cityCivilianLoss, cityTroopLoss, damageState,
+  isCivilian, rebuildCost, repairCost,
+} from '../shared/damage';
+import type { StructureDamageCause } from '../shared/types';
 import { dist2, latCos, wdx } from './spatial';
 
 const STATION_TYPES = new Set<number>([StructureType.City, StructureType.Port, StructureType.Factory]);
@@ -46,11 +51,15 @@ export class EconomySystem {
   recount(pid: number): void {
     const p = this.g.playerById[pid];
     if (!p) return;
+    // (A save made before Feedback 3 restores an Int32Array: fractional levels need a Float64Array.)
+    if (!(p.structLevels instanceof Float64Array)) p.structLevels = new Float64Array((p.structLevels as ArrayLike<number>).length);
     p.structCount.fill(0);
     p.structLevels.fill(0);
     for (const s of this.g.structByOwner.get(pid) ?? []) {
       p.structCount[s.type]++;
-      if (s.built >= 1) p.structLevels[s.type] += s.level;
+      // Feedback 3: a damaged structure counts at its function (level × 1 / 0.6 / 0.25).
+      if (s.built >= 1) p.structLevels[s.type] += s.level * s.fn;
+      s.countedState = damageState(s.hp);
     }
   }
 
@@ -129,9 +138,10 @@ export class EconomySystem {
       g.message(p.id, err);
       return false;
     }
-    const cost = g.structureCost(p.id, type);
+    const cost = this.buildCost(p.id, type, tile);
     p.gold -= cost;
     p.stats.goldSpent += cost;
+    if (g.ruins.delete(tile)) g.ruinsDirty = true;
     const s = new Structure(g.allocId(), type, p.id, tile);
     s.built = 0;
     if (type === StructureType.Factory) s.timer = g.tick + STRUCTURE_DEFS[type].buildTicks + 2;
@@ -189,7 +199,7 @@ export class EconomySystem {
     if (!s || s.owner !== p.id) return false;
     const refund = Math.round(structureCost(s.type, Math.max(0, p.structCount[s.type] - 1)) * DEMOLISH_REFUND * (s.built >= 1 ? 1 : 2));
     g.addGold(p.id, refund);
-    this.destroyStructure(s, p.id);
+    this.destroyStructure(s, p.id, false);
     return true;
   }
 
@@ -210,30 +220,160 @@ export class EconomySystem {
     g.emit({ type: 'structureBuilt', tick: g.tick, structureId: s.id, owner, structure: type, tile });
   }
 
-  destroyStructure(s: Structure, by: number): void {
+  /**
+   * Remove a structure. Feedback 3: unless it was demolished by its owner (`ruin` false), it leaves rubble on its tile
+   * (a ruin, published in TickUpdate.ruins for 30 game days) which the owner of the land may rebuild at half price.
+   */
+  destroyStructure(s: Structure, by: number, ruin = true, cause: StructureDamageCause = 'strike'): void {
     const g = this.g;
     if (!g.structureMap.has(s.id)) return;
+    const owner = s.owner;
     this.unregister(s);
     const k = g.playerById[by];
-    if (k && by !== s.owner) k.stats.structuresDestroyed++;
+    if (k && by !== owner) k.stats.structuresDestroyed++;
     // Aircraft parked on a destroyed airbase burn with it.
     if (s.type === StructureType.Airbase) {
-      for (const u of (g.unitsByOwner.get(s.owner) ?? []).slice()) {
+      for (const u of (g.unitsByOwner.get(owner) ?? []).slice()) {
         if (u.home === s.id && u.mode === Mode.Docked) g.unitSys.kill(u, by);
       }
     }
-    g.emit({ type: 'structureDestroyed', tick: g.tick, structureId: s.id, owner: s.owner, structure: s.type, tile: s.tile, by });
-    if (s.owner === HUMAN_ID && by !== HUMAN_ID) g.message(HUMAN_ID, 'msg.structureLost', 'warning', { structure: s.type });
+    if (ruin && s.built >= 1) {
+      g.ruins.set(s.tile, { tile: s.tile, type: s.type, level: s.level, owner, by, tick: g.tick, cause });
+      g.ruinsDirty = true;
+    }
+    g.emit({ type: 'structureDestroyed', tick: g.tick, structureId: s.id, owner, structure: s.type, tile: s.tile, by });
+    if (owner === HUMAN_ID && by !== HUMAN_ID) g.message(HUMAN_ID, 'msg.structureLost', 'warning', { structure: s.type });
   }
 
-  /** The land under a structure changed hands. */
+  /**
+   * Feedback 3 (owner item #27): the one damage rule for every weapon (bombers, drones, missiles, naval and division
+   * artillery, command mode, nuclear blast rims). hp drops by `amount`; reaching 0 costs one level (the structure then
+   * stands heavily damaged at LEVEL_LOSS_HP) or, at level 1, destroys it (rubble). A city hit kills civilians and the
+   * owner's troops there; striking a city has a diplomatic cost (DiplomacySystem.onCivilianStrike). `block` is a city
+   * block command mode saw collapse (bit of CITY_BLOCKS).
+   */
+  damage(s: Structure, amount: number, by: number, cause: StructureDamageCause = 'strike', block = -1): void {
+    const g = this.g;
+    if (!g.structureMap.has(s.id) || !(amount > 0)) return;
+    const hpBefore = s.hp, stateBefore = damageState(s.hp);
+    const owner = s.owner;
+    s.hp -= amount;
+    s.lastDamageTick = g.tick;
+    if (by > 0 && by !== owner) s.lastHitBy = by;
+    if (block >= 0 && block < 32) s.blocks |= 1 << block;
+    g.structuresDirty = true;
+    if (by > 0 && by !== owner) g.markHostile(by, owner);
+    let civilians = 0, troops = 0;
+    const P = g.playerById[owner];
+    if (P && s.type === StructureType.City && s.built >= 1) {
+      const dealt = Math.min(amount, 1);
+      civilians = Math.min(P.pop * 0.5, cityCivilianLoss(s.level, dealt));
+      troops = Math.min(P.troops, cityTroopLoss(s.level, dealt, P.troops));
+      P.pop = Math.max(0, P.pop - civilians);
+      P.civilians = P.pop;
+      P.troops -= troops;
+      P.stats.troopsLost += troops;
+      const K = g.playerById[by];
+      if (K && by !== owner) K.stats.troopsKilled += troops;
+    }
+    if (by > 0 && by !== owner && isCivilian(s.type)) g.diplomacy.onCivilianStrike(by, owner, s.id);
+    let levelLost = false, destroyed = false;
+    if (s.hp <= 0) {
+      if (s.level > 1 && s.built >= 1) {
+        s.level--;
+        s.hp = LEVEL_LOSS_HP;
+        s.upgradeStart = s.upgradeUntil = 0;
+        levelLost = true;
+        if (STATION_TYPES.has(s.type)) this.railDirty = true;
+      } else destroyed = true;
+    }
+    const state = destroyed ? 3 : damageState(s.hp);
+    if (state !== stateBefore || levelLost || destroyed || amount >= 0.1) {
+      g.emit({
+        type: 'structureDamaged', tick: g.tick, structureId: s.id, owner, by, structure: s.type, tile: s.tile, level: s.level,
+        hpBefore: Math.max(0, hpBefore), hp: Math.max(0, s.hp), state, levelLost, destroyed, civilians: Math.round(civilians), troops: Math.round(troops), cause,
+      });
+    }
+    if (destroyed) {
+      this.destroyStructure(s, by, true, cause);
+      return;
+    }
+    if (levelLost || damageState(s.hp) !== s.countedState) this.recount(owner);
+  }
+
+  /** Why `p` cannot repair structure `id` now (i18n key), or null. */
+  repairError(p: Player, s: Structure | undefined): string | null {
+    if (!s || s.owner !== p.id) return 'msg.invalidTarget';
+    if (s.built < 1) return 'msg.underConstruction';
+    if (s.hp >= 0.999) return 'msg.repairNotNeeded';
+    if (s.repairing) return 'msg.repairing';
+    if (p.gold < repairCost(s.type, s.level, s.hp)) return 'msg.notEnoughGold';
+    return null;
+  }
+
+  /** Feedback 3: pay the repair up front; the structure regains REPAIR_PER_HOUR per game hour (paused after hits). */
+  repair(p: Player, structureId: number): boolean {
+    const g = this.g;
+    const s = g.structureMap.get(structureId);
+    const err = this.repairError(p, s);
+    if (err || !s) {
+      if (p.id === HUMAN_ID && err) g.message(p.id, err);
+      return false;
+    }
+    const cost = repairCost(s.type, s.level, s.hp);
+    p.gold -= cost;
+    p.stats.goldSpent += cost;
+    s.repairing = true;
+    g.structuresDirty = true;
+    return true;
+  }
+
+  /** Price of building `type` at `tile`: half on the builder's own rubble of the same type (Feedback 3). */
+  buildCost(pid: number, type: StructureType, tile: number): number {
+    const g = this.g;
+    const base = g.structureCost(pid, type);
+    const r = tile >= 0 ? g.ruins.get(tile) : undefined;
+    return r && r.type === type && g.owner[tile] === pid ? rebuildCost(base) : base;
+  }
+
+  /** Rubble older than RUIN_TICKS is cleared (checked every game hour). */
+  private expireRuins(): void {
+    const g = this.g;
+    for (const [t, r] of g.ruins) {
+      if (g.tick - r.tick >= RUIN_TICKS || g.structAt[t] !== 0) {
+        g.ruins.delete(t);
+        g.ruinsDirty = true;
+      }
+    }
+  }
+
+  /**
+   * The land under a structure changed hands. Feedback 3: it is captured, not deleted (defense posts included), taken
+   * in the fighting (at most CAPTURE_MAX_HP); a structure the new owner's divisions were ordered to raze is destroyed
+   * instead, and land falling to nobody leaves rubble.
+   */
   onTileCaptured(sid: number, prev: number, next: number): void {
     const g = this.g;
     const s = g.structureMap.get(sid);
     if (!s || s.owner === next) return;
-    if (next === 0 || s.type === StructureType.DefensePost) {
-      this.destroyStructure(s, next === 0 ? 0 : next);
+    if (next === 0) {
+      this.destroyStructure(s, 0, true, 'capture');
       return;
+    }
+    if (s.razeBy.includes(next)) {
+      g.emit({
+        type: 'structureDamaged', tick: g.tick, structureId: s.id, owner: s.owner, by: next, structure: s.type, tile: s.tile, level: s.level,
+        hpBefore: Math.max(0, s.hp), hp: 0, state: 3, levelLost: false, destroyed: true, civilians: 0, troops: 0, cause: 'raze',
+      });
+      if (isCivilian(s.type)) g.diplomacy.onCivilianStrike(next, s.owner, s.id);
+      this.destroyStructure(s, next, true, 'raze');
+      return;
+    }
+    s.razeBy.length = 0;
+    s.repairing = false;
+    if (s.hp > CAPTURE_MAX_HP) {
+      s.hp = CAPTURE_MAX_HP;
+      s.lastDamageTick = g.tick;
     }
     g.unitSys.dropQueue(s);
     s.upgradeStart = s.upgradeUntil = 0;
@@ -259,7 +399,7 @@ export class EconomySystem {
   radarCovers(owner: number, x: number, y: number): boolean {
     for (const s of this.radars) {
       if (s.owner !== owner || !s.operational) continue;
-      const r = (structureLevel(s.type, s.level).coverageTiles ?? 0) * TILE_KM;
+      const r = (structureLevel(s.type, s.level).coverageTiles ?? 0) * TILE_KM * s.fn;
       if (tileKm(s.x, s.y, x, y) <= r) return true;
     }
     return false;
@@ -403,15 +543,24 @@ export class EconomySystem {
         if (tick >= s.upgradeUntil) this.finishUpgrade(s);
         else if (tick % 5 === 0) g.structuresDirty = true;
       }
-      if (s.hp < 1 && tick - s.lastDamageTick > STRUCTURE_REPAIR_DELAY) {
-        s.hp = Math.min(1, s.hp + STRUCTURE_REPAIR_PER_TICK);
-        if (tick % 10 === 0) g.structuresDirty = true;
+      // Feedback 3: repairs are paid (repairStructure) and pause for 2 h after every new hit; no free self-repair.
+      if (s.repairing && s.hp > 0) {
+        if (tick - s.lastDamageTick > REPAIR_PAUSE_TICKS) {
+          s.hp = Math.min(1, s.hp + REPAIR_PER_TICK);
+          if (s.hp >= 1) {
+            s.repairing = false;
+            g.emit({ type: 'structureRepaired', tick, structureId: s.id, owner: s.owner, structure: s.type, tile: s.tile, level: s.level });
+          }
+          if (damageState(s.hp) !== s.countedState) this.recount(s.owner);
+          if (tick % 5 === 0 || !s.repairing) g.structuresDirty = true;
+        }
       }
       if (s.hp <= 0) continue;
       if (s.type === StructureType.Factory && tick >= s.timer) this.dispatchTrain(s);
       else if (s.type === StructureType.Port) this.maybeTrade(s);
     }
     if (progressDirty && tick % 5 === 0) g.structuresDirty = true;
+    if (tick % 10 === 0 && g.ruins.size) this.expireRuins();
     if ((this.railDirty && tick - this.lastRailBuild >= 60) || tick - this.lastRailBuild >= 240) this.rebuildRail();
     // Owners change under fallout (recount every 50 ticks); a tile clears exactly when its §2.4 duration ends.
     if (tick % 50 === 0 || tick >= g.weapons.falloutNextExpiry) g.weapons.maintainFallout();
@@ -490,7 +639,7 @@ export class EconomySystem {
     const g = this.g;
     f.timer = g.tick + 20;
     if (f.rail.length === 0) return;
-    const want = structureLevel(f.type, f.level).trains ?? f.level;
+    const want = Math.round((structureLevel(f.type, f.level).trains ?? f.level) * f.fn);
     let running = 0;
     for (const u of g.unitsByOwner.get(f.owner) ?? []) if (u.type === UnitType.Train && u.home === f.id) running++;
     if (running >= want) return;
@@ -536,7 +685,13 @@ export class EconomySystem {
     port.nextTradeTick = g.tick + TRADE_TURNAROUND_TICKS;
     const owner = g.playerById[port.owner];
     if (!owner || !owner.alive || owner.kind === 'tribe') return;
-    const want = structureLevel(port.type, port.level).tradeShips ?? 2 * port.level;
+    // Feedback 3 (#28): a blockaded port sends no trade ships (its trade income stops until the blockade lifts).
+    if (g.unitSys.blockaded(port)) {
+      port.nextTradeTick = g.tick + 10;
+      g.structuresDirty = true;
+      return;
+    }
+    const want = Math.round((structureLevel(port.type, port.level).tradeShips ?? 2 * port.level) * port.fn);
     let active = 0;
     for (const u of g.unitsByOwner.get(port.owner) ?? []) if (u.type === UnitType.TradeShip && u.home === port.id) active++;
     if (active >= want) return;

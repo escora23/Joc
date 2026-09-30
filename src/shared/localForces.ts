@@ -33,8 +33,9 @@ import { tileXYToLatLon, latLonToTileXY } from './geo';
 import { isNavigableTerrain, isWaterTerrain } from './terrain';
 import {
   StructureType, UnitMode, UnitState, UnitType,
-  type AttackView, type FrontLine, type FrontView, type PairState, type PlayerView, type StructureView, type TreatyKind, type UnitView,
+  type AttackView, type FrontLine, type FrontView, type PairState, type PlayerView, type RuinView, type StructureView, type TreatyKind, type UnitView,
 } from './types';
+import { collapsedBlocks, damageState, standingShare, type DamageState } from './damage';
 
 // =================================================================================================
 // Numbers (§9.6, §14.11)
@@ -60,7 +61,7 @@ export type LocalForcesPlayer = Pick<PlayerView, 'id' | 'troops' | 'tiles' | 'al
 export type LocalForcesUnit = Pick<UnitView,
   'id' | 'type' | 'owner' | 'x' | 'y' | 'prevX' | 'prevY' | 'heading' | 'hp' | 'state' | 'mode' | 'frontKey' | 'targetX'
   | 'targetY' | 'alt' | 'home' | 'serial'>;
-export type LocalForcesStructure = Pick<StructureView, 'id' | 'type' | 'owner' | 'tile' | 'level' | 'hp' | 'built'>;
+export type LocalForcesStructure = Pick<StructureView, 'id' | 'type' | 'owner' | 'tile' | 'level' | 'hp' | 'built'> & Partial<Pick<StructureView, 'blocks' | 'repairing'>>;
 export type LocalForcesFront = Pick<FrontView,
   'key' | 'a' | 'b' | 'x' | 'y' | 'length' | 'dirX' | 'dirY' | 'samples' | 'progress' | 'line' | 'garrisonA' | 'garrisonB'
   | 'momentum' | 'advanceKmh' | 'intensity' | 'quiet' | 'offensiveA' | 'offensiveB'>;
@@ -78,6 +79,8 @@ export interface LocalForcesView {
   readonly structures: ReadonlyMap<number, LocalForcesStructure>;
   readonly attacks: readonly LocalForcesAttack[];
   readonly fronts: readonly LocalForcesFront[];
+  /** Feedback 3: rubble of destroyed structures (GameView.ruins); absent = none. */
+  readonly ruins?: readonly RuinView[];
   pairState(a: number, b: number): PairState;
   hasTreaty(a: number, b: number, kind: TreatyKind): boolean;
   isOccupied(tile: number): boolean;
@@ -141,12 +144,30 @@ export interface LocalStructure extends LocalPos {
   level: number;
   /** 0..1 */
   integrity: number;
+  /**
+   * Feedback 3 (shared/damage.ts): damage state 0 intact, 1 damaged, 2 heavily damaged; the share of the model still
+   * standing; the collapsed city blocks (bitmask of CITY_BLOCKS: command-mode reports + the state's share, the same mask
+   * the strategic model draws); a paid repair under way.
+   */
+  damage: DamageState;
+  standing: number;
+  collapsed: number;
+  repairing: boolean;
   /** 0..1 construction progress (1 = operational). */
   built: number;
   /** Reach of its effect at this level, km (SAM range, defense-post zone, radar coverage, airbase scramble), 0 = n/a. */
   rangeKm: number;
   /** The anchor lies inside that reach. */
   coversAnchor: boolean;
+}
+
+/** Feedback 3: rubble of a destroyed structure in the window. */
+export interface LocalRuin extends LocalPos {
+  tile: number;
+  type: StructureType;
+  level: number;
+  owner: number;
+  by: number;
 }
 
 export interface LocalFront {
@@ -257,6 +278,8 @@ export interface LocalForces {
   sides: LocalForceSide[];
   units: LocalUnit[];
   structures: LocalStructure[];
+  /** Feedback 3: rubble inside the window (destroyed structures), nearest first. */
+  ruins: LocalRuin[];
   /** Pair states among every player involved (including the viewer), each pair once with a < b. */
   pairs: { a: number; b: number; state: PairState; alliance: boolean; openBorders: boolean }[];
   /** Nobody here is at war with anybody else here (no hostile pools). */
@@ -648,6 +671,7 @@ export function deriveLocalForces(
     if (d > R && !covers && !inPool) continue;
     structures.push({
       ...pos(sx, sy), structureId: st.id, type: st.type, owner: st.owner, level: st.level, integrity: st.hp, built: st.built,
+      damage: damageState(st.hp), standing: standingShare(st.hp), collapsed: collapsedBlocks(st.id, st.hp, st.blocks ?? 0), repairing: !!st.repairing,
       rangeKm: range, coversAnchor: covers,
     });
     const sd = side(st.owner);
@@ -661,6 +685,13 @@ export function deriveLocalForces(
     }
   }
   structures.sort((p, q) => p.distKm - q.distKm || p.structureId - q.structureId);
+  const ruins: LocalRuin[] = [];
+  for (const r of view.ruins ?? []) {
+    const rx = (r.tile % MAP_W) + 0.5, ry = ((r.tile / MAP_W) | 0) + 0.5;
+    if (Math.hypot(wdx(x, rx) * kmX, (y - ry) * kmY) > R) continue;
+    ruins.push({ ...pos(rx, ry), tile: r.tile, type: r.type, level: r.level, owner: r.owner, by: r.by });
+  }
+  ruins.sort((p, q) => p.distKm - q.distKm || p.tile - q.tile);
 
   // --- units ---------------------------------------------------------------------------------------------
   const units: LocalUnit[] = [];
@@ -742,7 +773,7 @@ export function deriveLocalForces(
   return {
     x, y, lat: ll.lat, lon: ll.lon, radiusKm: R, viewer, tick: view.tick, point, owners,
     waterShare: samples ? water / samples : 0, frontKey: localFronts[0]?.key ?? 0, fronts: localFronts, sides: order, units,
-    structures, pairs, peaceful,
+    structures, ruins, pairs, peaceful,
   };
 }
 

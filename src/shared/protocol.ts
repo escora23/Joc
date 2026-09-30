@@ -14,7 +14,7 @@ import type {
   AllianceRequestView, AllianceView, AttackView, Demand, OpinionView, ProposalKind, ProposalView, TreatyKind, TreatyView, BuildableUnit, ClockMode, ClockView, CommandKind, EmoteId, FrontView,
   GameConfig, GameOverReason, GamePhase, GameSpeed, PeaceTerms, PlayerKind, Personality, PlayerStatsCounters,
   ScarView, SiegeView, StructureType, StructureView, UnitType, WarGoal, WarView, WeaponType, WorldEventKind,
-  WorldEventView, WorldInit, UnitOrderKind, ProductionView, OffensiveIntensity,
+  WorldEventView, WorldInit, UnitOrderKind, ProductionView, OffensiveIntensity, RuinView, StructureDamageCause,
 } from './types';
 
 // =================================================================================================
@@ -110,7 +110,17 @@ export type PlayerCommand =
   /** The controlled unit's integrity after local losses (0 = destroyed, by = the player who destroyed it). */
   | { type: 'controlledDamage'; unitId: number; integrity: number; by?: number }
   /** A vehicle of the quick-reaction force of this unit's incursion is at its station beside it in the scene: the last warning starts. */
-  | { type: 'escortAlongside'; unitId: number };
+  | { type: 'escortAlongside'; unitId: number }
+  // --- Feedback 3 (owner item #27): damage, repair ---
+  /** Pay for the repair of a damaged own structure (shared/damage.ts repairCost; +8 % hp per game hour). */
+  | { type: 'repairStructure'; structureId: number }
+  /**
+   * Command mode hit a real structure (or one block of a city) with the controlled unit's weapons: `dmg` hp through the
+   * sim's one damage rule (level loss, rubble, civilian and troop losses, diplomatic cost). `block` = the city block
+   * (0..CITY_BLOCKS-1) seen collapsing, -1 = none. Capped per report (≤ 0.6 hp) and validated against the unit's
+   * position (within 30 km of the structure) and the war / incursion state.
+   */
+  | { type: 'commandStructureHit'; unitId: number; structureId: number; dmg: number; block?: number };
 
 export type PlayerCommandType = PlayerCommand['type'];
 
@@ -185,6 +195,27 @@ export type SimEvent =
   | { type: 'airRaid'; tick: number; owner: number; target: number; unitId: number; unit: UnitType; /** The home airbase's tile when the aircraft has one (fromBase), else where it was when detected. */ fromTile: number; fromBase: boolean; toTile: number; etaTicks: number; by: 'takeoff' | 'radar' | 'observers' }
   /** The sim's answer to a unitOrder of `owner`: how many units took it, the i18n reason when none did. */
   | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null; errorParams?: Record<string, string | number> }
+  /**
+   * Feedback 3: a structure took damage (sent when its damage state changes, it loses a level, is destroyed or razed, or
+   * a hit of 0.1 hp or more): hp before and after, the damage state (0 intact .. 3 destroyed), civilians and troops killed.
+   */
+  | { type: 'structureDamaged'; tick: number; structureId: number; owner: number; by: number; structure: StructureType; tile: number; level: number; hpBefore: number; hp: number; state: number; levelLost: boolean; destroyed: boolean; civilians: number; troops: number; cause: StructureDamageCause }
+  /**
+   * Feedback 3 (item 29d): an after-action report when an offensive, a strike or a unit's mission ends, for the player
+   * involved. result: offensive won (reached its axis / broke the enemy) | held (took ground, then halted) | failed
+   * (stalled or retreated without ground) | cancelled; strike hit | destroyed | lost (shot down before the target);
+   * mission captured | destroyed | razed | cancelled | lost. lossesOwn / lossesEnemy: troops (offensive), integrity %
+   * of the unit (mission, strike). damage: hp dealt to the target. units: the divisions and aircraft that supported it.
+   */
+  | {
+      type: 'afterAction'; tick: number; kind: 'offensive' | 'strike' | 'mission'; owner: number; enemy: number;
+      result: 'won' | 'held' | 'failed' | 'cancelled' | 'hit' | 'destroyed' | 'lost' | 'captured' | 'razed';
+      x: number; y: number; startTick: number; tilesTaken: number; tilesLost: number; lossesOwn: number; lossesEnemy: number;
+      unitId?: number; unitType?: UnitType; order?: UnitOrderKind; structure?: number; damage?: number; attackId?: number;
+      units?: number[]; structuresTaken?: number; reason?: string;
+    }
+  /** Feedback 3: a paid repair finished. */
+  | { type: 'structureRepaired'; tick: number; structureId: number; owner: number; structure: StructureType; tile: number; level: number }
   /** A strike landed (bomber, drone): damage done, for the alert and the result line. */
   | { type: 'strikeResult'; tick: number; unitId: number; unit: UnitType; owner: number; victim: number; kind: 'structure' | 'division' | 'front' | 'ship' | 'none'; targetId: number; structure: number; damage: number; destroyed: boolean; x: number; y: number }
   /** A blockading warship captured a trade ship: the payout goes to the captor. */
@@ -304,6 +335,8 @@ export interface TickUpdate {
   attacks?: AttackView[];
   fronts?: FrontRecord[];
   scars?: ScarView[];
+  /** Feedback 3: rubble of destroyed structures (full list when it changed). */
+  ruins?: RuinView[];
   worldEvents?: WorldEventView[];
   alliances?: AllianceView[];
   allianceRequests?: AllianceRequestView[];
@@ -364,6 +397,8 @@ export type SimDebugAction =
   /** Give `playerId` every playable tile within `radius` tiles of centerTile. */
   | { type: 'conquer'; playerId: number; centerTile: number; radius: number }
   | { type: 'spawnStructure'; structure: StructureType; owner: number; tile: number; level: number }
+  /** Feedback 3 (staging): damage the structure at `tile` by `amount` hp through the one damage rule (by = attacker, 0 = none). */
+  | { type: 'damageStructure'; tile: number; amount: number; by: number; block?: number }
   /** Create a unit at tile heading to targetTile (-1 = idle). */
   | { type: 'spawnUnit'; unit: UnitType; owner: number; tile: number; targetTile: number }
   /** Launch a nuke/missile regardless of silos & gold (flight + interception rules still apply). */

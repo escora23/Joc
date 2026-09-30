@@ -3,6 +3,7 @@
 // and carry the extra internal state the systems need. sim-ai only ever sees the SimX interfaces.
 
 import { MAP_W } from '../shared/constants';
+import { functionFactor } from '../shared/damage';
 import { wdx, wrapXf } from './spatial';
 import type { ModifierKey, SimAttack, SimPlayer, SimStructure, SimUnit } from '../shared/simapi';
 import {
@@ -42,8 +43,11 @@ export class Player implements SimPlayer {
 
   // --- aggregates maintained by the systems -----------------------------------------------------
   structCount = new Int32Array(STRUCTURE_TYPES.length);
-  /** Operational (built) levels per structure type. */
-  structLevels = new Int32Array(STRUCTURE_TYPES.length);
+  /**
+   * Operational levels per structure type, each weighted by its damage function (Feedback 3: a damaged city at level 4
+   * works as 4 × 0.6 = 2.4 levels for income, troop cap and population).
+   */
+  structLevels = new Float64Array(STRUCTURE_TYPES.length);
   unitCount = new Int32Array(UNIT_TYPES.length);
   falloutTiles = 0;
   civilians = 0;
@@ -117,8 +121,17 @@ export class Structure implements SimStructure {
   built = 0;
   cooldownTicks = 0;
   level = 1;
-  /** Tick of the last damage (repairs start after a delay). */
+  /** Tick of the last damage (a repair pauses REPAIR_PAUSE_TICKS after it). */
   lastDamageTick = -1_000_000;
+  /** Feedback 3: player who hit it last (0 = none) and the damage state the owner's aggregates were counted at. */
+  lastHitBy = 0;
+  countedState = 0;
+  /** Feedback 3: a paid repair is under way (+REPAIR_PER_TICK hp per tick until 1). */
+  repairing = false;
+  /** Feedback 3: city blocks command mode reported destroyed (bitmask of CITY_BLOCKS). */
+  blocks = 0;
+  /** Feedback 3: players whose divisions are ordered to raze it when they take its tile (instead of capturing it). */
+  razeBy: number[] = [];
   /** Rail links (station ids). */
   rail: number[] = [];
   /** Factory: tick when the next train leaves. */
@@ -150,6 +163,11 @@ export class Structure implements SimStructure {
 
   get operational(): boolean {
     return this.built >= 1 && this.hp > 0;
+  }
+
+  /** Share of its effects it delivers now (Feedback 3 damage states: 1 / 0.6 / 0.25 / 0; 0 while being built). */
+  get fn(): number {
+    return this.built >= 1 ? functionFactor(this.hp) : 0;
   }
 }
 
@@ -250,6 +268,13 @@ export class Unit implements SimUnit {
   frontKey = 0;
   /** Division: an own offensive runs on its sector (display: «apoyando la ofensiva»). */
   onOffensive = false;
+  /**
+   * Feedback 3 (#28): the mission's target: the offensive joined ('join', an attack id) or the structure to take or
+   * raze ('assault' / 'raze'); the tick it started and the damage its artillery dealt (after-action report).
+   */
+  missionTarget = 0;
+  missionStart = 0;
+  missionDealt = 0;
   /** Division path legs travelled by rail (parallel to `path`: 1 = the leg ending at that waypoint is rail). */
   pathRail: Uint8Array | null = null;
   /** The planned path changed and the clients have not received it yet. */
@@ -360,6 +385,11 @@ export class Attack implements SimAttack {
   air: -1 | 0 | 1 = 0;
   casAtk = 0;
   casDef = 0;
+  /** Feedback 3: attached divisions of each side, warships bombarding, and the model's plains speed v this tick. */
+  divAtk = 0;
+  divDef = 0;
+  navalAtk = 0;
+  planKmh = 0;
   /** Tiles ready to fall but held by the war's logistics bucket this tick. */
   consolidating = false;
   /** Retreat: troops are back home at this tick (-1 = not retreating). */

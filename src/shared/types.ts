@@ -438,6 +438,29 @@ export interface StructureView {
   upgrade?: number;
   /** v2 (W4): units queued for production here (hourglass badge). */
   producing?: number;
+  /** Feedback 3: a paid repair is under way. */
+  repairing?: boolean;
+  /** Feedback 3: city blocks command mode reported destroyed (bitmask; see shared/damage.ts collapsedBlocks). */
+  blocks?: number;
+  /** Feedback 3: the player who hit it last (0 = none), for the card («dañada por Francia»). */
+  hitBy?: number;
+  /** Feedback 3: a port blockaded by this player's warships (no trade ships leave). */
+  blockadedBy?: number;
+}
+
+/** Feedback 3: what damaged or destroyed a structure (structureDamaged events, ruins, after-action reports). */
+export type StructureDamageCause = 'strike' | 'bomber' | 'drone' | 'missile' | 'naval' | 'artillery' | 'command' | 'nuke' | 'capture' | 'raze';
+
+/** Feedback 3: rubble left where a structure was destroyed (TickUpdate.ruins; cleared after 30 game days or on rebuild). */
+export interface RuinView {
+  tile: number;
+  type: StructureType;
+  level: number;
+  /** Owner when it was destroyed, and who destroyed it (0 = nobody / the land fell to no one). */
+  owner: number;
+  by: number;
+  tick: number;
+  cause: StructureDamageCause;
 }
 
 export interface AttackView {
@@ -486,6 +509,15 @@ export interface AttackView {
   air?: -1 | 0 | 1;
   casAtk?: number;
   casDef?: number;
+  /**
+   * Feedback 3 (29a, #28): attached divisions supporting each side, warships bombarding the coast for the attacker, and
+   * the model's plains speed this tick (km/h before terrain and forts). Previews scale the measured km/h by it
+   * (shared/orders.ts offensiveOutlook) so the badge, the panel and the dialogs agree.
+   */
+  divAtk?: number;
+  divDef?: number;
+  navalAtk?: number;
+  planKmh?: number;
 }
 
 export interface FrontView {
@@ -730,11 +762,15 @@ export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'ultimatu
 // --- v2 (W4): unit orders, modes and production (DESIGN_V2 §6.4, §7, §14.2) ------------------------------------------
 /** Orders a player gives to units (§6.4). The right-click context picks one (§7.3). */
 export type UnitOrderKind = 'move' | 'attach' | 'hold' | 'return' | 'cap' | 'intercept' | 'escort' | 'strike' | 'support'
-  | 'patrol' | 'blockade' | 'bombard' | 'rebase' | 'attack';
+  | 'patrol' | 'blockade' | 'bombard' | 'rebase' | 'attack'
+  // Feedback 3 (owner item #28): division missions. defend = hold a border sector or a city (tile = the anchor);
+  // join = join offensive `targetId` (an attack id) and follow its spearhead; assault / raze = take (or destroy) enemy
+  // structure `targetId` near the front, shelling it with the division's artillery on the way.
+  | 'defend' | 'join' | 'assault' | 'raze';
 /** Index = the order code published in UnitView.order. Append only. */
 export const UNIT_ORDER_KINDS: readonly UnitOrderKind[] = [
   'move', 'attach', 'hold', 'return', 'cap', 'intercept', 'escort', 'strike', 'support', 'patrol', 'blockade', 'bombard',
-  'rebase', 'attack',
+  'rebase', 'attack', 'defend', 'join', 'assault', 'raze',
 ];
 /** What a unit is doing right now (published in UnitView.mode). */
 export const UnitMode = {

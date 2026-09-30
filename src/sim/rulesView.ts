@@ -152,6 +152,19 @@ function createRules(view: GameView): ClientRules {
       return waterComponents(w.terrain)[tile];
     },
     railLinks: () => view.rail,
+    *offensivesOf(owner) {
+      for (const a of view.attacks) {
+        if (a.attacker !== owner) continue;
+        const live = a.contactX >= 0;
+        yield { id: a.id, attacker: a.attacker, defender: a.defender, naval: a.naval, state: a.state, x: live ? a.contactX : a.x, y: live ? a.contactY : a.y };
+      }
+    },
+    offensive(id) {
+      const a = view.attacks.find((x) => x.id === id);
+      if (!a) return null;
+      const live = a.contactX >= 0;
+      return { id: a.id, attacker: a.attacker, defender: a.defender, naval: a.naval, state: a.state, x: live ? a.contactX : a.x, y: live ? a.contactY : a.y };
+    },
   };
   return r;
 }

@@ -28,6 +28,7 @@ import {
   DIFFICULTY_INDEX, HUMAN_ID, INBOX_MIN_REAL_MS, INBOX_TICKS, NAP_TICKS, OPINION_PERIOD_TICKS, PROPOSAL_COOLDOWN_TICKS,
   TICKS_PER_GAME_DAY, TRAITOR_TICKS, TREATY_WARNING_TICKS, ULTIMATUM_PEACE_TICKS, ULTIMATUM_TICKS,
 } from '../shared/constants';
+import { CASUS_BELLI_TICKS, CIVILIAN_OPINION_ALLY, CIVILIAN_OPINION_VICTIM, CIVILIAN_OPINION_WORLD } from '../shared/damage';
 import type { SimEvent } from '../shared/protocol';
 import type { ProposalAnswer, SimProposal } from '../shared/simapi';
 import {
@@ -65,6 +66,10 @@ export const REMEMBERED = {
   leftAlliance: { value: -20, halfLife: 2_400, cap: 20 },
   leftTreaty: { value: -5, halfLife: 2_400, cap: 5 },
   demandedOfUs: { value: -5, halfLife: 2_400, cap: 10 },
+  // Feedback 3 (owner item #27): striking cities. The victim, its allies, and every other nation (shared/damage.ts).
+  civilianStrike: { value: CIVILIAN_OPINION_VICTIM, halfLife: 7_200, cap: 60 },
+  bombedAlly: { value: CIVILIAN_OPINION_ALLY, halfLife: 4_800, cap: 36 },
+  bombedCities: { value: CIVILIAN_OPINION_WORLD, halfLife: 4_800, cap: 20 },
 } as const;
 export type RememberedKey = keyof typeof REMEMBERED;
 
@@ -150,6 +155,13 @@ export class DiplomacySystem {
   private readonly noWar = new Map<number, number>();
   /** Refused calls to arms: dirKey(asker, refuser) -> count (three end the alliance). */
   private readonly refused = new Map<number, number>();
+  /**
+   * Feedback 3: casus belli dirKey(holder, against) -> tick it expires. A nation whose cities (or an ally's) were struck
+   * by `against` may declare war on it within CASUS_BELLI_TICKS without the world counting it as unprovoked.
+   */
+  private readonly casusBelli = new Map<number, number>();
+  /** Feedback 3: last tick a civilian strike of dirKey(striker, victim) was counted (one opinion hit per game hour). */
+  private readonly civilianTick = new Map<number, number>();
   /** Cooldown after a rejection: `${from},${to},${kind}` -> tick. */
   private readonly cooldown = new Map<string, number>();
   private nextId = 1;
@@ -453,7 +465,8 @@ export class DiplomacySystem {
       for (const p of g.playerArr) if (p.id !== aggressor && p.id !== target && p.alive && p.kind === 'nation') this.addReason(p.id, aggressor, 'reputationTraitor');
     }
     if (join) return;
-    const provoked = goal === 'retaliation' || goal === 'defense' || goal === 'liberation' || goal === 'coalition' || this.opinion(target, aggressor) <= -50;
+    const provoked = goal === 'retaliation' || goal === 'defense' || goal === 'liberation' || goal === 'coalition' || this.opinion(target, aggressor) <= -50
+      || this.hasCasusBelli(aggressor, target);
     const T = g.playerById[target];
     for (const p of g.playerArr) {
       if (!p.alive || p.kind !== 'nation' || p.id === aggressor || p.id === target) continue;
@@ -461,6 +474,38 @@ export class DiplomacySystem {
       else if (!provoked && !p.allies.has(aggressor)) this.addReason(p.id, aggressor, 'unprovokedWar', undefined, { player: target });
     }
     this.opinionsDirty = true;
+  }
+
+  /**
+   * Feedback 3 (owner item #27): `striker` hit a city of `victim`. Once per game hour per pair: the victim remembers
+   * it (civilianStrike −20, up to −60), the victim's allies (bombedAlly −12) and every other nation (bombedCities −5);
+   * the victim and its allies hold a casus belli against the striker for 30 game days; the striker's war escalation
+   * with the victim rises to L2 (strategic targets).
+   */
+  onCivilianStrike(striker: number, victim: number, _structureId: number): void {
+    const g = this.g;
+    if (striker <= 0 || victim <= 0 || striker === victim) return;
+    const k = dirKey(striker, victim);
+    const last = this.civilianTick.get(k) ?? -1_000_000;
+    if (g.tick - last < 10) return;
+    this.civilianTick.set(k, g.tick);
+    const V = g.playerById[victim];
+    this.addReason(victim, striker, 'civilianStrike', undefined, { player: victim });
+    for (const p of g.playerArr) {
+      if (!p.alive || p.kind !== 'nation' || p.id === striker || p.id === victim) continue;
+      if (V && V.allies.has(p.id)) {
+        this.addReason(p.id, striker, 'bombedAlly', undefined, { player: victim });
+        this.casusBelli.set(dirKey(p.id, striker), g.tick + CASUS_BELLI_TICKS);
+      } else this.addReason(p.id, striker, 'bombedCities', undefined, { player: victim });
+    }
+    this.casusBelli.set(dirKey(victim, striker), g.tick + CASUS_BELLI_TICKS);
+    if (g.war.atWar(striker, victim) && g.war.escalation(striker, victim) < 2) g.war.raiseEscalation(striker, victim, 2, 'escalation.reason.civilian');
+    this.opinionsDirty = true;
+  }
+
+  /** Does `holder` hold a casus belli against `against` (its or an ally's cities were struck in the last 30 days)? */
+  hasCasusBelli(holder: number, against: number): boolean {
+    return (this.casusBelli.get(dirKey(holder, against)) ?? 0) > this.g.tick;
   }
 
   /** A war ended: both remember it (§5.1 pastWar); its open peace proposals and calls to arms are settled. */

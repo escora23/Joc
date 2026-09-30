@@ -25,7 +25,7 @@ import type {
 import { isPlayableTerrain, isShoreTerrain, isWaterTerrain } from '../shared/terrain';
 import {
   StructureType, UnitState, UnitType, type AttackView, type Difficulty, type GameConfig, type GameOverReason,
-  type GamePhase, type GameSpeed, type PairState, type ScarView, type StructureView, type WorldEventKind,
+  type GamePhase, type GameSpeed, type PairState, type ScarView, type RuinView, type StructureView, type WorldEventKind,
   type WorldEventView, type WorldInit,
 } from '../shared/types';
 import { createAiDirector } from './ai';
@@ -110,6 +110,8 @@ export class Game implements SimGame {
   readonly dyingUnits: Unit[] = [];
   readonly attackList: Attack[] = [];
   readonly scars: Scar[] = [];
+  /** Feedback 3: rubble of destroyed structures by tile (TickUpdate.ruins). */
+  readonly ruins = new Map<number, RuinView>();
   readonly eventStates = new Map<number, WorldEventView>();
   /** pairKey(a, b) -> last tick they fought. */
   readonly hostility = new Map<number, number>();
@@ -151,6 +153,7 @@ export class Game implements SimGame {
   structuresDirty = true;
   attacksDirty = true;
   scarsDirty = false;
+  ruinsDirty = false;
   worldEventsDirty = false;
   alliancesDirty = true;
   private forceFull = true;
@@ -326,7 +329,7 @@ export class Game implements SimGame {
     if (ev !== null) g.worldEvents.restoreState?.(ev);
     r.section('end');
     g.forceFull = true;
-    g.structuresDirty = g.attacksDirty = g.alliancesDirty = g.worldEventsDirty = g.scarsDirty = true;
+    g.structuresDirty = g.attacksDirty = g.alliancesDirty = g.worldEventsDirty = g.scarsDirty = g.ruinsDirty = true;
     g.war.dirty = g.war.trucesDirty = true;
     g.diplomacy.treatiesDirty = g.diplomacy.opinionsDirty = g.diplomacy.proposalsDirty = true;
     g.fronts.dirty = true;
@@ -470,7 +473,7 @@ export class Game implements SimGame {
       return true;
     });
     if (crowded) return 'msg.buildTooClose';
-    if (p.gold < this.structureCost(playerId, type)) return 'msg.notEnoughGold';
+    if (p.gold < this.economy.buildCost(playerId, type, tile)) return 'msg.notEnoughGold';
     return null;
   }
 
@@ -628,6 +631,10 @@ export class Game implements SimGame {
         return this.command.damage(p, cmd);
       case 'escortAlongside':
         return this.command.alongside(p, cmd.unitId);
+      case 'commandStructureHit':
+        return this.command.structureHit(p, cmd);
+      case 'repairStructure':
+        return this.economy.repair(p, cmd.structureId);
       case 'commandResult':
         return this.applyCommandResult(p, cmd);
     }
@@ -1183,6 +1190,11 @@ export class Game implements SimGame {
       case 'spawnStructure':
         this.economy.spawnStructure(a.structure, a.owner, a.tile, a.level);
         break;
+      case 'damageStructure': {
+        const s = this.structureMap.get(this.structAt[a.tile] ?? 0);
+        if (s) this.economy.damage(s, a.amount, a.by, 'strike', a.block ?? -1);
+        break;
+      }
       case 'spawnUnit':
         this.unitSys.debugSpawn(a.unit, a.owner, a.tile, a.targetTile);
         break;
@@ -1564,6 +1576,10 @@ export class Game implements SimGame {
         strength: Math.max(0, Math.min(1, (s.until - this.tick) / Math.max(1, s.until - s.tick))),
       }));
     }
+    if (this.ruinsDirty || full) {
+      this.ruinsDirty = false;
+      u.ruins = [...this.ruins.values()].map((r) => ({ ...r }));
+    }
     if (this.worldEventsDirty || full) {
       this.worldEventsDirty = false;
       u.worldEvents = [...this.eventStates.values()].map((e) => ({ ...e, players: e.players.slice() }));
@@ -1627,6 +1643,8 @@ export class Game implements SimGame {
     for (const s of this.structureMap.values()) {
       out.push({
         id: s.id, type: s.type, owner: s.owner, tile: s.tile, level: s.level, hp: Math.max(0, Math.min(1, s.hp)),
+        repairing: s.repairing || undefined, blocks: s.blocks || undefined, hitBy: s.lastHitBy || undefined,
+        blockadedBy: s.type === StructureType.Port ? this.unitSys.blockaded(s) || undefined : undefined,
         built: Math.min(1, s.built), cooldown: this.economy.cooldownFraction(s),
         upgrade: s.upgradeUntil > 0 ? Math.min(0.999, Math.max(0.001, (this.tick - s.upgradeStart) / Math.max(1, s.upgradeUntil - s.upgradeStart))) : 0,
         producing: s.queue.length,

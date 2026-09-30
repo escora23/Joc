@@ -152,8 +152,13 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
           if (level < 2 && STRATEGIC.has(s.type)) continue;
           const d = Math.sqrt(nearestDist2(airbaseTiles, s.tile));
           if (d > range * 0.95) continue;
-          const v = s.type === StructureType.SamSite ? 5 : s.type === StructureType.MissileSilo ? 4.5 : s.type === StructureType.Airbase ? 3.5
-            : s.type === StructureType.City ? 1.5 + s.level * 0.4 : s.type === StructureType.Factory || s.type === StructureType.Port ? 1.8 : 1;
+          // Feedback 3: cities are civilian targets with a diplomatic price: an AI bombs them in answer to strikes on its
+          // own (or an ally's) cities, otherwise only as a last resort. Military targets first; a structure already in
+          // ruins-to-be (heavily damaged) is worth finishing, one being repaired is worth hitting again.
+          const answer = g.diplomacy.hasCasusBelli(p.id, enemy.id);
+          const v = (s.type === StructureType.SamSite ? 5 : s.type === StructureType.MissileSilo ? 4.5 : s.type === StructureType.Airbase ? 3.5
+            : s.type === StructureType.City ? (answer ? 2.5 + s.level * 0.3 : 0.5) : s.type === StructureType.Factory || s.type === StructureType.Port ? 1.8 : 1)
+            * (s.hp < 0.4 ? 1.3 : 1);
           const sc = v / (1 + d / range);
           if (sc > bestScore) {
             bestScore = sc;

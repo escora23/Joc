@@ -17,6 +17,7 @@ import {
   NEUTRAL_TROOPS_PER_FRONT_TILE, OFFENSIVE_CONTACT_TICKS, STRUCTURE_LEVELS, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE,
   UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, structureLevel,
 } from './constants';
+import { isCivilian } from './damage';
 import {
   StructureType, TerrainFlag, UnitMode, UnitState, UnitType, type PairState, type PlayerKind, type TreatyKind,
   type UnitOrderKind,
@@ -64,6 +65,17 @@ export interface FrontLike {
   length?: number;
 }
 
+/** Feedback 3: an offensive a division may join (its live contact, else its axis point). */
+export interface OffensiveLike {
+  id: number;
+  attacker: number;
+  defender: number;
+  naval: boolean;
+  state: string;
+  x: number;
+  y: number;
+}
+
 /** Implemented by Game (worker) and by an adapter over GameView (main thread). */
 export interface RulesView {
   readonly tick: number;
@@ -95,6 +107,9 @@ export interface RulesView {
   waterComponent(tile: number): number;
   /** Rail network: station-id pairs (§14.5). */
   railLinks(): Int32Array;
+  /** Feedback 3: a running offensive by id (null when it ended), and the running offensives of `owner`. */
+  offensive(id: number): OffensiveLike | null;
+  offensivesOf(owner: number): Iterable<OffensiveLike>;
 }
 
 // =================================================================================================
@@ -229,10 +244,10 @@ export function orderCheck(r: RulesView, unitId: number, order: UnitOrderKind, t
   if (u.state === UnitState.Controlled) return { key: 'order.err.controlled' };
   if (u.state === UnitState.Destroyed) return { key: 'order.err.noUnit' };
   if (tile < 0 || tile >= TILE_COUNT) {
-    if (order !== 'hold' && order !== 'return') return { key: 'order.err.noTarget' };
+    if (order !== 'hold' && order !== 'return' && order !== 'join' && order !== 'assault' && order !== 'raze') return { key: 'order.err.noTarget' };
   }
   switch (u.type) {
-    case UnitType.ArmoredDivision: return divisionCheck(r, u, order, tile);
+    case UnitType.ArmoredDivision: return divisionCheck(r, u, order, tile, targetId, opts);
     case UnitType.Warship: return warshipCheck(r, u, order, tile, targetId);
     case UnitType.FighterSquadron:
     case UnitType.Bomber:
@@ -255,9 +270,50 @@ export function nearFrontLine(r: RulesView, owner: number, tile: number, reach =
   return someTileWithin(tile, reach, (t) => r.ownerOf(t) === owner && r.playable(t));
 }
 
-function divisionCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: number): OrderIssue | null {
+/** Feedback 3: how deep behind the enemy line a division's assault may aim (tiles from our land): ~150 km. */
+export const ASSAULT_DEPTH_TILES = 6;
+/** A division's artillery reaches this far past its position (tiles, ~50 km): it shells an assault target in range. */
+export const DIVISION_ARTILLERY_TILES = 2;
+/** Artillery damage of one division on its assault target per game hour (×1.5 when ordered to raze). */
+export const DIVISION_SHELL_PER_HOUR = 0.04;
+export const RAZE_SHELL_MUL = 1.5;
+/** A defending division holds its sector: fronts within this many tiles of its anchor (~100 km). */
+export const DEFEND_TILES = 4;
+
+function divisionCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: number, targetId = 0, opts: OrderOpts = {}): OrderIssue | null {
   switch (order) {
     case 'hold': return null;
+    case 'join': {
+      const a = r.offensive(targetId);
+      if (!a || a.attacker !== u.owner || a.naval) return { key: 'order.err.joinNone' };
+      if (a.state === 'retreating') return { key: 'order.err.joinRetreating' };
+      if (!hostileTo(r, u.owner, a.defender)) return { key: 'order.err.atPeace', params: nameParam(a.defender) };
+      const at = Math.floor(a.y) * MAP_W + (((Math.floor(a.x) % MAP_W) + MAP_W) % MAP_W);
+      const hc = r.landComponent(hereTile(u)), tc = r.landComponent(at);
+      if (hc >= 0 && tc >= 0 && hc !== tc) return { key: 'order.err.noLandRoute' };
+      return null;
+    }
+    case 'assault':
+    case 'raze': {
+      const s = r.structure(targetId) ?? (tile >= 0 && tile < TILE_COUNT ? r.structureAt(tile) : null);
+      if (!s) return { key: 'order.err.assaultTarget' };
+      if (s.owner === u.owner || canTransit(r, u.owner, s.owner)) return { key: 'order.err.ownTarget' };
+      if (!hostileTo(r, u.owner, s.owner)) return { key: 'order.err.atPeace', params: nameParam(s.owner) };
+      if (!r.sharesBorder(u.owner, s.owner)) return { key: 'order.err.noFront', params: nameParam(s.owner) };
+      const hc = r.landComponent(hereTile(u)), tc = r.landComponent(s.tile);
+      if (hc >= 0 && tc >= 0 && hc !== tc) return { key: 'order.err.noLandRoute' };
+      if (!nearFrontLine(r, u.owner, s.tile, ASSAULT_DEPTH_TILES)) return { key: 'order.err.assaultDeep', params: { km: Math.round(ASSAULT_DEPTH_TILES * TILE_KM) } };
+      if (order === 'raze' && isCivilian(s.type) && !opts.ai && !opts.confirm) return { key: 'order.err.civilian', params: { player: s.owner }, confirm: true };
+      return null;
+    }
+    case 'defend': {
+      if (!r.playable(tile)) return { key: 'order.err.divisionWater' };
+      const hc = r.landComponent(hereTile(u)), tc = r.landComponent(tile);
+      if (hc >= 0 && tc >= 0 && hc !== tc) return { key: 'order.err.noLandRoute' };
+      const o = r.ownerOf(tile);
+      if (canTransit(r, u.owner, o)) return null;
+      return { key: 'order.err.defendOwn' };
+    }
     case 'return': {
       for (const s of r.structuresOf(u.owner)) if (s.type === StructureType.ArmyBase && s.built >= 1) return null;
       return { key: 'order.err.noArmyBase' };
@@ -440,7 +496,7 @@ function aircraftCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: nu
       if (u.type === UnitType.DroneSwarm && tgt.kind !== 'structure') return { key: 'order.err.droneStructure' };
       const far = outOfReach(tgt.x, tgt.y);
       if (far) return far;
-      return escalationCheck(r, u.owner, tgt.owner, tgt.strategic, opts);
+      return escalationCheck(r, u.owner, tgt.owner, tgt.strategic, opts) ?? civilianCheck(tgt, opts);
     }
     default:
       return { key: 'order.err.notForAircraft' };
@@ -457,6 +513,16 @@ function escalationCheck(r: RulesView, owner: number, enemy: number, strategic: 
   }
   if (strategic && lv < 2 && !opts.confirm) return { key: 'order.err.needsL2', confirm: true };
   return null;
+}
+
+/**
+ * Feedback 3 (owner item #27): a strike on a city (a civilian target) always asks the human to confirm, with its
+ * consequences (civilian deaths, opinion of the victim, its allies and the world, a casus belli against us, escalation
+ * to L2). The AI weighs the same price in its target choice instead (ai/military.ts).
+ */
+export function civilianCheck(tgt: StrikeTarget | null, opts: OrderOpts): OrderIssue | null {
+  if (!tgt || opts.ai || opts.confirm || tgt.kind !== 'structure' || !isCivilian(tgt.structure as StructureType)) return null;
+  return { key: 'order.err.civilian', params: { player: tgt.owner }, confirm: true };
 }
 
 export interface StrikeTarget {
@@ -487,6 +553,32 @@ export function strikeTarget(r: RulesView, tile: number, targetId: number): Stri
   return { kind: 'front', id: 0, owner: o, x: tileCx(tile), y: tileCy(tile), strategic: false, structure: -1 };
 }
 
+/** Feedback 3: a right click this close (tiles) to our offensive's contact joins it. */
+export const JOIN_NEAR_TILES = 5;
+
+/** Our running (not retreating) land offensive against `enemy` whose contact lies within `r` tiles of `tile`. */
+export function offensiveNear(r: RulesView, owner: number, enemy: number, tile: number, reach: number): OffensiveLike | null {
+  const tx = tileCx(tile), ty = tileCy(tile);
+  let best: OffensiveLike | null = null, bd = reach * TILE_KM;
+  for (const a of r.offensivesOf(owner)) {
+    if (a.defender !== enemy || a.naval || a.state === 'retreating') continue;
+    const d = tileKm(tx, ty, a.x, a.y);
+    if (d <= bd) {
+      bd = d;
+      best = a;
+    }
+  }
+  return best;
+}
+
+/** Land of a nation we are at war with (or an independent territory) within `reach` tiles of `tile`. */
+export function hostileNear(r: RulesView, owner: number, tile: number, reach: number): boolean {
+  return someTileWithin(tile, reach, (t) => {
+    const o = r.ownerOf(t);
+    return o > 0 && o !== owner && r.playable(t) && hostileTo(r, owner, o);
+  });
+}
+
 // =================================================================================================
 // Right-click context (§7.3)
 // =================================================================================================
@@ -506,9 +598,17 @@ export function inferOrder(r: RulesView, unitId: number, tile: number, targetUni
   switch (u.type) {
     case UnitType.ArmoredDivision: {
       if (ts && ts.owner === u.owner && ts.type === StructureType.ArmyBase) return { order: 'return', targetId: ts.id };
+      // Feedback 3 (#28): an enemy structure near the front: take it (Shift: raze it).
+      if (ts && ts.owner !== u.owner && hostileTo(r, u.owner, ts.owner)) return { order: shift ? 'raze' : 'assault', targetId: ts.id };
       if (land && o > 0 && o !== u.owner && !canTransit(r, u.owner, o) && hostileTo(r, u.owner, o)) {
+        // Near our own running offensive against that enemy: join it (the division follows its spearhead).
+        const off = offensiveNear(r, u.owner, o, tile, JOIN_NEAR_TILES);
+        if (off) return { order: 'join', targetId: off.id };
         return { order: nearFrontLine(r, u.owner, tile) ? 'attach' : 'attack', targetId: 0 };
       }
+      // Own city, or own land near a hostile border: defend that sector.
+      if (ts && ts.owner === u.owner && ts.type === StructureType.City) return { order: 'defend', targetId: 0 };
+      if (land && canTransit(r, u.owner, o) && hostileNear(r, u.owner, tile, DEFEND_TILES)) return { order: 'defend', targetId: 0 };
       return { order: 'move', targetId: 0 };
     }
     case UnitType.Warship: {
@@ -553,6 +653,65 @@ export function inferOrder(r: RulesView, unitId: number, tile: number, targetUni
 /** Plains depth speed of a front at force ratio R (§4.5). */
 export function advanceKmh(ratio: number): number {
   return ADVANCE_MAX_KMH * Math.min(1, Math.max(0, (ratio - 1) / (ADVANCE_FULL_RATIO - 1)));
+}
+
+/** Armored divisions speed up the tiles within this many tiles of them ×1.5 (sim/attacks.ts). */
+export const ARMOR_REACH_TILES = 3;
+
+/** The live figures of an offensive a preview scales (AttackView fields, Feedback 3 29a). */
+export interface OutlookInput {
+  ratio: number;
+  advanceKmh: number;
+  planKmh?: number;
+  intensity: number;
+  frontageTiles: number;
+  divAtk?: number;
+  casAtk?: number;
+  casDef?: number;
+  air?: number;
+  navalAtk?: number;
+}
+
+export interface OffensiveOutlook {
+  ratio: number;
+  /** The model's plains speed (km/h). */
+  planKmh: number;
+  /** Expected measured speed (km/h): the measured one scaled by the model, or the plains speed before any measurement. */
+  kmh: number;
+  /** Attached divisions after the change and the attack power they add (×1.25 each, at most ×2). */
+  divisions: number;
+  armorMul: number;
+}
+
+const armorMul = (n: number): number => Math.min(2, 1 + 0.25 * n);
+const nearMul = (n: number, frontage: number): number => 1 + 0.5 * Math.min(1, (n * 2 * ARMOR_REACH_TILES) / Math.max(3, frontage));
+
+/**
+ * Feedback 3 (29a, #28): what an offensive does now and what it would do with more support: `add` divisions joining,
+ * drone swarms in close support, warships bombarding its coast. The same rules as the sim (sim/attacks.ts): each
+ * division ×1.25 attack power (at most ×2) and ×1.5 pressure on the tiles within ARMOR_REACH_TILES of it; drones ×1.15
+ * power and ×1.15 speed unless the enemy owns the sky; naval bombardment ×1.15 power. The expected km/h is the MEASURED
+ * speed scaled by the model's ratio (so the badge, the Guerra panel, the unit card and every dialog tell one number);
+ * before the first measurement it is the plains speed.
+ */
+export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; drones?: number; naval?: number } = {}): OffensiveOutlook {
+  const d0 = a.divAtk ?? 0, d1 = d0 + Math.max(0, add.divisions ?? 0);
+  const cas0 = a.casAtk ?? 0, cas1 = (a.air ?? 0) < 0 ? 0 : cas0 + Math.max(0, add.drones ?? 0);
+  const nav0 = a.navalAtk ?? 0, nav1 = nav0 + Math.max(0, add.naval ?? 0);
+  let ratio = a.ratio * (armorMul(d1) / armorMul(d0));
+  if (cas0 === 0 && cas1 > 0) ratio *= 1.15;
+  if (nav0 === 0 && nav1 > 0) ratio *= 1.15;
+  let plan = a.intensity === 0 ? 0 : advanceKmh(ratio);
+  if (cas1 > 0) plan *= 1.15;
+  if ((a.casDef ?? 0) > 0 && (a.air ?? 0) <= 0) plan *= 0.85;
+  if ((a.air ?? 0) > 0) plan *= 1.1;
+  if ((a.air ?? 0) < 0) plan *= 0.9;
+  const near = nearMul(d1, a.frontageTiles) / nearMul(d0, a.frontageTiles);
+  const plan0 = a.planKmh ?? 0;
+  let kmh: number;
+  if (a.advanceKmh > 0.05 && plan0 > 0.05) kmh = a.advanceKmh * (plan / plan0) * near;
+  else kmh = plan * nearMul(d1, a.frontageTiles);
+  return { ratio, planKmh: plan, kmh: Math.min(ADVANCE_MAX_KMH * 1.5, kmh), divisions: d1, armorMul: armorMul(d1) };
 }
 
 /**

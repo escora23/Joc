@@ -15,7 +15,7 @@ import {
 import { clamp01, lerpAngle } from '../shared/math';
 import {
   UnitType, emptyStats, type OpinionView, type ProposalView, type TreatyKind, type TreatyView, type AllianceRequestView, type AllianceView, type AttackView, type ClockView, type FrontView,
-  type GameConfig, type GamePhase, type GameSpeed, type PairState, type PlayerView, type ScarView, type SiegeView,
+  type GameConfig, type GamePhase, type GameSpeed, type PairState, type PlayerView, type RuinView, type ScarView, type SiegeView,
   type StatsSample, type StructureType, type StructureView, type Timelapse, type UnitState, type UnitView, type WarView,
   type WorldData, type WorldEventView, type ProductionView, type UnitMode,
 } from '../shared/types';
@@ -99,6 +99,8 @@ class ClientView implements GameView {
   attacks: AttackView[] = [];
   fronts: FrontView[] = [];
   scars: ScarView[] = [];
+  /** Feedback 3: rubble of destroyed structures. */
+  ruins: RuinView[] = [];
   worldEvents: WorldEventView[] = [];
   alliances: AllianceView[] = [];
   allianceRequests: AllianceRequestView[] = [];
@@ -204,6 +206,7 @@ class ClientView implements GameView {
     this.attacks = [];
     this.fronts = [];
     this.scars = [];
+    this.ruins = [];
     this.worldEvents = [];
     this.alliances = [];
     this.allianceRequests = [];
@@ -521,6 +524,7 @@ export function createSimClient(bus: GameBus): SimClientApi {
       }
     }
     if (u.scars) view.scars = u.scars;
+    if (u.ruins) view.ruins = u.ruins;
     if (u.worldEvents) view.worldEvents = u.worldEvents;
     if (u.alliances) view.alliances = u.alliances;
     if (u.allianceRequests) view.allianceRequests = u.allianceRequests;

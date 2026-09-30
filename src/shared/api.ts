@@ -11,7 +11,7 @@ import type { QualityProfile } from './quality';
 import type { SettingsStore } from './settings';
 import type {
   AllianceRequestView, AllianceView, AttackView, ClockView, CommandKind, Difficulty, FrontView, GameConfig, GamePhase,
-  GameSpeed, LatLon, PairState, PlayerView, ScarView, SiegeView, StatsSample, StructureType, StructureView, Timelapse,
+  GameSpeed, LatLon, PairState, PlayerView, RuinView, ScarView, SiegeView, StatsSample, StructureType, StructureView, Timelapse,
   UnitType, UnitView, WarView, WorldData, WorldEventView, ProductionView, OpinionView, ProposalView, TreatyKind, TreatyView,
 } from './types';
 
@@ -99,6 +99,8 @@ export interface GameView {
   readonly attacks: readonly AttackView[];
   readonly fronts: readonly FrontView[];
   readonly scars: readonly ScarView[];
+  /** Feedback 3: rubble of destroyed structures (shared/damage.ts). */
+  readonly ruins: readonly RuinView[];
   readonly worldEvents: readonly WorldEventView[];
   readonly alliances: readonly AllianceView[];
   readonly allianceRequests: readonly AllianceRequestView[];

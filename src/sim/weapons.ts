@@ -9,7 +9,7 @@ import {
 } from '../shared/constants';
 import { tileKm } from '../shared/orders';
 import type { NukeWeapon } from '../shared/protocol';
-import { StructureType, UnitState, UnitType, type WeaponType } from '../shared/types';
+import { StructureType, UnitState, UnitType, type StructureDamageCause, type WeaponType } from '../shared/types';
 import {
   CRUISE_RANGE, MIRV_SPLIT_T, MIRV_SPREAD, MIRV_WARHEADS,
   NUKE_ALLY_BREAK_TILES, TERMINAL_PHASE_T, WARSHIP_SHELL_DAMAGE,
@@ -132,7 +132,8 @@ export class WeaponSystem {
     p.gold -= cost;
     p.stats.goldSpent += cost;
     // Reload 24 / 12 / 8 h by level (§2.4).
-    silo.cooldownTicks = structureLevel(silo.type, silo.level).reloadTicks ?? 240;
+    // Feedback 3: a damaged silo reloads slower (reload ÷ function).
+    silo.cooldownTicks = Math.round((structureLevel(silo.type, silo.level).reloadTicks ?? 240) / Math.max(0.25, silo.fn));
     g.structuresDirty = true;
     if (weapon === UnitType.Mirv) p.mirvsLaunched++;
     const u = this.launch(p.id, weapon, silo.tile, targetTile, silo.id);
@@ -500,7 +501,8 @@ export class WeaponSystem {
     const base = ballistic ? (lv.hitBallistic ?? 0.45) : (lv.hitAir ?? 0.7);
     const mul = ballistic ? (target.type === UnitType.HydrogenBomb ? 0.85 : target.type === UnitType.MirvWarhead ? 0.7 : 1)
       : target.type === UnitType.CruiseMissile ? 0.65 : 1;
-    const chance = Math.min(0.95, base * mul);
+    // Feedback 3: a damaged site fires with its function (60 % / 25 % of the chance).
+    const chance = Math.min(0.95, base * mul * s.fn);
     const hit = g.rngCombat.next() < chance;
     this.engagedThisTick.set(target.id, (this.engagedThisTick.get(target.id) ?? 0) + 1);
     g.emit({ type: 'combat', tick: g.tick, kind: 'sam', owner: s.owner, fromX: s.x, fromY: s.y, toX: target.x, toY: target.y, hit });
@@ -585,7 +587,7 @@ export class WeaponSystem {
       if (k) k.stats.troopsKilled += killed;
     }
     g.structGrid.query(tx, ty, 1.6, (st) => {
-      if (st.owner === victim) this.damageStructure(st, 0.12, owner);
+      if (st.owner === victim) this.damageStructure(st, 0.12, owner, 'naval');
     });
   }
 
@@ -613,7 +615,7 @@ export class WeaponSystem {
         if (k) k.stats.troopsKilled += killed;
       }
       g.structGrid.query(u.toX, u.toY, 1.6, (s) => {
-        if (s.owner === u.targetPlayer) this.damageStructure(s, 0.12, u.owner);
+        if (s.owner === u.targetPlayer) this.damageStructure(s, 0.12, u.owner, 'naval');
       });
     }
     g.unitSys.remove(u, false);
@@ -644,7 +646,7 @@ export class WeaponSystem {
       });
       const directDmg = kind === 'bomb' ? 1.1 : 0.6;
       g.structGrid.query(u.toX, u.toY, radius, (s) => {
-        if (s.owner !== u.owner && !g.isAllied(u.owner, s.owner)) this.damageStructure(s, s === direct ? directDmg : structDmg, u.owner);
+        if (s.owner !== u.owner && !g.isAllied(u.owner, s.owner)) this.damageStructure(s, s === direct ? directDmg : structDmg, u.owner, kind === 'bomb' ? 'bomber' : kind === 'drone' ? 'drone' : 'strike');
       });
     }
     g.unitGrid.query(u.toX, u.toY, radius, (o) => {
@@ -669,14 +671,9 @@ export class WeaponSystem {
     }
   }
 
-  damageStructure(s: Structure, amount: number, by: number): void {
-    const g = this.g;
-    if (!g.structureMap.has(s.id)) return;
-    s.hp -= amount;
-    s.lastDamageTick = g.tick;
-    g.structuresDirty = true;
-    if (by > 0 && by !== s.owner) g.markHostile(by, s.owner);
-    if (s.hp <= 0) g.economy.destroyStructure(s, by);
+  /** Damage through the one rule of Feedback 3 (EconomySystem.damage: states, level loss, rubble, city losses). */
+  damageStructure(s: Structure, amount: number, by: number, cause: StructureDamageCause = 'strike'): void {
+    this.g.economy.damage(s, amount, by, cause);
   }
 
   // =================================================================================================
@@ -781,12 +778,12 @@ export class WeaponSystem {
       if (d2 > outer2) return;
       if (!isNuke) {
         // Cruise missile: precision kill of the structure at the aim point, damage around it.
-        if (d2 <= 2.25) this.damageStructure(s, 1.2, u.owner);
-        else if (d2 <= inner2) this.damageStructure(s, 0.4, u.owner);
+        if (d2 <= 2.25) this.damageStructure(s, 1.2, u.owner, 'missile');
+        else if (d2 <= inner2) this.damageStructure(s, 0.4, u.owner, 'missile');
         return;
       }
-      if (d2 <= inner2) g.economy.destroyStructure(s, u.owner);
-      else this.damageStructure(s, 1.3 * (1 - (Math.sqrt(d2) - inner) / Math.max(1, outer - inner)) + 0.2, u.owner);
+      if (d2 <= inner2) g.economy.destroyStructure(s, u.owner, true, 'nuke');
+      else this.damageStructure(s, 1.3 * (1 - (Math.sqrt(d2) - inner) / Math.max(1, outer - inner)) + 0.2, u.owner, 'nuke');
     });
     // Units caught in the blast (not missiles in flight).
     const victims: Unit[] = [];

@@ -32,6 +32,8 @@
 import { GAME_SECONDS_PER_TICK, HUMAN_ID, MAP_H, MAP_W, TILE_KM, UNIT_DEFS } from '../shared/constants';
 import type { PlayerCommand } from '../shared/protocol';
 import { isWaterTerrain } from '../shared/terrain';
+import { CITY_BLOCKS } from '../shared/damage';
+import { hostileTo } from '../shared/orders';
 import { StructureType, UnitState, UnitType, type CommandView, type IncursionView } from '../shared/types';
 import type { Game } from './game';
 import { Mode, type Player, type Unit } from './state';
@@ -68,6 +70,8 @@ export const QRF_APC_FIRE = 0.25;
 export const QRF_TANK_FIRE = 1;
 /** Full strength of each command kind in the same units (division 4 tanks, squadron 3 jets, one warship). */
 export const INTRUDER_STRENGTH: Record<'tank' | 'jet' | 'ship', number> = { tank: 4, jet: 3, ship: 1 };
+/** Feedback 3: a command-mode hit on a structure is accepted within this distance of the controlled unit (km). */
+const STRUCTURE_HIT_KM = 30;
 /** Real divisions of the victim count toward the fire only this close (km) to the intruder. */
 export const ENGAGE_DIVISION_KM = 3;
 /**
@@ -763,8 +767,38 @@ export class CommandSystem {
     for (const h of cmd.structureHits ?? []) {
       const s = g.structureMap.get(h.structureId);
       if (!s || s.owner === p.id || g.isAllied(p.id, s.owner)) continue;
-      g.weapons.damageStructure(s, Math.max(0, Math.min(1, h.dmg)), p.id);
+      g.economy.damage(s, Math.max(0, Math.min(1, h.dmg)), p.id, 'command');
     }
+    this.dirty = true;
+    return true;
+  }
+
+  /**
+   * Feedback 3 (owner item #27, hook for command mode): a shell, bomb, missile or naval gun of the controlled unit hit a
+   * real structure (or one block of a city). The hit goes through the sim's one damage rule (EconomySystem.damage):
+   * level loss, rubble, civilian and troop losses, the diplomatic cost of a city. Validated: own unit, within
+   * STRUCTURE_HIT_KM of the structure, at most 0.6 hp per report; a structure of a nation at peace is an act of war
+   * (that nation declares it, as when its escort is fired upon).
+   */
+  structureHit(p: Player, cmd: Extract<PlayerCommand, { type: 'commandStructureHit' }>): boolean {
+    const g = this.g;
+    const u = g.unitMap.get(cmd.unitId);
+    const s = g.structureMap.get(cmd.structureId);
+    if (!u || u.dead || u.owner !== p.id || !s || s.owner === p.id || g.isAllied(p.id, s.owner)) return false;
+    if (tileDistKm(u.x, u.y, s.x, s.y) > STRUCTURE_HIT_KM) {
+      this.log(`[command] structure hit on ${s.id} refused: unit ${u.id} is ${tileDistKm(u.x, u.y, s.x, s.y).toFixed(1)} km away`);
+      return false;
+    }
+    const dmg = Math.max(0, Math.min(0.6, Number(cmd.dmg) || 0));
+    if (dmg <= 0) return false;
+    if (s.owner > 0 && !hostileTo(g.rules, p.id, s.owner)) {
+      if (g.war.declareError(s.owner, p.id, { force: true }) !== null) return false;
+      const w = g.war.declare(s.owner, p.id, 'incursion', 'war.reason.structureAttacked', { force: true });
+      if (!w) return false;
+      this.log(`[command] ${p.id} fired on a structure of ${s.owner} at peace: ${s.owner} declares war`);
+    }
+    const block = typeof cmd.block === 'number' && cmd.block >= 0 && cmd.block < CITY_BLOCKS ? cmd.block | 0 : -1;
+    g.economy.damage(s, dmg, p.id, 'command', block);
     this.dirty = true;
     return true;
   }

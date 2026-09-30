@@ -60,6 +60,9 @@ export interface SimStructure {
   readonly built: number;
   /** Ticks until ready again (silos, SAMs), 0 = ready. */
   readonly cooldownTicks: number;
+  /** Feedback 3: a paid repair is under way; tick of the last hit. */
+  readonly repairing: boolean;
+  readonly lastDamageTick: number;
 }
 
 export interface SimUnit {
@@ -196,6 +199,8 @@ export interface ProposalAnswer {
 /** The diplomacy system (src/sim/diplomacy.ts) seen from sim-ai. */
 export interface SimDiplomacyApi {
   opinion(of: number, toward: number): number;
+  /** Feedback 3: `holder` (or an ally of it) had cities struck by `against` in the last 30 game days. */
+  hasCasusBelli(holder: number, against: number): boolean;
   reasons(of: number, toward: number): ReasonView[];
   /** Remember a reason (keys of REMEMBERED in diplomacy.ts; value overrides the default, e.g. a gift's size). */
   addReason(of: number, toward: number, key: string, value?: number, params?: Record<string, string | number>): void;

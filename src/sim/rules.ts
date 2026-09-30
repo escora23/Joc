@@ -68,6 +68,19 @@ export function createSimRules(g: Game): SimRules {
     },
     waterComponent: (tile) => (tile >= 0 && tile < TILE_COUNT ? g.nav.comp[tile] : -1),
     railLinks: () => g.economy.railPairs(),
+    *offensivesOf(owner) {
+      for (const a of g.attackList) {
+        if (a.ended || a.attacker !== owner) continue;
+        const live = a.liveX >= 0;
+        yield { id: a.id, attacker: a.attacker, defender: a.defender, naval: a.naval, state: a.state, x: live ? a.liveX : a.clickX, y: live ? a.liveY : a.clickY };
+      }
+    },
+    offensive(id) {
+      const a = g.attacks.byId(id);
+      if (!a || a.ended) return null;
+      const live = a.liveX >= 0;
+      return { id: a.id, attacker: a.attacker, defender: a.defender, naval: a.naval, state: a.state, x: live ? a.liveX : a.clickX, y: live ? a.liveY : a.clickY };
+    },
   };
 }
 
