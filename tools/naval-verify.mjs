@@ -192,6 +192,14 @@ async function command() {
     return s?.target && s.target.distM <= 700 ? s.target.distM : null;
   }, null, 60000, 1000);
   const boardTarget = await page.evaluate(() => window.__cmdStats?.intercept?.target?.unitId ?? 0);
+  // Still hove to? (a hail holds it 6 game hours) — else hail it again.
+  if (!(await page.evaluate((id) => __front.ctx.sim.view.units.get(id)?.mode === 19, boardTarget))) {
+    await page.keyboard.down('KeyE');
+    await sleep(1500);
+    await page.keyboard.up('KeyE');
+    await until(page, (id) => __front.ctx.sim.view.units.get(id)?.mode === 19, boardTarget, 60000, 1000);
+  }
+  console.log(`   (before F: ${await page.evaluate(() => JSON.stringify({ speed: window.__cmdStats?.speedKmh, text: window.__cmdStats?.intercept?.text }))})`);
   // Frames are 1-3 s apart under SwiftShader: press again until the boarding party is under way.
   for (let k = 0; k < 4; k++) {
     await page.keyboard.down('KeyF');

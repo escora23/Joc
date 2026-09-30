@@ -989,13 +989,18 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
   E «Dar el alto», R «Disparo de advertencia» (a real shell into the water ahead), F «Abordar» (alongside ≤ 700 m,
   ≤ 12 kn, stopped, no escort: 8 s boarding party), X «Hundir» (at peace it asks first). All sent to the sim
   (`navalIntercept`) with §20.5's consequences. Measured in the browser: C1 panel on «Convoy de tropas de Suiza · en paz ·
-  5.000 soldados»; C2 E → the ship heaves to in the sim; C4 R → warned, piracy, Suiza's opinion 0 → −26; C5 X → «¿Hundir
-  un barco de Suiza en tiempo de paz?», confirmed → sunk in the sim with 5,000 troops, piracy.
+  547 m · 5.000 soldados»; C2 E → the ship heaves to in the sim; C3 F at 529 m → the merchant seized (piracy) and
+  sailing to our port under our flag; C4 R → warned, piracy, Suiza's opinion −33 → −36 (0 → −26 in an earlier run with
+  the hail); C5 X → «¿Hundir un barco de Suiza en tiempo de paz?», confirmed → sunk in the sim with 5,000 troops,
+  piracy. Headless N9/N9b: hail stops it, warning shot −3 opinion at peace, board → ours, boarding 250 km away refused.
 
 ### Run notes / still open
-* Browser runs: blockade 7/7 (V1-V7) and command C1, C2, C4, C5 passed; the failing C3 (the nearest ship was the convoy,
-  which a boarding turns back instead of seizing) and P2 (the enemy's «blockade» event was dropped by the staging's
-  fast-forward filter; `blockade` is now in `FF_EVENT_TYPES`) were fixed in the tool / sim — see the last run below.
+* Browser runs (final, 0 page errors): **blockade 7/7** (V1-V7), **port 3/3** (P1-P3: P2 needed `blockade` added to
+  `FF_EVENT_TYPES`, the staging's fast-forward had dropped the event), **command 5/5** (C1-C5; C3 in the last run: stop
+  engines with S, re-hail, F → «Buque asegurado», the Swiss merchant flies our flag and sails to Málaga; earlier runs
+  failed because the hailed ship had got under way again — a hail now holds a ship 6 game hours — and because the
+  nearest ship was the convoy, which boarding turns back). Model check: shot `command-merchant-models` (the container
+  ship and the troop transport beside the player's warship).
 * A merchant spawned by the sim in the same 25 km tile as the controlled warship used to appear inside its hull; it now
   appears 550 m abeam. The scene's merchants follow the sim's route loosely (they steam toward the sim's position 2.5 km
   ahead), like the warships.

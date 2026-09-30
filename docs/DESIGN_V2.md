@@ -3359,7 +3359,7 @@ browser: `node tools/naval-verify.mjs`.
 ### 20.8 Command mode (a warship)
 * Merchants (a container ship model) and troop convoys (a grey ro-ro transport) of the sim within 40 km sail in the scene
   toward the sim's position; hove to, they stop. The nearest foreign one within 12 km gets a panel: flag, at war / at
-  peace, distance, state, and **E** «Dar el alto» (≤ 8 km: the radio call; it heaves to for 2 game hours), **R**
+  peace, distance, state, and **E** «Dar el alto» (≤ 8 km: the radio call; it heaves to for 6 game hours), **R**
   «Disparo de advertencia» (≤ 6 km: a real shell into the water 250 m ahead of its bow), **F** «Abordar» (≤ 700 m, own
   speed ≤ 12 kn, the ship stopped, no escort: an 8 s boarding party, then it is ours or turned back), **X** «Hundir» (at
   peace the game asks first, with the costs). Shelling it until it sinks is the same «Hundir». All go to the sim as

@@ -578,6 +578,29 @@ registerShot('command-merchant', 'command', 'Owner item 30: a warship with a for
   await freezeAndWait(s, I);
 });
 
+registerShot('command-merchant-models', 'command', 'Owner item 30 model check: the container ship and the troop transport alongside the player warship (&dist=m, &yaw=rad)', async (s) => {
+  await stage(s, { unit: UnitType.Warship, lat: 36.35, lon: -4.6, hour: Number(s.params.get('hour') ?? 16.5), ownRadius: 8 });
+  const I = internalsOrThrow();
+  I.skipIntro();
+  const c = I.controller!;
+  const p = c.ent;
+  const dist = Number(s.params.get('dist') ?? 420);
+  const fwd = new THREE.Vector3(-Math.sin(p.yaw), 0, -Math.cos(p.yaw));
+  const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+  const yaw = p.yaw + Number(s.params.get('yaw') ?? 1.2);
+  for (const [k, side] of [['merchant', -1], ['transport', 1]] as const) {
+    const v = p.pos.clone().addScaledVector(fwd, dist).addScaledVector(right, side * 130);
+    const e = I.world.spawn(k, 1, v.x, v.z, yaw);
+    e.neutral = true;
+    e.order = 'hold';
+    e.slot.x = 0;
+  }
+  const ahead = p.pos.clone().addScaledVector(fwd, dist);
+  c.aimAt(ahead.setY(20));
+  I.simulate(4, 1 / 30);
+  await freezeAndWait(s, I);
+});
+
 registerShot('command-intro', 'command', 'Take control: the swoop into the tank with the title card (unit, place, land status)', async (s) => {
   await stage(s, PEACE);
   const I = internalsOrThrow();

@@ -40,7 +40,7 @@ export const INTERCEPT_TILES = 2;
 /** Hours of history behind the «per hour» figures of a blockade and of a player's losses. */
 export const BLOCKADE_WINDOW_HOURS = 24;
 /** A merchant or convoy stopped by a hail or a warning shot heaves to this long (ticks). */
-export const HEAVE_TO_TICKS = 20;
+export const HEAVE_TO_TICKS = 60;
 
 /** Diplomatic cost of stopping ships of a nation at peace (opinion of the victim / its allies / the world, per ship). */
 export const PIRACY_OPINION = {
