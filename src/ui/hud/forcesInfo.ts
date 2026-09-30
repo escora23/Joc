@@ -12,7 +12,7 @@ import { kmhText, offensiveKmh } from './frontsInfo';
 import { blockadePlace, specText, stopsText } from './navalInfo';
 import {
   ARMOR_RAIL_KMH, BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
-  DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HOLD_ORBIT_KM, HUMAN_ID,
+  DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HOLD_ORBIT_KM, HUMAN_ID, MAP_W,
   PORT_TRADE_GOLD_PER_HOUR, RADAR_SAM_RANGE_MUL, RADAR_SCRAMBLE_MUL, RAIL_GOLD_PER_HOUR, REARM_TICKS, STRUCTURE_DEFS,
   STRUCTURE_LEVELS, TILE_KM, UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, structureLevel, upgradeCost, upgradeTicks,
 } from '../../shared/constants';
@@ -353,7 +353,7 @@ export function outlookOf(a: AttackView, kmh = a.advanceKmh): OutlookInput {
   // kmh: the measured speed every panel shows for it (frontsInfo.offensiveKmh), so a preview starts from that number.
   return {
     ratio: a.ratio, advanceKmh: kmh, planKmh: a.planKmh, intensity: a.intensity, frontageTiles: a.frontageTiles,
-    divAtk: a.divAtk, casAtk: a.casAtk, casDef: a.casDef, air: a.air, navalAtk: a.navalAtk,
+    divAtk: a.divAtk, casAtk: a.casAtk, casDef: a.casDef, air: a.air, navalAtk: a.navalAtk, armorCover: a.armorCover,
   };
 }
 
@@ -457,4 +457,34 @@ export function hostedUnits(hs: HudShared, s: StructureView): UnitView[] {
   for (const u of hs.ctx.sim.view.units.values()) if (u.home === s.id && u.owner === s.owner && isForce(u.type) && u.type !== UnitType.TransportShip) out.push(u);
   out.sort((a, b) => a.type - b.type || a.serial - b.serial);
   return out;
+}
+
+/**
+ * Feedback 3 fix 2 (#28): what one more division joining offensive `a` does to it, from the same figures every panel
+ * shows: the km/h now and after, and whether that is a real gain. At the ×2 power cap, with armour already at the
+ * spearhead, a join adds nothing: the UI then says so and recommends another mission.
+ */
+export function joinOutlook(hs: HudShared, a: AttackView): { now: number; next: ReturnType<typeof offensiveOutlook> } {
+  const now = liveKmh(hs, a);
+  return { now, next: offensiveOutlook(outlookOf(a, now), { divisions: 1 }) };
+}
+
+/** The enemy structure a division could assault near the spearhead of offensive `a` (6 tiles), the most useful first. */
+export function spearheadTarget(hs: HudShared, a: AttackView): StructureView | null {
+  const v = hs.ctx.sim.view;
+  const x = a.contactX >= 0 ? a.contactX : a.x, y = a.contactX >= 0 ? a.contactY : a.y;
+  let best: StructureView | null = null, bv = 0;
+  for (const s of v.structures.values()) {
+    if (s.owner !== a.defender) continue;
+    const sx = (s.tile % MAP_W) + 0.5, sy = Math.floor(s.tile / MAP_W) + 0.5;
+    const d = Math.hypot(sx - x, sy - y);
+    if (d > 6) continue;
+    const w = (s.type === StructureType.DefensePost ? 4 : s.type === StructureType.ArmyBase || s.type === StructureType.Airbase ? 3
+      : s.type === StructureType.SamSite ? 2.5 : s.type === StructureType.City ? 0.8 : 1.2) / (1 + d / 3);
+    if (w > bv) {
+      bv = w;
+      best = s;
+    }
+  }
+  return best;
 }

@@ -211,8 +211,10 @@ function hintFor(hs: HudShared, order: UnitOrderKind, u: UnitView, targetId: num
       if (!a) return t('chip.hint.joinNone');
       const now = offensiveKmh(hs.ctx.sim.view, a), next = offensiveOutlook(outlookOf(a, now), { divisions: 1 });
       const pct = Math.round((next.armorMul / Math.min(2, 1 + 0.25 * (a.divAtk ?? 0)) - 1) * 100);
-      // With four divisions the power bonus is at its ×2 cap: the fifth only adds its ×1.5 push on the tiles near it.
-      return t(pct > 0 ? 'chip.hint.join' : 'chip.hint.joinMax', { off: offensiveName(hs, a), pct, from: kmhText(now), to: kmhText(next.kmh) });
+      // Fix 2 (#28): a join that does not speed the offensive up (power at the ×2 cap, armour already at its spearhead)
+      // says so plainly; with a gain, the power it adds and the km/h.
+      if (!next.gains) return t('chip.hint.joinMax', { off: offensiveName(hs, a), from: kmhText(now), cover: Math.round(next.cover * 100) });
+      return t(pct > 0 ? 'chip.hint.join' : 'chip.hint.joinPush', { off: offensiveName(hs, a), pct, from: kmhText(now), to: kmhText(next.kmh) });
     }
     case 'assault':
     case 'raze': {

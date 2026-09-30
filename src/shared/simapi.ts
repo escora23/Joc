@@ -76,6 +76,9 @@ export interface SimUnit {
   readonly hp: number;
   readonly troops: number;
   readonly targetTile: number;
+  /** The order it carries out (index into UNIT_ORDER_KINDS, -1 = none) and its mission's target (offensive / structure id). */
+  readonly order: number;
+  readonly missionTarget: number;
 }
 
 export interface SimAttack {
@@ -96,6 +99,9 @@ export interface SimAttack {
   /** v2 (W1): the axis point (continuous tile coords, -1 = none). */
   readonly clickX: number;
   readonly clickY: number;
+  /** The live contact point of the offensive (continuous tile coords, -1 = none yet). */
+  readonly liveX: number;
+  readonly liveY: number;
 }
 
 export interface NewPlayerDef {

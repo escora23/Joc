@@ -11,8 +11,8 @@
 //   where the blast would spill onto our own or allied land, and SAM umbrellas are cracked with cruise missiles.
 
 import { HUMAN_ID, MAP_W, NUKE_DEFS } from '../../shared/constants';
-import type { SimPlayer, SimStructure } from '../../shared/simapi';
-import { StructureType, UnitState, UnitType, type WeaponType } from '../../shared/types';
+import type { SimAttack, SimPlayer, SimStructure } from '../../shared/simapi';
+import { StructureType, UNIT_ORDER_KINDS, UnitState, UnitType, type WeaponType } from '../../shared/types';
 import { alive, isMajor, relation, type AiContext } from './context';
 import { nuclearThreat } from './economy';
 import { dist2, friendlyShare, ownerShare, tileAt } from './mapindex';
@@ -135,6 +135,8 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
       }
     }
   }
+  const outgoing = g.outgoingAttacks(p.id);
+  let assaultIssued = false, defendersKept = 0;
   for (const u of units) {
     if (u.state === UnitState.Controlled) continue;
     const here = unitTile(u.x, u.y);
@@ -147,20 +149,49 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
         // enemy (the division follows its spearhead and adds its power), or assault an enemy structure near the line
         // (defence posts first: they slow our advance); on the defensive: defend the threatened sector.
         const targetsEnemy = u.targetTile >= 0 && g.ownerOf(u.targetTile) !== p.id;
+        const ord = u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : '';
+        // Feedback 3 fix 2 (#28): the missions are re-planned, not set once. A division holding a sector (defend /
+        // attach) or idle goes with our running offensive (join); a joined one near an enemy structure the spearhead
+        // is reaching assaults it (or razes it when the enemy is hated); against the human as against anyone.
+        const onMission = ord === 'join' || ord === 'assault' || ord === 'raze';
         if (offensive && enemy) {
+          if (u.state === UnitState.Moving && !onMission && ord !== 'defend' && ord !== 'attach') break;
+          // Our offensive against this enemy nearest the division.
+          let off: SimAttack | null = null, od = Infinity;
+          for (const a of outgoing) {
+            if (a.defender !== enemy.id || a.naval || a.state === 'retreating') continue;
+            const ax = a.liveX >= 0 ? a.liveX : a.clickX, ay = a.liveY >= 0 ? a.liveY : a.clickY;
+            const d = Math.hypot(ax - u.x, ay - u.y);
+            if (d < od) {
+              od = d;
+              off = a;
+            }
+          }
+          // The spearhead within reach of a structure: one assault (or raze) order per pass, from a joined division.
+          if (ord === 'join' && off && !assaultIssued && rng.next() < 0.5) {
+            const ax = off.liveX >= 0 ? off.liveX : off.clickX, ay = off.liveY >= 0 ? off.liveY : off.clickY;
+            const tgt = assaultTarget(ctx, p, enemy, unitTile(ax, ay), 6);
+            if (tgt) {
+              const raze = tgt.type !== StructureType.City && g.diplomacy.opinion(p.id, enemy.id) < -60 && rng.next() < 0.4;
+              if (g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: raze ? 'raze' : 'assault', tile: tgt.tile, targetId: tgt.id })) {
+                assaultIssued = true;
+                break;
+              }
+            }
+          }
+          if (onMission) break;
+          // A sector under a real threat keeps one defender.
+          if (ord === 'defend' && threatFront >= 0 && defendersKept < 1) {
+            defendersKept++;
+            break;
+          }
+          if (off && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'join', tile: -1, targetId: off.id })) break;
           if (u.state !== UnitState.Idle) break;
-          let joined = false;
-          // One division in three goes after a structure near the line first (a defence post in the way, a base).
+          // No offensive of ours yet: a structure near the line, else deploy toward the enemy.
           if (rng.next() < 0.35) {
             const tgt = assaultTarget(ctx, p, enemy, enemyAim >= 0 ? enemyAim : here);
             if (tgt && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'assault', tile: tgt.tile, targetId: tgt.id })) break;
           }
-          for (const a of g.outgoingAttacks(p.id)) {
-            if (a.defender !== enemy.id || a.naval || a.state === 'retreating') continue;
-            joined = g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'join', tile: -1, targetId: a.id });
-            if (joined) break;
-          }
-          if (joined) break;
           const tgt = enemyAim >= 0 ? enemyAim : enemy.capitalTile;
           if (tgt >= 0) g.issue(p.id, { type: 'deployArmor', unitId: u.id, targetTile: tgt });
         } else if (targetsEnemy || u.state === UnitState.Idle) {
@@ -273,13 +304,13 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
  * Feedback 3: an enemy structure worth assaulting near `near`: a defence post (it slows our advance), an army base or
  * airbase, a city last; within 6 tiles of our land (the sim checks the exact depth and refuses the rest).
  */
-function assaultTarget(ctx: AiContext, p: SimPlayer, enemy: SimPlayer, near: number): SimStructure | null {
+function assaultTarget(ctx: AiContext, p: SimPlayer, enemy: SimPlayer, near: number, maxTiles = 14): SimStructure | null {
   const g = ctx.g;
   let best: SimStructure | null = null, bestV = 0;
   for (const s of g.structures(enemy.id)) {
     if (s.built < 1) continue;
     const d = Math.sqrt(dist2(s.tile, near));
-    if (d > 14) continue;
+    if (d > maxTiles) continue;
     const v = (s.type === StructureType.DefensePost ? 4 : s.type === StructureType.ArmyBase || s.type === StructureType.Airbase ? 3
       : s.type === StructureType.SamSite ? 2.5 : s.type === StructureType.City ? 1.5 : 1) / (1 + d / 6);
     if (v > bestV) {

@@ -217,10 +217,12 @@ export type SimEvent =
    */
   | {
       type: 'afterAction'; tick: number; kind: 'offensive' | 'strike' | 'mission'; owner: number; enemy: number;
-      result: 'won' | 'held' | 'failed' | 'cancelled' | 'hit' | 'destroyed' | 'lost' | 'captured' | 'razed';
+      result: 'won' | 'held' | 'failed' | 'cancelled' | 'hit' | 'destroyed' | 'lost' | 'captured' | 'razed' | 'ended';
       x: number; y: number; startTick: number; tilesTaken: number; tilesLost: number; lossesOwn: number; lossesEnemy: number;
       unitId?: number; unitType?: UnitType; order?: UnitOrderKind; structure?: number; damage?: number; attackId?: number;
       units?: number[]; structuresTaken?: number; reason?: string;
+      /** A lifted blockade (order 'blockade'): ships seized / sunk / turned back, gold taken, the enemy's lost trade. */
+      seized?: number; sunk?: number; turnedBack?: number; gold?: number; enemyLost?: number; blockadeId?: number;
     }
   /** Feedback 3: a paid repair finished. */
   | { type: 'structureRepaired'; tick: number; structureId: number; owner: number; structure: StructureType; tile: number; level: number }

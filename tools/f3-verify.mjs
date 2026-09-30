@@ -226,14 +226,26 @@ async function card() {
   row('D3', 'the damage report in the alert feed', feed.slice(0, 300), /Ataque de|funciona al/.test(feed));
   await shot(page, 'd1-card');
   const g0 = await page.evaluate(() => __front.ctx.sim.view.human.gold);
-  const hp0 = await page.evaluate(() => [...__front.ctx.sim.view.structures.values()].find((s) => s.owner === 1 && s.type === 2)?.hp ?? -1);
-  await uiClick(page, repBtn);
-  await runTicks(page, 30, 2);
-  const s1 = await page.evaluate(() => {
-    const s = [...__front.ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === 2);
-    return { hp: s?.hp ?? -1, repairing: !!s?.repairing, gold: __front.ctx.sim.view.human.gold };
+  const read = () => page.evaluate(() => {
+    const v = __front.ctx.sim.view;
+    const s = [...v.structures.values()].find((x) => x.owner === 1 && x.type === 2);
+    return { hp: s?.hp ?? -1, repairing: !!s?.repairing, hitTick: s?.hitTick ?? -1, tick: v.tick, gold: v.human.gold };
   });
-  row('D4', '«Reparar» pays and the structure regains integrity (+8 %/h after the 2 h pause that follows a hit)', `hp ${hp0.toFixed(3)} → ${s1.hp.toFixed(3)} in 3 h, repairing ${s1.repairing}, gold ${Math.round(g0)} → ${Math.round(s1.gold)}`, s1.hp > hp0 + 0.05 && s1.gold < g0 - 20000);
+  const r0 = await read();
+  await uiClick(page, repBtn);
+  // The structure's hp is published every 5 ticks while it repairs: the window ends on a published tick, and the
+  // repair starts 2 h (20 ticks) after the last hit. Expected: +0.8 % per tick after the pause (+8 %/h).
+  await runTicks(page, 30, 2);
+  const r1 = await read();
+  await runTicks(page, 30, 2);
+  const r2 = await read();
+  const pub = (t) => Math.floor(t / 5) * 5;
+  const from = Math.max(r0.tick, r0.hitTick + 20);
+  const exp1 = Math.max(0, pub(r1.tick) - from) * 0.008;
+  const rate = ((r2.hp - r1.hp) / Math.max(1, pub(r2.tick) - pub(r1.tick))) * 10;
+  row('D4', '«Reparar» pays and the structure regains integrity (+8 %/h after the 2 h pause that follows a hit)',
+    `hp ${r0.hp.toFixed(3)} → ${r1.hp.toFixed(3)} → ${r2.hp.toFixed(3)} (ticks ${r0.tick} → ${r1.tick} → ${r2.tick}, last hit ${r0.hitTick}); expected +${exp1.toFixed(3)} in the first window, measured +${(r1.hp - r0.hp).toFixed(3)}; rate after the pause ${(rate * 100).toFixed(1)} %/h; repairing ${r1.repairing}, gold ${Math.round(g0)} → ${Math.round(r1.gold)}`,
+    Math.abs(r1.hp - r0.hp - exp1) <= 0.02 && Math.abs(rate - 0.08) <= 0.01 && r1.gold < g0 - 20000);
   await shot(page, 'd4-repairing');
   await page.close();
 }

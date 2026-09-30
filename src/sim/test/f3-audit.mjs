@@ -338,6 +338,31 @@ function missions() {
     const dmax = Math.max(...divs.map((u) => Math.hypot(u.x - cx, u.y - cy)));
     row('M1', 'the joined divisions follow the spearhead', `farthest ${dmax.toFixed(1)} tiles from the live contact after ${joined.taken} tiles taken`, '≤ 4 tiles', dmax <= 4);
   }
+  // M1c (fix 2): an offensive with 4 divisions (power at the ×2 cap, armour already at the spearhead) and a 5th joining:
+  // the preview must say it adds (almost) nothing, and the measured km/h with and without it must agree with that.
+  {
+    let pv = null, nowKmh = 0;
+    const four = (extra) => offensiveRun(5, (c, phase, i) => {
+      if (phase !== 'tick') return;
+      if (i === 60) {
+        for (let k = 0; k < 4; k++) {
+          const d = spawn(c.g, U.ArmoredDivision, HUMAN_ID, c.at(-2, k * 2 - 3));
+          c.g.unitSys.order(c.H, [d.id], 'join', -1, c.a.id);
+        }
+      }
+      if (i === 170 && extra) {
+        const view = c.g.attacks.view(c.a);
+        nowKmh = view.advanceKmh;
+        pv = offensiveOutlook(view, { divisions: 1 });
+        const d = spawn(c.g, U.ArmoredDivision, HUMAN_ID, c.at(-2, 0));
+        c.g.unitSys.order(c.H, [d.id], 'join', -1, c.a.id);
+      }
+    });
+    const without = four(false), with5 = four(true);
+    const dPred = pv ? pv.kmh - nowKmh : NaN, dMeas = with5.kmh - without.kmh;
+    row('M1c', 'a 5th division joining a capped offensive: the preview', pv ? `${nowKmh.toFixed(2)} → ≈ ${pv.kmh.toFixed(2)} km/h (cover ${pv.cover.toFixed(2)}), gains ${pv.gains}` : 'none', 'no noticeable gain (gains false)', pv && !pv.gains);
+    row('M1c', 'measured with and without the 5th division', `${without.kmh.toFixed(2)} vs ${with5.kmh.toFixed(2)} km/h (Δ ${dMeas.toFixed(2)}; predicted Δ ${dPred.toFixed(2)})`, '|Δ measured − Δ predicted| ≤ 0.3 km/h', Math.abs(dMeas - dPred) <= 0.3);
+  }
   // M2: defend a sector — an enemy offensive into it is slower with two divisions defending there.
   {
     const enemyRun = (defend) => {
@@ -403,7 +428,7 @@ function missions() {
   }
   // M5: blockade a port.
   {
-    const { g, step, H, E, at } = twoNations(5);
+    const { g, step, H, E, at, events: ev5 } = twoNations(5);
     // A coast: the enemy's port needs water; use the sim's naval test coast near Florida instead.
     void at;
     const P = T(30.3, -81.6); // Jacksonville coast
@@ -433,11 +458,59 @@ function missions() {
       const trade0 = [...g.unitMap.values()].filter((u) => u.type === U.TradeShip && u.home === port.id).length;
       const pub = g.buildUpdate(1).structures?.find((x) => x.id === port.id);
       row('M5', 'a warship blockading an enemy port', `order ${ok}, blockaded by ${by}, trade ships out ${trade0}, published ${pub?.blockadedBy ?? '(unchanged)'}`, 'blockaded by us, no trade ships leave', ok && by === HUMAN_ID);
+      // M5b (fix 2, 29d): the blockade lifted (the ship is given another order) has its after-action report.
+      const n0 = ev5.length;
+      g.unitSys.order(H, [ship.id], 'hold', -1, 0);
+      step(2);
+      const rep = ev5.slice(n0).find((e) => e.type === 'afterAction' && e.order === 'blockade');
+      row('M5b', 'a lifted blockade reports how long it held and what it stopped', rep ? `${rep.result}: ${((rep.tick - rep.startTick) / 10).toFixed(0)} h, seized ${rep.seized}, sunk ${rep.sunk}, gold ${rep.gold}, enemy trade lost ${rep.enemyLost}` : 'none', 'afterAction order blockade', !!rep);
     }
+  }
+  // M8 (fix 2, #28/29d): a warship bombarding a coastal factory: the mission ends when it is destroyed, with a report.
+  {
+    const { g, step, H, E, events } = twoNations(5);
+    const P = T(30.3, -81.6);
+    g.transferContext = 'staging';
+    g.forDisc?.(P, 3, (t) => g.playable[t] && g.setOwner(t, E));
+    g.transferContext = 'none';
+    step(2);
+    let tile = -1;
+    for (let r = 0; r < 6 && tile < 0; r++) {
+      for (let dy = -r; dy <= r && tile < 0; dy++) for (let dx = -r; dx <= r; dx++) {
+        const t = P + dy * MAP_W + dx;
+        if (g.owner[t] === E && g.nav.coastal[t]) { tile = t; break; }
+      }
+    }
+    const f = struct(g, S.Factory, E, tile, 2);
+    g.war.declare(HUMAN_ID, E, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
+    const ship = spawn(g, U.Warship, HUMAN_ID, g.nav.waterNear(tile));
+    step(2);
+    const ok = g.unitSys.order(H, [ship.id], 'bombard', tile, f.id);
+    const pubMission = () => g.buildUpdate(1) && ship.missionTarget;
+    const m0 = pubMission();
+    let t = 0;
+    while (t < 1200 && g.structureMap.has(f.id)) {
+      step(10);
+      t += 10;
+    }
+    const gone = t;
+    step(20);
+    const rep = events.find((e) => e.type === 'afterAction' && e.order === 'bombard');
+    row('M8', 'warship bombards a level-2 coastal factory until it is destroyed', `order ${ok}, mission target ${m0 === f.id}, destroyed after ${(gone / 10).toFixed(0)} h`, 'destroyed', ok && m0 === f.id && !g.structureMap.has(f.id));
+    row('M8', 'the bombardment ends with an after-action report', rep ? `${rep.result}, ${((rep.tick - rep.startTick) / 10).toFixed(0)} h, damage ${rep.damage}, report ${((rep.tick - gone) / 10).toFixed(1)} h after the last hit` : 'none', 'afterAction mission bombard destroyed, within 2 h', rep?.result === 'destroyed' && rep.kind === 'mission' && rep.tick - gone <= 20 && rep.damage > 0);
+    row('M8', 'the ship stops shelling and waits for orders', `order ${ship.order}, mode ${ship.mode}`, 'order -1 (no mission)', ship.order === -1);
+    // A second bombardment called off by the war's end.
+    const f2 = struct(g, S.Factory, E, tile, 3);
+    g.unitSys.order(H, [ship.id], 'bombard', tile, f2.id);
+    step(60);
+    g.war.makePeace(HUMAN_ID, E, { kind: 'white' });
+    step(20);
+    const rep2 = events.filter((e) => e.type === 'afterAction' && e.order === 'bombard')[1];
+    row('M8', 'a bombardment cut short by peace has its report too', rep2 ? `${rep2.result}, damage ${rep2.damage}` : `none (at war ${g.war.atWar(HUMAN_ID, E)})`, 'ended', rep2?.result === 'ended');
   }
 }
 
-function aiMissions() {
+function aiMissions(forced = true) {
   const { g, step, events } = quiet(30, true, 11);
   step(1200);
   const nations = g.playerArr.filter((p) => p.kind === 'nation' && p.alive);
@@ -461,6 +534,23 @@ function aiMissions() {
   for (const P of nations) {
     if (P.id === HUMAN_ID || !g.sharesBorder(P.id, HUMAN_ID) || g.war.atWar(P.id, HUMAN_ID)) continue;
     if (g.war.declare(P.id, HUMAN_ID, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true })) againstHuman.add(P.id);
+  }
+  if (!forced) {
+    // The human's own structures along that border (what a player has there): defence posts and a factory or two.
+    const H0 = g.playerById[HUMAN_ID];
+    const edge = [];
+    for (const t of H0.border) {
+      const x = t % MAP_W, y = Math.floor(t / MAP_W);
+      if ([t - 1, t + 1, t - MAP_W, t + MAP_W].some((q) => againstHuman.has(g.owner[q])) && x > 0 && y > 0) edge.push(t);
+    }
+    const hx = H0.capitalTile % MAP_W, hy = Math.floor(H0.capitalTile / MAP_W);
+    for (let i = 0; i < edge.length && i < 60; i += Math.max(1, Math.floor(edge.length / 4))) {
+      const t = edge[i];
+      const x = t % MAP_W, y = Math.floor(t / MAP_W);
+      const back = (y + Math.sign(hy - y) * 2) * MAP_W + x + Math.sign(hx - x) * 2;
+      struct(g, S.DefensePost, HUMAN_ID, t, 1);
+      if (g.owner[back] === HUMAN_ID) struct(g, S.Factory, HUMAN_ID, back, 1);
+    }
   }
   // Every AI at war with its biggest neighbour (the director's own war plans run on top).
   for (const P of nations) {
@@ -486,7 +576,7 @@ function aiMissions() {
   }
   // Each enemy of the human launches one offensive on it (what its war plan does when the odds suit it; forced here so
   // the test does not depend on the plan's timing): its divisions must then join it.
-  for (const id of againstHuman) {
+  for (const id of forced ? againstHuman : []) {
     const P = g.playerById[id];
     P.troops = Math.max(P.troops, 600_000);
     let aim = -1;
@@ -501,7 +591,10 @@ function aiMissions() {
   const kinds = ['join', 'defend', 'assault', 'raze', 'blockade'];
   const codes = kinds.map((k) => ['move', 'attach', 'hold', 'return', 'cap', 'intercept', 'escort', 'strike', 'support', 'patrol', 'blockade', 'bombard', 'rebase', 'attack', 'defend', 'join', 'assault', 'raze'].indexOf(k));
   const counted = new Set();
-  for (let i = 0; i < 150; i++) {
+  const passes = forced ? 150 : 300;
+  const offOnHuman = new Set();
+  const strikesOnHuman0 = events.length;
+  for (let i = 0; i < passes; i++) {
     step(10);
     for (const u of g.unitMap.values()) {
       if (u.owner === HUMAN_ID) continue;
@@ -511,10 +604,23 @@ function aiMissions() {
       if (counted.has(key)) continue;
       counted.add(key);
       seen[kinds[k]]++;
-      if (againstHuman.has(u.owner)) human[kinds[k]] = (human[kinds[k]] ?? 0) + 1;
+      if (!againstHuman.has(u.owner)) continue;
+      // Against the human: a join of an offensive on the human, an assault / raze of one of its structures.
+      const tgtOwner = kinds[k] === 'join' ? g.attacks.byId(u.missionTarget)?.defender : kinds[k] === 'assault' || kinds[k] === 'raze' ? g.structureMap.get(u.missionTarget)?.owner : HUMAN_ID;
+      if (tgtOwner === HUMAN_ID || kinds[k] === 'defend') human[kinds[k]] = (human[kinds[k]] ?? 0) + 1;
     }
+    for (const a of g.attackList) if (againstHuman.has(a.attacker) && a.defender === HUMAN_ID) offOnHuman.add(a.id);
   }
-  const humanAtt = g.attackList.filter((a) => againstHuman.has(a.attacker) && a.defender === HUMAN_ID).length;
+  const humanAtt = offOnHuman.size;
+  if (!forced) {
+    // M9 (fix 2): nothing scripted — the AI's own war plan launches its offensives on the human; its divisions must
+    // join them and assault or raze the human's structures near the front.
+    const onHuman = events.slice(strikesOnHuman0).filter((e) => e.type === 'structureDamaged' && e.owner === HUMAN_ID && againstHuman.has(e.by) && e.cause === 'artillery').length;
+    row('M9', 'AI at war with the human, no forced offensive (300 h): its offensives on the human', `${humanAtt} offensives by ${againstHuman.size} enemies`, '≥ 1', humanAtt > 0);
+    row('M9', 'its divisions join those offensives', `join ${human.join}`, '≥ 1', human.join > 0);
+    row('M9', 'and assault or raze the human\'s structures near the front', `assault ${human.assault}, raze ${human.raze}; artillery hits on the human's structures ${onHuman}`, '≥ 1 order', human.assault + human.raze > 0);
+    return;
+  }
   row('M7', 'AI nations at war with the human use the same missions against it (orders over the run)', `${againstHuman.size} enemies of the human: ${JSON.stringify(human)}; their offensives on the human ${humanAtt}`, 'join or assault against the human', againstHuman.size > 0 && human.join + human.assault > 0);
   const aars = events.filter((e) => e.type === 'structureDamaged' && e.cause === 'artillery' && e.by !== HUMAN_ID).length;
   const divs = [...g.unitMap.values()].filter((u) => u.owner !== HUMAN_ID && (u.type === U.ArmoredDivision || u.type === U.Warship));
@@ -525,7 +631,7 @@ function aiMissions() {
   row('M6', 'AI division artillery hits on structures', `${aars} damage events`, '> 0', aars > 0);
 }
 
-const sections = { damage, missions, ai: aiRepairs, aimissions: aiMissions };
+const sections = { damage, missions, ai: aiRepairs, aimissions: aiMissions, aihuman: () => aiMissions(false) };
 for (const [k, fn] of Object.entries(sections)) {
   if (ONLY && ONLY !== k) continue;
   fn();

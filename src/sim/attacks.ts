@@ -762,7 +762,7 @@ export class AttackSystem {
     const capital = D ? D.capitalTile : -1;
     const ready = this.ready;
     ready.length = 0;
-    let fortSum = 0, fortN = 0;
+    let fortSum = 0, fortN = 0, coverN = 0, coverArm = 0;
     for (const [t, p0] of a.pressure) {
       // Lazy validation: still the defender's, still touching the attacker.
       if (owner[t] !== def) {
@@ -803,6 +803,8 @@ export class AttackSystem {
         }
         if (g.falloutUntil[t] > tick) terrain *= 2;
         const armor = this.atkArmor.length && this.nearUnit(this.atkArmor, t) ? 1.5 : 1;
+        coverN++;
+        if (armor > 1) coverArm++;
         const perp = this.corridor(a, t);
         const axis = perp < 0 ? 0.8 : perp <= AXIS_CORE ? 1 : 0.8;
         inc = (Math.min(ADVANCE_MAX_KMH, v * armor) * axis * 0.1) / (extent * terrain);
@@ -812,6 +814,7 @@ export class AttackSystem {
       a.pressure.set(t, p);
       if (p >= a.theta.get(t)!) ready.push(t);
     }
+    if (coverN > 0) a.armorCover = a.armorCover * 0.9 + 0.1 * (coverArm / coverN);
     // --- casualties (§4.6) -----------------------------------------------------------------------------
     let lostA = 0, lostD = 0;
     if (D && Pa > 0 && Pd > 0 && a.pressure.size > 0 && !(counter && counter.id < a.id)) {
@@ -1160,7 +1163,7 @@ export class AttackSystem {
       committed: Math.floor(a.committed), etaTicks: eta, state: a.state, defensePower: Math.round(a.pd), attackPower: Math.round(a.pa),
       intensity: a.intensity,
       air: a.air, casAtk: a.casAtk, casDef: a.casDef,
-      divAtk: a.divAtk, divDef: a.divDef, navalAtk: a.navalAtk, planKmh: +a.planKmh.toFixed(2),
+      divAtk: a.divAtk, divDef: a.divDef, navalAtk: a.navalAtk, planKmh: +a.planKmh.toFixed(2), armorCover: +a.armorCover.toFixed(3),
     };
   }
 

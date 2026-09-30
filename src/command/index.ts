@@ -23,7 +23,7 @@ import { easeInOutCubic } from '../shared/math';
 import { deriveLocalForces, holderAt } from '../shared/localForces';
 import { localSideText } from '../shared/localForcesText';
 import { isWaterTerrain } from '../shared/terrain';
-import type { CommandKind } from '../shared/types';
+import { UnitType, type CommandKind } from '../shared/types';
 import { describePlace } from '../ui/places';
 import { unitLabel } from '../ui/hud/news';
 import { ShipIntercept } from './intercept';
@@ -75,8 +75,14 @@ const STRUCT_KEY: Record<number, string> = { 0: 'city', 1: 'port', 2: 'factory',
  */
 const STOP_KM: Record<CommandKind, number> = { tank: 1.2, jet: 12, ship: 8 };
 const HOP_KM: Record<CommandKind, number> = { tank: 0.8, jet: 20, ship: 6 };
+/** «Ir al combate» drives this last stretch (km) with the local autopilot (time compressed) instead of a march and a new scene. */
+const NEAR_DRIVE_KM: Record<CommandKind, number> = { tank: 4, jet: 20, ship: 6 };
 /** An enemy entity this close is contact: the chip says so and there is nothing to travel to. */
 const REACH_M: Record<CommandKind, number> = { tank: 4000, jet: 15000, ship: 12000 };
+/** A tank this close (km) to a contact line at war, with enemy soldiers on it, has them within REACH_M in the scene. */
+const CONTACT_LINE_KM = 2.6;
+/** A march to the action gives up after this many legs (each follow-on leg costs about 2.4 real s). */
+const MAX_LEGS = 8;
 /** Beyond this the chip offers «Ir al frente más cercano» (a far unit) instead of «Ir al combate». */
 const FAR_KM: Record<CommandKind, number> = { tank: 25, jet: 150, ship: 60 };
 /** A march takes about this many real seconds (the clock rate follows), between ×300 and ×3600. */
@@ -305,9 +311,16 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   /** The action the player was sent to (entered from a badge, the Guerra panel, an alert…), until reached. */
   let entryGoal: CombatTarget | null = null;
   let goalLabel = '';
+  /** The front (and offensive) the player was sent to: the march keeps going to its live contact line (fix 2, #26). */
+  let entryFrontKey = 0;
+  let entryAttackId = 0;
+  /** Why the last march stopped short of contact ('' = in contact or not an action march). */
+  let marchShort = '';
   let transitAbort = false;
   /** Tools: marches done (km, game s, real ms, stopped by). */
-  const transits: { km: number; gameSec: number; realMs: number; rate: number; stop: string }[] = [];
+  const transits: { km: number; gameSec: number; realMs: number; rate: number; stop: string; legs: number; short: string }[] = [];
+  /** Tools (#26 timing): real ms of every scene build of this session, first the entry build, then any rebuild. */
+  const builds: { ms: number; relocating: boolean }[] = [];
   let lastUpdateWall = 0;
 
   /** Entered from a ground battle: the point the battle camera looked at and its two sides (null otherwise). */
@@ -1011,6 +1024,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   async function build(p: CommandEnterParams, relocating = false): Promise<void> {
+    const t0 = performance.now();
+    try {
+      await buildScene(p, relocating);
+    } finally {
+      builds.push({ ms: Math.round(performance.now() - t0), relocating });
+    }
+  }
+
+  async function buildScene(p: CommandEnterParams, relocating: boolean): Promise<void> {
     if (!ground || !scatter || !world || !fx || !water || !mats || !hud || !overlay || !civil || !forces) return;
     const q = ctx.quality;
     kind = p.kind;
@@ -1633,7 +1655,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       lastMapWall = 0;
     };
     // Near, or fired upon a moment ago: the local autopilot (the + key compresses time when nothing is in reach).
-    if (c.km - stop < HOP_KM[kind] || localSec - lastFiredSec < 30) {
+    if (c.km - stop < NEAR_DRIVE_KM[kind] || localSec - lastFiredSec < 30) {
       nearWaypoint();
       const ok = contactNow() ? false : setRequested(inOwnOrFriendlyLand() ? 60 : 10);
       overlay.showNotice(t(ok ? 'command.go.driving' : 'command.go.drive', { what: title, km: formatNumber(Math.max(0, c.km - stop), 1) }), 4, true);
@@ -1659,25 +1681,146 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   /**
-   * During a march: where the next leg goes, judged from the sim alone (the scene is not rebuilt yet). The action the
-   * player was sent to while it is not reached, else the nearest action (a defended sector never pulls away from a
-   * fight); null when the unit is there, an enemy unit is in reach or no route exists.
+   * Contact as the scene will show it, judged from the sim alone at (x, y) (tile coords): an enemy division within
+   * reach, or a contact line at war within CONTACT_LINE_KM whose enemy side has soldiers on it (the scene stands them
+   * 140-560 m beyond the line, forces.ts), so a hostile is inside REACH_M once the scene is built there.
+   */
+  function simContact(x: number, y: number): boolean {
+    if (enemyNearTile(x, y, kind === 'tank' ? REACH_M.tank / 1000 : kind === 'ship' ? 12 : 15)) return true;
+    if (kind !== 'tank') return false;
+    const lf = deriveLocalForces(ctx.sim.view, x, y, 12, HUMAN_ID);
+    for (const fr of lf.fronts) {
+      const foe = fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0;
+      if (!foe || !atWar(ctx.sim.view, foe) || fr.nearest.distKm > CONTACT_LINE_KM) continue;
+      const side = lf.sides.find((q) => q.owner === foe);
+      if (side && side.pools.front + side.pools.offensive >= 1) return true;
+    }
+    return false;
+  }
+
+  /** Tools: the sim-side contact figures where the unit is (nearest line at war, enemy soldiers on it). */
+  function contactInfo(): string {
+    const uv = unitView();
+    if (!uv) return 'no unit';
+    const lf = deriveLocalForces(ctx.sim.view, uv.x, uv.y, 12, HUMAN_ID);
+    const parts: string[] = [];
+    for (const fr of lf.fronts) {
+      const foe = fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0;
+      const side = lf.sides.find((q) => q.owner === foe);
+      parts.push(`front ${fr.key} vs ${foe} at ${fr.nearest.distKm.toFixed(1)} km, line ${fr.line ? fr.line.kmh.toFixed(1) + ' km/h' : 'tile'}, foe pools ${side ? (side.pools.front + side.pools.offensive).toFixed(0) : '-'}`);
+    }
+    return parts.join('; ') || 'no front within 12 km';
+  }
+
+  /**
+   * The live contact for a tank sent to an action: the nearest point of the contact line at war (the entry's front
+   * first; with an offensive, its stretch of line) or an enemy division when that is nearer. This is where the fight
+   * really is: an offensive's rally point sits behind the line and moves while the clock runs fast.
+   */
+  function liveContact(x: number, y: number): CombatTarget | null {
+    const view = ctx.sim.view;
+    let best: CombatTarget | null = null;
+    const pick = (fronts: { key: number; a: number; b: number; nearest: { x: number; y: number } }[], ax: number, ay: number): void => {
+      let bk = Infinity;
+      for (const fr of fronts) {
+        const foe = fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0;
+        if (!foe || !atWar(view, foe)) continue;
+        const km = tileKm(x, y, fr.nearest.x, fr.nearest.y);
+        // The front the player chose leads (up to 3 times farther than another one).
+        const score = km * (entryFrontKey && fr.key !== entryFrontKey ? 3 : 1) + tileKm(ax, ay, fr.nearest.x, fr.nearest.y) * (ax === x && ay === y ? 0 : 0.5);
+        if (score < bk) {
+          bk = score;
+          best = { kind: 'front', tx: fr.nearest.x, ty: fr.nearest.y, km, owner: foe, frontKey: fr.key };
+        }
+      }
+    };
+    // With an offensive: its stretch of the line (the line nearest its live contact, 30 km around it) while the unit is
+    // still far; near it, the line nearest the unit (the same stretch, measured from where the unit stands).
+    const off = entryAttackId ? view.attacks.find((a) => a.id === entryAttackId && a.contactX >= 0) : undefined;
+    const near = deriveLocalForces(view, x, y, 40, HUMAN_ID);
+    pick(near.fronts, x, y);
+    const b1 = best as CombatTarget | null;
+    if (off && (!b1 || tileKm(x, y, off.contactX, off.contactY) > 40 || (entryFrontKey && b1.frontKey !== entryFrontKey))) {
+      best = null;
+      pick(deriveLocalForces(view, off.contactX, off.contactY, 30, HUMAN_ID).fronts, off.contactX, off.contactY);
+    }
+    const fk = entryFrontKey ? view.frontByKey.get(entryFrontKey) : undefined;
+    if (!best && fk) {
+      // Nothing within 40 km: the stretch of the chosen front nearest the unit, then its line there.
+      let sx = -1, sy = -1, sd = Infinity;
+      for (let i = 0; i + 1 < fk.samples.length; i += 2) {
+        const d = tileKm(x, y, fk.samples[i], fk.samples[i + 1]);
+        if (d < sd) {
+          sd = d;
+          sx = fk.samples[i];
+          sy = fk.samples[i + 1];
+        }
+      }
+      if (sx >= 0) pick(deriveLocalForces(view, sx, sy, 30, HUMAN_ID).fronts, sx, sy);
+    }
+    if (!best) {
+      // Else the nearest point of any front at war (the coarse far view).
+      const t = combatTargets(view, x, y, kind, null).nearest;
+      if (t && (t.kind === 'front' || t.kind === 'battle')) best = { ...t, kind: 'front' };
+    }
+    // An enemy division nearer than the line is the fight.
+    for (const u of view.units.values()) {
+      if (u.type !== UnitType.ArmoredDivision || !atWar(view, u.owner) || !(u.hp > 0)) continue;
+      const km = tileKm(x, y, u.x, u.y);
+      const b = best as CombatTarget | null;
+      if (km < 30 && (!b || km < b.km - 2)) best = { kind: 'unit', tx: u.x, ty: u.y, km, owner: u.owner, unitId: u.id };
+    }
+    return best;
+  }
+
+  /**
+   * During a march: where the next leg goes, judged from the sim alone (the scene is not rebuilt yet). Sent to an
+   * action (a front, a battle, a mission on a front): the live contact until the sim puts a hostile in reach. Otherwise
+   * the nearest action (a defended sector never pulls away from a fight). Null when the unit is in contact or no leg is
+   * possible; `marchShort` then says why.
    */
   function nextLegFromSim(): { route: Route; c: CombatTarget } | null {
     const uv = unitView();
     if (!uv) return null;
-    if (enemyNearTile(uv.x, uv.y, kind === 'tank' ? 4 : kind === 'ship' ? 12 : 15)) return null;
+    if (simContact(uv.x, uv.y)) {
+      marchShort = '';
+      return null;
+    }
     targets = combatTargets(ctx.sim.view, uv.x, uv.y, kind, uv);
     targetsWall = performance.now();
-    if (entryGoal) entryGoal.km = tileKm(uv.x, uv.y, entryGoal.tx, entryGoal.ty);
-    if (entryGoal && entryGoal.km < STOP_KM[kind] + HOP_KM[kind]) entryGoal = null;
-    const { nearest, mission } = targets;
-    const c = entryGoal ?? (mission && mission.order !== 'defend' && mission.km > STOP_KM[kind] + HOP_KM[kind] && (!nearest || mission.km <= nearest.km * 1.5 + 5) ? mission : nearest);
-    if (!c) return null;
-    const stop = c.kind === 'unit' && c.unitId ? STOP_KM[kind] * 2 : STOP_KM[kind];
-    if (c.km - stop < HOP_KM[kind]) return null;
+    let c: CombatTarget | null;
+    const toAction = kind === 'tank' && (entryFrontKey > 0 || entryAttackId > 0);
+    if (toAction) {
+      c = liveContact(uv.x, uv.y);
+      if (entryGoal && c) {
+        entryGoal.tx = c.tx;
+        entryGoal.ty = c.ty;
+        entryGoal.km = c.km;
+      }
+    } else {
+      if (entryGoal) entryGoal.km = tileKm(uv.x, uv.y, entryGoal.tx, entryGoal.ty);
+      if (entryGoal && entryGoal.km < STOP_KM[kind] + HOP_KM[kind]) entryGoal = null;
+      const { nearest, mission } = targets;
+      c = entryGoal ?? (mission && mission.order !== 'defend' && mission.km > STOP_KM[kind] + HOP_KM[kind] && (!nearest || mission.km <= nearest.km * 1.5 + 5) ? mission : nearest);
+      // A tank heading for a line or an offensive goes to the live line, not to the offensive's rally point.
+      if (c && kind === 'tank' && (c.kind === 'battle' || c.kind === 'front' || (c.kind === 'mission' && c.order === 'join'))) c = liveContact(uv.x, uv.y) ?? c;
+    }
+    if (!c) {
+      marchShort = 'noLine';
+      return null;
+    }
+    const stop = c.kind === 'unit' ? STOP_KM[kind] * 2 : STOP_KM[kind];
+    if (c.km - stop < (toAction ? 0.4 : HOP_KM[kind])) {
+      // At the line and still no contact: the enemy has nobody on this stretch.
+      marchShort = toAction ? 'empty' : '';
+      return null;
+    }
     const route = planRoute(uv.x, uv.y, c.tx, c.ty, stop, passableTile, kind === 'jet' ? 4000 : 2500);
-    return route && route.km >= 0.5 ? { route, c } : null;
+    if (!route || route.km < 0.3) {
+      marchShort = 'noRoute';
+      return null;
+    }
+    return { route, c };
   }
 
   /**
@@ -1713,10 +1856,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     let pt = alongRoute(route, 0);
     const reachKm = kind === 'tank' ? 5 : kind === 'ship' ? 25 : 60;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    let legSec0 = sec0, kmDone = 0;
+    let legSec0 = sec0, kmDone = 0, lastContactCheck = 0, iters = 0, sends = 0, legWall = performance.now();
+    marchShort = '';
+    let legsRun = 0;
     for (let leg = 0; ; leg++) {
+    legsRun = leg + 1;
     for (;;) {
       await sleep(80);
+      iters++;
       if (!active) {
         scene.visible = true;
         return null;
@@ -1737,6 +1884,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (now - lastSend > 150) {
         lastSend = now;
         ctx.sim.send({ type: 'controlledMove', unitId: p0.unitId, x: pt.x, y: pt.y, heading: pt.heading });
+        sends++;
         if (now - sentClock.at > 1000) {
           ctx.sim.setClock('travel', rate, { x: uv.x, y: uv.y }, false);
           sentClock.at = now;
@@ -1751,6 +1899,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         stopBy = 'enemy';
         break;
       }
+      // The line came to the unit (an enemy offensive, or ours pulling back): contact before the end of the leg.
+      if (kind === 'tank' && km > 0.5 && now - lastContactCheck > 700) {
+        lastContactCheck = now;
+        if (simContact(uv.x, uv.y)) {
+          stopBy = 'enemy';
+          break;
+        }
+      }
       // Nothing moves any more (blocked): stop where it is.
       if (Math.abs(km - lastKm) >= 0.01 || lastKm < 0) stallSince = now;
       stall = now - stallSince;
@@ -1758,6 +1914,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (stall > 30000) {
         console.info(`[command] march stalled at ${km.toFixed(1)} km (sim ${cv?.sec.toFixed(0)} s, moves ${JSON.stringify(cv?.moves)}, log ${JSON.stringify(cv?.log.slice(-2))})`);
         stopBy = 'player';
+        marchShort = 'stalled';
         break;
       }
       const leftKm = Math.max(0, route.km - km);
@@ -1774,10 +1931,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     kmDone += km;
     // Arrived, but the line moved during the march (fronts are alive) or the far view of it was coarse: the next leg
     // goes on behind the same fade, from where the sim has the unit (no scene rebuild in between; at most 4 legs).
-    if (stopBy !== 'arrived' || leg >= 3) break;
+    if (stopBy !== 'arrived') break;
     const nx = nextLegFromSim();
     if (!nx) break;
-    console.info(`[command] march goes on to ${targetTitle(nx.c)}: ${nx.route.km.toFixed(1)} km more`);
+    if (leg >= MAX_LEGS - 1) {
+      marchShort = 'legs';
+      break;
+    }
+    {
+      const cvl = ctx.sim.view.command;
+      console.info(`[command] march goes on to ${targetTitle(nx.c)}: ${nx.route.km.toFixed(1)} km more (leg ${leg + 1}: ${km.toFixed(1)} km in ${cvl ? (cvl.sec - legSec0).toFixed(0) : '?'} game s at ×${rate}, ${((performance.now() - legWall) / 1000).toFixed(1)} real s, ${iters} loops, ${sends} moves ${JSON.stringify(cvl?.moves ?? null)}; ${contactInfo()})`);
+      iters = sends = 0;
+      legWall = performance.now();
+    }
     route = nx.route;
     c = nx.c;
     title = targetTitle(c);
@@ -1803,8 +1969,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     overlay.setTransit(null);
     scene.visible = true;
     const cv = ctx.sim.view.command;
-    transits.push({ km, gameSec: cv ? cv.sec - sec0 : 0, realMs: performance.now() - wall0, rate, stop: stopBy });
-    console.info(`[command] march ended (${stopBy}): ${km.toFixed(1)} km in ${((performance.now() - wall0) / 1000).toFixed(1)} real s`);
+    transits.push({ km, gameSec: cv ? cv.sec - sec0 : 0, realMs: performance.now() - wall0, rate, stop: stopBy, legs: legsRun, short: marchShort });
+    console.info(`[command] march ended (${stopBy}${marchShort ? '/' + marchShort : ''}): ${km.toFixed(1)} km in ${((performance.now() - wall0) / 1000).toFixed(1)} real s; ${contactInfo()}`);
     const uv = unitView();
     if (stopBy === 'lost' || !uv) {
       phase = prevPhase;
@@ -1824,13 +1990,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const h = forces.nearestHostile(P.pos);
     const contact = !!h.ent && h.dist < REACH_M[kind];
     if (entryGoal) {
-      // Sent to an action: arrived there (the march ran behind the entry fade) or still short of it.
+      // Sent to an action: the march ran behind the entry fade until the sim put an enemy within reach, or it said why
+      // it stopped short (then the player decides: G goes on; no automatic second march and scene rebuild).
       const goal = entryGoal;
       if (goal.km < STOP_KM[kind] + HOP_KM[kind]) entryGoal = null;
       refreshTargets(true);
       const next = chosenTarget();
-      if (!contact && next && next.km - STOP_KM[kind] >= HOP_KM[kind]) {
+      const toAction = kind === 'tank' && (entryFrontKey > 0 || entryAttackId > 0);
+      if (!toAction && !contact && next && next.km - STOP_KM[kind] >= HOP_KM[kind]) {
         marchLegs = 1;
+        void goToCombat();
+      } else if (!contact && marchShort) shortNotice(next ?? goal);
+      else if (!contact && next && next.km - STOP_KM[kind] < NEAR_DRIVE_KM[kind]) {
+        // In reach of the line but nobody in the scene yet: the autopilot drives the last stretch.
         void goToCombat();
       } else arrivalNotice(next ?? goal, 'arrived');
       return;
@@ -1876,12 +2048,27 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const next = chosenTarget();
     const P = player();
     const inReach = !!P && !!forces && forces.nearestHostile(P.pos).dist < REACH_M[kind];
-    if (stopBy === 'arrived' && next && !inReach && next.km - STOP_KM[kind] >= HOP_KM[kind] && marchLegs < 5) {
+    // (The march itself already chained its legs from the sim until contact; a new march, with a scene rebuild, only
+    // when it ran out of legs.)
+    if (stopBy === 'arrived' && marchShort === 'legs' && next && !inReach && next.km - STOP_KM[kind] >= HOP_KM[kind] && marchLegs < 3) {
       marchLegs++;
       await goToCombat();
-    } else marchLegs = 0;
+    } else {
+      marchLegs = 0;
+      if (!inReach && marchShort && marchShort !== 'legs') shortNotice(next ?? c);
+    }
   }
   let marchLegs = 0;
+
+  /** The march to the action stopped short of contact: say why, plainly (fix 2, #26). */
+  function shortNotice(c: CombatTarget): void {
+    const P = player();
+    if (!P || !overlay || !marchShort) return;
+    const tp = tileOf(P.pos.x, P.pos.z);
+    const km = tileKm(tp.x, tp.y, c.tx, c.ty);
+    console.info(`[command] march short of contact (${marchShort}): ${km.toFixed(1)} km from ${targetTitle(c)}`);
+    overlay.showNotice(t(`command.transit.short.${marchShort}`, { nation: nationName(c.owner), km: formatNumber(km, 1) }), 8, true);
+  }
 
   function arrivalNotice(c: CombatTarget, stopBy: string): void {
     const P = player();
@@ -2404,26 +2591,43 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       goalLabel = '';
       targets = { nearest: null, mission: null };
       transits.length = 0;
+      builds.length = 0;
       lastUpdateWall = 0;
       confirmed.clear();
       kind = p.kind;
+      entryFrontKey = 0;
+      entryAttackId = 0;
+      marchShort = '';
       if (p.goal) {
         const ux = p.x ?? 0, uy = p.y ?? 0;
+        const view = ctx.sim.view;
         goalLabel = p.goal.label;
-        // The place of the action on the contact line itself (the one local derivation: the line the scene draws).
+        entryFrontKey = p.goal.frontKey ?? 0;
+        entryAttackId = p.goal.attackId ?? 0;
         let gx = p.goal.x, gy = p.goal.y;
-        const glf = kind === 'tank' ? deriveLocalForces(ctx.sim.view, gx, gy, 30, HUMAN_ID) : null;
-        const gfr = glf?.fronts.find((q) => atWar(ctx.sim.view, q.a === HUMAN_ID ? q.b : q.a) && (q.a === HUMAN_ID || q.b === HUMAN_ID));
-        if (gfr) {
-          gx = gfr.nearest.x;
-          gy = gfr.nearest.y;
+        let gfoe = view.owner[Math.floor(gy) * MAP_W + Math.floor(gx)] ?? 0;
+        if (kind === 'tank' && !entryFrontKey) {
+          // An alert or a battle strip names a place: the front at war there (if any) is the action.
+          const gfr = deriveLocalForces(view, gx, gy, 30, HUMAN_ID).fronts.find((q) => (q.a === HUMAN_ID || q.b === HUMAN_ID) && atWar(view, q.a === HUMAN_ID ? q.b : q.a));
+          if (gfr) entryFrontKey = gfr.key;
         }
-        const gt = Math.floor(gy) * MAP_W + Math.floor(gx);
-        const gfoe = gfr ? (gfr.a === HUMAN_ID ? gfr.b : gfr.a) : ctx.sim.view.owner[gt] ?? 0;
-        entryGoal = { kind: 'battle', tx: gx, ty: gy, km: tileKm(ux, uy, gx, gy), owner: gfoe };
-        if (entryGoal.km - STOP_KM[kind] >= HOP_KM[kind]) {
-          const route = planRoute(ux, uy, gx, gy, STOP_KM[kind], passableTile, kind === 'jet' ? 4000 : 2500);
-          if (route && route.km > 0.5) {
+        let stop = STOP_KM[kind];
+        if (kind === 'tank' && (entryFrontKey || entryAttackId)) {
+          // Fix 2 (#26/#29e): the live contact (the line itself, or an enemy division on it), never the offensive's
+          // rally point; the march goes on leg after leg until the sim puts an enemy within reach.
+          const lc = liveContact(ux, uy);
+          if (lc) {
+            gx = lc.tx;
+            gy = lc.ty;
+            gfoe = lc.owner;
+            if (lc.kind === 'unit') stop *= 2;
+          }
+        }
+        entryGoal = { kind: 'battle', tx: gx, ty: gy, km: tileKm(ux, uy, gx, gy), owner: gfoe, frontKey: entryFrontKey || undefined };
+        const inContact = kind === 'tank' && (entryFrontKey || entryAttackId) ? simContact(ux, uy) : entryGoal.km - stop < HOP_KM[kind];
+        if (!inContact) {
+          const route = planRoute(ux, uy, gx, gy, stop, passableTile, kind === 'jet' ? 4000 : 2500);
+          if (route && route.km > 0.3) {
             overlay?.show(kind);
             const at = await marchTo(route, entryGoal, true);
             if (at) {
@@ -2431,7 +2635,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
               p = { ...p, lat: ll.lat, lon: ll.lon, x: at.x, y: at.y, heading: at.heading, tile: Math.floor(at.y) * MAP_W + Math.floor(at.x), battleHandoff: undefined };
               params = p;
             }
-          }
+          } else marchShort = 'noRoute';
         }
       }
       try {
@@ -2830,7 +3034,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           // Owner item 30: the ship-stopping panel, its target (sim unit id, kind, distance) and the actions sent.
           intercept: intercept ? { text: intercept.text, target: intercept.current ? { unitId: intercept.current.src?.id ?? 0, kind: intercept.current.kind, distM: Math.round(intercept.current.pos.distanceTo(P.pos)), speed: +intercept.current.speed.toFixed(1) } : null, log: intercept.log.slice(-8) } : null,
           merchants: world.ents.filter((e) => e.alive && (e.kind === 'merchant' || e.kind === 'transport')).length,
-          combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })),
+          combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })), builds: builds.map((x) => ({ ...x })),
           nearestHostileM: Math.round(forces.nearestHostile(P.pos).dist),
           night: +atmos.night.toFixed(2), vision: night.vision, lights: night.lightsOn, flares: night.flaresFired, fires: civil.fires.length,
           target: (() => {

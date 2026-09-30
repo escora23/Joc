@@ -445,6 +445,8 @@ export interface StructureView {
   producing?: number;
   /** Feedback 3: a paid repair is under way. */
   repairing?: boolean;
+  /** Feedback 3 fix 2: the tick of the last hit while damaged (a repair waits REPAIR_PAUSE_TICKS after it). */
+  hitTick?: number;
   /** Feedback 3: city blocks command mode reported destroyed (bitmask; see shared/damage.ts collapsedBlocks). */
   blocks?: number;
   /** Feedback 3: the player who hit it last (0 = none), for the card («dañada por Francia»). */
@@ -532,6 +534,8 @@ export interface AttackView {
   divDef?: number;
   navalAtk?: number;
   planKmh?: number;
+  /** Feedback 3 fix 2: share of the pressured tiles with an attacking division near (its ×1.5 push), smoothed. */
+  armorCover?: number;
 }
 
 export interface FrontView {

@@ -13,7 +13,7 @@ import { tx } from '../tx';
 import { unitLabel } from './news';
 import type { HudShared } from './shared';
 import {
-  domainOf, effectLine, etaText, frontName, groupOf, isListedForce, offensiveName, orderWord, placeOf, stateLine, stationOrder, structureName,
+  domainOf, effectLine, etaText, frontName, groupOf, isListedForce, joinOutlook, offensiveName, orderWord, placeOf, spearheadTarget, stateLine, stationOrder, structureName,
   unitId, unitName, type Domain, type ForceGroup,
 } from './forcesInfo';
 import { frontAnchor, humanFrontsByDanger } from './frontsInfo';
@@ -247,7 +247,10 @@ export function createForces(hs: HudShared): ForcesPanel {
     const mine = v.attacks.find((a) => a.attacker === HUMAN_ID && !a.naval && a.defender > 0 && a.state !== 'retreating') ?? null;
     const contactTile = (a: AttackView) => tileAt(a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y);
     if (type === UnitType.ArmoredDivision) {
-      if (mine) return { ids, type, order: 'join', tile: -1, targetId: mine.id, text: t('adv.s.join', { off: offensiveName(hs, mine) }) };
+      // Fix 2 (#28): join only when it speeds the offensive up; at the cap, assault a structure at its spearhead instead.
+      if (mine && joinOutlook(hs, mine).next.gains) return { ids, type, order: 'join', tile: -1, targetId: mine.id, text: t('adv.s.join', { off: offensiveName(hs, mine) }) };
+      const st = mine ? spearheadTarget(hs, mine) : null;
+      if (st) return { ids, type, order: 'assault', tile: st.tile, targetId: st.id, text: t('adv.s.assault', { s: structureName(hs, st) }) };
       if (f) {
         const p = frontAnchor(f);
         const own = ownSideTile(p.x, p.y);

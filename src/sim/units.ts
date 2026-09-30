@@ -156,7 +156,7 @@ export class UnitSystem {
     }
     if (destroyed) {
       // Feedback 3 (29d): a mission cut short by the unit's loss has its report too.
-      if ((u.owner === HUMAN_ID || u.enemy === HUMAN_ID) && u.type === UnitType.ArmoredDivision && u.missionTarget) this.missionEnd(u, 'lost');
+      if ((u.owner === HUMAN_ID || u.enemy === HUMAN_ID) && (u.type === UnitType.ArmoredDivision || (u.type === UnitType.Warship && u.mode === Mode.Bombard)) && u.missionTarget) this.missionEnd(u, 'lost');
       else if (u.mode === Mode.Strike && (u.owner === HUMAN_ID || g.owner[u.targetTile] === HUMAN_ID) && u.targetTile >= 0) {
         g.emit({
           type: 'afterAction', tick: g.tick, kind: 'strike', owner: u.owner, enemy: g.owner[u.targetTile] ?? 0, result: 'lost', x: u.x, y: u.y,
@@ -769,6 +769,10 @@ export class UnitSystem {
   // --- warships ---------------------------------------------------------------------------------------
   private orderWarship(p: Player, u: Unit, order: UnitOrderKind, tile: number, targetId: number): boolean {
     const g = this.g;
+    // Feedback 3 fix 2 (29d): a bombardment called off by a new order has its report (what it did so far).
+    if (u.mode === Mode.Bombard && u.missionTarget && !(order === 'bombard' && (targetId === u.missionTarget || tile === u.targetTile))) {
+      this.missionEnd(u, 'cancelled', 'bombard');
+    }
     u.targetUnit = 0;
     u.enemy = 0;
     // Owner item 30: any new order takes the warship off its blockade.
@@ -806,6 +810,22 @@ export class UnitSystem {
         this.raiseMilitary(p, o);
         const ok = this.sailTo(u, w, Mode.Bombard);
         u.targetTile = tile;
+        // Feedback 3 fix 2 (#28/29d): a bombardment of a structure is a mission that ends when the structure is
+        // destroyed or taken (or the war ends): the target is the given structure, else the enemy's one on that tile.
+        let st = targetId ? g.structureMap.get(targetId) : undefined;
+        if (!st) {
+          let bd = Infinity;
+          g.structGrid.query(tileCx(tile), tileCy(tile), 0.75, (q) => {
+            const d = Math.hypot(q.x - tileCx(tile), q.y - tileCy(tile));
+            if (q.owner === o && d < bd) {
+              bd = d;
+              st = q;
+            }
+          });
+        }
+        u.missionTarget = st && st.owner === o ? st.id : 0;
+        u.missionStart = g.tick;
+        u.missionDealt = 0;
         return ok;
       }
       case 'attack': {
@@ -2022,9 +2042,20 @@ export class UnitSystem {
     if (u.mode === Mode.Bombard) {
       if (!u.path || this.followPath(u, speed)) {
         u.state = UnitState.Attacking;
-        if (!hostileTo(g.rules, u.owner, u.enemy)) {
+        const tgt = u.missionTarget ? g.structureMap.get(u.missionTarget) : undefined;
+        const done = u.missionTarget && (!tgt || tgt.owner !== u.enemy);
+        if (!hostileTo(g.rules, u.owner, u.enemy) || done) {
+          // The war ended, or the target is rubble or in other hands: the mission is over, with its report; the ship
+          // holds where it is (patrolling its station) and waits for orders.
+          if (u.missionTarget || u.missionDealt > 0) {
+            const res = !hostileTo(g.rules, u.owner, u.enemy) && !done ? 'ended' : !tgt ? 'destroyed' : tgt.owner === u.owner ? 'captured' : 'cancelled';
+            this.missionEnd(u, res, 'bombard');
+          }
           u.mode = Mode.Patrol;
           u.order = -1;
+          u.stationX = u.x;
+          u.stationY = u.y;
+          u.enemy = 0;
         } else if ((g.tick + u.id) % 10 === 0) this.bombard(u);
       } else u.state = UnitState.Moving;
       return;
@@ -2187,7 +2218,11 @@ export class UnitSystem {
     // Every 10 ticks: one hour of attrition on the garrison of the nearest front of the victim.
     this.bleedGarrison(victim, u.owner, tx, ty, BOMBARD_GARRISON_PER_HOUR);
     g.structGrid.query(tx, ty, 1.6, (st) => {
-      if (st.owner === victim) g.weapons.damageStructure(st, 0.05, u.owner, 'naval');
+      if (st.owner !== victim) return;
+      const before = st.hp;
+      g.weapons.damageStructure(st, 0.05, u.owner, 'naval');
+      // Damage done (hp share; a level lost counts the shell's full weight).
+      u.missionDealt += before > st.hp ? before - st.hp : 0.05;
     });
   }
 
@@ -2477,11 +2512,11 @@ export class UnitSystem {
   }
 
   /** Feedback 3 (29d): a division mission ended: the after-action report for the player. */
-  private missionEnd(u: Unit, result: 'captured' | 'destroyed' | 'razed' | 'cancelled' | 'lost'): void {
+  private missionEnd(u: Unit, result: 'captured' | 'destroyed' | 'razed' | 'cancelled' | 'lost' | 'ended', order?: UnitOrderKind): void {
     const g = this.g;
     const s = g.structureMap.get(u.missionTarget);
-    const tile = s ? s.tile : u.anchorTile;
-    const ord = u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : 'attach';
+    const tile = s ? s.tile : u.type === UnitType.Warship ? u.targetTile : u.anchorTile;
+    const ord = order ?? (u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : 'attach');
     if (u.owner === HUMAN_ID || u.enemy === HUMAN_ID) {
       g.emit({
         type: 'afterAction', tick: g.tick, kind: 'mission', owner: u.owner, enemy: u.enemy, result,

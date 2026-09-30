@@ -434,6 +434,13 @@ export interface CommandGoal {
   x: number;
   y: number;
   label: string;
+  /**
+   * Feedback 3 fix 2 (#26/#29e): the front the action is on (a front badge, a Guerra row, a joined offensive). The
+   * march goes to that front's live contact line, not to the offensive's rally point.
+   */
+  frontKey?: number;
+  /** The offensive the action is (its live contact leads the way to the line). */
+  attackId?: number;
 }
 
 /** v2 (W5/W6, §9.6): what the ground battle layer was showing when the player took control from it. */

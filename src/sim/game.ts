@@ -1685,6 +1685,7 @@ export class Game implements SimGame {
       out.push({
         id: s.id, type: s.type, owner: s.owner, tile: s.tile, level: s.level, hp: Math.max(0, Math.min(1, s.hp)),
         repairing: s.repairing || undefined, blocks: s.blocks || undefined, hitBy: s.lastHitBy || undefined,
+        hitTick: s.hp < 1 && s.lastDamageTick > 0 ? s.lastDamageTick : undefined,
         blockadedBy: s.type === StructureType.Port ? this.unitSys.blockaded(s) || undefined : undefined,
         ...(s.type === StructureType.Port ? this.portTradeLoss(s) : {}),
         built: Math.min(1, s.built), cooldown: this.economy.cooldownFraction(s),

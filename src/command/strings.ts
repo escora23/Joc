@@ -343,6 +343,11 @@ const es: Record<string, string> = {
   'command.transit.end.arrived': 'Has llegado: {what} a {km} km al {dir}. El marcador rojo señala al enemigo.',
   'command.transit.end.enemy': 'Enemigo a la vista: la marcha se detiene. {what} a {km} km al {dir}.',
   'command.transit.end.player': 'Marcha detenida: {what} a {km} km al {dir}. Pulsa G para seguir.',
+  'command.transit.short.empty': 'Has llegado a la línea con {nation}, pero en este tramo no tiene tropas a la vista: no hay contacto. Pulsa G para buscar el combate más cercano.',
+  'command.transit.short.noRoute': 'No hay camino por terreno propio o aliado hasta la línea con {nation} (agua o un país en paz en medio): la marcha se detiene a {km} km.',
+  'command.transit.short.noLine': 'No hay ningún frente en guerra al alcance: la marcha se detiene aquí.',
+  'command.transit.short.legs': 'La línea con {nation} se mueve más deprisa que la marcha: se detiene a {km} km. Pulsa G para seguir.',
+  'command.transit.short.stalled': 'La división no puede avanzar más (bloqueada): se detiene a {km} km de la línea con {nation}.',
 };
 
 const en: Record<string, string> = {
@@ -686,6 +691,11 @@ const en: Record<string, string> = {
   'command.transit.end.arrived': 'You have arrived: {what} {km} km to the {dir}. The red marker shows the enemy.',
   'command.transit.end.enemy': 'Enemy in sight: the march stops. {what} {km} km to the {dir}.',
   'command.transit.end.player': 'March stopped: {what} {km} km to the {dir}. Press G to go on.',
+  'command.transit.short.empty': 'You have reached the line with {nation}, but it has no troops in sight on this stretch: no contact. Press G to look for the nearest fight.',
+  'command.transit.short.noRoute': 'There is no way over your own or allied ground to the line with {nation} (water or a nation at peace in between): the march stops {km} km short.',
+  'command.transit.short.noLine': 'No front at war within reach: the march stops here.',
+  'command.transit.short.legs': 'The line with {nation} is moving faster than the march: it stops {km} km short. Press G to go on.',
+  'command.transit.short.stalled': 'The division cannot advance any further (blocked): it stops {km} km from the line with {nation}.',
 };
 
 /** The dictionaries (tools/i18n-check.mjs reads them). */

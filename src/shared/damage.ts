@@ -76,9 +76,13 @@ export function repairCost(type: StructureType, level: number, hp: number): numb
   return Math.round(upgradeCost(type, Math.max(1, level)) * REPAIR_COST_SHARE * missing / 100) * 100;
 }
 
-/** Game hours a repair from `hp` to 1 takes (without new hits). */
-export function repairHours(hp: number): number {
-  return Math.max(0, 1 - hp) / REPAIR_PER_HOUR;
+/**
+ * Game hours a repair from `hp` to 1 takes (without new hits): +8 %/h, after the 2 h pause that follows the last hit
+ * (`hitTick`, counted from `tick`) when one is still running.
+ */
+export function repairHours(hp: number, hitTick = -1, tick = 0): number {
+  const pause = hitTick >= 0 ? Math.max(0, hitTick + REPAIR_PAUSE_TICKS + 1 - tick) / 10 : 0;
+  return pause + Math.max(0, 1 - hp) / REPAIR_PER_HOUR;
 }
 
 /** Civilian targets: cities (ports and factories are strategic, not civilian). */

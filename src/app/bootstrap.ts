@@ -187,7 +187,7 @@ export async function bootstrap(): Promise<void> {
           }
         }
       }
-      await app.enterCommandMode(id, { x: gx, y: gy, label: target.label });
+      await app.enterCommandMode(id, { x: gx, y: gy, label: target.label, frontKey: target.frontKey || undefined, attackId: target.attackId || undefined });
       return true;
     },
     async exitCommandMode() {

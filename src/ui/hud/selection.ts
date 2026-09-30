@@ -18,7 +18,7 @@ import { tx } from '../tx';
 import { attackNation, breakAlliance, donate, focusNation, nationRelation, requestAlliance, toggleEmbargo } from './diplomacy';
 import {
   effectLine, enduranceLine, etaText, goldPerHour, homeName, hostedUnits, integrityHelp, levelEffects, maxLevel, placeOf,
-  offensiveName, outlookOf, reachLine, speedLine, speedRealLine, stateLine, stationOrder, structId, structureName, structurePurpose, unitId, unitName,
+  offensiveName, outlookOf, spearheadTarget, reachLine, speedLine, speedRealLine, stateLine, stationOrder, structId, structureName, structurePurpose, unitId, unitName,
 } from './forcesInfo';
 import { selectedUnitIds } from './orderCtl';
 import { missionTarget } from '../../command/goto';
@@ -176,7 +176,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
         hs.sound('whoosh');
         hs.flags.commandEntered = true;
         hs.setMode({ kind: 'none' });
-        void ctx.app.enterCommandMode(cur.id, { x: m.tx, y: m.ty, label: missionLabel(cur) });
+        void ctx.app.enterCommandMode(cur.id, { x: m.tx, y: m.ty, label: missionLabel(cur), frontKey: m.frontKey, attackId: m.order === 'join' ? cur.mission : undefined });
       });
       tip(tm, () => ({ title: t('hud.takeMission'), text: t('hud.takeMission.tip') }));
       toggleClass(tm, 'fu-hidden', !missionTarget(view(), u.x, u.y, u));
@@ -212,8 +212,11 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
           if (!a) return { title: t('order.join'), text: t('order.join.tip'), whyNot: t('order.err.joinNone') };
           const now = offensiveKmh(view(), a), next = offensiveOutlook(outlookOf(a, now), { divisions: 1 });
           const km = tileKm(cur.x, cur.y, a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y);
+          // Fix 2 (#28): a join that does not speed the offensive up says so first, with the better use of the division.
+          const alt = next.gains ? null : spearheadTarget(hs, a);
           return {
-            title: t('order.join'), text: t('order.join.tip'),
+            title: t('order.join'),
+            text: next.gains ? t('order.join.tip') : `${t('fr.send.join.flat', { off: offensiveName(hs, a), kmh: kmhText(now), cover: Math.round(next.cover * 100) })} ${alt ? t('fr.send.join.alt', { s: structureName(hs, alt) }) : t('fr.send.join.altDefend')}`,
             now: [[t('card.join.target'), offensiveName(hs, a)], [t('card.join.eta'), etaText(hs, Math.round((km / UNIT_DEFS[cur.type].speedKmh) * 10))]],
             nextKey: 'tip.next.join', next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
             lines: [t('fr.send.join.risk', { wear: formatNumber(0.2, 1) })],
@@ -408,7 +411,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
         if (!cur) return null;
         return {
           title: t('card.repair.title'), text: t('card.repair.tip', { p: Math.round(REPAIR_PER_HOUR * 100) }), cost: formatNumber(repairCost(cur.type, cur.level, cur.hp)),
-          now: [[t('card.repair.time'), etaText(hs, Math.round(repairHours(cur.hp) * 10))]], whyNot: repairWhy(cur),
+          now: [[t('card.repair.time'), etaText(hs, Math.round(repairHours(cur.hp, cur.hitTick ?? -1, view().tick) * 10))]], whyNot: repairWhy(cur),
         };
       });
       live.repair = rep;
@@ -573,14 +576,14 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     {
       const st = damageState(s.hp);
       const parts = [t(`card.dmg.${DAMAGE_IDS[st]}`), t('card.dmg.fn', { p: Math.round(functionFactor(s.hp) * 100) })];
-      if (s.repairing) parts.push(t('card.repairing', { eta: etaText(hs, Math.round(repairHours(s.hp) * 10), false) }));
+      if (s.repairing) parts.push(t('card.repairing', { eta: etaText(hs, Math.round(repairHours(s.hp, s.hitTick ?? -1, view().tick) * 10), false) }));
       else if (s.hitBy && st > 0) parts.push(t('card.dmg.hitBy', { name: hs.name(s.hitBy) }));
       setText(live.dmg, parts.join(' · '));
       live.dmg.dataset.state = String(st);
       toggleClass(live.dmg, 'fu-hidden', s.built < 1);
       if (live.repair) {
         const why = repairWhy(s);
-        setText(live.repair.lastElementChild as HTMLElement, s.repairing ? t('card.repair.busy') : s.hp >= 0.999 ? t('card.repair.none') : t('card.repair.btn', { cost: formatNumber(repairCost(s.type, s.level, s.hp)), h: formatNumber(repairHours(s.hp), 1) }));
+        setText(live.repair.lastElementChild as HTMLElement, s.repairing ? t('card.repair.busy') : s.hp >= 0.999 ? t('card.repair.none') : t('card.repair.btn', { cost: formatNumber(repairCost(s.type, s.level, s.hp)), h: formatNumber(repairHours(s.hp, s.hitTick ?? -1, view().tick), 1) }));
         toggleClass(live.repair, 'is-disabled', !!why);
         toggleClass(live.repair, 'fu-hidden', s.hp >= 0.999 && !s.repairing);
       }

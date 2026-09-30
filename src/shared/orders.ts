@@ -679,6 +679,8 @@ export interface OutlookInput {
   casDef?: number;
   air?: number;
   navalAtk?: number;
+  /** Measured share of the pressured tiles an attacking division stands near (AttackView.armorCover). */
+  armorCover?: number;
 }
 
 export interface OffensiveOutlook {
@@ -690,6 +692,14 @@ export interface OffensiveOutlook {
   /** Attached divisions after the change and the attack power they add (×1.25 each, at most ×2). */
   divisions: number;
   armorMul: number;
+  /**
+   * Feedback 3 fix 2 (#28): whether the change speeds the offensive up noticeably (≥ 0.1 km/h and ≥ 3 %). Joining an
+   * offensive whose power is at the ×2 cap and whose spearhead already has armour does not: the UI then does not offer
+   * «Unirse» as the recommended mission and says why.
+   */
+  gains: boolean;
+  /** The part of the frontage with the armour push after the change (0..1). */
+  cover: number;
 }
 
 const armorMul = (n: number): number => Math.min(2, 1 + 0.25 * n);
@@ -719,7 +729,13 @@ export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; dro
   if ((a.casDef ?? 0) > 0 && (a.air ?? 0) <= 0) plan *= 0.85;
   if ((a.air ?? 0) > 0) plan *= 1.1;
   if ((a.air ?? 0) < 0) plan *= 0.9;
-  const near = nearMul(d1, a.frontageTiles) / nearMul(d0, a.frontageTiles);
+  // The ×1.5 push acts on the tiles near a division. Joined divisions follow the spearhead (they stand together), so a
+  // new one adds its own stretch only when no armour is there yet: the measured cover says which (the sim's figure;
+  // before any measurement the old estimate of one stretch per division).
+  const reach = Math.min(1, (2 * ARMOR_REACH_TILES) / Math.max(3, a.frontageTiles));
+  const c0 = a.armorCover !== undefined ? a.armorCover : d0 > 0 ? Math.min(1, d0 * reach) : 0;
+  const c1 = d1 > d0 ? (c0 > 0.05 ? Math.min(1, c0 + (d0 === 0 ? reach : 0)) : Math.min(1, c0 + reach)) : c0;
+  const near = (1 + 0.5 * c1) / (1 + 0.5 * c0);
   const plan0 = a.planKmh ?? 0;
   let kmh: number;
   // The measured speed answers the model's with an elasticity of ½ (terrain, forts, the mop-up and the war's logistics
@@ -727,7 +743,9 @@ export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; dro
   if (int1 === 0) kmh = 0;
   else if (a.advanceKmh > 0.05 && plan0 > 0.05) kmh = a.advanceKmh * Math.sqrt((plan / plan0) * near);
   else kmh = plan * nearMul(d1, a.frontageTiles);
-  return { ratio, planKmh: plan, kmh: Math.min(ADVANCE_MAX_KMH * 1.5, kmh), divisions: d1, armorMul: armorMul(d1) };
+  kmh = Math.min(ADVANCE_MAX_KMH * 1.5, kmh);
+  const base = int1 === 0 ? 0 : a.advanceKmh > 0.05 ? a.advanceKmh : plan0 > 0 ? plan0 : kmh;
+  return { ratio, planKmh: plan, kmh, divisions: d1, armorMul: armorMul(d1), gains: kmh - base >= Math.max(0.1, base * 0.03), cover: c1 };
 }
 
 /**

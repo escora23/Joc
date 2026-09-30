@@ -88,6 +88,29 @@ export function wireAfterAction(hs: HudShared, alerts: AlertCenter): void {
       body = t('aar.strike.body', { place: where(e.x, e.y), own: e.lossesOwn, time: duration(e) });
       icon = e.unitType === UnitType.DroneSwarm ? 'droneSwarm' : 'bomber';
       unitId = e.result === 'lost' ? undefined : e.unitId;
+    } else if (e.order === 'blockade') {
+      // A lifted blockade (ours, or one that stopped our ships): how long, what it stopped, what it earned or cost.
+      const place = where(e.x, e.y);
+      const nums = { time: duration(e), seized: formatNumber(e.seized ?? 0), sunk: formatNumber(e.sunk ?? 0), back: formatNumber(e.turnedBack ?? 0), gold: formatNumber(e.gold ?? 0), lost: formatNumber(e.enemyLost ?? 0) };
+      title = ours ? t('aar.blockade.ours', { place }) : t('aar.blockade.theirs', { name: hs.name(e.owner), place });
+      body = t(ours ? 'aar.blockade.ours.body' : 'aar.blockade.theirs.body', nums);
+      icon = 'shield';
+      if (e.blockadeId) groupKey = `blk:${e.blockadeId}`;
+    } else if (e.order === 'bombard') {
+      // A warship's bombardment of a structure: over when it is rubble or taken, the war ends, or a new order comes.
+      const unit = unitLabel(UnitType.Warship, view().units.get(e.unitId ?? 0)?.serial ?? 0);
+      const s = e.structure !== undefined && e.structure >= 0 ? t(`structure.${structId(e.structure)}`) : t('fstate.target');
+      const place = where(e.x, e.y);
+      if (!ours) {
+        if (e.result !== 'destroyed') return;
+        title = t('aar.bombard.enemy.destroyed', { name: hs.name(e.owner), s, place });
+        severity = 'danger';
+      } else title = t(`aar.bombard.${e.result}`, { unit, s, place });
+      body = t('aar.bombard.body', { time: duration(e), dmg: Math.round((e.damage ?? 0) * 100), own: e.lossesOwn });
+      if (ours && e.result === 'lost') severity = 'warning';
+      icon = 'warship';
+      unitId = ours && e.result !== 'lost' ? e.unitId : undefined;
+      groupKey = `aar:bombard:${e.unitId}:${e.startTick}`;
     } else {
       const unit = unitLabel(e.unitType ?? UnitType.ArmoredDivision, view().units.get(e.unitId ?? 0)?.serial ?? 0);
       const s = e.structure !== undefined && e.structure >= 0 ? t(`structure.${structId(e.structure)}`) : t('fstate.target');

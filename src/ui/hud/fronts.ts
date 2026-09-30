@@ -21,7 +21,7 @@ import { icon } from '../icons';
 import { tip, type TipData } from '../tooltip';
 import { tx } from '../tx';
 import { askHelp, whyNotPropose } from './diplomacy';
-import { etaText, frontName, offensiveName, outlookOf, unitName, placeOf } from './forcesInfo';
+import { etaText, frontName, joinOutlook, offensiveName, outlookOf, spearheadTarget, structureName, unitName, placeOf } from './forcesInfo';
 import {
   advanceText, combatDays, frontAnchor, frontFocus, frontTiles, humanFrontsByDanger, isoOf, kmhText, offensiveKmh, offensiveStatus, sidesOf,
   troopsText, worldFronts, type FrontSides,
@@ -329,7 +329,11 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     if (!listEl) return;
     const list = candidates(f);
     // (The language is part of it: a switch re-labels the buttons.)
-    const sig = `${t('fr.send.go')}|${ownOffensive(sidesOf(view(), f))?.id ?? 0}|` + (list.map((c) => `${c.u.id}:${c.onWay ? 2 : c.why ? 1 : 0}`).join(',') || 'none');
+    const own0 = ownOffensive(sidesOf(view(), f));
+    // Fix 2 (#28): at the power cap with armour at its spearhead, a join does not speed the offensive up: said on the
+    // button itself («Unirse · no acelera») and in plain words in its tooltip, with what to do instead.
+    const flat = !!own0 && !joinOutlook(hs, own0).next.gains;
+    const sig = `${t('fr.send.go')}|${own0?.id ?? 0}|${flat}|` + (list.map((c) => `${c.u.id}:${c.onWay ? 2 : c.why ? 1 : 0}`).join(',') || 'none');
     if (listEl.dataset.sig === sig) {
       for (const c of list) {
         const el = listEl.querySelector<HTMLElement>(`.fu-war-send[data-unit="${c.u.id}"]`);
@@ -346,7 +350,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     }
     for (const c of list) {
       const ownOff = ownOffensive(sidesOf(view(), f));
-      const btn = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, icon('armoredDivision'), t(c.onWay ? 'fr.send.onWay' : ownOff ? 'fr.send.join' : 'fr.send.go')) as HTMLButtonElement;
+      const btn = h('button', { class: `fu-btn fu-btn--sm fu-btn--ghost${flat && !c.onWay ? ' fu-war-send--flat' : ''}` }, icon('armoredDivision'), t(c.onWay ? 'fr.send.onWay' : ownOff ? (flat ? 'fr.send.joinFlat' : 'fr.send.join') : 'fr.send.go')) as HTMLButtonElement;
       btn.disabled = !!c.why;
       const unitId = c.u.id;
       const current = (): SendCandidate | undefined => {
@@ -359,9 +363,12 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         const own = ff ? ownOffensive(sidesOf(view(), ff)) : null;
         if (own) {
           // Feedback 3 (#28): the preview of joining: its power and the km/h the offensive would reach.
-          const now = offensiveKmh(view(), own), next = offensiveOutlook(outlookOf(own, now), { divisions: 1 });
+          const { now, next } = joinOutlook(hs, own);
+          const alt = spearheadTarget(hs, own);
           return {
-            title: unitName(q.u), text: t('fr.send.join.tip', { off: offensiveName(hs, own) }),
+            title: unitName(q.u),
+            text: next.gains ? t('fr.send.join.tip', { off: offensiveName(hs, own) })
+              : `${t('fr.send.join.flat', { off: offensiveName(hs, own), kmh: kmhText(now), cover: Math.round(next.cover * 100) })} ${alt ? t('fr.send.join.alt', { s: structureName(hs, alt) }) : t('fr.send.join.altDefend')}`,
             now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`]],
             nextKey: 'tip.next.join', next: [[t('fr.send.join.power'), `×${formatNumber(next.armorMul, 2)}`], [t('fr.send.join.kmh'), `${kmhText(now)} → ≈ ${kmhText(next.kmh)} km/h`]],
             lines: [t('fr.send.join.risk', { wear: formatNumber(0.2, 1) })], whyNot: q.why,

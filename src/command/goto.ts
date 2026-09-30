@@ -141,7 +141,7 @@ export function missionTarget(view: GameView, ux: number, uy: number, unit: Unit
     const a = view.attacks.find((x) => x.id === m);
     if (!a) return null;
     const x = a.contactX >= 0 ? a.contactX : a.x, y = a.contactX >= 0 ? a.contactY : a.y;
-    return { kind: 'mission', order, tx: x, ty: y, km: tileKm(ux, uy, x, y), owner: a.attacker === HUMAN_ID ? a.defender : a.attacker };
+    return { kind: 'mission', order, tx: x, ty: y, km: tileKm(ux, uy, x, y), owner: a.attacker === HUMAN_ID ? a.defender : a.attacker, frontKey: a.frontKey || undefined };
   }
   if ((order === 'assault' || order === 'raze' || order === 'blockade' || order === 'bombard') && m > 0) {
     const s = view.structures.get(m);

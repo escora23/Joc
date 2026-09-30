@@ -181,6 +181,22 @@ export class NavalSystem {
     if (b.active) {
       b.active = false;
       g.emit({ type: 'blockade', tick: g.tick, blockade: b.id, owner: b.owner, stage: 'end', kind: b.kind, key: b.key, portId: b.portId, x: b.x, y: b.y, spec: b.spec });
+      // Feedback 3 fix 2 (29d): the lifted blockade's report — how long it held, what it stopped and what it earned.
+      const humanHit = b.nations.get(HUMAN_ID);
+      if (b.owner === HUMAN_ID || humanHit) {
+        const mine = b.owner === HUMAN_ID ? b : humanHit!;
+        let enemy = 0, most = -1;
+        for (const [n, r] of b.nations) if (n !== b.owner && r.seized + r.sunk + r.turnedBack + r.rerouted > most) {
+          most = r.seized + r.sunk + r.turnedBack + r.rerouted;
+          enemy = n;
+        }
+        g.emit({
+          type: 'afterAction', tick: g.tick, kind: 'mission', owner: b.owner, enemy: b.owner === HUMAN_ID ? enemy : HUMAN_ID, result: 'ended',
+          x: b.x, y: b.y, startTick: b.startTick, tilesTaken: 0, tilesLost: 0, lossesOwn: 0, lossesEnemy: 0, order: 'blockade', unitType: UnitType.Warship,
+          seized: mine.seized, sunk: mine.sunk, turnedBack: mine.turnedBack, gold: Math.round(b.owner === HUMAN_ID ? b.gold : 0),
+          enemyLost: Math.round(b.owner === HUMAN_ID ? b.enemyLost : humanHit!.lost), blockadeId: b.id,
+        });
+      }
     }
     this.version++;
     this.dirty = true;

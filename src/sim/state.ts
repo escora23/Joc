@@ -406,6 +406,12 @@ export class Attack implements SimAttack {
   /** Feedback 3: attached divisions of each side, warships bombarding, and the model's plains speed v this tick. */
   divAtk = 0;
   divDef = 0;
+  /**
+   * Feedback 3 fix 2 (#28): the share of the tiles under pressure that an attacking division stands near (its ×1.5
+   * push), smoothed over the last hours. Joined divisions follow the spearhead, so they cover the same stretch: the
+   * previews read this instead of assuming each new division covers a new stretch.
+   */
+  armorCover = 0;
   navalAtk = 0;
   planKmh = 0;
   /** Tiles ready to fall but held by the war's logistics bucket this tick. */
