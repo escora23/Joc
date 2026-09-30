@@ -16,6 +16,7 @@ import type {
   ScarView, SiegeView, StructureType, StructureView, UnitType, WarGoal, WarView, WeaponType, WorldEventKind,
   WorldEventView, WorldInit, UnitOrderKind, ProductionView, OffensiveIntensity, RuinView, StructureDamageCause,
 } from './types';
+import type { BlockadeSpec } from './naval';
 
 // =================================================================================================
 // Player commands (human via UI, AI via SimGame.issue). All are validated by the sim; invalid ones are
@@ -81,7 +82,7 @@ export type PlayerCommand =
    * without an offensive on that front launches one with this share of home troops. confirm: the player accepted a
    * strategic (L2) strike in the confirmation dialog.
    */
-  | { type: 'unitOrder'; unitIds: number[]; order: UnitOrderKind; tile: number; targetId: number; ratio?: number; confirm?: boolean }
+  | { type: 'unitOrder'; unitIds: number[]; order: UnitOrderKind; tile: number; targetId: number; ratio?: number; confirm?: boolean; /** Owner item 30: order 'blockade' — whom it stops and what it does (default: nations at war, seize). */ blockade?: Partial<BlockadeSpec> }
   /** Cancel the last unit queued for production at a structure (refund). */
   | { type: 'cancelProduction'; structureId: number }
   /** Command mode: freeze/unfreeze a unit while the player drives it. */
@@ -120,7 +121,14 @@ export type PlayerCommand =
    * (0..CITY_BLOCKS-1) seen collapsing, -1 = none. Capped per report (≤ 0.6 hp) and validated against the unit's
    * position (within 30 km of the structure) and the war / incursion state.
    */
-  | { type: 'commandStructureHit'; unitId: number; structureId: number; dmg: number; block?: number };
+  | { type: 'commandStructureHit'; unitId: number; structureId: number; dmg: number; block?: number }
+  /**
+   * Owner item 30: the controlled warship `unitId` hails a merchant or troop convoy (it heaves to for inspection),
+   * fires a warning shot across its bow, boards it (a merchant is seized and sails to our nearest port; a convoy is
+   * sent back) or sinks it. Validated against the distance (hail 50 km, warning shot / sink 30 km, board 50 km... the
+   * boarding party needs the ship alongside: 2 tiles) and escorts; at peace it is piracy (opinion, casus belli).
+   */
+  | { type: 'navalIntercept'; unitId: number; targetId: number; act: 'hail' | 'warn' | 'board' | 'sink' };
 
 export type PlayerCommandType = PlayerCommand['type'];
 
@@ -220,6 +228,19 @@ export type SimEvent =
   | { type: 'strikeResult'; tick: number; unitId: number; unit: UnitType; owner: number; victim: number; kind: 'structure' | 'division' | 'front' | 'ship' | 'none'; targetId: number; structure: number; damage: number; destroyed: boolean; x: number; y: number }
   /** A blockading warship captured a trade ship: the payout goes to the captor. */
   | { type: 'shipCaptured'; tick: number; unitId: number; from: number; by: number; warshipId: number; gold: number; x: number; y: number }
+  // --- Owner item 30: naval warfare ---
+  /** A blockade came into force (a warship holds its station) or ended (its last warship left or was sunk). */
+  | { type: 'blockade'; tick: number; blockade: number; owner: number; stage: 'start' | 'end'; kind: 'strait' | 'port' | 'sea'; key: string; portId: number; x: number; y: number; spec: BlockadeSpec }
+  /**
+   * A merchant or troop convoy of `victim` was stopped by `by` (a blockade, or a warship ordered / driven in command
+   * mode: blockade 0): seized (the merchant now sails to the captor's port), sunk, turned back (a convoy), let through
+   * because escorted (passed), hailed or warned (it heaves to). piracy: `by` is at peace with `victim`.
+   */
+  | { type: 'shipStopped'; tick: number; blockade: number; by: number; victim: number; unitId: number; unit: UnitType; warshipId: number; action: 'seized' | 'sunk' | 'turnedBack' | 'passed' | 'hailed' | 'warned'; gold: number; troops: number; x: number; y: number; piracy: boolean }
+  /** A merchant or convoy steers around a blockade (sent when the human is involved): the extra km and trade gold lost. */
+  | { type: 'shipRerouted'; tick: number; unitId: number; owner: number; unit: UnitType; blockade: number; by: number; extraKm: number; lost: number; x: number; y: number }
+  /** A seized merchant reached its captor's port: the cargo is paid. */
+  | { type: 'prizeDelivered'; tick: number; unitId: number; owner: number; from: number; gold: number; tile: number; blockade: number }
   // --- v2 (W3): diplomacy ---
   /** A proposal was created or changed status (answers carry their reasons). */
   | { type: 'proposal'; tick: number; proposal: ProposalView }
@@ -381,6 +402,10 @@ export interface TickUpdate {
   proposals?: ProposalView[];
   /** v2 (W3): the human's economy with its terms (every 10 ticks), for the top-bar breakdowns. */
   economy?: import('./types').HumanEconomyView;
+  /** Owner item 30: every blockade standing or ended in the last game day (when changed, and hourly). */
+  blockades?: import('./naval').BlockadeView[];
+  /** Owner item 30: the human's trade lost to blockades and seized cargo gained (with blockades). */
+  naval?: import('./naval').NavalEconomyView;
   /** v2 (W5): command mode (while a unit is controlled or an incursion runs, and once after). */
   command?: import('./types').CommandView;
 }

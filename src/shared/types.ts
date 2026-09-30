@@ -451,6 +451,15 @@ export interface StructureView {
   hitBy?: number;
   /** Feedback 3: a port blockaded by this player's warships (no trade ships leave). */
   blockadedBy?: number;
+  /**
+   * Owner item 30 (ports): trade income lost per hour now to a blockade (idle ships of a blockaded or cut-off port, and
+   * detours at sea), the blockading player, cut off (every route closed, the port itself is free) and own merchants
+   * sailing a detour.
+   */
+  tradeLoss?: number;
+  tradeLossBy?: number;
+  tradeCut?: boolean;
+  rerouted?: number;
 }
 
 /** Feedback 3: what damaged or destroyed a structure (structureDamaged events, ruins, after-action reports). */
@@ -807,6 +816,13 @@ export const UnitMode = {
   Embarking: 15,
   /** Unit in combat (warship engaging, fighter dogfight). */
   Engaged: 16,
+  // --- Owner item 30: naval warfare ---
+  /** A merchant seized by its new owner, sailing to the captor's port with its cargo. */
+  Prize: 17,
+  /** A merchant or convoy steering around a blockade (a longer route). */
+  Detour: 18,
+  /** A merchant or convoy hove to for inspection (hailed or warned by a warship). */
+  HoveTo: 19,
 } as const;
 export type UnitMode = (typeof UnitMode)[keyof typeof UnitMode];
 /** One unit being produced for the human (TickUpdate.production). */

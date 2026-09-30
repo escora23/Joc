@@ -29,6 +29,7 @@ import {
   TICKS_PER_GAME_DAY, TRAITOR_TICKS, TREATY_WARNING_TICKS, ULTIMATUM_PEACE_TICKS, ULTIMATUM_TICKS,
 } from '../shared/constants';
 import { CASUS_BELLI_TICKS, CIVILIAN_OPINION_ALLY, CIVILIAN_OPINION_VICTIM, CIVILIAN_OPINION_WORLD } from '../shared/damage';
+import { PIRACY_ALLY_CAP, PIRACY_CAP, PIRACY_OPINION, PIRACY_WORLD_CAP } from '../shared/naval';
 import type { SimEvent } from '../shared/protocol';
 import type { ProposalAnswer, SimProposal } from '../shared/simapi';
 import {
@@ -70,6 +71,11 @@ export const REMEMBERED = {
   civilianStrike: { value: CIVILIAN_OPINION_VICTIM, halfLife: 7_200, cap: 60 },
   bombedAlly: { value: CIVILIAN_OPINION_ALLY, halfLife: 4_800, cap: 36 },
   bombedCities: { value: CIVILIAN_OPINION_WORLD, halfLife: 4_800, cap: 20 },
+  // Owner item 30: stopping ships of a nation at peace (shared/naval.ts PIRACY_*): the victim (value per ship given by
+  // the caller), its allies, and every nation when ships are sunk.
+  piracy: { value: PIRACY_OPINION.seize, halfLife: 4_800, cap: PIRACY_CAP },
+  piracyAlly: { value: PIRACY_OPINION.ally, halfLife: 4_800, cap: PIRACY_ALLY_CAP },
+  piracyWorld: { value: PIRACY_OPINION.world, halfLife: 4_800, cap: PIRACY_WORLD_CAP },
 } as const;
 export type RememberedKey = keyof typeof REMEMBERED;
 
@@ -500,6 +506,13 @@ export class DiplomacySystem {
     }
     this.casusBelli.set(dirKey(victim, striker), g.tick + CASUS_BELLI_TICKS);
     if (g.war.atWar(striker, victim) && g.war.escalation(striker, victim) < 2) g.war.raiseEscalation(striker, victim, 2, 'escalation.reason.civilian');
+    this.opinionsDirty = true;
+  }
+
+  /** Owner item 30: `holder` may declare on `against` as a provoked war for 30 game days (its ships were stopped at peace). */
+  grantCasusBelli(holder: number, against: number): void {
+    if (holder <= 0 || against <= 0 || holder === against) return;
+    this.casusBelli.set(dirKey(holder, against), this.g.tick + CASUS_BELLI_TICKS);
     this.opinionsDirty = true;
   }
 

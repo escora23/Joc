@@ -299,6 +299,24 @@ export class Unit implements SimUnit {
   strikeKind = 0;
   /** Fighters that already tried to intercept this aircraft on its current pass: fighter id -> tick. */
   capTries: Map<number, number> | null = null;
+  // --- Owner item 30: naval warfare (sim/naval.ts) ---
+  /** Warship: the blockade it holds (0 = none). */
+  blockadeId = 0;
+  /** Merchant: seized, sailing to its captor's port with its cargo (the captor owns it now). */
+  prize = false;
+  /** Merchant / convoy: the blockade it is steering around (0 = on its direct route) and the blockade that stopped it. */
+  detourBy = 0;
+  stoppedBy = 0;
+  /** Merchant: km of the direct trip it is paid for, km of the route it sails, and its port's rate per ship (gold/h). */
+  directKm = 0;
+  routeKm = 0;
+  slotRate = 0;
+  /** Zone set (NavalSystem.version) this ship last checked its route against. */
+  navalVer = 0;
+  /** Hove to (hailed / warning shot) until this tick. */
+  hoveUntil = 0;
+  /** The blockade that let this escorted ship pass (0 = none). */
+  passedBy = 0;
   readonly maxHp: number;
 
   constructor(

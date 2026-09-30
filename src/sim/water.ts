@@ -12,6 +12,14 @@
 import { MAP_H, MAP_W, TILE_COUNT } from '../shared/constants';
 import { TerrainFlag } from '../shared/types';
 import { TileHeap } from './heap';
+import { canalTiles } from '../shared/naval';
+
+/** A disc ships must keep out of (a blockade zone): centre in continuous tile coords, radius in tiles. */
+export interface AvoidZone {
+  x: number;
+  y: number;
+  r: number;
+}
 
 const CELL = 4;
 const CW = MAP_W / CELL;
@@ -51,7 +59,15 @@ export class WaterNav {
   private bqueue = new Int32Array(64);
   private nb = new Int32Array(8);
 
+  /** Owner item 30: canal tiles (Suez, Panama) are sailable although the land raster has no water there. */
+  private readonly canal: Uint8Array;
+  /** Zones the current search keeps out of (findPathAvoid only), with the longitude scale of each. */
+  private avoid: { x: number; y: number; r2: number; c: number }[] | null = null;
+  private avoidCache = new Map<string, Int32Array | null>();
+
   constructor(private readonly terrain: Uint8Array) {
+    this.canal = new Uint8Array(TILE_COUNT);
+    for (const t of canalTiles()) this.canal[t] = 1;
     this.comp = new Int32Array(TILE_COUNT).fill(-1);
     this.coastal = new Uint8Array(TILE_COUNT);
     this.node = new Int32Array(TILE_COUNT).fill(-1);
@@ -62,7 +78,12 @@ export class WaterNav {
   }
 
   isNavigable(t: number): boolean {
-    return (this.terrain[t] & TerrainFlag.Navigable) !== 0 && (this.terrain[t] & 0x0f) <= 1;
+    return ((this.terrain[t] & TerrainFlag.Navigable) !== 0 && (this.terrain[t] & 0x0f) <= 1) || this.canal[t] === 1;
+  }
+
+  /** A canal tile (land in the raster, sailable). */
+  isCanal(t: number): boolean {
+    return this.canal[t] === 1;
   }
 
   private labelComponents(): void {
@@ -191,6 +212,63 @@ export class WaterNav {
       }
     }
     return path;
+  }
+
+  /**
+   * Owner item 30: a water path that keeps out of the given zones (blockades), or null when there is none (an end
+   * inside a zone, a strait closed with no way around, or the search budget spent: check canSearch()). Results are
+   * cached per zone set (`zonesKey`) until clearAvoidCache().
+   */
+  findPathAvoid(from: number, to: number, zones: readonly AvoidZone[], zonesKey: string): Int32Array | null {
+    const c = this.comp[from];
+    if (c < 0 || c !== this.comp[to]) return null;
+    const key = `${from}:${to}:${zonesKey}`;
+    const hit = this.avoidCache.get(key);
+    if (hit !== undefined) return hit;
+    this.avoid = zones.map((z) => ({ x: z.x, y: z.y, r2: z.r * z.r, c: Math.max(0.2, Math.cos(((90 - (z.y / MAP_H) * 180) * Math.PI) / 180)) }));
+    try {
+      const fx = (from % MAP_W) + 0.5, fy = ((from / MAP_W) | 0) + 0.5;
+      const tx = (to % MAP_W) + 0.5, ty = ((to / MAP_W) | 0) + 0.5;
+      if (this.inAvoid(fx, fy, 0) || this.inAvoid(tx, ty, 0)) {
+        this.avoidCache.set(key, null);
+        return null;
+      }
+      if (this.used >= this.budget) return null;
+      this.used++;
+      let raw: number[] | null = null;
+      if (this.lineOfSight(from, to, c)) raw = [from, to];
+      else {
+        const chain = this.nodePath(this.node[from], this.node[to]);
+        if (chain) raw = this.expand(from, to, chain);
+      }
+      const path = raw ? this.smooth(raw, c) : null;
+      if (this.avoidCache.size > 600) this.avoidCache.clear();
+      this.avoidCache.set(key, path);
+      return path;
+    } finally {
+      this.avoid = null;
+    }
+  }
+
+  /** The zones changed: forget the detours planned around the old ones. */
+  clearAvoidCache(): void {
+    this.avoidCache.clear();
+  }
+
+  /** Is (x, y) within a zone of the current avoid search (plus `margin` tiles)? */
+  private inAvoid(x: number, y: number, margin: number): boolean {
+    const av = this.avoid;
+    if (!av) return false;
+    for (const z of av) {
+      let dx = x - z.x;
+      if (dx > MAP_W / 2) dx -= MAP_W;
+      else if (dx < -MAP_W / 2) dx += MAP_W;
+      dx *= z.c;
+      const dy = y - z.y;
+      const rr = Math.sqrt(z.r2) + margin;
+      if (dx * dx + dy * dy <= rr * rr) return true;
+    }
+    return false;
   }
 
   // --- coarse graph ----------------------------------------------------------------------------------
@@ -324,6 +402,7 @@ export class WaterNav {
       for (let e = start[cur], end = start[cur + 1]; e < end; e++) {
         const nn = list[e];
         if (closed[nn] === gen) continue;
+        if (this.avoid && nn !== goal && this.inAvoid((rep[nn] % MAP_W) + 0.5, ((rep[nn] / MAP_W) | 0) + 0.5, 2.2)) continue;
         const ngv = gc + cost[e];
         if (stamp[nn] === gen && g[nn] <= ngv) continue;
         stamp[nn] = gen;
@@ -413,6 +492,7 @@ export class WaterNav {
       const y = Math.floor(ay + dy * f);
       x = ((x % MAP_W) + MAP_W) % MAP_W;
       if (this.comp[y * MAP_W + x] !== c) return false;
+      if (this.avoid && this.inAvoid(ax + dx * f, ay + dy * f, 0)) return false;
     }
     return true;
   }

@@ -47,6 +47,7 @@ import { Attack, Player, Structure, Unit } from './state';
 import { UnitSystem } from './units';
 import { createSimRules, type SimRules } from './rules';
 import { WaterNav } from './water';
+import { NavalSystem } from './naval';
 import { WarSystem } from './war';
 import { WeaponSystem, type Scar } from './weapons';
 import { GAME_VERSION, SAVE_FORMAT_VERSION, SAVE_MAGIC, SaveError, worldHash, type SaveReader, type SaveWriter } from './save';
@@ -123,6 +124,8 @@ export class Game implements SimGame {
   readonly unitSys: UnitSystem;
   readonly weapons: WeaponSystem;
   readonly economy: EconomySystem;
+  /** Owner item 30: blockades of ports, straits and sea lanes; seizures; their consequences. */
+  readonly naval: NavalSystem;
   /** v2 (W3): opinions, treaties, proposals (§5). */
   readonly diplomacy: DiplomacySystem;
   readonly fronts: FrontTracker;
@@ -153,6 +156,8 @@ export class Game implements SimGame {
   private changedOverflow = false;
   private events: SimEvent[] = [];
   structuresDirty = true;
+  /** Tick of the last blockades publication. */
+  private navalPubTick = -1_000;
   attacksDirty = true;
   scarsDirty = false;
   ruinsDirty = false;
@@ -242,6 +247,7 @@ export class Game implements SimGame {
     this.weapons = new WeaponSystem(this);
     this.economy = new EconomySystem(this);
     this.diplomacy = new DiplomacySystem(this);
+    this.naval = new NavalSystem(this);
     this.fronts = new FrontTracker(this);
     this.labels = new LabelPlacer(this);
     this.enclaves = new EnclaveSystem(this);
@@ -597,7 +603,7 @@ export class Game implements SimGame {
       case 'airStrike':
         return this.unitSys.legacyStrike(p, cmd.unitId, cmd.targetTile);
       case 'unitOrder':
-        return this.unitSys.order(p, cmd.unitIds, cmd.order, cmd.tile, cmd.targetId, cmd.ratio, cmd.confirm);
+        return this.unitSys.order(p, cmd.unitIds, cmd.order, cmd.tile, cmd.targetId, cmd.ratio, cmd.confirm, cmd.blockade);
       case 'cancelProduction':
         return this.unitSys.cancelProduction(p, cmd.structureId);
       case 'allianceRequest':
@@ -635,6 +641,17 @@ export class Game implements SimGame {
         return this.command.alongside(p, cmd.unitId);
       case 'commandStructureHit':
         return this.command.structureHit(p, cmd);
+      case 'navalIntercept': {
+        // Owner item 30: a warship (driven in command mode, or selected) acts on a merchant or convoy alongside.
+        const w = this.unitMap.get(cmd.unitId);
+        if (!w || w.owner !== p.id) return false;
+        const err = this.naval.commandError(w, this.unitMap.get(cmd.targetId), cmd.act);
+        if (err) {
+          this.message(p.id, err, 'warning');
+          return false;
+        }
+        return this.naval.commandIntercept(w, this.unitMap.get(cmd.targetId), cmd.act);
+      }
       case 'repairStructure':
         return this.economy.repair(p, cmd.structureId);
       case 'commandResult':
@@ -1288,7 +1305,8 @@ export class Game implements SimGame {
     this.attacks.step();
     this.fronts.endTick();
     this.enclaves.step();
-    // 5. units & projectiles
+    // 5. units & projectiles (the blockade zones in force first: warships and ships at sea read them)
+    this.naval.step();
     this.unitSys.step();
     this.weapons.step();
     // 6. economy
@@ -1610,6 +1628,15 @@ export class Game implements SimGame {
       const hp = this.playerById[HUMAN_ID];
       if (hp && hp.spawned && hp.alive) u.economy = this.economy.breakdown(hp);
     }
+    // Owner item 30: blockades (when changed, and every game hour for their per-hour figures) and the human's naval ledger.
+    const nv = this.naval;
+    if (full || nv.dirty || (nv.blockades.size > 0 && this.tick - this.navalPubTick >= 10)) {
+      nv.dirty = false;
+      this.navalPubTick = this.tick;
+      u.blockades = nv.views();
+      const hp = this.playerById[HUMAN_ID];
+      if (hp && hp.spawned) u.naval = nv.economyView(HUMAN_ID);
+    }
     {
       const cv = this.command.view(full);
       if (cv) u.command = cv;
@@ -1640,6 +1667,13 @@ export class Game implements SimGame {
     return out;
   }
 
+  /** Owner item 30: the port card's lost trade (StructureView.tradeLoss / tradeLossBy / tradeCut / rerouted). */
+  private portTradeLoss(s: Structure): Partial<StructureView> {
+    const l = this.naval.portLoss(s);
+    if (!l) return {};
+    return { tradeLoss: l.perHour, tradeLossBy: l.by || undefined, tradeCut: l.cut || undefined, rerouted: l.rerouted || undefined };
+  }
+
   private packStructures(): StructureView[] {
     const out: StructureView[] = [];
     for (const s of this.structureMap.values()) {
@@ -1647,6 +1681,7 @@ export class Game implements SimGame {
         id: s.id, type: s.type, owner: s.owner, tile: s.tile, level: s.level, hp: Math.max(0, Math.min(1, s.hp)),
         repairing: s.repairing || undefined, blocks: s.blocks || undefined, hitBy: s.lastHitBy || undefined,
         blockadedBy: s.type === StructureType.Port ? this.unitSys.blockaded(s) || undefined : undefined,
+        ...(s.type === StructureType.Port ? this.portTradeLoss(s) : {}),
         built: Math.min(1, s.built), cooldown: this.economy.cooldownFraction(s),
         upgrade: s.upgradeUntil > 0 ? Math.min(0.999, Math.max(0.001, (this.tick - s.upgradeStart) / Math.max(1, s.upgradeUntil - s.upgradeStart))) : 0,
         producing: s.queue.length,
@@ -1713,11 +1748,12 @@ export function neighbors4(tile: number, out: Int32Array): number {
 type SaveCtor = abstract new (...args: never[]) => unknown;
 const SAVE_MERGE = new Set<SaveCtor>([
   Game, AttackSystem, UnitSystem, WeaponSystem, EconomySystem, DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav,
+  NavalSystem,
 ]);
 const SAVE_SPEC: GraphSpec = {
   classes: [
     Game, Player, Structure, Unit, Attack, RngClass, SGrid, DGrid, TileHeap, AttackSystem, UnitSystem, WeaponSystem, EconomySystem,
-    DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES,
+    DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES, NavalSystem,
   ],
   skip: new Map<SaveCtor, ReadonlySet<string>>([
     [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'command', 'commandTravel', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug', 'rules'])],
@@ -1729,9 +1765,10 @@ const SAVE_SPEC: GraphSpec = {
     // FrontTracker.lines (T41, W6): view data re-measured from ownership and pressure on the next tick after a load.
     [FrontTracker, new Set(['nb', 'lines'])],
     [DiplomacySystem, new Set(['cache', 'cacheTick', 'realTimeFloor'])],
+    [NavalSystem, new Set(['rel'])],
     [WaterNav, new Set([
       'terrain', 'comp', 'compSize', 'coastal', 'node', 'nodeCount', 'nodeRep', 'adjStart', 'adjList', 'adjCost', 'ngen', 'nstamp',
-      'nclosed', 'ng', 'nparent', 'nheap', 'bgen', 'bstamp', 'bparent', 'bqueue', 'nb',
+      'nclosed', 'ng', 'nparent', 'nheap', 'bgen', 'bstamp', 'bparent', 'bqueue', 'nb', 'canal', 'avoid', 'avoidCache',
     ])],
   ]),
 };

@@ -679,6 +679,11 @@ export class EconomySystem {
   // =================================================================================================
   // Maritime trade (§6.2): a Port of level L keeps 2L trade ships at sea
   // =================================================================================================
+  /** Every port (owner item 30: hourly accounting of blockaded ports). */
+  portList(): readonly Structure[] {
+    return this.ports;
+  }
+
   private maybeTrade(port: Structure): void {
     const g = this.g;
     if (g.tick < port.nextTradeTick) return;

@@ -222,8 +222,20 @@ export interface SimDiplomacyApi {
   band(loser: number, winner: number, tiles: number): number[];
 }
 
+/** Owner item 30: naval warfare (src/sim/naval.ts) seen from sim-ai. */
+export interface SimNavalApi {
+  /** Straits the ships of `enemy` sail through now, busiest first (the strait worth closing). */
+  chokepointsFor(enemy: number): { key: string; tile: number; ships: number }[];
+  /** The blockade a warship holds (0 = none). */
+  blockadeOfUnit(unitId: number): number;
+  /** Blockades in force that stop ships of `p` (their owner, centre, warships). */
+  activeAgainst(p: number): { id: number; owner: number; x: number; y: number; warships: readonly number[] }[];
+}
+
 export interface SimGame {
   readonly config: GameConfig;
+  /** Owner item 30: blockades, seizures. */
+  readonly naval: SimNavalApi;
   /** v2 (W3): opinions, treaties, proposals (§5). */
   readonly diplomacy: SimDiplomacyApi;
   /** v2 (W1): wars, truces, peace (§4). */

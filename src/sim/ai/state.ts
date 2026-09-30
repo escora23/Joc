@@ -7,6 +7,18 @@
 import type { Personality, WarGoal } from '../../shared/types';
 import type { DifficultyProfile, PersonalityProfile } from './profiles';
 
+/** Owner item 30: what another player's warships did to our ships (the AI's answer grows with it). */
+export interface NavalGrievance {
+  stops: number;
+  /** Some of it at peace (piracy). */
+  piracy: boolean;
+  first: number;
+  last: number;
+  protested: number;
+  escorted: number;
+  declared: boolean;
+}
+
 /** How a brain feels about another player. */
 export interface Relation {
   /** -1 (mortal enemy) .. +1 (trusted friend). */
@@ -129,6 +141,8 @@ export interface Brain {
   warActive: Map<number, number>;
   /** v2 (W3): `${kind}:${player}` -> last tick this nation proposed that (no repeated offers). */
   proposed: Map<string, number>;
+  /** Owner item 30: ships of ours stopped by another player (navalwar.ts): offender id -> grievance. */
+  navalGrief?: Map<number, NavalGrievance>;
 }
 
 export function emptyFront(): FrontInfo {

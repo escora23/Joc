@@ -33,6 +33,7 @@ import {
   type UnitOrderKind,
 } from '../shared/types';
 import { MAX_BOATS, WARSHIP_FIRE_COOLDOWN, tradeGold, trainGold } from './balance';
+import { INTERCEPT_TILES, chokepointNear, chokepointTile, type BlockadeSpec } from '../shared/naval';
 import type { Game } from './game';
 import { TileHeap } from './heap';
 import { Attack, Mode, Player, Structure, Unit } from './state';
@@ -80,6 +81,8 @@ export interface AirOverFront {
 
 export class UnitSystem {
   private readonly comps: number[] = [];
+  /** The blockade spec of the unitOrder being applied (owner item 30). */
+  private blockadeSpec: Partial<BlockadeSpec> | undefined = undefined;
   private readonly rnd: () => number;
   private readonly scratch: Unit[] = [];
   private readonly stations: StationLike[] = [];
@@ -124,6 +127,9 @@ export class UnitSystem {
   remove(u: Unit, destroyed: boolean, by = 0): void {
     if (u.dead) return;
     const g = this.g;
+    // Owner item 30: a blockading warship leaves its blockade; a convoy sunk inside a zone counts for it.
+    if (u.blockadeId) g.naval.release(u);
+    if (destroyed && u.type === UnitType.TransportShip) g.naval.onShipLost(u, by);
     u.dead = true;
     u.killedBy = by;
     g.unitMap.delete(u.id);
@@ -248,7 +254,14 @@ export class UnitSystem {
           default: return UnitMode.Idle;
         }
       case UnitType.TransportShip:
-        return g.tick < u.embarkUntil ? UnitMode.Embarking : u.mode === Mode.Return ? UnitMode.Returning : UnitMode.Moving;
+        if (u.hoveUntil > g.tick) return UnitMode.HoveTo;
+        if (g.tick < u.embarkUntil) return UnitMode.Embarking;
+        return u.mode === Mode.Return ? UnitMode.Returning : u.detourBy ? UnitMode.Detour : UnitMode.Moving;
+      case UnitType.TradeShip:
+        if (u.prize) return UnitMode.Prize;
+        if (u.hoveUntil > g.tick) return UnitMode.HoveTo;
+        if (u.mode === Mode.Return) return UnitMode.Returning;
+        return u.detourBy ? UnitMode.Detour : u.state === UnitState.Idle ? UnitMode.Idle : UnitMode.Moving;
       default:
         return u.state === UnitState.Idle ? UnitMode.Idle : UnitMode.Moving;
     }
@@ -341,14 +354,8 @@ export class UnitSystem {
    * WARSHIP_ENGAGE_TILES of it: no trade ship leaves (its trade income stops) and its invasions cannot embark.
    */
   blockaded(s: Structure): number {
-    const g = this.g;
-    let by = 0;
-    g.unitGrid.query(s.x, s.y, WARSHIP_ENGAGE_TILES / Math.max(0.2, latCos(s.y)), (o) => {
-      if (by || o.dead || o.type !== UnitType.Warship || o.mode !== Mode.Blockade || o.owner === s.owner) return;
-      if (tileKm(o.x, o.y, s.x, s.y) > WARSHIP_ENGAGE_TILES * TILE_KM) return;
-      if (hostileTo(g.rules, o.owner, s.owner)) by = o.owner;
-    });
-    return by;
+    // Owner item 30: the port lies inside a blockade zone in force that applies to its owner's merchants.
+    return this.g.naval.portBlockade(s)?.owner ?? 0;
   }
 
   /** A fighter squadron on station on its combat air patrol (within its orbit, not transiting or out of fuel). */
@@ -404,8 +411,9 @@ export class UnitSystem {
   // Orders (unitOrder, §6.4, §7.3)
   // =================================================================================================
   /** A unitOrder from `p`: every unit is validated with the shared rules; the ack says who took it. */
-  order(p: Player, unitIds: number[], order: UnitOrderKind, tile: number, targetId: number, ratio?: number, confirm?: boolean): boolean {
+  order(p: Player, unitIds: number[], order: UnitOrderKind, tile: number, targetId: number, ratio?: number, confirm?: boolean, blockade?: Partial<BlockadeSpec>): boolean {
     const g = this.g;
+    this.blockadeSpec = order === 'blockade' ? blockade : undefined;
     if (g.phase !== 'playing' || !Array.isArray(unitIds)) return false;
     const accepted: number[] = [];
     let firstErr: string | null = null;
@@ -763,6 +771,8 @@ export class UnitSystem {
     const g = this.g;
     u.targetUnit = 0;
     u.enemy = 0;
+    // Owner item 30: any new order takes the warship off its blockade.
+    if (u.blockadeId) g.naval.release(u);
     switch (order) {
       case 'hold':
         u.path = null;
@@ -774,9 +784,19 @@ export class UnitSystem {
       case 'move':
       case 'patrol':
         return this.sailTo(u, tile, order === 'patrol' ? Mode.Patrol : Mode.Sail);
-      case 'blockade':
+      case 'blockade': {
+        // Owner item 30: a strait near the click is blockaded at its narrows; whom it stops comes with the order.
+        const cp = chokepointNear((tile % MAP_W) + 0.5, Math.floor(tile / MAP_W) + 0.5);
+        if (cp) {
+          const c = chokepointTile(cp);
+          const w = g.nav.comp[c] >= 0 ? c : g.nav.waterNear(c);
+          if (w >= 0) tile = w;
+        }
         u.enemy = this.enemyNear(u.owner, tile, WARSHIP_ENGAGE_TILES);
-        return this.sailTo(u, tile, Mode.Blockade);
+        if (!this.sailTo(u, tile, Mode.Blockade)) return false;
+        g.naval.assign(u, u.anchorTile, this.blockadeSpec);
+        return true;
+      }
       case 'bombard': {
         const o = g.owner[tile];
         u.enemy = o;
@@ -1693,6 +1713,10 @@ export class UnitSystem {
       return;
     }
     if (!u.path) return;
+    if (u.hoveUntil > g.tick) {
+      u.state = UnitState.Idle;
+      return;
+    }
     u.state = u.mode === Mode.Return ? UnitState.Returning : UnitState.Moving;
     const sailing = g.attackList.find((x) => x.id === u.attackId && !x.ended);
     if (sailing && sailing.state === 'embarking') {
@@ -1745,10 +1769,25 @@ export class UnitSystem {
       }
       return;
     }
+    if (u.hoveUntil > g.tick) {
+      u.state = UnitState.Idle;
+      return;
+    }
     u.state = UnitState.Moving;
     if (!this.followPath(u, KM_PER_TICK[UnitType.TradeShip])) return;
     const dest = g.structureMap.get(u.targetStructure);
     const owner = g.playerById[u.owner];
+    if (u.prize) {
+      // Owner item 30: a seized merchant reached its captor's port: the cargo is paid to the captor.
+      g.naval.onPrizeDelivered(u, dest);
+      this.remove(u, false);
+      return;
+    }
+    if (u.mode === Mode.Return) {
+      // Turned back by a warship: home without a payout.
+      this.remove(u, false);
+      return;
+    }
     if (dest && owner && owner.alive && dest.type === StructureType.Port) {
       const partner = g.playerById[dest.owner];
       if (partner && partner.alive && !g.hasEmbargo(u.owner, dest.owner) && !g.hasEmbargo(dest.owner, u.owner)) {
@@ -1780,19 +1819,124 @@ export class UnitSystem {
     if (p) p.tradeGold += gold;
   }
 
-  /** A blockading warship takes a trade ship: the captor gets the cargo (§6.2), the ship is taken as a prize. */
-  private captureTrade(ship: Unit, pirate: Unit): void {
+  // --- owner item 30: helpers for sim/naval.ts ------------------------------------------------------
+  /** The navigable tile a ship is on (or the nearest one). */
+  waterTileOf(u: Unit): number {
+    return this.nearestWater(u);
+  }
+
+  /** Replace a ship's path (a detour) and publish it. */
+  setPath(u: Unit, path: Int32Array, oldRemainingKm = 0): void {
+    u.path = path;
+    u.pathI = 1;
+    u.waitingPath = false;
+    u.pathFailed = false;
+    let km = 0, px = u.x, py = u.y;
+    for (let i = 1; i < path.length; i++) {
+      const t = path[i];
+      const tx = (t % MAP_W) + 0.5, ty = ((t / MAP_W) | 0) + 0.5;
+      km += kmBetween(px, py, tx, ty);
+      px = tx;
+      py = ty;
+    }
+    // The whole trip's length: what it sailed so far plus the new remainder.
+    if (u.type === UnitType.TradeShip) u.routeKm = Math.max(0, u.routeKm - oldRemainingKm) + km;
+    this.publishRoute(u);
+  }
+
+  /** A warship escorting this ship (its owner's or an ally's, within ESCORT_TILES), or null. */
+  escortNear(ship: Unit): Unit | null {
     const g = this.g;
-    const victim = ship.owner;
-    const gold = ship.cargo;
-    g.addGold(pirate.owner, gold);
-    this.tradeIncome(pirate.owner, gold);
-    g.markHostile(pirate.owner, victim);
-    g.emit({ type: 'shipCaptured', tick: g.tick, unitId: ship.id, from: victim, by: pirate.owner, warshipId: pirate.id, gold: Math.round(gold), x: ship.x, y: ship.y });
-    g.emit({ type: 'goldBonus', tick: g.tick, playerId: pirate.owner, gold: Math.round(gold), tile: tileOf(ship.x, ship.y), reason: 'trade' });
-    if (victim === HUMAN_ID) g.message(HUMAN_ID, 'msg.tradeCaptured', 'warning');
+    let best: Unit | null = null;
+    g.unitGrid.query(ship.x, ship.y, ESCORT_TILES / Math.max(0.2, latCos(ship.y)), (o) => {
+      if (o.dead || o.type !== UnitType.Warship || (o.owner !== ship.owner && !g.isAllied(o.owner, ship.owner))) return;
+      if (o.mode !== Mode.Escort || o.targetUnit !== ship.id) return;
+      best = o;
+      return true;
+    });
+    return best;
+  }
+
+  /** A merchant taken or sunk: its port sends the next one after the turnaround. */
+  tradeTaken(ship: Unit): void {
     this.tradeLost(ship);
-    this.remove(ship, false);
+  }
+
+  /** Troops aboard a convoy (its offensive's, else its own). */
+  convoyTroops(u: Unit): number {
+    const a = this.g.attackList.find((x) => x.id === u.attackId && !x.ended);
+    return a ? a.troops : u.troops;
+  }
+
+  /**
+   * A boarded merchant changes flag: it sails to its captor's nearest port with its cargo (paid on arrival). No port on
+   * that sea: the cargo is taken at once and the hull scuttled.
+   */
+  takePrize(ship: Unit, captor: number, blockadeId: number): void {
+    const g = this.g;
+    const from = ship.owner;
+    const here = this.nearestWater(ship);
+    const c = g.nav.comp[here];
+    let best: Structure | null = null, bd = Infinity, dest = -1;
+    for (const s of g.structByOwner.get(captor) ?? []) {
+      if (s.type !== StructureType.Port || !s.operational) continue;
+      const w = g.nav.waterNear(s.tile, c);
+      if (w < 0 || g.nav.comp[w] !== c) continue;
+      const d = dist2(ship.x, ship.y, s.x, s.y);
+      if (d < bd) {
+        bd = d;
+        best = s;
+        dest = w;
+      }
+    }
+    this.changeOwner(ship, captor);
+    ship.prize = true;
+    ship.stoppedBy = blockadeId;
+    ship.targetPlayer = from;
+    ship.home = 0;
+    ship.detourBy = 0;
+    ship.hoveUntil = 0;
+    ship.mode = Mode.Sail;
+    if (!best || !g.nav.canSearch()) {
+      g.naval.onPrizeDelivered(ship, best ?? undefined);
+      this.remove(ship, false);
+      return;
+    }
+    ship.targetStructure = best.id;
+    ship.toX = best.x;
+    ship.toY = best.y;
+    ship.targetTile = best.tile;
+    const path = g.nav.findPath(here, dest, false);
+    if (!path) {
+      g.naval.onPrizeDelivered(ship, best);
+      this.remove(ship, false);
+      return;
+    }
+    ship.path = path;
+    ship.pathI = 1;
+    this.publishRoute(ship);
+  }
+
+  /** A convoy (or a merchant) boarded and sent back where it came from; a convoy's troops rejoin its reserve there. */
+  turnBack(u: Unit): void {
+    const g = this.g;
+    const here = this.nearestWater(u);
+    u.detourBy = 0;
+    u.hoveUntil = 0;
+    if (u.type === UnitType.TransportShip) {
+      const a = g.attackList.find((x) => x.id === u.attackId && !x.ended);
+      if (a && !this.recallBoat(a)) return;
+      if (!a) {
+        u.mode = Mode.Return;
+        u.state = UnitState.Returning;
+        this.planPath(u, here, u.aux >= 0 ? u.aux : here, false);
+      }
+      return;
+    }
+    const home = g.structureMap.get(u.home);
+    const w = home ? g.nav.waterNear(home.tile, g.nav.comp[here]) : -1;
+    u.mode = Mode.Return;
+    if (w < 0 || !this.planPath(u, here, w, false)) this.remove(u, false);
   }
 
   // --- warships ---------------------------------------------------------------------------------------
@@ -1842,13 +1986,20 @@ export class UnitSystem {
       if ((g.tick + u.id) % 5 === 0 || (u.targetUnit && !g.unitMap.has(u.targetUnit))) this.acquireNavalTarget(u);
       target = u.mode !== Mode.Escort && u.targetUnit ? g.unitMap.get(u.targetUnit) : u.mode === Mode.Escort ? this.escortThreat(u) : undefined;
     }
+    if (target && (target.owner === u.owner || target.prize)) {
+      u.targetUnit = 0;
+      target = undefined;
+    }
     if (target && !target.dead) {
       u.state = UnitState.Attacking;
       const dKm = tileKm(u.x, u.y, target.x, target.y);
-      if (target.type === UnitType.TradeShip) {
-        if (dKm <= 2 * TILE_KM) {
-          this.captureTrade(target, u);
-          u.targetUnit = 0;
+      // Owner item 30: merchants (and, for a boarding blockade, convoys) are boarded or sunk alongside.
+      const blk = g.naval.of(u);
+      const board = target.type === UnitType.TradeShip || (target.type === UnitType.TransportShip && !!blk && blk.spec.action === 'seize' && g.naval.applies(blk, target));
+      if (board) {
+        if (dKm <= INTERCEPT_TILES * TILE_KM) {
+          g.naval.intercept(target, u, blk && g.naval.applies(blk, target) ? blk : null);
+          if (target.dead || target.owner === u.owner || target.mode === Mode.Return) u.targetUnit = 0;
           return;
         }
         this.chase(u, target, speed);
@@ -1890,7 +2041,13 @@ export class UnitSystem {
       u.anchorTile = tileOf(u.x, u.y);
     }
     if (u.mode === Mode.Blockade) {
-      // Hold the station (small drift).
+      // Hold the station (small drift); back to it after a chase (owner item 30: the zone is in force only then).
+      if (!u.waitingPath && dist2(u.x, u.y, u.stationX, u.stationY) > 1 && (g.tick + u.id) % 5 === 0 && g.nav.canSearch()) {
+        const here = this.nearestWater(u);
+        if (g.nav.comp[here] >= 0 && g.nav.comp[here] === g.nav.comp[u.anchorTile]) this.planPath(u, here, u.anchorTile, false);
+        u.pathFailed = false;
+        return;
+      }
       u.state = UnitState.Idle;
       return;
     }
@@ -1968,16 +2125,42 @@ export class UnitSystem {
       if (d > rKm) return;
       let prio: number;
       if (o.type === UnitType.TransportShip) {
-        // Invasion convoys heading to us or our allies are always engaged; others only when at war with their owner.
+        // Invasion convoys heading to us or our allies are always engaged; others only when at war with their owner,
+        // or when our blockade stops them (owner item 30: by its spec; an escort at war is fought first).
         const tgt = g.owner[o.targetTile] ?? 0;
-        if (!(tgt === u.owner || g.isAllied(u.owner, tgt) || hostileTo(g.rules, u.owner, o.owner))) return;
+        const ours = tgt === u.owner || g.isAllied(u.owner, tgt);
+        if (blockade && !ours) {
+          const t = g.naval.targetFor(u, o);
+          if (!t) {
+            if (!hostileTo(g.rules, u.owner, o.owner) || g.naval.of(u)?.spec.ships === 'trade') return;
+          } else if (t !== o) {
+            const s = 1 * 10_000 + d;
+            if (s < bestScore) {
+              bestScore = s;
+              best = t;
+            }
+            return;
+          }
+        } else if (!(ours || hostileTo(g.rules, u.owner, o.owner))) return;
+        if (o.mode === Mode.Return) return;
         prio = 0;
       } else if (o.type === UnitType.Warship) {
         if (!hostileTo(g.rules, u.owner, o.owner)) return;
         prio = 1;
       } else if (o.type === UnitType.TradeShip) {
-        // Only a blockade stops trade (§6.3).
-        if (!blockade || !hostileTo(g.rules, u.owner, o.owner)) return;
+        // Only a blockade stops trade (§6.3), and only the ships its spec names (owner item 30).
+        if (!blockade) return;
+        const t = g.naval.targetFor(u, o);
+        if (!t) return;
+        if (t !== o) {
+          // Escorted at war: fight the escort first.
+          const s = 1 * 10_000 + d;
+          if (s < bestScore) {
+            bestScore = s;
+            best = t;
+          }
+          return;
+        }
         prio = 2;
       } else return;
       const s = prio * 10_000 + d;
@@ -2794,15 +2977,37 @@ export class UnitSystem {
     if (a < 0 || b < 0) return false;
     const path = nav.findPath(a, b, true);
     if (!path) return false;
-    return this.spawnTrade(from, to, path, a);
+    // Owner item 30: a blockade across the direct route: the detour (paid as the direct trip), or no trade that way.
+    const r = g.naval.route(from.owner, 'trade', a, b, path);
+    if ('blocked' in r) {
+      g.naval.noteCut(from, r.blocked);
+      return false;
+    }
+    if (!this.spawnTrade(from, to, r.path, a, r.directKm)) return false;
+    g.naval.noteLaunched(from);
+    const u = this.lastTrade!;
+    u.navalVer = g.naval.version;
+    if (r.by) {
+      const b = g.naval.blockades.get(r.by)!;
+      if (r.run) u.detourBy = 0;
+      else {
+        u.detourBy = r.by;
+        g.naval.noteReroute(u, b, Math.max(0, r.km - r.directKm));
+      }
+    }
+    return true;
   }
+  /** The merchant spawnTrade created last. */
+  private lastTrade: Unit | null = null;
 
-  private spawnTrade(from: Structure, to: Structure, path: Int32Array, start: number): boolean {
-    let km = 0;
+  private spawnTrade(from: Structure, to: Structure, path: Int32Array, start: number, directKm?: number): boolean {
+    let routeKm = 0;
     for (let i = 1; i < path.length; i++) {
       const p0 = path[i - 1], p1 = path[i];
-      km += kmBetween((p0 % MAP_W) + 0.5, ((p0 / MAP_W) | 0) + 0.5, (p1 % MAP_W) + 0.5, ((p1 / MAP_W) | 0) + 0.5);
+      routeKm += kmBetween((p0 % MAP_W) + 0.5, ((p0 / MAP_W) | 0) + 0.5, (p1 % MAP_W) + 0.5, ((p1 / MAP_W) | 0) + 0.5);
     }
+    // Owner item 30: the trip is paid for the direct route (a detour around a blockade earns nothing more).
+    const km = directKm !== undefined ? Math.min(routeKm, directKm) : routeKm;
     const u = this.spawn(UnitType.TradeShip, from.owner, (start % MAP_W) + 0.5, ((start / MAP_W) | 0) + 0.5);
     u.path = path;
     u.pathI = 1;
@@ -2816,11 +3021,15 @@ export class UnitSystem {
     const ships = structureLevel(from.type, lv).tradeShips ?? 2 * lv;
     const hours = km / UNIT_DEFS[UnitType.TradeShip].speedKmh;
     u.cargo = (PORT_TRADE_GOLD_PER_HOUR[lv] / ships) * (hours + 0.2);
+    u.slotRate = PORT_TRADE_GOLD_PER_HOUR[lv] / ships;
+    u.directKm = km;
+    u.routeKm = routeKm;
     u.toX = to.x;
     u.toY = to.y;
     u.targetTile = to.tile;
-    u.eta = Math.ceil(hours * 10);
+    u.eta = Math.ceil((routeKm / UNIT_DEFS[UnitType.TradeShip].speedKmh) * 10);
     this.publishRoute(u);
+    this.lastTrade = u;
     return true;
   }
 

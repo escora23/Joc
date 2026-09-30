@@ -18,6 +18,7 @@ import {
   UNIT_DEFS, WARSHIP_BOMBARD_TILES, WARSHIP_ENGAGE_TILES, structureLevel,
 } from './constants';
 import { isCivilian } from './damage';
+import { canalTiles, chokepointNear } from './naval';
 import {
   StructureType, TerrainFlag, UnitMode, UnitState, UnitType, type PairState, type PlayerKind, type TreatyKind,
   type UnitOrderKind,
@@ -153,6 +154,7 @@ export function someTileWithin(center: number, r: number, fn: (t: number) => boo
 }
 
 const isNavigable = (terrain: number): boolean => (terrain & TerrainFlag.Navigable) !== 0 && (terrain & 0x0f) <= 1;
+const navigableTerrain = isNavigable;
 
 // =================================================================================================
 // Players
@@ -367,6 +369,21 @@ export function shipComponent(r: RulesView, u: UnitLike): number {
  * Where a warship stations to bombard land tile `tile`: the navigable tile of its sea nearest to the target within
  * WARSHIP_BOMBARD_TILES (surface-true), -1 when that coast is out of reach from its sea.
  */
+/** Owner item 30: right-click on water blockades when a hostile coast lies within 150 km or a strait is near. */
+export function blockadeHint(r: RulesView, owner: number, tile: number): boolean {
+  if (chokepointNear(tileCx(tile), tileCy(tile))) return true;
+  let enemy = 0;
+  someTileWithin(tile, WARSHIP_ENGAGE_TILES, (t) => {
+    const o = r.ownerOf(t);
+    if (o > 0 && o !== owner && hostileTo(r, owner, o)) {
+      enemy = o;
+      return true;
+    }
+    return false;
+  });
+  return enemy > 0;
+}
+
 export function bombardStation(r: RulesView, tile: number, comp: number): number {
   let best = -1, bd = Infinity;
   const tx = tileCx(tile), ty = tileCy(tile);
@@ -396,20 +413,9 @@ function warshipCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: num
     case 'move':
     case 'patrol':
       return sea(tile);
-    case 'blockade': {
-      const e = sea(tile);
-      if (e) return e;
-      let enemy = 0;
-      someTileWithin(tile, WARSHIP_ENGAGE_TILES, (t) => {
-        const o = r.ownerOf(t);
-        if (o > 0 && o !== u.owner && hostileTo(r, u.owner, o)) {
-          enemy = o;
-          return true;
-        }
-        return false;
-      });
-      return enemy ? null : { key: 'order.err.blockadeNoEnemy' };
-    }
+    case 'blockade':
+      // Owner item 30: a port, a strait or any stretch of a sea lane; whom it stops is chosen with the order.
+      return sea(tile);
     case 'bombard': {
       const o = r.ownerOf(tile);
       if (!r.playable(tile) || o === 0 || o === u.owner) return { key: 'order.err.bombardTarget' };
@@ -424,7 +430,8 @@ function warshipCheck(r: RulesView, u: UnitLike, order: UnitOrderKind, tile: num
     }
     case 'escort': {
       const t = r.unit(targetId);
-      if (!t || t.owner !== u.owner || t.type !== UnitType.TransportShip) return { key: 'order.err.escortTarget' };
+      // Owner item 30: merchants can be escorted too (a convoy the blockade cannot board).
+      if (!t || t.owner !== u.owner || (t.type !== UnitType.TransportShip && t.type !== UnitType.TradeShip)) return { key: 'order.err.escortTarget' };
       return null;
     }
     default:
@@ -617,12 +624,12 @@ export function inferOrder(r: RulesView, unitId: number, tile: number, targetUni
       if (tu && tu.owner !== u.owner && (tu.type === UnitType.Warship || tu.type === UnitType.TransportShip || tu.type === UnitType.TradeShip) && hostileTo(r, u.owner, tu.owner)) {
         return { order: 'attack', targetId: tu.id };
       }
-      if (tu && tu.owner === u.owner && tu.type === UnitType.TransportShip) return { order: 'escort', targetId: tu.id };
+      if (tu && tu.owner === u.owner && (tu.type === UnitType.TransportShip || tu.type === UnitType.TradeShip)) return { order: 'escort', targetId: tu.id };
       if (ts && ts.owner === u.owner && (ts.type === StructureType.NavalYard || ts.type === StructureType.Port)) return { order: 'return', targetId: ts.id };
       if (land) return { order: 'bombard', targetId: 0 };
       if (shift) return { order: 'patrol', targetId: 0 };
-      // Water near the coast of a nation at war: blockade.
-      if (tile >= 0 && orderError(r, unitId, 'blockade', tile, 0) === null) return { order: 'blockade', targetId: 0 };
+      // Water near the coast of a nation at war, or a strait: blockade (owner item 30).
+      if (tile >= 0 && orderError(r, unitId, 'blockade', tile, 0) === null && blockadeHint(r, u.owner, tile)) return { order: 'blockade', targetId: 0 };
       return { order: 'move', targetId: 0 };
     }
     case UnitType.FighterSquadron: {
@@ -926,9 +933,13 @@ export function waterComponents(terrain: Uint8Array): Int32Array {
   if (c) return c;
   c = new Int32Array(TILE_COUNT).fill(-1);
   const stack = new Int32Array(TILE_COUNT);
+  // Owner item 30: canal tiles (Suez, Panama) sail like water, as in the sim's WaterNav.
+  const canal = new Uint8Array(TILE_COUNT);
+  for (const t of canalTiles()) canal[t] = 1;
+  const isNavigable = (v: number, t: number): boolean => navigableTerrain(v) || canal[t] === 1;
   let id = 0;
   for (let s = 0; s < TILE_COUNT; s++) {
-    if (c[s] !== -1 || !isNavigable(terrain[s])) continue;
+    if (c[s] !== -1 || !isNavigable(terrain[s], s)) continue;
     let sp = 0;
     stack[sp++] = s;
     c[s] = id;
@@ -937,10 +948,10 @@ export function waterComponents(terrain: Uint8Array): Int32Array {
       const x = t % MAP_W;
       const l = x === 0 ? t + MAP_W - 1 : t - 1;
       const rr = x === MAP_W - 1 ? t - MAP_W + 1 : t + 1;
-      if (c[l] === -1 && isNavigable(terrain[l])) { c[l] = id; stack[sp++] = l; }
-      if (c[rr] === -1 && isNavigable(terrain[rr])) { c[rr] = id; stack[sp++] = rr; }
-      if (t >= MAP_W && c[t - MAP_W] === -1 && isNavigable(terrain[t - MAP_W])) { c[t - MAP_W] = id; stack[sp++] = t - MAP_W; }
-      if (t < TILE_COUNT - MAP_W && c[t + MAP_W] === -1 && isNavigable(terrain[t + MAP_W])) { c[t + MAP_W] = id; stack[sp++] = t + MAP_W; }
+      if (c[l] === -1 && isNavigable(terrain[l], l)) { c[l] = id; stack[sp++] = l; }
+      if (c[rr] === -1 && isNavigable(terrain[rr], rr)) { c[rr] = id; stack[sp++] = rr; }
+      if (t >= MAP_W && c[t - MAP_W] === -1 && isNavigable(terrain[t - MAP_W], t - MAP_W)) { c[t - MAP_W] = id; stack[sp++] = t - MAP_W; }
+      if (t < TILE_COUNT - MAP_W && c[t + MAP_W] === -1 && isNavigable(terrain[t + MAP_W], t + MAP_W)) { c[t + MAP_W] = id; stack[sp++] = t + MAP_W; }
     }
     id++;
   }

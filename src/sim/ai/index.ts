@@ -26,6 +26,7 @@ import { placeFor, thinkBuild } from './economy';
 import { MapIndex, dist2 } from './mapindex';
 import { emergencyAirDefense, thinkMilitary, thinkNukes } from './military';
 import { SETTLE_EVERY, thinkNaval, thinkSettle } from './naval';
+import { NAVAL_WAR_EVERY, onShipStopped, thinkNavalWar } from './navalwar';
 import { AUTOPILOT_PERSONALITY, DIFFICULTY, PERSONALITY, REBEL_PERSONALITY, autopilotDifficulty } from './profiles';
 import { setupWorld } from './setup';
 import { sharedEventState } from '../events/bridge';
@@ -178,6 +179,8 @@ export function createAiDirector(game: SimGame): AiDirector {
       b.nextDiplomacy = t + jitter(d.diplomacyInterval);
       thinkDiplomacy(c, b, p);
     }
+    // Owner item 30: answers to what others' warships did to our ships (protest, embargo, escorts, war).
+    if ((t + b.id) % NAVAL_WAR_EVERY === 0) thinkNavalWar(c, b, p);
     if (game.difficulty === 'insane' && b.kind === 'nation' && (t + b.id) % 50 === 0) insaneCheats(p, b);
   }
 
@@ -230,6 +233,11 @@ export function createAiDirector(game: SimGame): AiDirector {
       case 'allianceBroken':
         recordBetrayal(c, e.breaker, e.victim);
         return;
+      case 'shipStopped': {
+        const b = brains.get(e.victim);
+        if (b && b.kind !== 'tribe') onShipStopped(b, e);
+        return;
+      }
       case 'warDeclared': {
         // §5.1 `unprovokedWar`: a war of choice on a nation that was not hostile (retaliation, defence, liberation and
         // wars on the runaway leader are provoked).

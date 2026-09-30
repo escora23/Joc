@@ -18,6 +18,7 @@ import { nuclearThreat } from './economy';
 import { dist2, friendlyShare, ownerShare, tileAt } from './mapindex';
 import type { Brain } from './state';
 import { atWar } from './diplomacy';
+import { blockadeTile } from './navalwar';
 
 /** Reach in tiles from the airbase (§6.3: 1,000 / 2,000 / 1,000 km) and the cruise missile's 2,500 km. */
 const AIR_RANGE: Record<number, number> = { [UnitType.FighterSquadron]: 40, [UnitType.Bomber]: 80, [UnitType.DroneSwarm]: 40 };
@@ -220,18 +221,20 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
       }
       case UnitType.Warship: {
         if (u.state !== UnitState.Idle && u.state !== UnitState.Moving) break;
+        // Owner item 30: a warship holding a blockade keeps it while the war lasts.
+        const held = g.naval.blockadeOfUnit(u.id);
+        if (held && enemy) break;
         if (shipOrders > 0 || rng.next() < 0.6) break;
         let dest = -1;
-        // Feedback 3 (#28): blockade the enemy's nearest port (its trade stops) when one lies within reach.
-        if (enemy && rng.next() < 0.5) {
+        // Feedback 3 (#28) / owner item 30: close the strait the enemy's ships sail through, else blockade its nearest
+        // port (its trade stops) when one lies within reach. Enemies only (the default blockade).
+        if (enemy && !held && rng.next() < 0.5) {
           const port = nearestOf(ctx, enemy.id, StructureType.Port, here);
-          if (port && dist2(port.tile, here) < 320 * 320) {
-            const water = waterBeside(ctx, port.tile);
-            if (water >= 0 && u.targetTile === water) break;
-            if (water >= 0 && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'blockade', tile: water, targetId: 0 })) {
-              shipOrders++;
-              break;
-            }
+          const water = port && dist2(port.tile, here) < 320 * 320 ? waterBeside(ctx, port.tile) : -1;
+          const at = blockadeTile(ctx, enemy.id, here, water);
+          if (at >= 0 && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'blockade', tile: at, targetId: 0, blockade: { who: 'war', ships: 'all', action: 'seize' } })) {
+            shipOrders++;
+            break;
           }
         }
         if (enemy) {
