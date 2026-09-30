@@ -525,7 +525,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         seg.append(b);
         row.prio.push(b);
       }
-      const send = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost' }, icon('armoredDivision'), tx('fr.send')) as HTMLButtonElement;
+      const send = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost fu-war-sendbtn' }, icon('armoredDivision'), tx('fr.send')) as HTMLButtonElement;
       send.addEventListener('click', () => {
         hs.sound('click');
         if (expanded.has(key)) expanded.delete(key);

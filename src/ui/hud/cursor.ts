@@ -6,6 +6,7 @@ import { h, setStyle, setText, toggleClass } from '../dom';
 import { icon } from '../icons';
 import { nationRelation } from './diplomacy';
 import type { HudShared } from './shared';
+import { STRUCT_IDS } from './forcesInfo';
 import { chipText, previewOrders, selectedUnitIds, type OrderPreview } from './orderCtl';
 import { structureName, unitName } from './forcesInfo';
 import { describeXY } from '../places';
@@ -204,6 +205,13 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     markDirty(tooltip);
     // On a small-island marker the first line names the island, its size and its owner (DESIGN_V2 §10.6).
     setText(ttTerrain, hs.hover.islandLabel ?? terrainName(tile));
+    // Feedback 3 (#27): rubble of a destroyed structure: what it was, who destroyed it, when, and the rebuild price.
+    const ruin = view.ruins.find((r) => r.tile === tile);
+    if (ruin) {
+      const h0 = Math.max(0, (view.tick - ruin.tick) / 10);
+      const when = h0 >= 24 ? t('aar.days', { n: formatNumber(h0 / 24, 1) }) : t('aar.hours', { n: formatNumber(h0, 0) });
+      setText(ttTerrain, `${t('ruin.title', { s: t(`structure.${STRUCT_IDS[ruin.type] ?? 'city'}`) })} — ${t('ruin.text', { name: ruin.by > 0 ? hs.name(ruin.by) : '—', when })}`);
+    }
     const me = view.human;
     if (owner === 0) {
       setStyle(ttSw, 'background', 'transparent');

@@ -1432,3 +1432,60 @@ Refresh rates: text at 10 Hz, leaderboard and minimap at 4 Hz (L184-L208).
   with capture.
 * Shaders must still compile during loading: create any new material in `init` and warm it up.
 * Keep `npx tsc --noEmit` and `npm run build` clean.
+
+---
+
+## 26. Feedback 3, strategic side (owner items 27, 28, 29a/c/d) — where it lives
+
+Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (headless), `tools/f3-verify.mjs` (browser).
+
+**Damage model (#27)**
+* `src/shared/damage.ts` — the ONE rule set (worker-safe): `damageState(hp)`, `functionFactor(hp)` (1 / 0.6 / 0.25 / 0),
+  `LEVEL_LOSS_HP`, `repairCost`, `repairHours`, `REPAIR_PER_TICK`, `RUIN_TICKS`, `CAPTURE_MAX_HP`, city losses
+  (`cityCivilianLoss`, `cityTroopLoss`), the diplomatic constants, `CITY_BLOCKS` and `collapsedBlocks(id, hp, reported)`
+  (the block mask the strategic city model and command mode both draw), `standingShare(hp)`.
+* `src/sim/economy.ts` — `damage(s, amount, by, cause, block)` (every weapon ends here: `weapons.damageStructure`
+  delegates; level loss; rubble; city civilians/troops; `diplomacy.onCivilianStrike`; `structureDamaged` event),
+  `destroyStructure(s, by, ruin, cause)` (rubble into `g.ruins`), `repair` / `repairError` (command `repairStructure`),
+  `buildCost` (half price on own rubble), `onTileCaptured` (capture ≤ 0.6 hp, raze via `Structure.razeBy`),
+  `recount` (per-type level sums weighted by `Structure.fn`), blockaded ports send no trade ships.
+* `Structure` (`src/sim/state.ts`): `fn` getter, `repairing`, `lastHitBy`, `blocks`, `razeBy`, `countedState`. Every
+  effect point multiplies by `s.fn` (attacks.ts defence posts, weapons.ts SAM chance and silo reload, economy radar /
+  trains / trade ships, units.ts repairs, scramble radius, production speed, embark time).
+* `src/sim/diplomacy.ts` — REMEMBERED `civilianStrike` / `bombedAlly` / `bombedCities`, `onCivilianStrike`,
+  `hasCasusBelli` (also in `SimDiplomacyApi`), provoked wars.
+* Protocol: `repairStructure`, `commandStructureHit` (command-mode hook, `sim/command.ts structureHit`), debug
+  `damageStructure`; events `structureDamaged`, `structureRepaired`, `afterAction`; `TickUpdate.ruins` →
+  `GameView.ruins` (`RuinView`); `StructureView.repairing / blocks / hitBy / blockadedBy`; `UF.mission` (stride 21).
+* `src/shared/localForces.ts` — `LocalStructure.damage / standing / collapsed / repairing`, `LocalForces.ruins`.
+* Render: `src/render/units/models.ts rubble()`; `src/render/units/index.ts updateStructures` (height by
+  `standingShare`, debris instance, collapsed city blocks, rubble on ruins), `updateAmbient` (smoke `smokeAt`, fire).
+* UI: `selection.ts` structure card (`.fu-w4-dmg`, `.fu-w4-repair`); `orderCtl.ts civilianBody / openCivilianConfirm`
+  (also used by `controller.ts` for cruise missiles); `cursor.ts` rubble hover; `aar.ts` damage reports.
+
+**Missions (#28)**
+* `src/shared/orders.ts` — order kinds `defend | join | assault | raze` (`UNIT_ORDER_KINDS` appended), `divisionCheck`,
+  `inferOrder` (right-click: enemy structure → assault / Shift raze; enemy land near our offensive → join; own city or
+  own land ≤ 4 tiles from a hostile nation → defend), `offensiveNear`, `hostileNear`, `civilianCheck`,
+  `offensiveOutlook` (the one preview of an offensive's km/h), constants `DEFEND_TILES`, `ASSAULT_DEPTH_TILES`,
+  `DIVISION_ARTILLERY_TILES`, `DIVISION_SHELL_PER_HOUR`, `RAZE_SHELL_MUL`, `ASSAULT_FLOOR_HP`, `JOIN_NEAR_TILES`,
+  `ARMOR_REACH_TILES`; `RulesView.offensive / offensivesOf` (sim `rules.ts`, client `rulesView.ts`).
+* `src/sim/units.ts` — `orderDivision` cases, `missionAim` (the point of the line each mission holds), `defendStep`,
+  `shellTarget`, `missionEnd` (after-action), `lineTileNearPoint`, `blockaded(port)`; `Unit.missionTarget / missionStart
+  / missionDealt`. `attacks.ts` publishes `divAtk / divDef / navalAtk / planKmh` and emits the offensive's
+  `afterAction`.
+* AI: `src/sim/ai/military.ts` (join / assault / defend / blockade, `assaultTarget`, cities weighed by casus belli),
+  `src/sim/ai/economy.ts` (repairs).
+* UI: `forcesInfo.ts` (`missionOf`, `stateLine`/`effectLine` per mission, `outlookOf`, `liveKmh`), `orderCtl.ts` (forced
+  targets, chip hints with effect / risk), `selection.ts` (division buttons Defender sector, Asaltar objetivo, one-click
+  «Unirse a la ofensiva» with its preview), `fronts.ts` («Unirse» rows with the km/h preview, «apoyo:» on «Tu ofensiva»),
+  `frontBadges.ts` (support row), render overlays (defended sector, spearhead marker, artillery reach, target rings).
+
+**29a / 29c / 29d**
+* `frontsInfo.ts offensiveStatus / offensiveKmh` — the one status text and km/h of an offensive (badge, panel, strip,
+  dialog, cards).
+* `forces.ts` — mission line per row, the advisor (`isIdle`, `suggest`, «Dar misión»); `window.__fuForces.idle /
+  advisor / missions`.
+* `aar.ts` — after-action reports (`afterAction`), damage reports, the periodic idle-units alert; `window.__fuAar`.
+* Shots (`src/ui/shotsF3.ts`): `f3-damage`, `f3-city-damage`, `f3-card`, `f3-civil`, `f3-missions`, `f3-advisor`.
+* i18n: `src/ui/i18n/f3.ts` (also overrides `help.units.body`, `help.structures.body`).

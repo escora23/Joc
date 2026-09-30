@@ -1641,7 +1641,7 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       const anchor = structAnchor.get(st.id);
       if (!anchor) continue;
       const km = structKm(st.type, st.level);
-      if (dst >= 2 && fx.particles.rand() < dt * 3) fx.burn(anchor, fx.visKm(anchor, km * 0.3, 8), 1.5);
+      if (dst >= 2 && fx.particles.rand() < dt * 3) fx.burn(anchor, fx.visKm(anchor, km * 0.18, 6), 1.5);
       if (fx.particles.rand() < dt * (dst >= 2 ? 6 : 3)) smokeAt(fx, anchor, km, dst >= 2 ? 1.3 : 0.9);
     }
     for (const r of view.ruins) {

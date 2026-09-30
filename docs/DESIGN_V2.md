@@ -3097,3 +3097,108 @@ the reviewer's suggestion, and why. Three consistency fixes found while revising
 `ENGAGEMENT_RATE` lowered from 0.002 to 0.0005 per tick (the old value killed half an army per day, which made the
 §4.6 equilibrium meaningless under the new regrowth); siege attrition from 2 %/h to 0.5 %/h, drone front drain from
 1 %/h to 0.25 %/h and naval bombardment drain from 0.5 %/h to 0.15 %/h, to keep them in proportion to that rate.
+
+---
+
+## 18. Feedback 3 (owner items 27-29, strategic side)
+
+Owner feedback #3 (FEEDBACK-1 items 26-29). This section holds the strategic rules; command mode (item 26 and the
+command-mode half of 27) is another workstream that uses the hooks named in §18.1.6. The numbers live in
+`src/shared/damage.ts` and `src/shared/orders.ts` (one source for the sim, the cards, the previews and the 3D models).
+
+### 18.1 Structure and city damage (#27)
+
+1. **Damage states.** A structure's integrity `hp` (0..1) gives its state: **intact** ≥ 0.75, **damaged** ≥ 0.40,
+   **heavily damaged** > 0, **destroyed** (rubble). Its **function** — the share of every effect it delivers — is
+   1 / 0.6 / 0.25 / 0. Function scales: city and factory gold, city population target and troop cap, army-base troop cap
+   (all through the owner's per-type level sums: level × function), port trade ships (2L × f, rounded), factory trains
+   (L × f), defence-post slow-down (1 + (mul − 1) × f), SAM hit chance (× f), radar coverage (× f), airbase scramble
+   radius (× f), repair rates of airbases, army bases, yards and ports (× f), unit production speed at a damaged base
+   (× f: the remaining time stretches), silo reload (÷ f, f ≥ 0.25) and invasion embark time (÷ f).
+2. **Level loss and rubble.** When `hp` falls to 0 a structure above level 1 **loses one level** and stands heavily
+   damaged at **0.30**; at level 1 it is **destroyed** and leaves **rubble** on its tile (TickUpdate.ruins: type, level,
+   old owner, who destroyed it, cause). Rubble clears after **30 game days** or when something is built on the tile;
+   the land's owner rebuilds the same type there at **half price**. A demolition by the owner leaves no rubble. Nuclear
+   inner radius destroys outright (rubble); the outer rim damages.
+3. **Repair.** No free self-repair any more. «Reparar» on the card pays `repairCost = upgradeCost(type, level) × 0.5 ×
+   (1 − hp)` up front (rounded to 100); the structure regains **8 %/h** (a heavily damaged 0.30 → 1.00 in 8.75 h), paused
+   **2 h** after every new hit; the AI repairs by itself (air defence and cities first) when it has twice the price.
+4. **Capture changes owner.** When its tile is taken the structure changes owner (defence posts too), taken in the
+   fighting at **≤ 0.60 hp**, its production queue and upgrade lost. It is destroyed instead when the taker's division
+   was ordered to **raze** it (§18.2), or when the land falls to nobody.
+5. **City hits.** Every hit of `d` hp on a city of level L kills `d × L × 30,000` civilians (at most half the
+   population) and `min(1 % × d × troops, 6,000 × L × d)` of the owner's troops. The population then regrows at its
+   normal drift. The owner is told (damage report, §18.4).
+6. **Civilian targets and diplomacy.** A city is a civilian target (ports and factories stay strategic L2 targets).
+   Striking one (bomber, drone, cruise missile, division artillery or raze, naval gun, command mode), at most once per
+   game hour per pair: the victim −20 opinion (cap −60, half-life 30 days), each ally of the victim −12 (cap −36), every
+   other nation −5 (cap −20); the victim and its allies hold a **casus belli** for 30 game days (a war they declare on
+   the striker is not «unprovoked», no reputation cost); the striker's escalation with the victim rises to **L2**. The
+   human confirms every strike on a city in a dialog that lists these consequences in numbers (bombers, drones, raze
+   orders, cruise missiles); the AI weighs them in its target choice (cities only in answer to strikes on its own or an
+   ally's cities, otherwise a last resort).
+7. **Hooks for command mode.** `commandStructureHit {unitId, structureId, dmg ≤ 0.6, block?}` applies a hit of the
+   controlled unit through the same rule (accepted within 30 km of the unit; on a nation at peace it is an act of war:
+   the victim declares). `commandCasualties.structureHits` also goes through it (cause `command`). `StructureView.blocks`
+   carries the city blocks command mode saw collapse; `collapsedBlocks(id, hp, blocks)` (16 blocks per city: 0 / 3 / 8 /
+   16 down by state, in a stable per-city order, plus the reported ones) is the ONE mask the strategic city model and the
+   command-mode city draw. `deriveLocalForces` returns each structure's `damage`, `standing` (1 / 0.85 / 0.6 / 0),
+   `collapsed` and `repairing`, and the rubble in the window (`ruins`).
+8. **What the player sees.** The card: «Dañada · funciona al 60 % · atacada por Francia», the repair button with its
+   price and hours, a blockaded port's «sin comercio». The 3D model: height drawn at 100 / 85 / 60 %, debris piled around
+   it (damaged / heavily damaged), a smoke column (damaged) and fire plus smoke (heavily damaged); a city loses whole
+   blocks to charred stubs with rubble; a destroyed structure becomes a scorched rubble pile with glowing embers that
+   smokes for 2 game days. Hover on a rubble tile: what it was, who destroyed it, when, and the half-price rebuild.
+
+### 18.2 Missions for every combat unit (#28)
+
+| Unit | Missions (one action each) | Effect in the sim (measured, f3-audit) |
+|---|---|---|
+| Division | **Defender sector** (right-click own land ≤ 4 tiles from a hostile nation, or an own city; card button) | Anchors at the tile; fights any front within 4 tiles (100 km) of it and never follows the line away; defending armor +25 % defence power and ×1.4 time for enemy tiles near it. M2: an enemy offensive into the sector 1.59 km/h / 58 tiles → 0.03 km/h / 1 tile with two divisions defending |
+| Division | **Unirse a la ofensiva X** (right-click enemy land ≤ 5 tiles from our offensive's contact; card button «Unirse a la ofensiva»; Guerra panel «Unirse»; advisor) | Follows the offensive's live contact (the spearhead) instead of the nearest line tile; its power adds (×1.25 each, max ×2) and tiles within 3 tiles advance ×1.5. M1: 2 divisions: 4.03 → 5.07 km/h; the preview said 3.53 → ≈ 5.59 |
+| Division | **Asaltar / Arrasar objetivo** (right-click an enemy structure ≤ 6 tiles from our land; Shift = raze; card button) | Stands on the line nearest the target, shells it within 2 tiles (50 km): −4 %/h (raze ×1.5), an assault never below 15 % (it wants it usable); our offensive on that front aims its axis at the target; when the tile falls the structure is captured (assault) or destroyed (raze). M3/M4 |
+| Division | Mantener, Mover, Unirse al frente, Atacar hacia aquí, Volver | as before (§6.4) |
+| Fighter | Patrulla aérea (defend a border / city / an offensive's sky), Escoltar, Interceptar | §25 (Feedback 2) |
+| Bomber / drones | Atacar objetivo, Apoyar ofensiva (drones) | §25; strikes on cities confirmed (§18.1.6) |
+| Warship | **Bloquear** (a port within 6 tiles: no trade ship leaves it, its trade income stops; card «bloqueado por X»), Bombardear costa, Escoltar convoy, Patrullar | M5 |
+
+Every mission runs by itself until done or cancelled: a join ends with its offensive (the division stays attached); an
+assault or raze ends when the target is captured, destroyed or no longer hostile; a defence lasts until another
+order. Visible on the map: the defended sector's ring (100 km), the spearhead marker of a joined offensive, the
+artillery reach and a red target ring on every structure under assault (double ring to raze). Every order chip shows
+the effect, the risk (wear −0.2 %/h; air risk for aircraft) and the ETA before the click.
+
+**One outlook for every preview (29a).** `offensiveOutlook(attack, {divisions, drones, naval, troopsMul, intensity})`
+scales the offensive's **measured** km/h by the square root of the model's change (elasticity ½: terrain, forts, the
+mop-up and the logistics bucket absorb part of any extra power; calibrated in f3-audit M1, error 10 %); before the first
+measurement it gives the plains speed. The Guerra panel's «Unirse» rows, the division card's «Unirse a la ofensiva»
+tip, the right-click chip and the running offensive's dialog («Ahora (medido)» → «Con este cambio») use it. AttackView
+publishes `divAtk`, `divDef`, `navalAtk` and `planKmh` so the UI never re-derives them.
+
+**The AI uses the same missions**: divisions join its running offensive (or one in three first assaults a structure
+near the line: defence posts, bases, SAM, cities last), defend the threatened sector otherwise; warships blockade the
+nearest enemy port; it repairs. M6: 1,500 ticks of AI wars: join 9, defend 128, assault 8, blockade 2 orders, 8
+artillery hits on structures.
+
+### 18.3 One number per front (29a)
+
+`frontsInfo.offensiveStatus(view, attack, kmh)` is the only text of an offensive's progress; `offensiveKmh(view, a)` the
+only km/h: the front's measured line speed when the offensive leads its front, else its own measurement. The badge,
+its tooltip, the Guerra panel's front row and «Tu ofensiva» line, the battle strip, the offensive dialog and the unit
+cards call them. An offensive whose measured speed is below 0.05 km/h reads «presionando: aún sin avance» (or
+«estancado» when the sim marks it stalled), never «avanzando» next to 0 km/h.
+
+### 18.4 Operations overview and after-action reports (29c, 29d)
+
+* **Fuerzas (U)**: every row shows the unit's mission («Misión: Unirse a la ofensiva» / «Sin misión»), state with ETA,
+  place and integrity. The **advisor** at the top groups idle units by type («Asesor: 3 unidades sin misión») and
+  proposes one mission per group with a «Dar misión» button: divisions join our offensive (else defend the most
+  dangerous front), fighters patrol over our offensive (else the most dangerous front, else the capital), drones support
+  our offensive, bombers enter target mode, warships blockade the nearest enemy port. During a war an advisor alert
+  («Asesor: 2 escuadrones de caza sin misión») appears at most every 12 game hours.
+* **After-action reports** (`afterAction` event): when an offensive the player fought ends (either side), a strike
+  lands or its aircraft is shot down, or a division mission ends (captured / destroyed / razed / cancelled / lost): an
+  alert in the feed and REGISTRO log, clickable to fly there (a unit's report selects it), with the result, duration,
+  tiles taken and lost (≈ km²), losses on both sides, the damage done and the divisions that supported it.
+* **Damage reports** (`structureDamaged` event): a structure of ours changing state, losing a level or destroyed (with
+  civilians and troops killed and «Repárala desde su ficha»), and our own weapons changing an enemy structure's state.
