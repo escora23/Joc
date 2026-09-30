@@ -440,11 +440,32 @@ function missions() {
 function aiMissions() {
   const { g, step, events } = quiet(30, true, 11);
   step(1200);
-  // Every AI at war with its biggest neighbour (the director's own war plans run on top).
   const nations = g.playerArr.filter((p) => p.kind === 'nation' && p.alive);
+  // The human is at war too: its neighbours declare on it (the missions must be used against the player as well).
+  const againstHuman = new Set();
+  {
+    // Bring the human's land up to its nearest AI neighbour (a common border to fight on).
+    const H0 = g.playerById[HUMAN_ID];
+    const hx = H0.capitalTile % MAP_W, hy = Math.floor(H0.capitalTile / MAP_W);
+    const near = nations.filter((P) => P.id !== HUMAN_ID && P.capitalTile >= 0).map((P) => {
+      const px = P.capitalTile % MAP_W, py = Math.floor(P.capitalTile / MAP_W);
+      return { P, px, py, d: Math.hypot(px - hx, py - hy) };
+    }).sort((a, b) => a.d - b.d)[0];
+    for (let k = 1; near && k <= 6 && !g.sharesBorder(HUMAN_ID, near.P.id); k++) {
+      const f = k / 7;
+      const x = Math.round(hx + (near.px - hx) * f), y = Math.round(hy + (near.py - hy) * f);
+      g.applyDebug({ type: 'conquer', playerId: HUMAN_ID, centerTile: y * MAP_W + x, radius: 4 });
+    }
+    H0.troops = Math.max(H0.troops, 400_000);
+  }
+  for (const P of nations) {
+    if (P.id === HUMAN_ID || !g.sharesBorder(P.id, HUMAN_ID) || g.war.atWar(P.id, HUMAN_ID)) continue;
+    if (g.war.declare(P.id, HUMAN_ID, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true })) againstHuman.add(P.id);
+  }
+  // Every AI at war with its biggest neighbour (the director's own war plans run on top).
   for (const P of nations) {
     for (const Q of nations) {
-      if (P.id >= Q.id || !g.sharesBorder(P.id, Q.id) || g.war.atWar(P.id, Q.id)) continue;
+      if (P.id >= Q.id || !g.sharesBorder(P.id, Q.id) || g.war.atWar(P.id, Q.id) || againstHuman.has(P.id) || againstHuman.has(Q.id)) continue;
       const w = g.war.declare(P.id, Q.id, 'conquest', 'war.reason.debug', { mobilizeTicks: 0, force: true });
       if (!w) console.log(`[M6] declare ${P.id}->${Q.id}: ${g.war.declareError(P.id, Q.id, { force: true })}`);
       break;
@@ -463,7 +484,20 @@ function aiMissions() {
       if (w >= 0) spawn(g, U.Warship, P.id, w);
     }
   }
+  // Each enemy of the human launches one offensive on it (what its war plan does when the odds suit it; forced here so
+  // the test does not depend on the plan's timing): its divisions must then join it.
+  for (const id of againstHuman) {
+    const P = g.playerById[id];
+    P.troops = Math.max(P.troops, 600_000);
+    let aim = -1;
+    for (const t of g.playerById[HUMAN_ID].border) {
+      aim = t;
+      break;
+    }
+    if (aim >= 0) g.issue(id, { type: 'attack', target: HUMAN_ID, ratio: 0.5, tile: aim });
+  }
   const seen = { join: 0, defend: 0, assault: 0, raze: 0, blockade: 0 };
+  const human = { join: 0, defend: 0, assault: 0, raze: 0, blockade: 0 };
   const kinds = ['join', 'defend', 'assault', 'raze', 'blockade'];
   const codes = kinds.map((k) => ['move', 'attach', 'hold', 'return', 'cap', 'intercept', 'escort', 'strike', 'support', 'patrol', 'blockade', 'bombard', 'rebase', 'attack', 'defend', 'join', 'assault', 'raze'].indexOf(k));
   const counted = new Set();
@@ -477,8 +511,11 @@ function aiMissions() {
       if (counted.has(key)) continue;
       counted.add(key);
       seen[kinds[k]]++;
+      if (againstHuman.has(u.owner)) human[kinds[k]] = (human[kinds[k]] ?? 0) + 1;
     }
   }
+  const humanAtt = g.attackList.filter((a) => againstHuman.has(a.attacker) && a.defender === HUMAN_ID).length;
+  row('M7', 'AI nations at war with the human use the same missions against it (orders over the run)', `${againstHuman.size} enemies of the human: ${JSON.stringify(human)}; their offensives on the human ${humanAtt}`, 'join or assault against the human', againstHuman.size > 0 && human.join + human.assault > 0);
   const aars = events.filter((e) => e.type === 'structureDamaged' && e.cause === 'artillery' && e.by !== HUMAN_ID).length;
   const divs = [...g.unitMap.values()].filter((u) => u.owner !== HUMAN_ID && (u.type === U.ArmoredDivision || u.type === U.Warship));
   const brains = g.ai.brains ? [...g.ai.brains.values()].map((b) => b.enemy) : Object.keys(g.ai);

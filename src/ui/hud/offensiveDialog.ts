@@ -210,7 +210,7 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
     }
     const v = ctx.sim.view;
     const now = offensiveKmh(v, cur);
-    const next = offensiveOutlook({ ...outlookOf(cur) }, { troopsMul: (cur.troops + send) / Math.max(1, cur.troops), intensity });
+    const next = offensiveOutlook(outlookOf(cur, now), { troopsMul: (cur.troops + send) / Math.max(1, cur.troops), intensity });
     const out = [
       row(t('off.row.now'), offensiveStatus(v, cur, now, 1, false)),
       row(t('off.row.support'), t('off.support', { d: cur.divAtk ?? 0, c: cur.casAtk ?? 0, n: cur.navalAtk ?? 0 })),

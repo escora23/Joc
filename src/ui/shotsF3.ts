@@ -116,7 +116,7 @@ registerShot('f3-damage', 'units', 'Feedback #3 item 27: one structure type in e
   // Frame first: the demolition fireball and its fire are sized for the camera that sees them happen.
   const lat = (tileLat(tiles[0]) + tileLat(tiles[3])) / 2, lon = (tileLon(tiles[0]) + tileLon(tiles[3])) / 2;
   const alt = Number(params.get('alt') ?? 24);
-  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.13), lon, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.85), heading: 0 });
+  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.05), lon, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.85), heading: 0 });
   await waitFrames(6);
   // 1 intact, 2 damaged (0.6), 3 heavily damaged (0.25), 4 destroyed: hit until it is rubble.
   sim.debug({ type: 'damageStructure', tile: tiles[1], amount: 0.4, by: 0 });
@@ -146,7 +146,7 @@ registerShot('f3-city-damage', 'units', 'Feedback #3 item 27: a level-8 city hea
   sim.debug({ type: 'spawnStructure', structure: S.City, owner: HUMAN_ID, tile: right, level: 8 });
   await until(s, () => !!structAt(ctx, left) && !!structAt(ctx, right), 30000);
   const lat = tileLat(left), lon = (tileLon(left) + tileLon(right)) / 2;
-  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.0), lon, altitudeKm: Number(params.get('alt') ?? 11), tilt: Number(params.get('tilt') ?? 1.0), heading: 0 });
+  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.0), lon, altitudeKm: Number(params.get('alt') ?? 20), tilt: Number(params.get('tilt') ?? 0.95), heading: 0 });
   await waitFrames(6);
   const hp = Number(params.get('hp') ?? 0.3);
   sim.debug({ type: 'damageStructure', tile: right, amount: 1 - hp, by: 0, block: 5 });
@@ -214,6 +214,7 @@ registerShot('f3-missions', 'ui', 'Feedback #3 item 28: division missions on a r
   sim.setSpeed(1);
   await until(s, () => ctx.sim.view.tick >= 290 + Number(params.get('run') ?? 60), 40000);
   sim.setSpeed(0);
+  await settleBlasts(s);
   const hud = getHud();
   if (hud) hud.shared.select({ kind: 'units', ids: divs.map((d) => d.id) });
   ctx.cameraRig.setState({ lat: 42.7, lon: -0.7, altitudeKm: Number(params.get('alt') ?? 900), tilt: 0.35, heading: 0 });

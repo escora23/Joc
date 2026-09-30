@@ -125,11 +125,11 @@ async function missions() {
         await new Promise((r) => setTimeout(r, 1200));
       })();
       void name;
-      out[`${u.id}:${kind}`] = (document.querySelector('.fu-sel')?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 400);
+      out[`${u.id}:${kind}`] = (document.querySelector('.fu-sel')?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 1500);
     }
     return out;
   }, idx);
-  const txt = Object.entries(cards).map(([k2, v]) => `${k2} => ${v.slice(0, 160)}`).join(' || ');
+  const txt = Object.entries(cards).map(([k2, v]) => `${k2} => ${v.slice(v.indexOf('ESTADO') >= 0 ? v.indexOf('ESTADO') : 150, (v.indexOf('ESTADO') >= 0 ? v.indexOf('ESTADO') : 150) + 260)}`).join(' || ');
   const has = (kind, re) => Object.entries(cards).some(([k2, v]) => k2.endsWith(`:${kind}`) && re.test(v));
   row('M2', 'unit cards say the mission and its effect', txt.slice(0, 900),
     has('join', /Con la ofensiva|Hacia la ofensiva/) && has('defend', /sector/) && has('assault', /Asaltando/) && has('assault', /Artillería/));
@@ -218,12 +218,12 @@ async function card() {
     const t = document.querySelector('.fu-w4-dmg')?.textContent ?? '';
     return /funciona al/.test(t) ? t : null;
   }, null, 20000);
-  row('D1', 'the card: state, function and who hit it', text ?? '(none)', /Dañada · funciona al 60 %/.test(text ?? '') && /atacada por/.test(text ?? ''));
+  row('D1', 'the card: state, function and who hit it', text ?? '(none)', /Con daños · funciona al 60 %/.test(text ?? '') && /último ataque/.test(text ?? ''));
   const repBtn = page.locator('.fu-w4-repair');
   const label = await repBtn.innerText().catch(() => '');
   row('D2', 'the repair button with its price and hours', label.replace(/\s+/g, ' '), /Reparar · [\d.]+ · [\d,]+ h/i.test(label));
   const feed = await page.evaluate(() => [...document.querySelectorAll('.fu-alert')].map((a) => a.innerText.replace(/\s+/g, ' ')).join(' | '));
-  row('D3', 'the damage report in the alert feed', feed.slice(0, 300), /alcanzada por|funciona al/.test(feed));
+  row('D3', 'the damage report in the alert feed', feed.slice(0, 300), /Ataque de|funciona al/.test(feed));
   await shot(page, 'd1-card');
   const g0 = await page.evaluate(() => __front.ctx.sim.view.human.gold);
   const hp0 = await page.evaluate(() => [...__front.ctx.sim.view.structures.values()].find((s) => s.owner === 1 && s.type === 2)?.hp ?? -1);

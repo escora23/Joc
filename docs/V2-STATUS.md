@@ -753,3 +753,93 @@ Measured (all after the change, real play in Chromium/SwiftShader through the re
 not proportional to the number of squadrons). Released aircraft on «hold» keep their own 12 h endurance and fly home
 without coming back (by design: the player left them there, not on a mission). Items 26-29 belong to the Feedback 3
 round.
+
+## Feedback #3 results (strategic) — owner items 27 (strategic side), 28, 29a, 29c, 29d (2026-09-30)
+
+> `git log --grep "Feedback #3"`. Rules with numbers: DESIGN_V2 §18; code map: CODEMAP §26. Headless
+> `npx tsx src/sim/test/f3-audit.mjs` **all pass** (damage D1-D8, missions M1-M7); browser, real UI, Chromium/SwiftShader
+> `node tools/f3-verify.mjs` (sections missions, card, civil, advisor: 20/20 — missions 8/8 in the final run, 0 page errors); regression audits after the
+> changes: `w4-audit` 43/43, `w6-audit` 20/20, `command-audit` 35/35, `air-audit` 25/25; `npx tsc --noEmit`, `npm run
+> build`, `i18n-check` (0 missing es/en) clean. Shots: `shots/feedback3-strategic/` (f3-damage, f3-city-damage, f3-card,
+> f3-missions, f3-advisor; verify/ has the real-play frames).
+
+**What existed before this round (checked against the code, not rebuilt):** structures already had an `hp`, bombers,
+drones, cruise missiles, nukes and naval shells already damaged them, `commandCasualties.structureHits` already existed,
+and capture already changed the owner (except defence posts). But: any hp > 0 worked at 100 %, hp 0 deleted the
+structure outright (no level loss, no rubble), repair was free and automatic after 15 h, cities lost nobody when hit,
+striking cities cost nothing diplomatically beyond the L2 escalation dialog, there was no division attack on a
+structure, no raze, and the damage was drawn only as a darker tint and an occasional flame. Missions: divisions had
+move / attach / attack / hold / return; «Unirse al frente» attached to the nearest line tile (not to an offensive);
+nothing showed what a division added to an offensive; the offensive dialog showed a plains formula next to the
+badge's measured km/h (29a); the Fuerzas panel had no mission column and no advisor; no after-action reports.
+
+### #27 structures and cities (strategic side) — done
+* Damage states with reduced function (1 / 0.6 / 0.25 / 0), level loss at hp 0 (then 0.30), rubble at level 1, paid
+  repair (+8 %/h, 2 h pause after a hit), capture changes owner at ≤ 0.60 hp (defence posts too), raze, city civilian
+  and troop losses, diplomatic cost with casus belli and confirmation dialog, rebuild on rubble at half price.
+  **Measured (f3-audit):** city L4 hit 0.35 → «damaged», owner's gold/h and troop cap fall; factory L3 direct bomber hit
+  → L2 at 0.30 (not destroyed); SAM L1 direct hit → rubble (TickUpdate.ruins), rebuild 50 %; repair 0.40 → 0.64 in 3 h,
+  paused 1.5 h after a new hit, done at 1.00; no free repair in 4 h; city L5 hit 0.55 → ≈ 16,500 civilians and troops
+  killed; opinion of the striker: victim −20, its ally −12, a third nation −5; casus belli victim + ally, not the third;
+  escalation L2; captured defence post owner human at 0.60; razed factory → rubble (cause raze); command-mode hook: hit
+  at 15 km accepted (−0.20, block 3 published), 300 km refused, a nation at peace declares war; bomber on a city needs
+  `order.err.civilian` confirmation (AI and confirmed orders pass); the real AI repairs its damaged structures.
+* Real play (f3-verify): D1 card «Con daños · funciona al 60 % · último ataque: Suiza»; D2 «Reparar · 50.600 · 5,6 h»; D3 the
+  damage report in the feed; D4 «Reparar» pays 39,000 and hp rises (0.55 → 0.62 in 3 h: 2 h pause after the hit, then
+  8 %/h); C1 a bomber ordered onto Toulouse opens «Atacar una ciudad» listing ≈ 30.000 civiles, −20 / −5 opinion, casus
+  belli 30 days, escalation L2; C2 confirm → sortie; C3 city 1.00 → 0.30 (a level lost), 30,000 civilians; C4 the
+  strike's after-action report; C5 the victim's opinion −69 → −89.
+* 3D (shots f3-damage, f3-city-damage): damaged / heavily damaged models drawn at 85 / 60 % height with debris piled
+  around, smoke columns and fire; a city loses whole blocks (charred stubs + rubble, the same 16-block mask command mode
+  reads); rubble pile with embers where a structure was destroyed. Hover on rubble names it, who destroyed it and when.
+* Hooks for the command-mode agent: `commandStructureHit`, `StructureView.blocks`, `collapsedBlocks`, `LocalStructure.
+  damage/standing/collapsed/repairing`, `LocalForces.ruins` (DESIGN_V2 §18.1.7). Command-mode rendering of damage and
+  sending the hits are the command-mode agent's side of #27 (not done here).
+
+### #28 missions for every combat unit — done
+* Divisions: **Defender sector**, **Unirse a la ofensiva X**, **Asaltar / Arrasar objetivo** (+ hold, move, attach,
+  attack). Warships: **Bloquear** now stops a port's trade (card «bloqueado por X · sin comercio»). Aircraft missions
+  from Feedback 2 (#25) unchanged. One action each: right-click context, card buttons (one-click «Unirse a la ofensiva»),
+  Guerra panel «Enviar divisiones» → «Unirse» with the km/h preview, the Fuerzas advisor. Every chip shows effect, risk
+  and ETA; each mission runs by itself; map shows sector ring, spearhead marker, artillery reach, target rings.
+* **Measured:** M1 (f3-audit, same seed, plains) offensive 4.03 km/h → **5.07 km/h** with 2 divisions joined (divAtk 2);
+  the preview said 3.53 → ≈ 5.59 (10 % off; elasticity ½ calibrated); joined divisions stay ≤ 0.2 tiles from the live
+  contact after 129 tiles. M2 an enemy offensive into a sector 1.59 km/h / 58 tiles → **0.03 km/h / 1 tile** with 2
+  divisions defending. M3 assault: a factory L2 shelled to 0.15 (never below), captured when the front took it,
+  after-action «captured». M4 raze: destroyed, rubble. M5 blockade: port blockaded, no trade ship leaves. M6 AI (1,500
+  ticks of wars): join 13, defend 125, assault 2-8, blockade 0-2 orders; 4-8 artillery hits on structures. M7 an AI at
+  war with the human: its divisions join its offensive against the human (join 4).
+* Real play (f3-verify): M3 «Enviar divisiones» lists «Unirse»; M3b its tooltip «Al unirse: Potencia ×2, Avance 2,9 →
+  ≈ 6,1 km/h, Riesgo…»; M3c one click → the division's mission is the offensive; M4 published divAtk 3 → 4 after it
+  arrives, the offensive measured 9.8 km/h; M5 the assaulted defence post 0.64 → 0.29, then captured by us (report
+  «captured»); M6 the right-click chip «Unirse a la ofensiva · 100 km · 2,5 h · … su potencia ya está al máximo (×2 con
+  4 divisiones)…».
+
+### #29a one number per front — done
+`offensiveStatus` / `offensiveKmh` feed the badge, the Guerra panel row and «Tu ofensiva» (which used to print the raw
+sim state «avanzando» beside «‖ estancado»), the battle strip, the offensive dialog (now «Ahora (medido)» → «Con este
+cambio») and the unit cards; below 0.05 km/h an offensive reads «presionando: aún sin avance». Real play M1: «▶ 2,9 km/h
+| Tu ofensiva … 2,9 km/h · apoyo: 3 div. (+75 % potencia) | ▶ 2,9 km/h» (panel row, own line, badge).
+
+### #29c operations overview — done
+Fuerzas rows show «Misión: …» / «Sin misión» / «sostener el frente (se unió sola)»; the advisor lists idle units by type
+with one «Dar misión» each (join our offensive / defend the worst front; CAP over our offensive or the worst front or
+the capital; drone support; bombers → target mode; warships → blockade the nearest enemy port). An advisor alert during
+wars at most every 12 game h. Real play A1-A3: «Asesor: 6 unidades sin misión…», idle 6 → 3 after the clicks (the
+bomber waits for its target and the warship has nothing to do against a landlocked enemy).
+
+### #29d after-action reports — done
+Offensives (either side, human-involved), strikes (hit / destroyed / shot down) and division missions (captured /
+destroyed / razed / cancelled / lost): an alert in the feed and REGISTRO, clickable to fly there, with result, duration,
+tiles and km², losses on both sides, damage and supporting divisions. Real play C4: «1.º Bombardero: impacto en Ciudad
+(−100 % de integridad) — cerca de Toulouse (Francia). Integridad perdida en la misión: 0 %. Duración 1,4 h.»
+
+### Still open / notes
+* The command-mode side of #27 (shells, bombs and naval guns hitting the structures and city blocks seen in command mode,
+  their fire/collapse there) belongs to the command-mode agent; the sim hook and the shared block mask are ready.
+* A demolition fireball and its 22 s fire are sized for the camera that sees them happen (pre-existing fx rule): zooming
+  in on a structure destroyed while watching from orbit shows an oversized fire for those seconds.
+* The AI's war plan decides by itself when to attack the human; M7 had to launch the AI's offensive to observe its
+  divisions joining it within the test window.
+* Division artillery is modest by design (4 %/h, 6 %/h to raze): a defence post falls in about a day of shelling; the
+  decisive way to take a structure is still the offensive reaching its tile.

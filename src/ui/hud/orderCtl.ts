@@ -208,7 +208,7 @@ function hintFor(hs: HudShared, order: UnitOrderKind, u: UnitView, targetId: num
     case 'join': {
       const a = hs.ctx.sim.view.attacks.find((x) => x.id === targetId);
       if (!a) return t('chip.hint.joinNone');
-      const now = offensiveKmh(hs.ctx.sim.view, a), next = offensiveOutlook(outlookOf(a), { divisions: 1 });
+      const now = offensiveKmh(hs.ctx.sim.view, a), next = offensiveOutlook(outlookOf(a, now), { divisions: 1 });
       const pct = Math.round((next.armorMul / Math.min(2, 1 + 0.25 * (a.divAtk ?? 0)) - 1) * 100);
       // With four divisions the power bonus is at its ×2 cap: the fifth only adds its ×1.5 push on the tiles near it.
       return t(pct > 0 ? 'chip.hint.join' : 'chip.hint.joinMax', { off: offensiveName(hs, a), pct, from: kmhText(now), to: kmhText(next.kmh) });

@@ -120,7 +120,7 @@ export function wireAfterAction(hs: HudShared, alerts: AlertCenter): void {
     const ll = tileXYToLatLon(x, y);
     const st = view().structures.get(e.structureId);
     const name = st ? structureName(hs, st) : t('structure.named', { s: t(`structure.${structId(e.structure)}`), place: describeXY(view(), x, y).name });
-    const stateTxt = e.destroyed ? t(e.cause === 'raze' ? 'aar.dmg.razed' : 'aar.dmg.rubble') : e.levelLost ? t('aar.dmg.levelLost', { n: e.level }) : t(`card.dmg.${DAMAGE_IDS[e.state]}`);
+    const stateTxt = e.destroyed ? t(e.cause === 'raze' ? 'aar.dmg.razed' : 'aar.dmg.rubble') : e.levelLost ? t('aar.dmg.levelLost', { n: e.level }) : t(`card.dmg.${DAMAGE_IDS[e.state]}`).toLocaleLowerCase();
     const fn = e.destroyed ? 0 : functionFactor(e.hp);
     let body = e.destroyed ? '' : t('card.dmg.fn', { p: Math.round(fn * 100) });
     if (e.civilians > 0 || e.troops > 0) body = `${t('aar.dmg.losses', { civ: formatNumber(Math.round(e.civilians / 100) * 100), troops: formatNumber(Math.round(e.troops / 10) * 10) })}${body ? ` · ${body}` : ''}`;

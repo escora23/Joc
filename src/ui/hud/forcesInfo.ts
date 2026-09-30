@@ -282,7 +282,7 @@ export function effectLine(hs: HudShared, u: UnitView): string {
       if (mission === 'join') {
         const a = joinedOffensive(hs, u);
         if (a && u.mode === UnitMode.Offensive) {
-          const now = offensiveOutlook(outlookOf(a));
+          const now = offensiveOutlook(outlookOf(a, liveKmh(hs, a)));
           return t('effect.division.join', { off: offensiveName(hs, a), n: a.divAtk ?? 0, pct: Math.round((now.armorMul - 1) * 100), kmh: kmhText(liveKmh(hs, a)) });
         }
         if (a) return t('effect.division.joinMoving', { off: offensiveName(hs, a) });
@@ -331,9 +331,10 @@ export function effectLine(hs: HudShared, u: UnitView): string {
 }
 
 /** The live figures of an offensive for offensiveOutlook. */
-export function outlookOf(a: AttackView): OutlookInput {
+export function outlookOf(a: AttackView, kmh = a.advanceKmh): OutlookInput {
+  // kmh: the measured speed every panel shows for it (frontsInfo.offensiveKmh), so a preview starts from that number.
   return {
-    ratio: a.ratio, advanceKmh: a.advanceKmh, planKmh: a.planKmh, intensity: a.intensity, frontageTiles: a.frontageTiles,
+    ratio: a.ratio, advanceKmh: kmh, planKmh: a.planKmh, intensity: a.intensity, frontageTiles: a.frontageTiles,
     divAtk: a.divAtk, casAtk: a.casAtk, casDef: a.casDef, air: a.air, navalAtk: a.navalAtk,
   };
 }

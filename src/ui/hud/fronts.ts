@@ -352,7 +352,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         const own = ff ? ownOffensive(sidesOf(view(), ff)) : null;
         if (own) {
           // Feedback 3 (#28): the preview of joining: its power and the km/h the offensive would reach.
-          const now = offensiveKmh(view(), own), next = offensiveOutlook(outlookOf(own), { divisions: 1 });
+          const now = offensiveKmh(view(), own), next = offensiveOutlook(outlookOf(own, now), { divisions: 1 });
           return {
             title: unitName(q.u), text: t('fr.send.join.tip', { off: offensiveName(hs, own) }),
             now: [[t('fr.send.eta'), etaText(hs, Math.round(q.hours * 10))], [t('fr.send.integrity'), `${Math.round(q.u.hp * 100)} %`]],

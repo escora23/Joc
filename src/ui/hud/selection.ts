@@ -191,7 +191,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
           const cur = view().units.get(u.id) ?? u;
           const a = nearestOwnOffensive(cur);
           if (!a) return { title: t('order.join'), text: t('order.join.tip'), whyNot: t('order.err.joinNone') };
-          const now = offensiveKmh(view(), a), next = offensiveOutlook(outlookOf(a), { divisions: 1 });
+          const now = offensiveKmh(view(), a), next = offensiveOutlook(outlookOf(a, now), { divisions: 1 });
           const km = tileKm(cur.x, cur.y, a.contactX >= 0 ? a.contactX : a.x, a.contactX >= 0 ? a.contactY : a.y);
           return {
             title: t('order.join'), text: t('order.join.tip'),
