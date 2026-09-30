@@ -843,3 +843,78 @@ tiles and km², losses on both sides, damage and supporting divisions. Real play
   divisions joining it within the test window.
 * Division artillery is modest by design (4 %/h, 6 %/h to raze): a defence post falls in about a day of shelling; the
   decisive way to take a structure is still the offensive reaching its tile.
+
+## Feedback #3 results (command) — owner items 26, 27 (command side), 29b, 29e (2026-09-30)
+
+> `git log --grep "Feedback #3 command"`. Rules with numbers: DESIGN_V2 §19; code map: CODEMAP §27. Browser, real UI,
+> Chromium/SwiftShader: `node tools/f3c-verify.mjs` (sections go, panel, alert, strike, city, bomb, night) — final
+> runs **all pass, 0 page errors**: go 5/5, panel 2/2, alert 3/3, strike 4/4, city 3/3, bomb 2/2, night 3/3.
+> Frames in `shots/feedback3-command/verify/`. `npx tsc --noEmit` and `npm run build` clean.
+
+**What existed before this round (checked, not rebuilt):** command mode (W5) entered a unit where it stood and let you
+drive; travel mode (×10…×900 with an autopilot to a map waypoint, M) existed but nothing said where the enemy was or took
+you there; shells, bombs and missiles passed through buildings; the night had moonlight and exposure only.
+
+### #26 getting to the action — done
+* **Where is the fight**: a chip under the compass, always on (the nearest enemy / offensive contact / front line / the
+  unit's mission, with km and bearing: «Frente con Suiza · 124 km · noreste», the mission on its second line), and a red
+  ring in the world or an arrow on the screen edge. In contact it turns into «Infantería de Suiza a tiro · 1,6 km».
+* **G «Ir al combate»** (or the chip's button; «Ir al frente más cercano» beyond 25 km): near, the autopilot; far, a
+  **march** behind a fade on the real clock (the whole world runs ×300…×3600, the unit really moves in the sim through
+  own or friendly land, never a nation at peace), then the scene is built where it stops, 1.2 km short of the line,
+  facing it. **New this pass:** when the unit arrives and the action is still out of reach (the line moved, the far view
+  was coarse, the joined offensive went on), the follow-on legs run behind the same fade from the sim (no scene rebuild
+  between them), so the scene is built once, at the action.
+* **Measured (G, real UI):** the defending division, 115-124 km behind the line, taken from its unit card: the chip names
+  the front at 115 km and offers «Ir al frente más cercano»; one G → 4 legs, 157 km in **18 real s** behind the card
+  (was 4 separate marches with 4 scene rebuilds, 381 s and no contact in the first run of this pass) → an anti-tank team
+  of Suiza at 1.6 km. From the click on «Tomar el mando» to contact: **105.6 real s here with 69 rendered frames** in
+  total — SwiftShader draws 1-3 s per frame, and 59 s of it is the entry build before the first frame of play. The
+  march itself runs on the sim clock (6 s for the first leg + 2.4 s for each follow-on leg by design). On a GPU, where a
+  scene build takes seconds, that is roughly 30-40 s, inside the ~60 s criterion; it cannot be timed here.
+  G5: after the march the strategic unit is exactly where the vehicle is.
+* **Map (M)**: click a destination; + drives there (existing travel mode).
+
+### #29e take control from anywhere, in at the action, out looking at it — done
+* Entry points: double click on a front badge, «Tomar el control aquí» on a Guerra panel front row, the battle strip
+  (your division in that battle, else the nearest marches there), «Al mando» on an alert about the war at a place,
+  «Al mando, a su misión» on a unit card with a mission. The app picks the unit (joined to that offensive, on that front,
+  else the nearest; healthier first) and marches it behind the entry fade **before** the scene is built.
+* **Measured:** P1 Guerra panel → our offensive's front: 3 follow-on legs 50 km in 42 s, **in contact (enemy at 2.2 km)
+  without touching the keyboard**, one scene build, 110 real s / 31 frames. A1-A2 «Al mando» on the alert «Puesto
+  defensivo … de Suiza: con daños»: 60 km in 31 s, enemy at 1.1 km, 77 real s. P2/A3 exit: the strategic camera ends
+  at 868-890 km right above the place of the action (±0.01°), not a continental view.
+
+### #27 command side: what you shoot is the real thing — done
+* Tank shells, the jet's missiles and new free-fall **bombs (B, 4 per sortie)**, the ship's guns and missiles stop at the
+  structures and houses of the scene and damage the same sim structures (`commandStructureHit`, flushed every 2 s):
+  structure HE 5 %, AP 2 %, naval gun 6 %, jet missile 12 %, ship missile 20 %, bomb 30 %; each house of a city 0.5 %, a
+  city block (a quarter of its houses down) 3 % more and its bit in the shared block mask. The sim does the rest (state,
+  function, level loss, rubble, civilians and troops, the owner's report, casus belli, opinion).
+* **Measured:** S1 one tank round fired by a click on a real factory: sim hp 1 → 0.98. S2 twenty HE rounds: 1 → 0.13,
+  «daños graves», six `structureDamaged` reports (cause command). S3 the model: lower (34 m standing), scorched, fire and
+  smoke. S4 back on the strategic map, its card: «Integridad 3 % · Daños graves · funciona al 25 % · último ataque:
+  Comandante · 110 oro/h con daños: 440 oro/h sin ellos», and the feed «Fábrica de Zaragoza de Suiza: daños graves».
+  B1 a fighter's four bombs on a factory: 1.00 → 0.70 → 0.10 → **level lost (L2 → L1 at 0.30)**; B2 it burns.
+  C1 the first round that reaches a house of an enemy city stops the game with «¿Atacar Ciudad…?»: ≈ 1.800 civilians per
+  heavy hit, −20 / −5 opinion, casus belli 30 days, escalation (no damage before «Atacar la ciudad»); C2 houses collapse,
+  the city's hp falls, civilians and troops die in the sim; C3 the victim's opinion −70 → −90.
+* The structure's hit notice now follows every hit (it used to keep saying «98 % · sin daños» during a salvo).
+
+### #29b night — done
+* Moonlight and exposure (W6), plus the vehicle's headlights (ship: searchlight; L toggles), illumination flares over
+  the fighting every 12 s while an enemy is within 4 km, the fires of damaged structures lighting their surroundings,
+  and **N**: night vision → thermal white-hot → off. **Measured at 01:24** at a front (N1-N3): plain mean luma 54 with
+  53 % of the frame lit (a first flare tuning of this pass was too bright, 114 / 57 %: fixed); night vision 94 / 75 %;
+  thermal 30 / 16 % (was 20 / 8 %: the ground was nearly black, brightened this pass). The battle view at night was
+  already measured in W6 (V17: luma 32-42).
+
+### Still open / notes
+* The ~60 s criterion can only be estimated here (SwiftShader: entry build ~60 s, 1-3 s per frame); the march part is
+  measured (18-42 s of sim clock behind the card on this 4-CPU container).
+* Naval guns and ship missiles hitting structures use the same code path as the tank and bomb hits (weapon share 6 % /
+  20 %), but no ship-vs-coast run was done in the browser this pass.
+* A tank can bring down only a few houses of a city with its 20 HE rounds (4 houses, −2 % in C2): cities are meant to
+  be hurt by bombers and artillery; a tank's work is structures.
+* The first leg of a long march often ends 25-35 km short (the far view of the line is coarse); the follow-on legs hide
+  it behind the same card, at ~2.4 s each.
