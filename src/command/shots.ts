@@ -557,7 +557,9 @@ registerShot('command-merchant', 'command', 'Owner item 30: a warship with a for
       if (!f) return;
       // A container ship 600 m off the bow heading west, a troop convoy further out.
       st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.TradeShip, owner: f, tile: latLonToTile(36.354, -4.593), targetTile: latLonToTile(36.2, -9.5) });
-      st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.TransportShip, owner: f, tile: latLonToTile(36.35, -4.4), targetTile: latLonToTile(36.0, -9.5) });
+      st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.TransportShip, owner: f, tile: latLonToTile(36.35, -4.6), targetTile: latLonToTile(37.5, 1.0) });
+      // Our port at Málaga: a boarded merchant sails there with its cargo.
+      st.ctx.sim.debug({ type: 'spawnStructure', structure: StructureType.Port, owner: HUMAN_ID, tile: latLonToTile(36.72, -4.42), level: 2 });
     },
   });
   if (live(s)) return;

@@ -997,8 +997,19 @@ export class Brain {
     const gx = e.goal.x - e.pos.x, gz = e.goal.z - e.pos.z;
     const far = Math.hypot(gx, gz);
     const want = e.slot.x;
-    const desired = far > 80 ? Math.atan2(-gx, -gz) : e.yaw;
-    this.steerShip(e, dt, desired, far > 80 ? want : 0, 0.05);
+    let desired = far > 80 ? Math.atan2(-gx, -gz) : e.yaw;
+    // Keep clear of other hulls (our warship included): turn away from one closer than 350 m.
+    let near: Ent | null = null, nd = 350;
+    for (const o of this.w.ents) {
+      if (o === e || !o.alive || !ENT_DEFS[o.kind].naval) continue;
+      const d = Math.hypot(o.pos.x - e.pos.x, o.pos.z - e.pos.z);
+      if (d < nd) {
+        nd = d;
+        near = o;
+      }
+    }
+    if (near && want > 0) desired = Math.atan2(e.pos.x - near.pos.x, e.pos.z - near.pos.z);
+    this.steerShip(e, dt, desired, far > 80 || near ? Math.max(want, near && want > 0 ? 6 : 0) : 0, 0.05);
   }
 
   private battery(e: Ent, dt: number): void {

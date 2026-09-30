@@ -228,7 +228,7 @@ export class Forces {
         this.reconcileShip(want(`ship:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.integrity);
       } else if ((u.type === UnitType.TradeShip || u.type === UnitType.TransportShip) && this.kind === 'ship' && u.distKm <= SHIP_KM) {
         // Owner item 30: merchants and troop convoys around a warship (hail, warning shot, boarding, sinking).
-        this.reconcileMerchant(want(`m:${u.unitId}`), u.unitId, u.type, u.owner, rel, u.lat, u.lon, u.heading, u.mode as UnitMode);
+        this.reconcileMerchant(want(`m:${u.unitId}`), u.unitId, u.type, u.owner, rel, u.lat, u.lon, u.heading, u.mode as UnitMode, player);
       } else if (u.type === UnitType.FighterSquadron && this.kind === 'jet' && u.airborne && (u.reason === 'cap' || u.distKm < 80 || this.capCovers(view, u.unitId, tp.x, tp.y))) {
         this.reconcileJets(want(`sq:${u.unitId}`), u.unitId, u.owner, rel, u.lat, u.lon, u.heading, u.jets, player);
       }
@@ -586,7 +586,7 @@ export class Forces {
    * steams toward the sim's position a little ahead of it; hove to (hailed / warned) it stops. A prize (it changed flag)
    * is re-spawned in its new colours. Never neutral: the player's shells hit it (sinking it is sent to the sim).
    */
-  private reconcileMerchant(g: Group, id: number, type: UnitType, owner: number, rel: LocalRelation, lat: number, lon: number, heading: number, mode: UnitMode): void {
+  private reconcileMerchant(g: Group, id: number, type: UnitType, owner: number, rel: LocalRelation, lat: number, lon: number, heading: number, mode: UnitMode, player: Ent): void {
     const c = this.sceneOfLL(lat, lon, new THREE.Vector3());
     const kind: EntKind = type === UnitType.TransportShip ? 'transport' : 'merchant';
     for (const e of [...g.ents]) {
@@ -603,6 +603,18 @@ export class Forces {
       }
     }
     if (g.ents.length === 0) {
+      // The sim's point may be where our own ship is (the same 25 km tile): it appears abeam instead, clear of our hull,
+      // and closes on its route from there.
+      const others = this.world.ents.filter((o) => o.alive && o !== player && (o.kind === 'merchant' || o.kind === 'transport'));
+      const ox = c.x, oz = c.z;
+      for (let k = 0; k < 8; k++) {
+        const crowded = c.distanceTo(player.pos) < 450 || others.some((o) => o.pos.distanceTo(c) < 450);
+        if (!crowded) break;
+        // Abeam, alternating sides, farther out each pair of tries.
+        const off = 550 * (1 + (k >> 1)) * (k % 2 === 0 ? 1 : -1);
+        c.x = ox + Math.cos(heading) * off;
+        c.z = oz + Math.sin(heading) * off;
+      }
       if (this.ground.heightAt(c.x, c.z) > -3) return;
       const e = this.mk(kind, this.team(rel), c.x, c.z, -heading, owner, rel, { kind: 'merchant', id, owner, share: 0 });
       e.neutral = false;

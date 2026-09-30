@@ -117,12 +117,10 @@ async function blockade() {
   await runTicks(page, 60, 4);
   await until(page, () => __front.ctx.sim.view.blockades.some((b) => b.owner === 1 && b.active), null, 120000);
   await page.evaluate(() => __front.ctx.cameraRig.setState({ lat: 36.3, lon: -4.0, altitudeKm: 2400, tilt: 0.15, heading: 0 }));
-  await sleep(4000);
-  const map = await page.evaluate(() => {
-    const drawn = window.__units?.overlaysDrawn?.() ?? null;
-    const chip = [...document.querySelectorAll('.fu-blk-badge')].find((c) => c.style.display !== 'none');
-    return { chip: chip?.textContent ?? null, drawn };
-  });
+  const map = (await until(page, () => {
+    const chip = [...document.querySelectorAll('.fu-blk-badge')].find((c) => c.style.display !== 'none' && c.offsetParent !== null);
+    return chip ? { chip: chip.textContent } : null;
+  }, null, 60000, 1000)) ?? { chip: null };
   const active = await page.evaluate(() => __front.ctx.sim.view.blockades.find((b) => b.owner === 1)?.active);
   row('V5', 'the blockade comes into force: its chip names the strait on the map', `active ${active}, chip «${map.chip ?? 'none'}»`, active && !!map.chip && /Gibraltar/.test(map.chip));
   await shot(page, 'v5-zone');
@@ -155,8 +153,8 @@ async function port() {
   const card = await until(page, () => document.querySelector('.fu-blk-card:not(.fu-hidden)')?.textContent ?? null, null, 60000);
   row('P1', 'our blockaded port\'s card: who blockades it and the trade lost per hour', card ?? 'no line', !!card && /Bloqueado por/.test(card) && /oro\/h/.test(card));
   await shot(page, 'p1-card');
-  const alert = await page.evaluate(() => [...document.querySelectorAll('.fu-alerts .fu-alert, .fu-alerts-list > *')].map((a) => a.textContent.replace(/\s+/g, ' ')).find((t) => /bloquea/i.test(t)) ?? null);
-  row('P2', 'the located alert: who closes which port', alert ?? 'none', !!alert);
+  const alert = await page.evaluate(() => window.__fuAlerts.list().find((a) => a.kind === 'blockade' && /bloquea/i.test(a.title)) ?? null);
+  row('P2', 'the located alert: who closes which port (click flies there)', alert ? `«${alert.title}» at ${alert.lat?.toFixed(1)}, ${alert.lon?.toFixed(1)}` : 'none', !!alert && Number.isFinite(alert.lat));
   await page.keyboard.press('Escape');
   await page.keyboard.press('KeyG');
   await sleep(1500);
@@ -181,17 +179,37 @@ async function command() {
   await page.keyboard.press('KeyE');
   const hove = await until(page, (id) => __front.ctx.sim.view.units.get(id)?.mode === 19, target, 90000, 1000);
   row('C2', 'E: «Dar el alto» — the merchant heaves to in the sim', `mode HoveTo ${!!hove}; radio «${(await stats())?.text?.match(/«[^»]+»/)?.[0] ?? ''}»`, !!hove);
-  // C3: F boards it (alongside, slow, stopped): it flies our flag, a prize sailing to our port.
+  // C3: F boards it (alongside, slow, stopped): stop our engines first (S on the telegraph), then F.
+  for (let k = 0; k < 5; k++) {
+    await page.keyboard.down('KeyS');
+    await sleep(1500);
+    await page.keyboard.up('KeyS');
+    await sleep(800);
+  }
+  await until(page, () => (window.__cmdStats?.speedKmh ?? 99) < 20, null, 600000, 2000);
   const near = await until(page, () => {
     const s = window.__cmdStats?.intercept;
     return s?.target && s.target.distM <= 700 ? s.target.distM : null;
   }, null, 60000, 1000);
-  await page.keyboard.press('KeyF');
+  const boardTarget = await page.evaluate(() => window.__cmdStats?.intercept?.target?.unitId ?? 0);
+  // Frames are 1-3 s apart under SwiftShader: press again until the boarding party is under way.
+  for (let k = 0; k < 4; k++) {
+    await page.keyboard.down('KeyF');
+    await sleep(1500);
+    await page.keyboard.up('KeyF');
+    const going = await until(page, () => /abordaje|aboard/i.test(window.__cmdStats?.intercept?.text ?? '') || window.__nv.stops.some((e) => e.action === 'seized' || e.action === 'turnedBack') || null, null, 25000, 1000);
+    if (going) break;
+  }
   const prize = await until(page, (id) => {
+    if (window.__nv.stops.some((e) => e.unitId === id && e.action === 'turnedBack')) return 'turned back';
     const u = __front.ctx.sim.view.units.get(id);
-    return u && u.owner === 1 && u.mode === 17 ? true : null;
-  }, target, 180000, 1500);
-  row('C3', 'F: «Abordar» — after the boarding party the merchant is ours (prize to our port)', `alongside ${near ?? '—'} m, prize ${!!prize}`, !!prize);
+    if (u && u.owner === 1 && u.mode === 17) return 'sailing to our port under our flag';
+    const d = window.__nv.prize.find((e) => e.unitId === id);
+    return d ? `cargo delivered at once (+${d.gold})` : null;
+  }, boardTarget || target, 300000, 2000);
+  // The nearest foreign ship may be the convoy: boarded, a convoy is turned back instead.
+  const seized = await until(page, (id) => window.__nv.stops.find((e) => e.unitId === id && (e.action === 'seized' || e.action === 'turnedBack')) ?? null, boardTarget || target, 60000, 1000);
+  row('C3', 'F: «Abordar» — after the boarding party a merchant is ours (a prize to our port), a convoy turns back', `alongside ${near ?? '—'} m, ${seized ? `${seized.unit === 0 ? 'convoy' : 'merchant'} ${seized.action}${prize ? `, ${prize}` : ''}` : 'not boarded'}, piracy ${seized?.piracy}`, !!seized && (seized.action === 'turnedBack' || !!prize));
   await shot(page, 'c3-boarded');
   // C4: R warning shot at the convoy (at peace: the nation's opinion falls).
   const convoy = await until(page, () => {

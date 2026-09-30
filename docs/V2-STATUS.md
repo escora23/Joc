@@ -918,3 +918,87 @@ you there; shells, bombs and missiles passed through buildings; the night had mo
   be hurt by bombers and artillery; a tank's work is structures.
 * The first leg of a long march often ends 25-35 km short (the far view of the line is coarse); the follow-on legs hide
   it behind the same card, at ~2.4 s each.
+
+## Feedback #3 results (naval, item 30) — war at sea: blockades, seizures, convoys (2026-09-30)
+
+> `git log --grep "Owner item 30"`. Rules with numbers: DESIGN_V2 §20; code map: CODEMAP §28. Headless
+> `npx tsx src/sim/test/naval-audit.mjs` **22/22 pass** (N1-N11). Browser, real UI, Chromium/SwiftShader
+> `node tools/naval-verify.mjs` (sections blockade, port, command; frames in `shots/feedback3-naval/verify/`, see the
+> run notes below). Regression audits after the change: `w4-audit` 43/43 (row 12 updated: the default blockade now
+> turns a convoy back instead of shelling it), `f3-audit` 35/35, `command-audit` 35/35, `air-audit` 25/25, `w6-audit`
+> 20/20; `npx tsc --noEmit`, `npm run build`, `i18n-check` (0 missing es/en) clean. Shots `shots/feedback3-naval/`
+> (`naval-dialog`, `naval-dialog-all` (&who=all), `naval-strait-all`, `naval-panel-all`, `naval-port-all`).
+
+**What existed before (checked, not rebuilt):** a warship ordered to «Bloquear» within 150 km of a hostile coast
+captured trade ships of nations at war that came within its engagement radius (the cargo was paid to the captor at once
+and the ship vanished), a port within that radius of an enemy blockading warship sent no merchants, and warships at war
+shelled convoys. Nothing else: no strait or sea-lane blockade, no rerouting (Suez and Panama were not even sailable: a
+ship from the Mediterranean to the Red Sea sailed 21,477 km around Africa), no choice of whom to stop or of seize/sink,
+no prize ship, no convoy turned back, no piracy at peace, no lost-income figures anywhere, no AI reaction, nothing on
+the map, nothing in command mode. A blockading warship that chased a ship never went back to its station.
+
+### Blockade a sea lane or a strait, not only a port — done
+* Order «Bloquear» anywhere on the ship's sea; within 150 km of one of 8 straits (Gibraltar, Suez, Bosporus, Hormuz,
+  Malacca, the Channel, Panama, Bab el-Mandeb) it closes the narrows; several warships share one blockade. In force
+  while one holds the station (they return to it after a chase). Suez and Panama are canals now (N1: Med → Red Sea
+  **1,770 km**, Pacific → Caribbean **538 km**).
+* **Rerouting, measured (N2, Gibraltar closed to our enemy, 144 game hours):** the enemy's merchants to the Atlantic
+  steer round via Suez and the Cape (+9,658 km each on average); others run it and are boarded (1-5 seized). The enemy's
+  **trade income fell 463 → 278 gold/h (−40 %)**; the blockade's ledger: 33,424 gold lost by the enemy, 1,087 gold/h over
+  the last 24 h; our seized cargo delivered at Cádiz: 24,282 gold. A merchant is paid for the direct trip, so a detour is
+  lost income by construction (`slotRate × (1 − direct/route)` per hour). In the browser (V6, 400 more ticks at ×8):
+  9 rerouted, 10 seized, China lost 198,075 gold (1,387 gold/h), we took 166,440 gold of cargo.
+* Blocked lanes on the map (V5, shot `naval-strait-all`): a hatched disc (amber ours, red when it stops us, owner's colour
+  otherwise), a chip «Estrecho de Gibraltar · tu bloqueo / +990 oro/h · 5 apresados · 4 desviados»; merchants on a
+  detour and prizes draw their new route (shot `verify/v6-detours`: the Suez / Cape detours drawn across Africa).
+
+### Seize or sink — done
+* Board and seize: the merchant changes flag and sails to our nearest port, paid there (N4: +1,234 cargo delivered at
+  Cádiz); sink: lost to everyone (N5). Convoys: boarded they turn back and their troops return home (N6: 40,000 troops
+  denied), sunk they die with it (N6b). Command mode (below) does the same by hand.
+
+### Selective blockades with payoff and cost shown before and tracked after — done
+* The dialog (V1-V4, shots `naval-dialog`, `naval-dialog-all`): whom it stops (only nations at war — default /
+  at war + embargoed / chosen nations / everyone but allies), which ships (all / merchants / troop transports), board or
+  sink; live preview: every nation with ships routed through there now (merchants, gold/h, convoys, troops; «se detienen»
+  / «pasan»), gains (trade cut, troops stopped), costs (none when only enemies are stopped; else piracy: opinion per ship,
+  allies, casus belli 30 days, each nation's opinion now → after and its risk of war, how many nations and allies turn
+  against us, our trade with them an embargo would cut).
+* Consequences follow whose ships were stopped (N3: with «enemies only» the neutral's ships were not touched and its
+  opinion stayed +8; N3b «everyone»: a neutral boarded at peace → opinion 10 → −50 and a casus belli against us).
+* Tracking: Guerra › **Mar** (V7, P3, shot `naval-panel-all`): the ledger (lost to blockades / spoils / merchants on
+  detours / ports cut off), our blockades (spec, in force, spoils gold/h, enemy trade cut, troops stopped, ships stopped
+  per nation with the piracy flag and our opinion there; Ir / Cambiar / Levantar), blockades against us (their cost;
+  «Romper el bloqueo», «Escoltar mercantes»), the straits with the ships passing now and «Cerrar». The Fuerzas panel has a
+  one-line ledger; the port card says «Bloqueado por China: ningún mercante zarpa · −150 oro/h» (P1, shot
+  `naval-port-all`).
+
+### Counterplay, alerts, AI — done
+* Escorts: an escorted ship at peace is let through (N7); at war the blockade must beat the escort first (N7b). Break a
+  blockade with our warships (Mar › «Romper el bloqueo», at war) or bombers; merchants can now be escorted.
+* Located alerts: our blockade in force / ended, another's closing a lane to us, each ship stopped (ours or theirs,
+  piracy noted), our merchants rerouted (grouped, extra km and gold), prizes in port.
+* The AI (N10, real AI, 24 nations): Algeria at war with us **closed Gibraltar** by itself (stopped 10 of our ships,
+  rerouted 9; our loss 328,520 gold, 427 gold/h). An AI whose merchants we seize and sink at peace (N10b, China):
+  **protest, embargo, then war** (declared at opinion −100, `war.reason.piracy`, allies called to arms). It escorts its
+  merchants and convoys near an offender's blockade and attacks a blockade that stops it when it has as many warships.
+
+### Command mode: hail, warning shot, board, sink — done
+* A container ship model and a grey troop transport (ro-ro, helicopter deck, lifeboats) sail in the warship scene where
+  the sim has them. The nearest foreign one within 12 km gets a panel (flag, at war / peace, distance, state) with
+  E «Dar el alto», R «Disparo de advertencia» (a real shell into the water ahead), F «Abordar» (alongside ≤ 700 m,
+  ≤ 12 kn, stopped, no escort: 8 s boarding party), X «Hundir» (at peace it asks first). All sent to the sim
+  (`navalIntercept`) with §20.5's consequences. Measured in the browser: C1 panel on «Convoy de tropas de Suiza · en paz ·
+  5.000 soldados»; C2 E → the ship heaves to in the sim; C4 R → warned, piracy, Suiza's opinion 0 → −26; C5 X → «¿Hundir
+  un barco de Suiza en tiempo de paz?», confirmed → sunk in the sim with 5,000 troops, piracy.
+
+### Run notes / still open
+* Browser runs: blockade 7/7 (V1-V7) and command C1, C2, C4, C5 passed; the failing C3 (the nearest ship was the convoy,
+  which a boarding turns back instead of seizing) and P2 (the enemy's «blockade» event was dropped by the staging's
+  fast-forward filter; `blockade` is now in `FF_EVENT_TYPES`) were fixed in the tool / sim — see the last run below.
+* A merchant spawned by the sim in the same 25 km tile as the controlled warship used to appear inside its hull; it now
+  appears 550 m abeam. The scene's merchants follow the sim's route loosely (they steam toward the sim's position 2.5 km
+  ahead), like the warships.
+* The per-hour figures average the last 24 game hours (divided by the hours since the blockade began when younger), so
+  a fresh blockade's figure moves a lot in its first hours (the chip read +990 then +1,913 gold/h in the same run).
+* Submarines do not exist in the game, so there is no sub-hunting.

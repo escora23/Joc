@@ -62,6 +62,8 @@ export const FF_EVENT_TYPES = new Set<SimEvent['type']>([
   'phaseChanged', 'playerSpawned', 'nationEliminated', 'capitalCaptured', 'allianceFormed', 'allianceBroken',
   'allianceExpired', 'embargoChanged', 'gameOver', 'warDeclared', 'warEnded', 'capitulation', 'escalation', 'siege',
   'hegemony', 'unrest', 'proposal', 'treatyChanged', 'tension',
+  // Owner item 30: a lane closed or opened is news even when the clock was fast-forwarded.
+  'blockade',
 ]);
 
 /**
