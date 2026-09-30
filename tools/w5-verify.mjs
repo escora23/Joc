@@ -273,6 +273,8 @@ if (ONLY.includes('border')) {
         // rendered frames, so the HUD (radio) has caught up with the top-up.
         await page.evaluate(() => window.__cmd.simulate(30, 1 / 30));
         await wait(1000);
+        // Two rendered frames after the top-up, so the radio (updated in the frame) describes the positions sampled.
+        await page.evaluate(() => new Promise((r) => { requestAnimationFrame(() => requestAnimationFrame(r)); setTimeout(r, 20000); }));
         const o = await page.evaluate(() => {
           const I = window.__cmd, v = I.ctx.sim.view, P = I.controller.ent;
           const inc = v.command?.incursions?.[0] ?? null;

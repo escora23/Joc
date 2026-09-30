@@ -137,6 +137,19 @@ async function air() {
   }, null, 60000);
   row('A4', 'the front row: our patrol owns the sky, drones counted', sky ? `${sky.text} (airA ${sky.airA}, airB ${sky.airB}, casA ${sky.casA}, casB ${sky.casB}, a=${sky.a})` : 'no superiority shown', !!sky);
   await shot(page, 'a4-sky');
+  // A4b: the front badge on the map repeats it: «✈» in our colour, and a «Cielo» row in its tooltip.
+  const badge = await until(page, () => {
+    const b = [...document.querySelectorAll('.fu-fb')].find((e) => e.querySelector('.fu-fb-sky')?.textContent === '✈');
+    if (!b) return null;
+    const own = __front.ctx.sim.view.players[1]?.color ?? -1;
+    return { text: b.innerText.replace(/\s+/g, ' '), color: b.querySelector('.fu-fb-sky').style.color, own: '#' + own.toString(16).padStart(6, '0') };
+  }, null, 30000);
+  let badgeTip = '';
+  if (badge) {
+    await page.locator('.fu-fb', { has: page.locator('.fu-fb-sky', { hasText: '✈' }) }).first().hover().catch(() => undefined);
+    badgeTip = (await until(page, () => [...document.querySelectorAll('.fu-tip-title')].map((x) => x.parentElement?.textContent ?? '').find((x) => /Cielo/.test(x)) ?? null, null, 10000)) ?? '';
+  }
+  row('A4b', 'the front badge shows who owns the sky (✈ in the owner\'s colour, «Cielo» in its tooltip)', badge ? `${badge.text} · colour ${badge.color} (ours ${badge.own}) · ${badgeTip.replace(/\s+/g, ' ').match(/Cielo[^·]*·[^·]*·[^A-Z]*/)?.[0] ?? badgeTip.slice(0, 120)}` : 'no ✈ on any badge', !!badge && /Cielo/.test(badgeTip));
   // A5: the offensive dialog's air row (Gestionar… opens the reinforce dialog of our running offensive).
   const manage = page.locator('.fu-war-front .fu-war-actions button', { hasText: /Gestionar|Ofensiva/ }).first();
   let dlg = '';
@@ -179,7 +192,8 @@ async function air() {
   row('A6', 'with time running the AI flies its bombers/drones at us and our patrol shoots them down (enemy bombers/drones only fly on AI orders)', JSON.stringify(st), st && st.shot >= 1);
   await shot(page, 'a6-after');
   // A7: the patrol's fuel. On station its Fuerzas row shows the fuel left; when it runs out the squadron flies home
-  // to refuel and goes back to the same station by itself (the row says so at each step).
+  // to refuel and goes back to the same station by itself (the row says so at each step; the flight home is under an hour,
+  // so a 1.5 h sampling step can miss the «Vuelve a repostar» row).
   const capId = await page.evaluate((o) => [...__front.ctx.sim.view.units.values()].find((u) => u.owner === 1 && u.type === 4 && u.order === o.cap)?.id ?? -1, ORDER);
   const seen = [];
   for (let i = 0; i < 40 && capId >= 0; i++) {
@@ -191,7 +205,7 @@ async function air() {
   }
   const iFuel = seen.findIndex((x) => /combustible/.test(x)), iHome = seen.findIndex((x) => /Vuelve a repostar/.test(x));
   const iRearm = seen.findIndex((x) => /Repostando/.test(x)), iBack = seen.findLastIndex((x) => /combustible/.test(x));
-  row('A7', 'the patrol shows its fuel, flies home to refuel and goes back by itself', `unit ${capId}: ${seen.join(' → ')}`, iFuel >= 0 && iHome > iFuel && iRearm > iHome && iBack > iRearm);
+  row('A7', 'the patrol shows its fuel, flies home to refuel and goes back by itself', `unit ${capId}: ${seen.join(' → ')}`, iFuel >= 0 && iRearm > iFuel && (iHome < 0 || (iHome > iFuel && iHome < iRearm)) && iBack > iRearm);
   await page.close();
 }
 

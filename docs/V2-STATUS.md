@@ -702,7 +702,54 @@ Items 18-23 were built and verified in real play by W5 fix pass 2 and the W6 fin
   used to leave its bomber on the way home (where it was shot down). The AI's escort order was sent with no tile and
   always refused. The «Apoyo aéreo» list stays open after an order so several aircraft can be sent.
 
-**Still open / notes**: the CAP itself does not run out of fuel (the squadron «rotates with its base», said in the
-tooltip); only released aircraft on «hold» have an endurance clock. The front badge does not repeat the sky (the
-Guerra panel row and the dialog do; the badge has no room). The air effects are flat multipliers per side (not scaled
-by the number of squadrons beyond «more than the enemy»).
+**Still open / notes** (as of the first pass, superseded below): the CAP did not run out of fuel; the front badge did
+not show the sky. The air effects are flat multipliers per side (not scaled by the number of squadrons beyond «more
+than the enemy»).
+
+### Feedback #2 — final pass (2026-09-30): fuel and rotation, the sky on the badge, every item re-played in the browser
+
+What changed (`git log --grep "Feedback #2 item 25: patrols"`):
+* **#25 fuel/endurance and return to rearm, now also for missions.** A fighter patrol (CAP) stays on station 24 game h
+  minus the flight there and back, drone close support 36 h (`STATION_ENDURANCE_TICKS`, never under 6 h); then it flies
+  home keeping its order, refuels/rearms (2 h fighters, 4 h drones) and goes back to the same station by itself, after
+  the same validation as a new order (a peace signed meanwhile closes the airspace). While it refuels its circle is
+  uncovered and the sky over the front changes. A second squadron ordered to the same station is automatically offset
+  half a stay (staggered relief), so two squadrons keep a border covered permanently. The Fuerzas row and the unit card
+  say it at each step: «Patrulla sobre X · combustible para 7,3 h» → «Vuelve a repostar a Base aérea de Madrid · <1 h;
+  luego retoma la misión» → «Repostando · vuelve a la misión en 1,3 h» → back on station; its effect line reads «Ninguno
+  mientras reposta: su zona queda sin cobertura…». The order tooltips (unit card, «Apoyo aéreo») explain it. «Volver
+  a la base» on a patrol refuelling at its base ends the mission (the button stays available for it).
+* **#25 the front badge repeats the sky**: «✈» between the division counts, in the colour of the side with more
+  fighters on patrol over the line; the badge tooltip has a «Cielo» row (patrols per side, drones per side, who owns it).
+* **#24 polish**: the badge's division counts stay under their own side's chip when the other side has none (the row
+  used to collapse to the left, putting the defender's count under the attacker).
+* Verifier fix (w5-verify B8b): the escort samples wait two rendered frames after the local-physics top-up, so the radio
+  text compared is the one for the sampled positions (the one failure this pass was the radio one frame behind: «a 150 m
+  y acercándonos» read against a vehicle already at 133 m).
+
+Measured (all after the change, real play in Chromium/SwiftShader through the real UI on a no-HMR server):
+* Headless: `air-audit` **25/25** (C1 CAP vs the real AI with two staggered squadrons: 2 AI bombers/drones shot down vs
+  0, 16 strikes reached their target vs 22 without, front bombing 88,275 troops lost vs 124,916; C2 superiority ×1.11 /
+  denial ×0.92 / CAS ×1.43; C3 escorted strikes 5/12 lost vs 12/12; C4 AI strike/escort/cap orders; C5 airspace; **C6**
+  on station 22.4 h, docks 1 h later keeping the order, back on the same station 2.7 h after landing, two squadrons on one
+  station: 0 h uncovered in 74 h). `w4-audit` 43/43 (criterion 13 now «patrols until recalled, refuels and goes back»,
+  19/20 raids intercepted, recall docks it), `w6-audit` 20/20, `command-audit` 35/35.
+* Browser `f2-verify` (#25): air **7/7** in the first run (A1-A7, A7 showing the whole cycle fuel 12 h → … → 1,3 h →
+  «Vuelve a repostar» → «Repostando · 1,3 h» → back on station) and chip 2/2; second run with A4b (badge ✈ in our
+  colour rgb(228,136,33) = #e48821, «Cielo · cazas en patrulla 1 / 0» in its tooltip) 7/8: A7 sampled every 1.5 h and
+  missed the <1 h flight home (fuel → «Repostando» → back); the check now accepts that (shots/feedback2/verify).
+* Browser `w5-verify` (#18-#21): release/releaseout R0-R4, X3-X4 **9/9** (a division released inside Switzerland holds at
+  0 km, the incursion goes on / became a war and says «sigue dentro de Suiza», ordered out the victim holds fire);
+  border **12/12** (warning at 1,500 m, confirmation, incursion, radio countdown 30 s, answer at 30.1 game s, ground QRF
+  in 300 s, escort IFVs ≤ 15.3 m/s, never closer than 54 m, last warning only alongside, B8b 0 mismatches of 185, fire
+  when ignored); handoff **7/7** (battle view = command mode: 2,625 / 608 soldiers, 4 tanks, one distance 17 km).
+* Browser `w6-verify` orbit + advance (#22/#23): **21/21** (slim arrow 4 px = 9 km, 0.06 % of the screen, under the
+  bands, gone at 1,000 km; offensive dialog with preview; persists 40 ticks without clicks; intensity from the row;
+  Retirar with 10 % loss; V15 an offensive from the dialog past its axis point, never 0 km/h while advancing,
+  4.67 km/h vs 4.29 km/h tile rate; Enviar divisiones).
+* `npx tsc --noEmit`, `npm run build`, `i18n-check` (0 missing in es/en) clean.
+
+**Still open after this round**: air effects remain flat per-side multipliers (more patrols than the enemy = the sky;
+not proportional to the number of squadrons). Released aircraft on «hold» keep their own 12 h endurance and fly home
+without coming back (by design: the player left them there, not on a mission). Items 26-29 belong to the Feedback 3
+round.

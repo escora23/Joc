@@ -1200,7 +1200,13 @@ waves, operation names, air strikes and `commandResult` are gone.
 * UI: Guerra y frentes row «Cielo · …» and «Apoyo aéreo» list (`ui/hud/fronts.ts airLine / paintAirList`), the
   offensive dialog's «Apoyo aéreo» row (the preview counts the sky and drones like the sim), right-click chip hints
   with effect and risk (`orderCtl.ts hintFor / airThreat`), texts in `ui/i18n/f2.ts`.
-* Tests: headless `npx tsx src/sim/test/air-audit.mjs` (C1-C5), browser `node tools/f2-verify.mjs` (shot `air-front`).
+* Fuel on station: a fighter CAP / drone support stays `STATION_ENDURANCE_TICKS` (240 / 360) minus the flight there
+  and back (`units.ts stationFuel`, `Unit.stationUntil`), then flies home keeping its order (`resumeOrder/resumeTile`),
+  rearms and `resumeStation` re-issues it after the same validation; a second squadron on the same station is offset
+  half a stay (staggered relief). `return` on a docked, rearming patrol ends it. Cards: `forcesInfo.ts stationOrder`
+  (`fstate.overFuel / refuel / rearmResume`). The front badge shows «✈» in the colour of the side owning the sky
+  (`frontBadges.ts skyOf`, tooltip row «Cielo»).
+* Tests: headless `npx tsx src/sim/test/air-audit.mjs` (C1-C6), browser `node tools/f2-verify.mjs` (shot `air-front`, A1-A7, C1-C2).
 
 ## 18. Camera rig (context for all visual changes)
 
