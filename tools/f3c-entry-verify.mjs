@@ -44,10 +44,11 @@ async function until(page, fn, arg, ms = 30000, every = 400) {
 async function open() {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   page.on('pageerror', (e) => { errors++; console.log(`[pageerror] ${e.message}`); });
-  page.on('console', (m) => { if (/\[command\] (march|failed)/.test(m.text())) console.log(`   ${m.text().slice(0, 200)}`); });
+  page.on('console', (m) => { if (/\[command\] (march|failed)/.test(m.text())) console.log(`   ${m.text().slice(0, 420)}`); });
   await page.goto(`${base}?shot=f3-missions&run=10&panel=0`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction(() => window.__shotReady === true || window.__shotError, null, { timeout: 1_800_000 });
   await sleep(1500);
+  if (args.debug) await page.evaluate(() => { window.__marchDebug = true; });
   await page.evaluate(() => {
     window.__ev = { frames: 0, playAt: 0, contactAt: 0 };
     const loop = () => {
@@ -76,13 +77,15 @@ async function measure(page, id, what, t0) {
       play: window.__ev.playAt ? (window.__ev.playAt - t0) / 1000 : -1,
       contact: window.__ev.contactAt ? (window.__ev.contactAt - t0) / 1000 : -1,
       frames: window.__ev.frames, near: s.nearestHostileM, combat: s.combat, transits: s.transits ?? [], builds: s.builds ?? [],
+      et: s.entryTimes ? { enter: (s.entryTimes.enter - t0) / 1000, march: (s.entryTimes.marchEnd - s.entryTimes.enter) / 1000, build: (s.entryTimes.buildEnd - s.entryTimes.marchEnd) / 1000, intro: (s.entryTimes.play - s.entryTimes.buildEnd) / 1000, introFrames: s.entryTimes.introFrames } : null,
     };
   }, t0);
   const marchS = r.transits.reduce((a, x) => a + x.realMs / 1000, 0);
   const km = r.transits.reduce((a, x) => a + x.km, 0);
   const legs = r.transits.reduce((a, x) => a + (x.legs ?? 1), 0);
   const b = r.builds.map((x) => `${(x.ms / 1000).toFixed(1)} s${x.relocating ? ' (rebuild)' : ''}`).join(' + ') || 'none';
-  const phases = `march ${legs} legs ${km.toFixed(1)} km in ${marchS.toFixed(1)} real s [${r.transits.map((x) => `${x.stop}${x.short ? '/' + x.short : ''}`).join(', ')}]; scene builds ${b}; first frame of play at ${r.play.toFixed(1)} s`;
+  const et = r.et ? `phases: click → command mode ${r.et.enter.toFixed(1)} s, march ${r.et.march.toFixed(1)} s, scene build ${r.et.build.toFixed(1)} s, intro ${r.et.intro.toFixed(1)} s (${r.et.introFrames} frames), play → contact ${(r.contact - r.play).toFixed(1)} s; ` : '';
+  const phases = `${et}march ${legs} legs ${km.toFixed(1)} km in ${marchS.toFixed(1)} real s [${r.transits.map((x) => `${x.stop}${x.short ? '/' + x.short : ''}`).join(', ')}]; scene builds ${b}; first frame of play at ${r.play.toFixed(1)} s`;
   row(id, what, c ? `contact at ${r.contact.toFixed(1)} real s, enemy ${r.near} m; ${phases}; chip «${String(r.combat).slice(0, 90)}»` : `no contact after ${CONTACT_MS / 1000} s; ${phases}; chip «${String(r.combat).slice(0, 140)}»`, !!c);
   row(`${id}b`, 'one scene build (no rebuild after the march)', b, r.builds.length === 1);
   return r;

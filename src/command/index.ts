@@ -88,6 +88,8 @@ const FAR_KM: Record<CommandKind, number> = { tank: 25, jet: 150, ship: 60 };
 /** A march takes about this many real seconds (the clock rate follows), between ×300 and ×3600. */
 const TRANSIT_REAL_S = 6;
 const TRANSIT_RATE_MIN = 300;
+/** A follow-on leg near the line runs from this rate (fix 2, #26: the line moves while the march is in view lag). */
+const FOLLOW_RATE_MIN = 120;
 const TRANSIT_RATE_MAX = 3600;
 /**
  * Feedback 3 (#27): what one hit of the controlled unit's weapons takes from a real structure (hp share, the sim's
@@ -321,6 +323,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   const transits: { km: number; gameSec: number; realMs: number; rate: number; stop: string; legs: number; short: string }[] = [];
   /** Tools (#26 timing): real ms of every scene build of this session, first the entry build, then any rebuild. */
   const builds: { ms: number; relocating: boolean }[] = [];
+  /** Tools (#26 timing): wall-clock marks of the last entry (performance.now ms) and the intro's rendered frames. */
+  let entryTimes = { enter: 0, marchEnd: 0, buildEnd: 0, play: 0, introFrames: 0 };
   let lastUpdateWall = 0;
 
   /** Entered from a ground battle: the point the battle camera looked at and its two sides (null otherwise). */
@@ -1856,7 +1860,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     let pt = alongRoute(route, 0);
     const reachKm = kind === 'tank' ? 5 : kind === 'ship' ? 25 : 60;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    let legSec0 = sec0, kmDone = 0, lastContactCheck = 0, iters = 0, sends = 0, legWall = performance.now();
+    let legSec0 = sec0, kmDone = 0, lastContactCheck = 0, iters = 0, sends = 0, legWall = performance.now(), lastDbg = 0;
+    let lastCvSec = -1, lastCvWall = performance.now();
     marchShort = '';
     let legsRun = 0;
     for (let leg = 0; ; leg++) {
@@ -1877,10 +1882,18 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       // last one, and snaps a move beyond it); the next move asks for the point the clock allows by now.
       km = routeProgress(route, uv.x, uv.y);
       const cv = ctx.sim.view.command;
-      const gs = cv ? Math.max(0, cv.sec - legSec0) : 0;
+      const now = performance.now();
+      // The view reaches this thread only every few real seconds at these rates (the worker runs several ticks per
+      // loop): the game time since it arrived is extrapolated on the wall clock at the requested rate, so the unit is
+      // asked for where its speed takes it NOW, not where it could have been at the last view (that lag let a moving
+      // line run away from the march). The sim still checks every move against its speed and snaps an early one.
+      if (cv && cv.sec !== lastCvSec) {
+        lastCvSec = cv.sec;
+        lastCvWall = now;
+      }
+      const gs = cv ? Math.max(0, cv.sec + (rate * Math.min(8000, now - lastCvWall)) / 1000 - legSec0) : 0;
       const want = Math.min(route.km, Math.max(km, (speed * gs) / 3600));
       pt = alongRoute(route, want);
-      const now = performance.now();
       if (now - lastSend > 150) {
         lastSend = now;
         ctx.sim.send({ type: 'controlledMove', unitId: p0.unitId, x: pt.x, y: pt.y, heading: pt.heading });
@@ -1889,6 +1902,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           ctx.sim.setClock('travel', rate, { x: uv.x, y: uv.y }, false);
           sentClock.at = now;
         }
+      }
+      if ((window as unknown as { __marchDebug?: boolean }).__marchDebug && now - lastDbg > 1000) {
+        lastDbg = now;
+        console.info(`[command] march dbg: sec ${cv?.sec.toFixed(0)} gs ${gs.toFixed(0)} km ${km.toFixed(2)}/${route.km.toFixed(2)} want ${want.toFixed(2)} unit ${uv.x.toFixed(3)},${uv.y.toFixed(3)} tick ${ctx.sim.view.tick}`);
       }
       if (km >= route.km - 0.25) break;
       if (transitAbort) {
@@ -1949,7 +1966,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     title = targetTitle(c);
     hours = route.km / speed;
     // A follow-on leg is short: it gets less real time than the first (the player is already waiting behind the card).
-    rate = Math.round(Math.max(TRANSIT_RATE_MIN, Math.min(TRANSIT_RATE_MAX, (hours * 3600) / (TRANSIT_REAL_S * 0.4))));
+    // Near the line it runs slower (from ×120): the line itself moves, and each real second of view lag lets it go on.
+    rate = Math.round(Math.max(FOLLOW_RATE_MIN, Math.min(TRANSIT_RATE_MAX, (hours * 3600) / (TRANSIT_REAL_S * 0.4))));
     requested = effRate = rate;
     ctx.sim.setClock('travel', rate, { x: route.pts[0].x, y: route.pts[0].y }, false);
     sentClock = { mode: 'travel', rate, throttled: false, at: performance.now() };
@@ -2598,6 +2616,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       entryFrontKey = 0;
       entryAttackId = 0;
       marchShort = '';
+      entryTimes = { enter: performance.now(), marchEnd: 0, buildEnd: 0, play: 0, introFrames: 0 };
       if (p.goal) {
         const ux = p.x ?? 0, uy = p.y ?? 0;
         const view = ctx.sim.view;
@@ -2639,7 +2658,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         }
       }
       try {
+        if (!entryTimes.marchEnd) entryTimes.marchEnd = performance.now();
         await build(p);
+        entryTimes.buildEnd = performance.now();
       } catch (err) {
         console.error('[command] failed to build the local scene', err);
       }
@@ -2801,9 +2822,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       // Phases.
       let allowInput = false;
       if (phase === 'intro') {
+        entryTimes.introFrames++;
         if (phaseT > introDur + 0.1) {
           phase = 'play';
           phaseT = 0;
+          if (!entryTimes.play) entryTimes.play = performance.now();
           if (battleNotice) {
             battleNotice = false;
             showBattleNotice();
@@ -3034,7 +3057,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           // Owner item 30: the ship-stopping panel, its target (sim unit id, kind, distance) and the actions sent.
           intercept: intercept ? { text: intercept.text, target: intercept.current ? { unitId: intercept.current.src?.id ?? 0, kind: intercept.current.kind, distM: Math.round(intercept.current.pos.distanceTo(P.pos)), speed: +intercept.current.speed.toFixed(1) } : null, log: intercept.log.slice(-8) } : null,
           merchants: world.ents.filter((e) => e.alive && (e.kind === 'merchant' || e.kind === 'transport')).length,
-          combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })), builds: builds.map((x) => ({ ...x })),
+          combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })), builds: builds.map((x) => ({ ...x })), entryTimes: { ...entryTimes },
           nearestHostileM: Math.round(forces.nearestHostile(P.pos).dist),
           night: +atmos.night.toFixed(2), vision: night.vision, lights: night.lightsOn, flares: night.flaresFired, fires: civil.fires.length,
           target: (() => {
