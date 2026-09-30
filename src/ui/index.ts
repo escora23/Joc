@@ -13,6 +13,7 @@ import './css/w3.css';
 import './css/w4.css';
 import './css/w6.css';
 import './css/f3.css';
+import './css/naval.css';
 import { h, leave, setText } from './dom';
 import { createEndScreen, type EndScreen } from './end';
 import { fontsReady } from './fonts';
@@ -34,6 +35,7 @@ import { enW4, esW4 } from './i18n/w4';
 import { enW6, esW6 } from './i18n/w6';
 import { enF2, esF2 } from './i18n/f2';
 import { enF3, esF3 } from './i18n/f3';
+import { enNaval, esNaval } from './i18n/naval';
 import { initTooltips } from './tooltip';
 import type { GameOverReason } from '../shared/types';
 
@@ -60,6 +62,8 @@ export function createUi(ctx: GameContext): UiApi {
   registerDictionary('en', enF2);
   registerDictionary('es', esF3);
   registerDictionary('en', enF3);
+  registerDictionary('es', esNaval);
+  registerDictionary('en', enNaval);
   const root = ctx.uiRoot;
   const sound = (kind: UiSoundKind) => ctx.bus.emit('uiSound', { kind });
   initModals(root, (k) => sound(k));

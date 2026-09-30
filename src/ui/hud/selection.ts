@@ -380,6 +380,13 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     const gold = h('div', { class: 'fu-w4-gold' });
     live.gold = gold;
     children.push(gold);
+    // Owner item 30: a port's trade lost to a blockade (blockaded, cut off, merchants on a detour) per hour.
+    if (s.type === StructureType.Port) {
+      const nav = h('div', { class: 'fu-w4-dmg fu-blk-card fu-hidden' });
+      live.navLoss = nav;
+      tip(nav, () => ({ title: t('naval.card.title'), text: t('naval.card.tip') }));
+      children.push(nav);
+    }
     const now = h('div', { class: 'fu-w4-eff' });
     const next = h('div', { class: 'fu-w4-eff is-next' });
     live.now = now;
@@ -568,7 +575,6 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       const parts = [t(`card.dmg.${DAMAGE_IDS[st]}`), t('card.dmg.fn', { p: Math.round(functionFactor(s.hp) * 100) })];
       if (s.repairing) parts.push(t('card.repairing', { eta: etaText(hs, Math.round(repairHours(s.hp) * 10), false) }));
       else if (s.hitBy && st > 0) parts.push(t('card.dmg.hitBy', { name: hs.name(s.hitBy) }));
-      if (s.blockadedBy) parts.push(t('card.blockaded', { name: hs.name(s.blockadedBy) }));
       setText(live.dmg, parts.join(' · '));
       live.dmg.dataset.state = String(st);
       toggleClass(live.dmg, 'fu-hidden', s.built < 1);
@@ -578,6 +584,15 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
         toggleClass(live.repair, 'is-disabled', !!why);
         toggleClass(live.repair, 'fu-hidden', s.hp >= 0.999 && !s.repairing);
       }
+    }
+    if (live.navLoss) {
+      const loss = s.tradeLoss ?? 0;
+      const txt = !loss && !s.rerouted ? '' : s.blockadedBy
+        ? t('naval.card.blockaded', { name: hs.name(s.blockadedBy), g: formatNumber(loss) })
+        : s.tradeCut && s.tradeLossBy ? t('naval.card.cut', { name: hs.name(s.tradeLossBy), g: formatNumber(loss) })
+          : t('naval.card.detour', { n: s.rerouted ?? 0, g: formatNumber(loss) });
+      setText(live.navLoss, txt);
+      toggleClass(live.navLoss, 'fu-hidden', !txt);
     }
     setMeter('build', s.built, s.built >= 1 ? t('hud.sel.operational') : `${Math.round(s.built * 100)} %`);
     toggleClass(live.buildBox, 'fu-hidden', s.built >= 1);

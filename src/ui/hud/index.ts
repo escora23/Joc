@@ -14,12 +14,14 @@ import { createTicker } from './feed';
 import { createNations } from './nations';
 import { createForces } from './forces';
 import { createFrontBadges } from './frontBadges';
+import { createBlockadeBadges } from './blockadeBadges';
 import { createBattleStrip } from './battleStrip';
 import { createFrontsPanel } from './fronts';
 import { createLeaderboard } from './leaderboard';
 import { createMinimap } from './minimap';
 import { wireNews } from './news';
 import { wireForcesNews } from './forcesNews';
+import { wireNavalNews } from './navalNews';
 import { wireAfterAction } from './aar';
 import { createRadial } from './radial';
 import { createSelectionPanel } from './selection';
@@ -75,6 +77,8 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
   // v2 (W6): the Guerra y frentes panel (G) shares the right-hand drawer slot, and the front badges on the globe.
   const frontsPanel = createFrontsPanel(hs);
   const badges = createFrontBadges(hs);
+  // Owner item 30: chips over the blockade zones.
+  const blkBadges = createBlockadeBadges(hs);
   const strip = createBattleStrip(hs);
   hs.openNations = (id) => {
     forces.close();
@@ -94,6 +98,11 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     if (nations.isOpen) nations.close();
     frontsPanel.close();
     forces.open();
+  };
+  hs.openSea = () => {
+    if (nations.isOpen) nations.close();
+    forces.close();
+    frontsPanel.openSea();
   };
   const toggleFronts = (): void => {
     if (frontsPanel.isOpen) {
@@ -147,6 +156,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
 
   wireNews(hs, ticker, alerts);
   wireForcesNews(hs, alerts);
+  wireNavalNews(hs, alerts);
   wireAfterAction(hs, alerts);
   alerts.onPing = (lat, lon, sev) => mm.ping(lat, lon, sev);
   ctx.bus.on('languageChanged', () => {
@@ -234,7 +244,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     spawn.el,
     crisis.edge,
   );
-  const el = h('div', { class: 'fu-hud-root' }, badges.el, strip.banners, strip.pointer, strip.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
+  const el = h('div', { class: 'fu-hud-root' }, badges.el, blkBadges.el, strip.banners, strip.pointer, strip.el, alerts.markersEl, layout, nations.el, forces.el, frontsPanel.el, cursor.el, ripples, radial.el, boxEl);
 
   let state: AppState = 'boot';
   let acc10 = 0, acc4 = 0;
@@ -304,6 +314,7 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
       alerts.update(dt);
       mm.frame();
       badges.update();
+      blkBadges.update();
       strip.update();
       if (acc10 >= 0.1) {
         acc10 = 0;

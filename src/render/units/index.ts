@@ -35,6 +35,7 @@ import { ModelBuilder } from './geom';
 import { createModelMaterial, minPxScale, structFade, unitFade } from './material';
 import { IconLayer, unitCategory, type IconHit } from './icons';
 import { RouteManager, type RouteEnv } from './routes';
+import { blockadeApplies } from '../../shared/naval';
 import { relationsFor } from '../relations';
 import {
   AIRBASE_SLOTS, buildBuilding, buildSpire, buildStructModel, buildUnitModel, levelKey, STRUCT_MODELS, UNIT_MODELS,
@@ -1819,6 +1820,19 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
           }
           break;
         }
+      }
+    }
+    // Owner item 30: every blockade zone on the map — hatched while in force, dashed while its warships are on their
+    // way: red when it stops our ships, amber for ours, the owner's colour (fainter) for the rest.
+    {
+      const rel = { atWar: (a: number, b: number) => view.pairState(a, b) === 'war', allied: (a: number, b: number) => view.players[a]?.allies.includes(b) ?? false, embargoes: (a: number, b: number) => view.players[a]?.embargoes.includes(b) ?? false };
+      for (const b of view.blockades) {
+        if (b.endTick) continue;
+        tileXYToLatLon(b.x, b.y, ll2);
+        const againstUs = b.owner !== HUMAN_ID && (blockadeApplies(rel, b.owner, b.spec, HUMAN_ID, 'trade') || blockadeApplies(rel, b.owner, b.spec, HUMAN_ID, 'transport'));
+        const col = b.owner === HUMAN_ID ? 0xffb020 : againstUs ? 0xff3b30 : ownerColor(b.owner).getHex();
+        const alpha = b.owner === HUMAN_ID || againstUs ? 0.95 : 0.5;
+        ov.ring({ lat: ll2.lat, lon: ll2.lon, radiusKm: b.r * TILE_KM, minPx: 14, style: b.active ? 4 : 2, color: col, alpha, dashes: 36, spin: 0.03 }, radiusAt);
       }
     }
     // Feedback 3 (#28): every structure under assault by one of our divisions carries a red target ring (the razed ones

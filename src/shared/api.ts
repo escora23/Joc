@@ -101,6 +101,9 @@ export interface GameView {
   readonly scars: readonly ScarView[];
   /** Feedback 3: rubble of destroyed structures (shared/damage.ts). */
   readonly ruins: readonly RuinView[];
+  /** Owner item 30: blockades standing (and ended in the last game day), and the human's naval ledger. */
+  readonly blockades: readonly import('./naval').BlockadeView[];
+  readonly naval: import('./naval').NavalEconomyView | null;
   readonly worldEvents: readonly WorldEventView[];
   readonly alliances: readonly AllianceView[];
   readonly allianceRequests: readonly AllianceRequestView[];

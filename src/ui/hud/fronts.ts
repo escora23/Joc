@@ -29,6 +29,7 @@ import {
 import type { HudShared } from './shared';
 import { openPeaceDialog } from './wardialogs';
 import { openOffensiveDialog } from './offensiveDialog';
+import { createSeaTab } from './navalPanel';
 import { takeControlAtFront } from './takeAction';
 import { hexToCss } from '../../shared/color';
 import {
@@ -49,9 +50,11 @@ export interface FrontsPanel {
   close(): void;
   toggle(): void;
   update(): void;
+  /** Owner item 30: open on the «Mar» tab. */
+  openSea(): void;
 }
 
-type Tab = 'mine' | 'world';
+type Tab = 'mine' | 'world' | 'sea';
 
 interface FrontRow {
   key: number;
@@ -116,7 +119,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
   tip(closeBtn, () => ({ title: t('common.close'), text: t('fr.close.tip'), hotkey: 'G / Esc' }));
   const tabBtns = new Map<Tab, HTMLElement>();
   const tabsEl = h('div', { class: 'fu-nt-tabs' });
-  for (const tb of ['mine', 'world'] as Tab[]) {
+  for (const tb of ['mine', 'world', 'sea'] as Tab[]) {
     const b = h('button', { class: 'fu-nt-tab' }, tx(`fr.tab.${tb}`));
     b.addEventListener('click', () => {
       hs.sound('click');
@@ -127,6 +130,8 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     tabsEl.append(b);
   }
   const body = h('div', { class: 'fu-nt-body fu-war-body' });
+  // Owner item 30: the naval war (blockades, straits, the trade ledger).
+  const sea = createSeaTab(hs);
   const intro = h('div', { class: 'fu-war-intro' }, tx('fr.intro'));
   const el = h('div', { class: 'fu-warpanel fu-glass fu-brackets fu-interactive fu-hidden' },
     h('div', { class: 'fu-nt-head' }, h('div', { class: 'fu-panel-title' }, icon('swords'), tx('fr.title')), h('span', { class: 'fu-kbd' }, 'G'), closeBtn),
@@ -785,6 +790,11 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     body.replaceChildren();
     rows.clear();
     wars.clear();
+    if (tab === 'sea') {
+      body.append(sea.el);
+      sea.update();
+      return;
+    }
     if (tab === 'mine') {
       const ws = humanWars();
       if (!ws.length) {
@@ -829,6 +839,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
 
   function currentKey(): string {
     const v = view();
+    if (tab === 'sea') return 's';
     if (tab === 'mine') {
       const ws = humanWars().map((w) => w.id).join(',');
       const fs = humanFrontsByDanger(v).map((f) => f.key).join(',');
@@ -857,6 +868,10 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
     if (k !== listKey) {
       listKey = k;
       rebuild();
+    }
+    if (tab === 'sea') {
+      sea.update();
+      return;
     }
     for (const w of v.wars) {
       const c = wars.get(w.id);
@@ -903,6 +918,10 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       else open();
     },
     update,
+    openSea() {
+      if (tab !== 'sea') setTab('sea');
+      open();
+    },
   };
   try {
     (window as unknown as { __fuFronts?: unknown }).__fuFronts = {

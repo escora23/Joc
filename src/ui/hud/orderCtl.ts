@@ -6,6 +6,7 @@
 // one unitOrder per distinct (order, target). The sim validates with the same orderError, so the preview and the sim
 // can never disagree (acceptance 3). A first strategic strike asks for confirmation (escalation L2, §5.10).
 
+import { openBlockadeDialog } from './blockade';
 import { h } from '../dom';
 import { openModal } from '../modal';
 import { tx } from '../tx';
@@ -287,6 +288,13 @@ export function issueOrders(hs: HudShared, pv: OrderPreview, tile: number): void
     let g = groups.get(k);
     if (!g) groups.set(k, (g = { order: p.order, targetId: p.targetId, ids: [] }));
     g.ids.push(p.unitId);
+  }
+  // Owner item 30: a blockade opens its dialog (whom it stops, what it does, gains and costs) before it is sent.
+  const blk = [...groups.values()].find((g) => g.order === 'blockade');
+  if (blk) {
+    groups.delete(`blockade:${blk.targetId}`);
+    openBlockadeDialog(hs, blk.ids, tile);
+    if (!groups.size) return;
   }
   const send = (confirm: boolean) => {
     for (const g of groups.values()) {

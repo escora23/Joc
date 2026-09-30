@@ -50,6 +50,8 @@ export class HudShared {
   openInbox: (proposalId?: number) => void = () => undefined;
   /** v2 (W4): the Fuerzas panel (U); set by the HUD assembly. */
   toggleForces: (open?: boolean) => void = () => undefined;
+  /** Owner item 30: the Guerra panel on its «Mar» tab (blockades); set by the HUD assembly. */
+  openSea: () => void = () => undefined;
   forcesOpen = false;
 
   constructor(readonly ctx: GameContext, readonly sound: (k: UiSoundKind) => void) {}

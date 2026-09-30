@@ -318,7 +318,9 @@ scenarios.blockade = () => {
     step();
     shots += events.slice(n0).filter((e) => e.type === 'combat' && e.kind === 'shell' && e.owner === HUMAN_ID).length;
   }
-  row('12', 'enemy convoy in the zone engaged', `${shots} salvoes, convoy ${cv.dead ? 'sunk' : `${(cv.hp / cv.maxHp * 100).toFixed(0)} %`}`, '>= 1 salvo', shots >= 1);
+  // Owner item 30: the default blockade boards (a convoy is sent back home); a sinking one fires (naval-audit N6).
+  const turned = events.some((e) => e.type === 'shipStopped' && e.unitId === cv.id && e.action === 'turnedBack');
+  row('12', 'enemy convoy in the zone engaged', `${shots} salvoes, turned back ${turned}, convoy ${cv.dead ? 'gone' : `${(cv.hp / cv.maxHp * 100).toFixed(0)} %`}`, '>= 1 salvo or turned back', shots >= 1 || turned);
 };
 
 // -------------------------------------------------------------------------------------------------------------

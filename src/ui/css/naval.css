@@ -1,0 +1,69 @@
+/* FRONT ULTRA — owner item 30: the war at sea. The blockade dialog (whom it stops, what it does, the live preview of
+   gains and costs), the «Mar» tab of the Guerra panel, the blockade chips on the map, the port card's lost trade. */
+.fu-blk-dialog { width: min(46rem, 94vw); }
+.fu-blk-dialog .fu-modal-body { max-height: min(72vh, 44rem); overflow-y: auto; display: flex; flex-direction: column; gap: 0.55rem; }
+.fu-blk-intro { margin: 0; font-size: 0.82rem; line-height: 1.45; color: var(--fu-text-2); }
+.fu-blk-field { display: flex; flex-direction: column; gap: 0.3rem; }
+.fu-blk-label { margin-top: 0.2rem; }
+.fu-blk-seg { display: flex; flex-wrap: wrap; }
+.fu-blk-seg > button { flex: 1 1 auto; font-size: 0.74rem; padding: 0.38rem 0.55rem; }
+.fu-blk-note { font-size: 0.72rem; color: var(--fu-text-dim); line-height: 1.4; }
+.fu-blk-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: 0.25rem 0.8rem; padding: 0.35rem 0.5rem; border: 1px solid var(--fu-line); background: rgba(0, 0, 0, 0.2); }
+.fu-blk-nation { display: flex; align-items: center; gap: 0.4rem; font-size: 0.76rem; cursor: pointer; }
+.fu-blk-chip { width: 0.7rem; height: 0.7rem; border-radius: 2px; flex: none; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.fu-blk-rel { font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fu-text-dim); }
+.fu-blk-rel.is-war { color: #ff7a6a; }
+.fu-blk-rel.is-ally { color: #7fe3a8; }
+.fu-blk-preview { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0.6rem; border: 1px solid var(--fu-line-strong); background: rgba(10, 18, 28, 0.55); }
+.fu-blk-table { display: flex; flex-direction: column; gap: 0.18rem; }
+.fu-blk-trow { display: grid; grid-template-columns: 0.8rem 8rem 4.2rem 1fr auto; align-items: center; gap: 0.45rem; font-size: 0.74rem; color: var(--fu-text-2); padding: 0.12rem 0.2rem; }
+.fu-blk-trow b { color: var(--fu-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fu-blk-trow.is-stopped { background: rgba(255, 74, 74, 0.08); }
+.fu-blk-trow .fu-blk-verdict { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fu-text-dim); }
+.fu-blk-trow.is-stopped .fu-blk-verdict { color: #ff8a7a; }
+.fu-blk-preview li.is-good { color: #8fe8b0; }
+.fu-blk-preview li.is-bad { color: #ffb0a3; }
+.fu-blk-preview li.is-dim { color: var(--fu-text-dim); }
+.fu-blk-preview li.is-risk-high { color: #ff6a5a; font-weight: 600; }
+.fu-blk-preview li.is-risk-mid { color: #ffc46a; }
+.fu-blk-preview li.is-risk-low { color: var(--fu-text-2); }
+.fu-blk-card { color: #ffb0a3; border-color: rgba(255, 90, 70, 0.4); background: rgba(255, 70, 50, 0.08); }
+
+/* The «Mar» tab. */
+.fu-sea { display: flex; flex-direction: column; gap: 0.45rem; }
+.fu-sea-title { margin-top: 0.35rem; }
+.fu-sea-ledger { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35rem; }
+.fu-sea-stat { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.35rem 0.45rem; border: 1px solid var(--fu-line); background: rgba(10, 18, 28, 0.6); font-size: 0.68rem; color: var(--fu-text-dim); }
+.fu-sea-stat b { font-size: 0.95rem; color: var(--fu-text); }
+.fu-sea-stat small { font-size: 0.64rem; }
+.fu-sea-stat.is-bad b { color: #ff8a7a; }
+.fu-sea-stat.is-good b { color: #7fe3a8; }
+.fu-sea-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.fu-sea-card.is-against { border-color: rgba(255, 90, 70, 0.45); }
+.fu-sea-state { font: 600 0.62rem var(--fu-font-cond); letter-spacing: 0.1em; padding: 0.1rem 0.35rem; border: 1px solid var(--fu-line-strong); color: var(--fu-text-dim); }
+.fu-sea-state.is-on { color: #ffd27a; border-color: rgba(255, 200, 80, 0.5); }
+.fu-sea-state.is-bad { color: #ff8a7a; border-color: rgba(255, 90, 70, 0.5); }
+.fu-war-line.is-bad { color: #ffb0a3; }
+.fu-sea-gain { color: #9fe8b8; }
+.fu-sea-nations { display: flex; flex-direction: column; gap: 0.12rem; }
+.fu-sea-nation { display: flex; align-items: center; gap: 0.4rem; font-size: 0.7rem; color: var(--fu-text-2); }
+.fu-sea-nation b { color: var(--fu-text); }
+.fu-sea-nation span:nth-child(3) { flex: 1; }
+.fu-sea-nation.is-bad { color: #ffb0a3; }
+.fu-sea-strait { display: grid; grid-template-columns: 9.5rem 1fr auto; align-items: center; gap: 0.4rem; font-size: 0.74rem; padding: 0.2rem 0; border-bottom: 1px solid var(--fu-line); }
+.fu-sea-strait .fu-war-note { padding: 0; }
+.fu-sea-strait-acts { display: flex; gap: 0.3rem; }
+
+/* The Fuerzas panel's naval line. */
+.fu-fo-naval { display: block; width: 100%; text-align: left; margin: 0 0 0.4rem; padding: 0.35rem 0.55rem; font: 500 0.72rem var(--fu-font); color: #ffd27a; background: rgba(255, 200, 80, 0.07); border: 1px solid rgba(255, 200, 80, 0.3); cursor: pointer; }
+.fu-fo-naval:hover { background: rgba(255, 200, 80, 0.13); }
+
+/* Blockade chips on the map. */
+.fu-blk-badges { position: absolute; inset: 0; pointer-events: none; }
+.fu-blk-badge { position: absolute; left: 0; top: 0; pointer-events: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 0.05rem; padding: 0.22rem 0.5rem 0.24rem 0.55rem; max-width: 17rem; background: rgba(6, 12, 20, 0.84); border: 1px solid rgba(255, 255, 255, 0.18); border-left: 3px solid var(--blk-color, #888); color: var(--fu-text); font: 500 0.66rem var(--fu-font); cursor: pointer; text-align: left; }
+.fu-blk-badge b { font: 700 0.7rem var(--fu-font-cond); letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.fu-blk-badge span { color: var(--fu-text-2); white-space: nowrap; }
+.fu-blk-badge.is-ours { border-color: rgba(255, 180, 40, 0.55); border-left-color: #ffb020; }
+.fu-blk-badge.is-ours span { color: #ffd27a; }
+.fu-blk-badge.is-against { border-color: rgba(255, 70, 60, 0.6); border-left-color: #ff3b30; }
+.fu-blk-badge.is-against span { color: #ff9a8a; }

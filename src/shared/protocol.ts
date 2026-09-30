@@ -442,6 +442,8 @@ export type SimDebugAction =
   | { type: 'removeUnit'; unitId: number }
   /** v2 (W4, staging): raise `by`'s escalation level in its war with `against` (§5.10). */
   | { type: 'escalate'; by: number; against: number; level: number }
+  /** Owner item 30 (staging): issue a command as another player (an AI's blockade of the human, its merchants' escort). */
+  | { type: 'issueAs'; playerId: number; cmd: PlayerCommand }
   // --- v2 (W3): diplomacy staging (shots, playtests, the diplomacy audit) ---
   /** Sign a treaty between two players now. */
   | { type: 'treaty'; a: number; b: number; kind: TreatyKind }

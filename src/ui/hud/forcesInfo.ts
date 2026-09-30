@@ -9,6 +9,7 @@ import type { HudShared } from './shared';
 import { unitLabel } from './news';
 import { describeXY, frontPlace } from '../places';
 import { kmhText, offensiveKmh } from './frontsInfo';
+import { blockadePlace, specText, stopsText } from './navalInfo';
 import {
   ARMOR_RAIL_KMH, BOMBARD_ATTACK_MUL, BOMBER_DIRECT_DMG, BOMBER_DIVISION_DMG, CAP_HIT_AIRCRAFT, CAP_RADIUS_TILES, DIVISION_ATTACH_TILES,
   DIVISION_FIELD_REPAIR, DIVISION_WEAR_ENGAGED, DRONE_ADVANCE_MUL, DRONE_DIRECT_DMG, DRONE_SUPPORT_TILES, HOLD_ORBIT_KM, HUMAN_ID,
@@ -71,6 +72,8 @@ export const MODE_IDS: Record<number, string> = {
   [UnitMode.Rearming]: 'rearming', [UnitMode.Patrol]: 'patrol', [UnitMode.Intercept]: 'intercept',
   [UnitMode.Escort]: 'escort', [UnitMode.Strike]: 'strike', [UnitMode.Support]: 'support', [UnitMode.Blockade]: 'blockade',
   [UnitMode.Bombard]: 'bombard', [UnitMode.Embarking]: 'embarking', [UnitMode.Engaged]: 'engaged',
+  // Owner item 30: merchants and convoys at sea.
+  [UnitMode.Prize]: 'prize', [UnitMode.Detour]: 'detour', [UnitMode.HoveTo]: 'hoveTo',
 };
 
 /** An aircraft left by the player on a holding orbit over a spot (released from command mode, feedback #18). */
@@ -213,7 +216,11 @@ export function stateLine(hs: HudShared, u: UnitView): string {
     case UnitMode.Support:
       if (rotating && eta) return t('fstate.overFuel', { mode, place: front || dest(), eta });
       return t('fstate.over', { mode, place: front || dest() });
-    case UnitMode.Blockade:
+    case UnitMode.Blockade: {
+      // Owner item 30: the blockade it holds, by name.
+      const b = hs.ctx.sim.view.blockades.find((x) => !x.endTick && x.warships.includes(u.id));
+      return b ? t('fstate.blockade', { place: blockadePlace(hs, b) }) : t('fstate.over', { mode, place: dest() });
+    }
     case UnitMode.Bombard:
       return t('fstate.over', { mode, place: dest() });
     case UnitMode.Rearming:
@@ -318,13 +325,24 @@ export function effectLine(hs: HudShared, u: UnitView): string {
       if (u.mode === UnitMode.Rearming) return t('effect.rearming');
       return t('effect.drone.ready', { km: formatNumber(reachKm(u.type)), r: Math.round(DRONE_SUPPORT_TILES * TILE_KM) });
     case UnitType.Warship:
-      if (u.mode === UnitMode.Blockade) return t('effect.warship.blockade', { km: Math.round(WARSHIP_ENGAGE_TILES * TILE_KM) });
+      if (u.mode === UnitMode.Blockade) {
+        const b = hs.ctx.sim.view.blockades.find((x) => !x.endTick && x.warships.includes(u.id));
+        if (b) return t('effect.warship.blockadeSpec', { spec: specText(hs, b.spec), stops: stopsText(b), g: formatNumber(b.goldPerHour) });
+        return t('effect.warship.blockade', { km: Math.round(WARSHIP_ENGAGE_TILES * TILE_KM) });
+      }
       if (u.mode === UnitMode.Bombard) return t('effect.warship.bombard', { pct: Math.round((BOMBARD_ATTACK_MUL - 1) * 100), km: Math.round(WARSHIP_BOMBARD_TILES * TILE_KM) });
       if (u.mode === UnitMode.Escort) return t('effect.warship.escort');
       if (u.mode === UnitMode.Engaged) return t('effect.warship.engaged');
       return t('effect.warship.patrol', { km: Math.round(WARSHIP_ENGAGE_TILES * TILE_KM) });
     case UnitType.TransportShip:
+      if (u.mode === UnitMode.HoveTo) return t('effect.hoveTo');
+      if (u.mode === UnitMode.Detour) return t('effect.convoy.detour', { n: formatNumber(Math.round(u.troops)) });
       return t('effect.convoy', { n: formatNumber(Math.round(u.troops)) });
+    case UnitType.TradeShip:
+      if (u.mode === UnitMode.Prize) return t('effect.trade.prize');
+      if (u.mode === UnitMode.HoveTo) return t('effect.hoveTo');
+      if (u.mode === UnitMode.Detour) return t('effect.trade.detour');
+      return t('effect.trade');
     default:
       return '';
   }

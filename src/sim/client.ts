@@ -6,6 +6,7 @@
 import { peekSaveHeader } from './save';
 import { GAME_SECONDS_PER_TICK, HUMAN_ID, MAP_H, MAP_W, STRUCTURE_DEFS, TILE_COUNT, UNIT_DEFS, structureCost } from '../shared/constants';
 import { hasKey, inSentence, playerName, t } from '../shared/i18n';
+import type { BlockadeView, NavalEconomyView } from '../shared/naval';
 import type { GameBus } from '../shared/events';
 import type { GameView, ProgressFn, SimClientApi } from '../shared/api';
 import {
@@ -101,6 +102,9 @@ class ClientView implements GameView {
   scars: ScarView[] = [];
   /** Feedback 3: rubble of destroyed structures. */
   ruins: RuinView[] = [];
+  /** Owner item 30: blockades and the human's naval ledger. */
+  blockades: BlockadeView[] = [];
+  naval: NavalEconomyView | null = null;
   worldEvents: WorldEventView[] = [];
   alliances: AllianceView[] = [];
   allianceRequests: AllianceRequestView[] = [];
@@ -207,6 +211,8 @@ class ClientView implements GameView {
     this.fronts = [];
     this.scars = [];
     this.ruins = [];
+    this.blockades = [];
+    this.naval = null;
     this.worldEvents = [];
     this.alliances = [];
     this.allianceRequests = [];
@@ -526,6 +532,8 @@ export function createSimClient(bus: GameBus): SimClientApi {
     }
     if (u.scars) view.scars = u.scars;
     if (u.ruins) view.ruins = u.ruins;
+    if (u.blockades) view.blockades = u.blockades;
+    if (u.naval) view.naval = u.naval;
     if (u.worldEvents) view.worldEvents = u.worldEvents;
     if (u.alliances) view.alliances = u.alliances;
     if (u.allianceRequests) view.allianceRequests = u.allianceRequests;

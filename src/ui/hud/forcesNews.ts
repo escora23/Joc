@@ -37,22 +37,7 @@ export function wireForcesNews(hs: HudShared, alerts: AlertCenter): void {
     });
   });
 
-  bus.on('shipCaptured', (e) => {
-    if (e.by !== HUMAN_ID && e.from !== HUMAN_ID) return;
-    const ll = tileXYToLatLon(e.x, e.y);
-    if (e.by === HUMAN_ID) {
-      const w = view().units.get(e.warshipId);
-      alerts.raise({
-        kind: 'shipCaptured', severity: 'info', icon: 'tradeShip', lat: ll.lat, lon: ll.lon, actors: [e.from], unitId: e.warshipId,
-        title: t('alert.shipCaptured.us', { ship: unitLabel(UnitType.Warship, w?.serial ?? 0), name: hs.name(e.from), gold: formatNumber(e.gold) }),
-      });
-    } else {
-      alerts.raise({
-        kind: 'shipCaptured', severity: 'warning', icon: 'tradeShip', lat: ll.lat, lon: ll.lon, actors: [e.by], groupKey: `captured:${e.by}`,
-        title: t('alert.shipCaptured.them', { name: hs.name(e.by), place: describeXY(view(), e.x, e.y).text }),
-      });
-    }
-  });
+  // Captured trade ships: owner item 30's navalNews.ts (shipStopped) reports them with the rest of the war at sea.
 
   bus.on('orderAck', (e) => {
     if (e.owner !== HUMAN_ID || e.accepted.length || !e.errorKey) return;

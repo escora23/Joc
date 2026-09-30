@@ -1228,6 +1228,9 @@ export class Game implements SimGame {
       case 'escalate':
         this.war.raiseEscalation(a.by, a.against, a.level, 'escalation.reason.military');
         break;
+      case 'issueAs':
+        this.issue(a.playerId, a.cmd);
+        break;
       case 'removeUnit': {
         const u = this.unitMap.get(a.unitId);
         if (u) this.unitSys.remove(u, false);

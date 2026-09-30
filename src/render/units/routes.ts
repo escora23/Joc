@@ -25,7 +25,7 @@ import * as THREE from 'three';
 import { EARTH_RADIUS_KM, HUMAN_ID, MAP_H, MAP_W, TILE_KM, UNIT_DEFS } from '../../shared/constants';
 import { smoothstep } from '../../shared/math';
 import { latLonToVec3, tileXYToLatLon, wrapDX } from '../../shared/geo';
-import { UnitState, UnitType, type LatLon, type UnitView } from '../../shared/types';
+import { UnitMode, UnitState, UnitType, type LatLon, type UnitView } from '../../shared/types';
 import type { FxInternal } from '../fx';
 import { TRAIL_STYLES, type Trail } from '../fx/trails';
 import type { Relation } from '../relations';
@@ -482,7 +482,9 @@ export class RouteManager {
     }
     // Planned path ahead (dashed): convoys and sorties always; anything selected or hovered. Ships follow their sim
     // path (no path: no preview, never a guess across land); aircraft the great circle they fly.
-    const planned = (kind === 'convoy' || kind === 'air' || this.focus.has(u.id)) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > Math.max(30, 2 * clear)
+    // Owner item 30: a merchant on a detour around a blockade and a seized ship show where they now sail.
+    const naval = ship && (u.mode === UnitMode.Detour || u.mode === UnitMode.Prize);
+    const planned = (kind === 'convoy' || kind === 'air' || naval || this.focus.has(u.id)) && tileDistKm(u.x, u.y, u.targetX, u.targetY) > Math.max(30, 2 * clear)
       && (!ship || (!!path && path.length >= 2));
     if (planned && !r.suppressed) {
       if (!r.plan) {

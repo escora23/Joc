@@ -80,10 +80,17 @@ export function createForces(hs: HudShared): ForcesPanel {
   // Feedback 3 (29c): the operations advisor — idle units by type, each group with a one-click mission.
   const advisor = h('div', { class: 'fu-fo-advisor fu-hidden' });
   const foot = h('div', { class: 'fu-fo-foot' });
+  // Owner item 30: the war at sea in one line (trade lost to blockades, cargo seized), a click opens the «Mar» tab.
+  const naval = h('button', { class: 'fu-fo-naval fu-hidden' }) as HTMLButtonElement;
+  naval.addEventListener('click', () => {
+    hs.sound('click');
+    hs.openSea();
+  });
+  tip(naval, () => ({ title: t('naval.ledger.title'), text: t('naval.ledger.tip') }));
   const hint = h('div', { class: 'fu-fo-hint' }, icon('mouse'), tx('forces.hint'));
   const el = h('div', { class: 'fu-forces fu-glass fu-brackets fu-interactive fu-hidden' },
     h('div', { class: 'fu-nt-head' }, h('div', { class: 'fu-panel-title' }, icon('armoredDivision'), tx('forces.title')), h('span', { class: 'fu-kbd' }, 'U'), closeBtn),
-    tabsEl, advisor, body, hint, foot,
+    tabsEl, naval, advisor, body, hint, foot,
   );
   el.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -394,6 +401,16 @@ export function createForces(hs: HudShared): ForcesPanel {
     if (!isOpen) return;
     dock();
     const v = view();
+    {
+      const n = v.naval;
+      const ours = v.blockades.filter((b) => b.owner === HUMAN_ID && !b.endTick).length;
+      const show = !!n && (n.lostTotal > 0 || n.gainTotal > 0 || ours > 0 || n.rerouted > 0 || n.portsBlocked > 0);
+      toggleClass(naval, 'fu-hidden', !show);
+      if (show && n) {
+        const txt = t('naval.forces.line', { lost: formatNumber(n.lostPerHour), gain: formatNumber(n.gainPerHour), n: ours, rer: n.rerouted });
+        if (naval.textContent !== txt) naval.textContent = txt;
+      }
+    }
     const list = forces();
     const counts: Record<Tab, number> = { land: 0, air: 0, sea: 0, all: 0 };
     for (const u of list) {

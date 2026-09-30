@@ -81,10 +81,17 @@ void main() {
       tick = max(tick, step(da * r, px * 1.6) * step(0.84, r) * step(r, 1.12));
     }
     a = ring * dash + fill + tick;
-  } else {
+  } else if (vStyle < 3.5) {
     // Build footprint: soft disc.
     a = (1.0 - smoothstep(0.7, 1.0, r)) * 0.18 + (1.0 - smoothstep(px, px * 2.5, abs(r - 1.0))) * 0.8;
     a *= pulse;
+  } else {
+    // Owner item 30: a blockade zone — a closed lane: diagonal hatching inside a solid ring with slow dashes.
+    float ring = 1.0 - smoothstep(px * 1.2, px * 2.8, abs(r - 1.0));
+    float dash = step(0.3, fract((ang / 6.2831) * vX.y - uTime * vX.z));
+    float stripe = step(0.62, fract((vL.x + vL.y) * 5.5 + uTime * 0.05));
+    float fill = step(r, 1.0) * (0.05 + 0.2 * stripe);
+    a = ring * mix(0.55, 1.0, dash) + fill;
   }
   a *= vCol.a;
   if (r > 1.25 || a < 0.01) discard;
@@ -100,7 +107,8 @@ export interface RingSpec {
   /** Radius in km (the real radius) and the minimum on-screen radius in px. */
   radiusKm: number;
   minPx: number;
-  style: 0 | 1 | 2 | 3;
+  /** 0 selection, 1 blast inner, 2 dashed zone, 3 soft disc, 4 blockade zone (hatched). */
+  style: 0 | 1 | 2 | 3 | 4;
   color: number;
   alpha: number;
   liftKm?: number;
