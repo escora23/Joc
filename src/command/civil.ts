@@ -13,6 +13,7 @@ import { nearestPlace, PLACES, placeKm } from '../data/places';
 import { sampleNightLights } from '../data';
 import { HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../shared/constants';
 import { tileToLatLon } from '../shared/geo';
+import { CITY_BLOCKS, collapsedBlocks, damageState, standingShare } from '../shared/damage';
 import { getLanguage, t } from '../shared/i18n';
 import type { GameView } from '../shared/api';
 import { StructureType, UnitType, type CommandKind, type StructureView } from '../shared/types';
@@ -48,6 +49,46 @@ interface Town {
   owner: number;
   capital: boolean;
   level: number;
+  /** The sim City this town is (0 = a place or village the sim does not model): its houses are its blocks (#27). */
+  cityId: number;
+}
+
+/** A house of a town in the scene (feedback 3, #27): what a shell can hit, and which city block it belongs to. */
+export interface HouseRec {
+  key: string;
+  x: number;
+  z: number;
+  /** Ground height, half footprint (m, as a radius) and height (m). */
+  y: number;
+  r: number;
+  h: number;
+  inst: number;
+  cityId: number;
+  block: number;
+  owner: number;
+  down: boolean;
+}
+
+/** A structure's footprint in the scene with its standing height, for hits (#27). */
+export interface StructRec {
+  id: number;
+  type: StructureType;
+  owner: number;
+  x: number;
+  z: number;
+  half: number;
+  y0: number;
+  y1: number;
+}
+
+/** Something burning or smoking in the scene (damaged structures, collapsed blocks, rubble): drawn by the effects. */
+export interface Fire {
+  x: number;
+  y: number;
+  z: number;
+  /** 0..1: smoke only below 0.4, flames above. */
+  heat: number;
+  size: number;
 }
 
 /**
@@ -139,6 +180,17 @@ export class Civil {
   labels: CivilLabel[] = [];
   /** Town houses (scene x, z, radius): obstacles for ground vehicles. */
   readonly houseList: { x: number; z: number; r: number }[] = [];
+  /** Feedback 3 (#27): every placed house (hit tests, collapse) and a 100 m grid over them. */
+  readonly houseRecs: HouseRec[] = [];
+  private houseGrid = new Map<string, number[]>();
+  /** Structures in the scene (hit tests). */
+  readonly structRecs: StructRec[] = [];
+  /** Houses destroyed in this session (they stay down when the layout is rebuilt). */
+  private readonly downHouses = new Set<string>();
+  /** Fires and smoke of the damage in view. */
+  fires: Fire[] = [];
+  /** Rubble piles of destroyed structures in view. */
+  private readonly rubble: THREE.InstancedMesh;
   /** Structure footprints (scene centre, half size): nothing spawns inside. */
   private readonly footprints: { x: number; z: number; half: number }[] = [];
   towns: Town[] = [];
@@ -177,6 +229,10 @@ export class Civil {
     const cc = new Float32Array(car.attributes.position.count * 3).fill(1);
     car.setAttribute('color', new THREE.BufferAttribute(cc, 3));
     this.cars = mk(car, MAX_TRAIN_CARS, 'train-cars');
+    const deb = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    const dc = new Float32Array(deb.attributes.position.count * 3).fill(1);
+    deb.setAttribute('color', new THREE.BufferAttribute(dc, 3));
+    this.rubble = mk(deb, MAX_RUBBLE, 'rubble');
     this.group.add(this.structGroup);
   }
 
@@ -199,6 +255,12 @@ export class Civil {
     this.houses.count = 0;
     this.posts.count = 0;
     this.cars.count = 0;
+    this.rubble.count = 0;
+    this.houseRecs.length = 0;
+    this.houseGrid.clear();
+    this.structRecs.length = 0;
+    this.downHouses.clear();
+    this.fires = [];
     this.labels = [];
     this.towns = [];
     this.roadAbs = [];
@@ -222,6 +284,19 @@ export class Civil {
     for (const fp of this.footprints) {
       fp.x -= dx;
       fp.z -= dz;
+    }
+    for (const r of this.houseRecs) {
+      r.x -= dx;
+      r.z -= dz;
+    }
+    this.regrid();
+    for (const r of this.structRecs) {
+      r.x -= dx;
+      r.z -= dz;
+    }
+    for (const f of this.fires) {
+      f.x -= dx;
+      f.z -= dz;
     }
     for (const l of this.labels) {
       l.x -= dx;
@@ -306,8 +381,9 @@ export class Civil {
       const ll = tileToLatLon(s.tile);
       f.absOf(ll.lat, ll.lon, p);
       if (Math.abs(p.x - ax) > R || Math.abs(p.z - az) > R) continue;
-      sig += `${s.id}:${s.level}:${s.owner}:${s.built >= 1 ? 1 : 0};`;
+      sig += `${s.id}:${s.level}:${s.owner}:${s.built >= 1 ? 1 : 0}:${damageState(s.hp)}:${s.blocks ?? 0};`;
     }
+    for (const r of view.ruins ?? []) sig += `r${r.tile};`;
     return sig;
   }
 
@@ -337,7 +413,7 @@ export class Civil {
       const tile = tileAt(pl.lat, pl.lon);
       towns.push({
         key: `p:${pl.nameEn}`, name: es ? pl.nameEs : pl.nameEn || pl.nameEs, lat: pl.lat, lon: pl.lon, ax: p.x, az: p.z,
-        r: pl.rank <= 1 ? 3200 : pl.rank === 2 ? 2000 : 1100, owner: view.owner[tile] ?? 0, capital: pl.rank === 1, level: 0,
+        r: pl.rank <= 1 ? 3200 : pl.rank === 2 ? 2000 : 1100, owner: view.owner[tile] ?? 0, capital: pl.rank === 1, level: 0, cityId: 0,
       });
     }
     for (const s of view.structures.values()) {
@@ -352,6 +428,7 @@ export class Civil {
           tw.level = Math.max(tw.level, s.level);
           tw.r = Math.max(tw.r, 700 + 260 * s.level);
           tw.owner = s.owner;
+          tw.cityId = s.id;
           if (s.tile === capTile) tw.capital = true;
           merged = true;
           break;
@@ -360,7 +437,7 @@ export class Civil {
       if (merged) continue;
       const np = nearestPlace(ll.lat, ll.lon, 120);
       const name = np ? t('command.town.near', { place: es ? np.nameEs : np.nameEn || np.nameEs }) : t('command.town.unnamed');
-      towns.push({ key: `c:${s.id}`, name, lat: ll.lat, lon: ll.lon, ax: p.x, az: p.z, r: 700 + 260 * s.level, owner: s.owner, capital: s.tile === capTile, level: s.level });
+      towns.push({ key: `c:${s.id}`, name, lat: ll.lat, lon: ll.lon, ax: p.x, az: p.z, r: 700 + 260 * s.level, owner: s.owner, capital: s.tile === capTile, level: s.level, cityId: s.id });
     }
     // Villages from the night lights: one candidate per 4 km cell (world-anchored), kept where people live.
     const V = 4000;
@@ -376,7 +453,7 @@ export class Civil {
         if (hash(cx * 11 + 5, cz * 13 + 3) > 0.12 + light * 2.2) continue;
         if (towns.some((tw) => Math.hypot(tw.ax - vx, tw.az - vz) < tw.r + 1500)) continue;
         const tile = tileAt(ll.lat, ll.lon);
-        towns.push({ key: `v:${cx},${cz}`, name: '', lat: ll.lat, lon: ll.lon, ax: vx, az: vz, r: 220 + Math.min(1, light * 3) * 380, owner: view.owner[tile] ?? 0, capital: false, level: -1 });
+        towns.push({ key: `v:${cx},${cz}`, name: '', lat: ll.lat, lon: ll.lon, ax: vx, az: vz, r: 220 + Math.min(1, light * 3) * 380, owner: view.owner[tile] ?? 0, capital: false, level: -1, cityId: 0 });
       }
     }
     this.towns = towns;
@@ -462,8 +539,14 @@ export class Civil {
     // 3. Houses of towns and villages within reach; town labels.
     const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), S = new THREE.Vector3(), C = new THREE.Color(), UP = new THREE.Vector3(0, 1, 0);
     let nh = 0;
+    this.houseRecs.length = 0;
+    this.fires = [];
     for (const tw of towns) {
       const d = Math.hypot(tw.ax - ax, tw.az - az);
+      // A sim city's damage: its collapsed blocks (the one mask the strategic model draws too) and its state.
+      const city = tw.cityId ? view.structures.get(tw.cityId) : undefined;
+      const mask = city ? collapsedBlocks(city.id, city.hp, city.blocks ?? 0) : 0;
+      const burnt = new Set<number>();
       if (tw.level >= 0 || tw.key.startsWith('p:')) {
         const sx = tw.ax - f.offX, sz = tw.az - f.offZ;
         const h = this.ground!.heightAt(sx, sz);
@@ -492,26 +575,34 @@ export class Civil {
         const w = (8 + hash(seed, i + 101) * 10 + k * 10) * big, dd = (7 + hash(seed, i + 202) * 8 + k * 8) * big;
         const hh = (5 + hash(seed, i + 303) * 4 + (tw.level > 2 ? k * k * 30 : k * 6)) * (this.kind === 'jet' ? 1.6 : 1);
         Q.setFromAxisAngle(UP, Math.round(hash(seed, i + 404) * 4) * (Math.PI / 2) + (a % 0.4));
-        S.set(w, hh, dd);
-        P.set(sx, hgt - 0.6, sz);
-        M.compose(P, Q, S);
-        this.houses.setMatrixAt(nh, M);
-        const v = 0.78 + hash(seed, i + 505) * 0.3;
-        C.setRGB(v, v * 0.96, v * 0.9);
-        this.houses.setColorAt(nh, C);
-        if (this.kind === 'tank' && Math.hypot(hx - ax, hz - az) < 3000) this.houseList.push({ x: sx, z: sz, r: Math.max(w, dd) * 0.55 });
+        const block = Math.floor((((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * CITY_BLOCKS) % CITY_BLOCKS;
+        const key = `${tw.key}:${i}`;
+        const down = this.downHouses.has(key) || ((mask >>> block) & 1) === 1;
+        const rec: HouseRec = { key, x: sx, z: sz, y: hgt, r: Math.max(w, dd) * 0.5, h: hh, inst: nh, cityId: tw.cityId, block, owner: tw.owner, down };
+        this.houseRecs.push(rec);
+        this.setHouse(rec, w, dd, Q, hash(seed, i + 505));
+        if (down && !burnt.has(block)) {
+          // One fire (or a smoke column when the city is only damaged) per collapsed block.
+          burnt.add(block);
+          this.fires.push({ x: sx, y: hgt + 2, z: sz, heat: city && damageState(city.hp) >= 2 ? 0.8 : 0.35, size: 2.2 });
+        }
+        if (this.kind === 'tank' && !down && Math.hypot(hx - ax, hz - az) < 3000) this.houseList.push({ x: sx, z: sz, r: Math.max(w, dd) * 0.55 });
         nh++;
       }
     }
     this.houses.count = nh;
+    this.regrid();
     this.houses.instanceMatrix.needsUpdate = true;
     if (this.houses.instanceColor) this.houses.instanceColor.needsUpdate = true;
     this.stats.houses = nh;
     this.stats.towns = towns.length;
     // 4. Structures with their real models and levels, and their names.
     this.structGroup.clear();
+    this.structRecs.length = 0;
+    this.rubbleN = 0;
     for (const st of structs) this.placeStructure(view, st.s, st.x, st.z);
     this.stats.structures = structs.length;
+    this.placeRubble(view, ax, az);
     // 5. Borders and gates.
     this.buildBorders(view, ax, az);
     // 6. Rail lines.
@@ -532,7 +623,7 @@ export class Civil {
     this[which] = m;
   }
 
-  private placeStructure(view: GameView, s: { id: number; type: StructureType; owner: number; level: number; tile: number }, x: number, z: number): void {
+  private placeStructure(view: GameView, s: StructureView, x: number, z: number): void {
     const f = this.frame!;
     const info = STRUCT_KM[s.type];
     if (!info) return;
@@ -547,10 +638,16 @@ export class Civil {
     }
     const owner = view.players[s.owner];
     const col = owner?.color ?? 0x888888;
-    let mat = this.structMats.get(col);
+    // Feedback 3 (#27): the damage state (shared/damage.ts) — lower, scorched, smoking or burning.
+    const state = damageState(s.hp);
+    const standing = standingShare(s.hp);
+    const mkey = col * 4 + state;
+    let mat = this.structMats.get(mkey);
     if (!mat) {
-      mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.05 });
-      this.structMats.set(col, mat);
+      mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: state ? 0.95 : 0.8, metalness: 0.05 });
+      if (state === 1) mat.color.setRGB(0.68, 0.64, 0.6);
+      else if (state >= 2) mat.color.setRGB(0.4, 0.35, 0.31);
+      this.structMats.set(mkey, mat);
     }
     const size = info.km * 1000 * (1 + 0.1 * (Math.max(1, Math.min(3, s.level)) - 1));
     if (!geo.boundingBox) geo.computeBoundingBox();
@@ -569,7 +666,12 @@ export class Civil {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(sx, base, sz);
     m.rotation.y = Math.round(hash(s.id, 17) * 4) * (Math.PI / 2);
-    m.scale.set(size, yScale, size);
+    m.scale.set(size, yScale * Math.max(0.3, standing), size);
+    this.structRecs.push({ id: s.id, type: s.type, owner: s.owner, x: sx, z: sz, half: size * 0.5, y0: hmin - 1, y1: base + info.tallM * Math.max(0.3, standing) });
+    if (state >= 1) {
+      this.fires.push({ x: sx, y: base + info.tallM * standing * 0.6, z: sz, heat: state >= 2 ? 0.9 : 0.3, size: Math.max(1.5, Math.min(4, size / 300)) });
+      this.addDebris(sx, sz, size * 0.55, state >= 2 ? 26 : 12, s.id, 0.5);
+    }
     m.castShadow = true;
     m.receiveShadow = true;
     m.name = `struct-${s.id}`;
@@ -589,8 +691,191 @@ export class Civil {
     this.labels.push({
       x: sx, y: base + info.tallM + 25, z: sz,
       text: np ? t('command.label.baseAt', { type: typeName, place: es ? np.nameEs : np.nameEn || np.nameEs }) : typeName,
-      sub: t('command.label.level', { n: s.level }), kind: 'base', color: css(col), owner: s.owner,
+      sub: state ? `${t('command.label.level', { n: s.level })} · ${t(`card.dmg.${DAMAGE_WORD[state]}`)}` : t('command.label.level', { n: s.level }), kind: 'base', color: css(col), owner: s.owner,
     });
+  }
+
+  /** A house instance: standing, or a low scorched heap where it collapsed. */
+  private setHouse(r: HouseRec, w: number, d: number, q: THREE.Quaternion, shade: number): void {
+    const M = HM, P = HP, S = HS, C = HC;
+    if (r.down) {
+      S.set(w * 1.15, Math.min(2.2, r.h * 0.3), d * 1.15);
+      C.setRGB(0.17 + shade * 0.05, 0.15 + shade * 0.04, 0.13 + shade * 0.03);
+    } else {
+      S.set(w, r.h, d);
+      const v = 0.78 + shade * 0.3;
+      C.setRGB(v, v * 0.96, v * 0.9);
+    }
+    P.set(r.x, r.y - 0.6, r.z);
+    M.compose(P, q, S);
+    this.houses.setMatrixAt(r.inst, M);
+    this.houses.setColorAt(r.inst, C);
+    HQ.copy(q);
+    this.houseRot.set(r.inst, [q.x, q.y, q.z, q.w, w, d, shade]);
+  }
+
+  private readonly houseRot = new Map<number, number[]>();
+
+  /** Knock a house down (a shell or bomb of command mode): it stays down for the session. */
+  collapseHouse(r: HouseRec): void {
+    if (r.down) return;
+    r.down = true;
+    this.downHouses.add(r.key);
+    const k = this.houseRot.get(r.inst);
+    if (k) {
+      HQ.set(k[0], k[1], k[2], k[3]);
+      this.setHouse(r, k[4], k[5], HQ, k[6]);
+      this.houses.instanceMatrix.needsUpdate = true;
+      if (this.houses.instanceColor) this.houses.instanceColor.needsUpdate = true;
+    }
+    const i = this.houseList.findIndex((h) => Math.abs(h.x - r.x) < 0.01 && Math.abs(h.z - r.z) < 0.01);
+    if (i >= 0) this.houseList.splice(i, 1);
+    this.fires.push({ x: r.x, y: r.y + 1.5, z: r.z, heat: 0.7, size: 1.4 });
+  }
+
+  /** Share of a city block's houses in the scene that are down (0..1), and how many houses it has here. */
+  blockDown(cityId: number, block: number): { share: number; n: number } {
+    let n = 0, d = 0;
+    for (const r of this.houseRecs) {
+      if (r.cityId !== cityId || r.block !== block) continue;
+      n++;
+      if (r.down) d++;
+    }
+    return { share: n ? d / n : 0, n };
+  }
+
+  private regrid(): void {
+    this.houseGrid.clear();
+    for (let i = 0; i < this.houseRecs.length; i++) {
+      const r = this.houseRecs[i];
+      const k = `${Math.floor(r.x / 100)},${Math.floor(r.z / 100)}`;
+      let l = this.houseGrid.get(k);
+      if (!l) this.houseGrid.set(k, (l = []));
+      l.push(i);
+    }
+  }
+
+  /**
+   * The first structure or standing house the segment a→b enters (scene coords), with the entry point. Houses are
+   * tested as boxes of their footprint radius and height; structures as their footprint up to their standing height.
+   */
+  hitTest(a: THREE.Vector3, b: THREE.Vector3, out: THREE.Vector3): { house: HouseRec | null; struct: StructRec | null } | null {
+    let bestT = Infinity;
+    let house: HouseRec | null = null, struct: StructRec | null = null;
+    const test = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): number => {
+      let t0 = 0, t1 = 1;
+      const d = [b.x - a.x, b.y - a.y, b.z - a.z], o = [a.x, a.y, a.z], lo = [x0, y0, z0], hi = [x1, y1, z1];
+      for (let k = 0; k < 3; k++) {
+        if (Math.abs(d[k]) < 1e-9) {
+          if (o[k] < lo[k] || o[k] > hi[k]) return Infinity;
+          continue;
+        }
+        let ta = (lo[k] - o[k]) / d[k], tb = (hi[k] - o[k]) / d[k];
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta);
+        t1 = Math.min(t1, tb);
+        if (t0 > t1) return Infinity;
+      }
+      return t0;
+    };
+    for (const r of this.structRecs) {
+      const tt = test(r.x - r.half, r.x + r.half, r.y0, r.y1, r.z - r.half, r.z + r.half);
+      if (tt < bestT) {
+        bestT = tt;
+        struct = r;
+        house = null;
+      }
+    }
+    // Houses: the grid cells along the segment.
+    const L = Math.hypot(b.x - a.x, b.z - a.z);
+    const n = Math.max(1, Math.ceil(L / 60));
+    const seen = new Set<number>();
+    for (let k = 0; k <= n; k++) {
+      const f = k / n;
+      const cx = Math.floor((a.x + (b.x - a.x) * f) / 100), cz = Math.floor((a.z + (b.z - a.z) * f) / 100);
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const l = this.houseGrid.get(`${cx + dx},${cz + dz}`);
+          if (!l) continue;
+          for (const i of l) {
+            if (seen.has(i)) continue;
+            seen.add(i);
+            const r = this.houseRecs[i];
+            if (r.down) continue;
+            const tt = test(r.x - r.r, r.x + r.r, r.y - 1, r.y + r.h - 0.6, r.z - r.r, r.z + r.r);
+            if (tt < bestT) {
+              bestT = tt;
+              house = r;
+              struct = null;
+            }
+          }
+        }
+      }
+    }
+    if (!Number.isFinite(bestT)) return null;
+    out.copy(a).lerp(b, bestT);
+    return { house, struct };
+  }
+
+  /** Houses within `radius` of a point (a bomb's blast). */
+  housesNear(x: number, z: number, radius: number): HouseRec[] {
+    const outL: HouseRec[] = [];
+    const c = Math.ceil(radius / 100);
+    const cx = Math.floor(x / 100), cz = Math.floor(z / 100);
+    for (let dz = -c; dz <= c; dz++) {
+      for (let dx = -c; dx <= c; dx++) {
+        for (const i of this.houseGrid.get(`${cx + dx},${cz + dz}`) ?? []) {
+          const r = this.houseRecs[i];
+          if (!r.down && Math.hypot(r.x - x, r.z - z) < radius + r.r) outL.push(r);
+        }
+      }
+    }
+    return outL;
+  }
+
+  private rubbleN = 0;
+  /** Scattered scorched debris around a point (damaged structures, rubble piles). */
+  private addDebris(x: number, z: number, radius: number, count: number, seed: number, scale: number): void {
+    const M = HM, P = HP, S = HS, C = HC, Q = HQ;
+    for (let i = 0; i < count && this.rubbleN < MAX_RUBBLE; i++) {
+      const a = hash(seed, i * 3) * Math.PI * 2, rr = Math.sqrt(hash(seed + 5, i * 3 + 1)) * radius;
+      const px = x + Math.cos(a) * rr, pz = z + Math.sin(a) * rr;
+      const h = this.ground!.heightAt(px, pz);
+      const k = (0.6 + hash(seed, i * 3 + 2) * 1.4) * scale;
+      S.set(6 * k + hash(seed, i + 9) * 8 * k, 1.2 * k + hash(seed, i + 11) * 3 * k, 5 * k + hash(seed, i + 13) * 7 * k);
+      Q.setFromAxisAngle(UPV, hash(seed, i + 17) * Math.PI);
+      P.set(px, h - 0.3, pz);
+      M.compose(P, Q, S);
+      this.rubble.setMatrixAt(this.rubbleN, M);
+      const g = 0.16 + hash(seed, i + 19) * 0.14;
+      C.setRGB(g * 1.05, g, g * 0.92);
+      this.rubble.setColorAt(this.rubbleN, C);
+      this.rubbleN++;
+    }
+  }
+
+  /** Rubble of destroyed structures in view (the sim's ruins), smoking for their first 2 game days. */
+  private placeRubble(view: GameView, ax: number, az: number): void {
+    const f = this.frame!;
+    const p = { x: 0, z: 0 };
+    for (const r of view.ruins ?? []) {
+      const ll = tileToLatLon(r.tile);
+      f.absOf(ll.lat, ll.lon, p);
+      if (Math.hypot(p.x - ax, p.z - az) > this.radii.struct) continue;
+      const info = STRUCT_KM[r.type];
+      const size = (info?.km ?? 1.2) * 1000;
+      const sx = p.x - f.offX, sz = p.z - f.offZ;
+      this.addDebris(sx, sz, size * 0.45, 60, r.tile, 1.1);
+      const y = this.ground!.heightAt(sx, sz);
+      if (view.tick - r.tick < 480) this.fires.push({ x: sx, y: y + 2, z: sz, heat: view.tick - r.tick < 120 ? 0.8 : 0.3, size: 3 });
+      this.labels.push({
+        x: sx, y: y + 30, z: sz, text: t('command.label.ruin', { type: t(`structure.${STRUCT_ID[r.type]}`) }),
+        sub: r.by ? t('command.label.ruinBy', { nation: view.players[r.by] ? (view.players[r.by]!.name ?? '') : '' }) : '', kind: 'base', color: '#5a5048', owner: r.owner,
+      });
+    }
+    this.rubble.count = this.rubbleN;
+    this.rubble.instanceMatrix.needsUpdate = true;
+    if (this.rubble.instanceColor) this.rubble.instanceColor.needsUpdate = true;
   }
 
   private buildBorders(view: GameView, ax: number, az: number): void {
@@ -784,6 +1069,11 @@ const STRUCT_ID: Record<number, string> = {
   [StructureType.SamSite]: 'samSite', [StructureType.MissileSilo]: 'missileSilo', [StructureType.Airbase]: 'airbase',
   [StructureType.ArmyBase]: 'armyBase', [StructureType.NavalYard]: 'navalYard', [StructureType.Radar]: 'radar',
 };
+
+const DAMAGE_WORD = ['intact', 'damaged', 'heavy', 'destroyed'] as const;
+const MAX_RUBBLE = 1400;
+const HM = new THREE.Matrix4(), HP = new THREE.Vector3(), HS = new THREE.Vector3(), HC = new THREE.Color(), HQ = new THREE.Quaternion();
+const UPV = new THREE.Vector3(0, 1, 0);
 
 const PAD_MAT = new THREE.MeshStandardMaterial({ color: 0x77736a, roughness: 0.95 });
 const GATE_MAT = new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.8 });

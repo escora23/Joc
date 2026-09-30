@@ -79,6 +79,11 @@ export class TankController implements Controller {
     this.solveGun(100);
   }
 
+  /** Load AP (0) or HE (1) now (staging; players press 1 / 2). */
+  selectAmmo(i: 0 | 1): void {
+    this.loaded = i;
+  }
+
   fire(): void {
     this.reloadT = 0;
     this.shoot();

@@ -21,6 +21,7 @@ import {
   offensiveName, outlookOf, reachLine, speedLine, speedRealLine, stateLine, stationOrder, structId, structureName, structurePurpose, unitId, unitName,
 } from './forcesInfo';
 import { selectedUnitIds } from './orderCtl';
+import { missionTarget } from '../../command/goto';
 import { kmhText, offensiveKmh } from './frontsInfo';
 import { DAMAGE_IDS, LEVEL_LOSS_HP, REPAIR_PER_HOUR, damageState, functionFactor, repairCost, repairHours } from '../../shared/damage';
 import { offensiveOutlook, tileKm } from '../../shared/orders';
@@ -163,6 +164,24 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       tip(tc, () => ({ title: t('hud.takeControl'), text: t('card.takeControl.tip'), hotkey: 'T' }));
       live.tc = tc;
       children.push(tc);
+      // Feedback 3 (#29e): straight into the unit's mission — command mode takes it to the mission's target.
+      const tm = h('button', { class: 'fu-btn fu-btn--sm fu-btn--ghost fu-tc-mission' }, icon('target'), tx('hud.takeMission'));
+      tm.addEventListener('click', () => {
+        const cur = view().units.get(u.id);
+        const m = cur ? missionTarget(view(), cur.x, cur.y, cur) : null;
+        if (!cur || !m) {
+          hs.sound('error');
+          return;
+        }
+        hs.sound('whoosh');
+        hs.flags.commandEntered = true;
+        hs.setMode({ kind: 'none' });
+        void ctx.app.enterCommandMode(cur.id, { x: m.tx, y: m.ty, label: missionLabel(cur) });
+      });
+      tip(tm, () => ({ title: t('hud.takeMission'), text: t('hud.takeMission.tip') }));
+      toggleClass(tm, 'fu-hidden', !missionTarget(view(), u.x, u.y, u));
+      live.tm = tm;
+      children.push(tm);
     }
     if (own && u.type !== UnitType.TransportShip) {
       const acts = h('div', { class: 'fu-sel-actions fu-w4-orders' });
@@ -240,6 +259,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     if (live.endurance) setText(live.endurance, enduranceLine(u));
     if (live.place) setText(live.place, placeOf(hs, u));
     if (live.tc) toggleClass(live.tc, 'is-disabled', u.state === UnitState.Controlled);
+    if (live.tm) toggleClass(live.tm, 'fu-hidden', !missionTarget(view(), u.x, u.y, u) || u.state === UnitState.Controlled);
     if (live.join) toggleClass(live.join, 'is-disabled', !nearestOwnOffensive(u));
     if (live.back) toggleClass(live.back, 'is-disabled', (u.mode === UnitMode.Docked || u.mode === UnitMode.Rearming) && !stationOrder(u));
     const m = hs.mode;
@@ -766,6 +786,11 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     },
     refresh,
   };
+
+  /** «Misión de la 2.ª División acorazada» for the command mode's marker. */
+  function missionLabel(u: UnitView): string {
+    return t('hud.takeMission.label', { unit: unitName(u) });
+  }
 
   return { el, refresh, takeControl, invalidate: () => (builtFor = '') };
 }

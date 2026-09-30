@@ -29,6 +29,7 @@ import {
 import type { HudShared } from './shared';
 import { openPeaceDialog } from './wardialogs';
 import { openOffensiveDialog } from './offensiveDialog';
+import { takeControlAtFront } from './takeAction';
 import { hexToCss } from '../../shared/color';
 import {
   AIR_DENIAL_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, BOMBER_GARRISON_SHARE, CAP_RADIUS_TILES, DEFENSE_REDEPLOY_TICKS,
@@ -598,7 +599,11 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         const mine = s ? ownOffensive(s) : null;
         return { title: t('fr.retreat'), text: t('fr.retreat.tip'), now: mine ? [[t('fr.retreat.troops'), troopsText(mine.troops)], [t('fr.retreat.loss'), troopsText(mine.troops * 0.1)]] : undefined, whyNot: mine ? null : t('fr.retreat.none') };
       });
-      actions.append(seg, send, counter, retreat);
+      // Feedback 3 (#26): take control at this front — the unit engaged here (or the nearest division) goes to the action.
+      const take = h('button', { class: 'fu-btn fu-btn--sm fu-btn--amber fu-war-take' }, icon('takeControl'), tx('hud.takeHere')) as HTMLButtonElement;
+      take.addEventListener('click', () => takeControlAtFront(hs, key));
+      tip(take, () => ({ title: t('hud.takeHere'), text: t('hud.takeHere.tip') }));
+      actions.append(seg, send, counter, retreat, take);
       row.ownLine = h('div', { class: 'fu-war-line fu-war-own' });
       row.ownBox = h('div', { class: 'fu-war-ownbox fu-hidden' }, row.ownLine, row.intSeg!);
       row.counter = counter;

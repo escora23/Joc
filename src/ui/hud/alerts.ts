@@ -16,6 +16,7 @@
 // Debug / verification hook: window.__fuAlerts (list, log, pings, markers, banner).
 
 import { h, leave, setText, toggleClass } from '../dom';
+import { humanAtWar, takeControlAtPlace } from './takeAction';
 import { flag } from '../flag';
 import { icon } from '../icons';
 import { openModal, type ModalHandle } from '../modal';
@@ -266,6 +267,17 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
         if (key) raisePriority(key, prio);
       });
     } else prio.classList.add('fu-hidden');
+    // Feedback 3 (#26/#29e): «Al mando» on an alert about the war at a place: take control there.
+    const take = h('button', { class: 'fu-alert-prio fu-alert-take', type: 'button' }, icon('takeControl'), h('span', null, t('hud.takeHere.short')));
+    const warHere = i.lat !== undefined && i.lon !== undefined && humanAtWar(view()) && (!!i.frontKey || !!i.frontEnemy
+      || (i.actors ?? []).some((o) => o !== HUMAN_ID && view().pairState(HUMAN_ID, o) === 'war'));
+    if (warHere) {
+      tip(take, () => ({ title: t('hud.takeHere'), text: t('hud.takeHere.tip') }));
+      take.addEventListener('click', (e) => {
+        e.stopPropagation();
+        takeControlAtPlace(hs, i.lat!, i.lon!, i.title, alertFront(i));
+      });
+    } else take.classList.add('fu-hidden');
     const flags = h('div', { class: 'fu-alert-flags' });
     for (const id of (i.actors ?? []).slice(0, 2)) {
       const p = view().players[id];
@@ -278,7 +290,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
         i.body ? h('div', { class: 'fu-alert-body' }, i.body) : null,
         h('div', { class: 'fu-alert-meta fu-mono' }, h('span', { class: 'fu-alert-age' }, ageText(a)), h('span', { class: 'fu-alert-count' }),
           i.lat !== undefined ? h('span', { class: 'fu-alert-go' }, icon('eye'), tx(i.proposalId ? 'alerts.open' : 'alerts.fly')) : i.proposalId ? h('span', { class: 'fu-alert-go' }, icon('inbox'), tx('alerts.open')) : null,
-          prio),
+          prio, take),
       ),
       close,
       h('i', { class: 'fu-alert-timer' }),

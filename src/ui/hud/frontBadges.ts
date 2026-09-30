@@ -13,6 +13,7 @@
 // panel. Quiet fronts get a badge only when the human is on one side of them.
 
 import { h, setText, toggleClass } from '../dom';
+import { takeControlAtFront } from './takeAction';
 import { tip } from '../tooltip';
 import { hexToCss } from '../../shared/color';
 import { HUMAN_ID, MAP_H } from '../../shared/constants';
@@ -128,6 +129,12 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
       hs.sound('click');
       ctx.bus.emit('frontSelected', { key, fly: true });
     });
+    // Feedback 3 (#26): double click takes control at this front (the unit engaged there goes to the action).
+    e.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      const f = ctx.sim.view.frontByKey.get(key);
+      if (f && (f.a === HUMAN_ID || f.b === HUMAN_ID)) takeControlAtFront(hs, key);
+    });
     tip(e, () => badgeTip(key));
     el.append(e);
     return {
@@ -159,7 +166,8 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     }
     const air = skyOf(f, s.att);
     if (air.any) now.push([t('fr.tip.sky'), t('fr.tip.skyV', { a: air.att, d: air.def, ca: air.casAtt, cd: air.casDef, who: air.owner ? hs.name(air.owner) : t('fr.tip.skyNobody') })]);
-    return { title: name, text: t(s.quiet ? 'fr.tip.quiet' : 'fr.tip.text'), now, lines: [t('fr.tip.click')], hotkey: 'G' };
+    const mine = f.a === HUMAN_ID || f.b === HUMAN_ID;
+    return { title: name, text: t(s.quiet ? 'fr.tip.quiet' : 'fr.tip.text'), now, lines: mine ? [t('fr.tip.click'), t('hud.takeHere.badge')] : [t('fr.tip.click')], hotkey: 'G' };
   }
 
   /** Fighters on patrol and drones in support over the front, per side (attacker first), and who owns the sky. */

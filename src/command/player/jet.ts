@@ -195,12 +195,28 @@ export class JetController implements Controller {
         this.flareCd = 0.7;
         c.world.releaseFlares(e);
       }
+      if (inp.hit('KeyB')) this.bomb();
     }
     // Missile warning
     let warn = false;
     for (const p of c.world.projs) if (p.alive && p.kind === 'missile' && p.target === e) warn = true;
     this.hud.missileWarning = warn;
     this.fillHud();
+  }
+
+  /** Feedback 3 (#27): free-fall bombs (B) for ground targets — structures and city blocks take the hit in the sim. */
+  bombs = 4;
+  private bombCd = 0;
+  bomb(): void {
+    const e = this.ent;
+    const c = this.c;
+    if (this.bombs <= 0 || this.c.world.time < this.bombCd) return;
+    this.bombCd = c.world.time + 0.8;
+    this.bombs--;
+    T2.set(0, -1.4, 0.5).applyQuaternion(e.quat).add(e.pos);
+    const p = c.world.dropBomb(e, 0, T2, e.vel, 400, 38);
+    if (p) p.player = true;
+    c.fx.hooks.sound('missileLaunch', 0.4);
   }
 
   private gun(): void {
@@ -338,6 +354,7 @@ export class JetController implements Controller {
       { key: 'LMB', label: 'command.ammo.gun', count: this.gunAmmo, max: 640, active: true, ready: 1 },
       { key: 'RMB', label: 'command.ammo.aam', count: this.missiles, max: 6, active: this.lockP >= 1, ready: this.msCd > 0 ? 1 - this.msCd / 0.6 : 1 },
       { key: 'F', label: 'command.ammo.flares', count: e.flares, max: 30, active: false, ready: this.flareCd > 0 ? 1 - this.flareCd / 0.7 : 1 },
+      { key: 'B', label: 'command.ammo.bombs', count: this.bombs, max: 4, active: false, ready: 1 },
     );
     h.rangeM = this.lockT ? this.lockT.pos.distanceTo(e.pos) : 0;
   }

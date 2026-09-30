@@ -187,6 +187,11 @@ export interface WorldHooks {
   /** Player took damage (damage vignette, direction indicator). */
   onPlayerDamaged(amount: number, from: THREE.Vector3 | null): void;
   onPlayerKilled(): void;
+  /**
+   * Feedback 3 (#27): a shell, bomb or missile crossed the segment a→b: the scenery (structures, city houses) it hit
+   * first, as the impact point, or null. The world then explodes it there; the scenery owner applies the damage.
+   */
+  sceneryHit?(p: Proj, a: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 | null;
 }
 
 /** Active soldier instances per team and model; the rest of a big battle stands in the crowd. */
@@ -1022,6 +1027,18 @@ export class World {
       if (hit) {
         this.onHit(p, hit);
         continue;
+      }
+      // Buildings and structures stop shells, bombs and missiles (and take the damage: the hook's owner decides).
+      if ((p.kind === 'shell' || p.kind === 'bomb' || p.kind === 'missile') && this.hooks.sceneryHit) {
+        const at = this.hooks.sceneryHit(p, p.prev, p.pos);
+        if (at) {
+          p.pos.copy(at);
+          const big = p.kind === 'bomb' ? 3.2 : p.kind === 'missile' ? 1.4 : p.splash > 10 ? 1.8 : p.ap ? 1.0 : 1.3;
+          fx.explosion(p.pos, big, 'vehicle');
+          this.splashDamage(p, p.pos, null);
+          this.retire(p);
+          continue;
+        }
       }
       // Ground / water
       const gh = this.ground.heightAt(p.pos.x, p.pos.z);

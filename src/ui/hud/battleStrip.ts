@@ -9,10 +9,12 @@
 import * as THREE from 'three';
 import { h, setText, toggleClass } from '../dom';
 import { tip } from '../tooltip';
+import { icon } from '../icons';
+import { takeControlAtPlace } from './takeAction';
 import { tx } from '../tx';
 import { hexToCss } from '../../shared/color';
 import { formatNumber, t } from '../../shared/i18n';
-import { HUMAN_ID } from '../../shared/constants';
+import { HUMAN_ID, UNIT_DEFS } from '../../shared/constants';
 import { battleCentre, greatCircleKm, tileXYToLatLon } from '../../shared/geo';
 import { frontName } from './forcesInfo';
 import { unitLabel } from './news';
@@ -36,8 +38,38 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
   const adv = h('span');
   const day = h('span');
   const sub = h('div', { class: 'fu-bstrip-sub' });
+  // Feedback 3 (#26/#29e): take control here — your division in this battle (its soldiers are handed over), else the
+  // nearest one marches to it.
+  const take = h('button', { class: 'fu-btn fu-btn--sm fu-btn--amber fu-bstrip-take' }, icon('takeControl'), tx('hud.takeHere'), h('span', { class: 'fu-kbd' }, 'T')) as HTMLButtonElement;
+  take.style.pointerEvents = 'auto';
+  take.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+  take.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const bv = ctx.battle.active ? ctx.battle.view?.() ?? null : null;
+    let best = 0, bd = Infinity;
+    for (const d of bv?.divisions ?? []) {
+      const du = ctx.sim.view.units.get(d.unitId);
+      if (!du || du.owner !== HUMAN_ID || !UNIT_DEFS[du.type].command || d.km >= bd) continue;
+      bd = d.km;
+      best = du.id;
+    }
+    if (best) {
+      hs.sound('whoosh');
+      hs.flags.commandEntered = true;
+      hs.setMode({ kind: 'none' });
+      void ctx.app.enterCommandMode(best);
+      return;
+    }
+    const c = centreOfBattle() ?? ctx.battle.pointer?.() ?? null;
+    if (!c) {
+      hs.sound('error');
+      return;
+    }
+    takeControlAtPlace(hs, c.lat, c.lon, title.textContent ?? t('fr.front'), bv?.frontKey ?? 0);
+  });
+  tip(take, () => ({ title: t('hud.takeHere'), text: t('hud.takeHere.battle'), hotkey: 'T' }));
   const el = h('div', { class: 'fu-bstrip fu-hidden' },
-    h('div', { class: 'fu-bstrip-main' }, title, h('span', null, '·'), chipA, sideA, arrow, chipB, sideB, h('span', null, '·'), adv, h('span', null, '·'), day),
+    h('div', { class: 'fu-bstrip-main' }, title, h('span', null, '·'), chipA, sideA, arrow, chipB, sideB, h('span', null, '·'), adv, h('span', null, '·'), day, take),
     sub,
   );
   const bannerEls = [h('div', { class: 'fu-bbanner' }), h('div', { class: 'fu-bbanner' })];

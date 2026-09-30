@@ -123,6 +123,34 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
 .fu-cmdx-radio.danger .cd .bar i, .fu-cmdx-radio.critical .cd .bar i { background: #ff6a4a; }
 .fu-cmdx-radio .cd .n { min-width: 4.5rem; text-align: right; font-size: 0.9rem; }
 .fu-cmdx-radio .x { font: 700 0.72rem/1.2 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #aee9ff; margin-top: 0.4rem; }
+/* Feedback 3 (#26): the nearest action — what, how far, which way — with «G Ir al combate». */
+.fu-cmdx-combat { position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 0.6rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.75rem; background: rgba(20,6,4,0.8); border: 1px solid rgba(255,106,74,0.55); border-radius: 3px;
+  font: 700 0.78rem/1.2 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #ffd0c4; max-width: 44rem; pointer-events: auto; }
+.fu-cmdx-combat.show { display: flex; }
+.fu-cmdx-combat .ic { width: 0.9rem; height: 0.9rem; border: 2px solid #ff6a4a; border-radius: 50%; flex: none; box-shadow: 0 0 8px rgba(255,106,74,0.7); }
+.fu-cmdx-combat.contact .ic { background: #ff6a4a; animation: fu-cmdx-blink 0.9s ease-in-out infinite; }
+.fu-cmdx-combat .w { display: flex; flex-direction: column; gap: 0.12rem; }
+.fu-cmdx-combat .w small { font: 600 0.72rem/1.2 var(--fu-font, sans-serif); letter-spacing: 0; text-transform: none; color: #d9b8ae; }
+.fu-cmdx-combat .d { font: 700 0.95rem/1 var(--fu-font-mono, monospace); color: #fff; letter-spacing: 0.02em; white-space: nowrap; }
+.fu-cmdx-combat button { pointer-events: auto; cursor: pointer; padding: 0.4rem 0.65rem; font: 700 0.72rem/1 var(--fu-font-cond, sans-serif); letter-spacing: 0.14em;
+  text-transform: uppercase; color: #fff; background: rgba(255,90,60,0.28); border: 1px solid #ff6a4a; border-radius: 2px; white-space: nowrap; }
+.fu-cmdx-combat button:hover { background: rgba(255,90,60,0.45); }
+.fu-cmdx-combat button kbd { font: 700 0.64rem/1 var(--fu-font-mono, monospace); margin-right: 0.4rem; padding: 0.08rem 0.25rem; border: 1px solid rgba(255,255,255,0.5); border-radius: 2px; }
+.fu-cmdx-combat button[hidden] { display: none; }
+.fu-cmdx-transit { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(36rem, 88vw); padding: 1rem 1.2rem; display: none; }
+.fu-cmdx-transit.show { display: block; animation: fu-cmdx-in 0.3s ease both; }
+.fu-cmdx-transit .k { font: 700 0.68rem/1 var(--fu-font-cond, sans-serif); letter-spacing: 0.3em; color: #ffb53d; text-transform: uppercase; }
+.fu-cmdx-transit .h { font: 700 1.2rem/1.25 var(--fu-font-display, sans-serif); letter-spacing: 0.05em; text-transform: uppercase; margin-top: 0.35rem; }
+.fu-cmdx-transit .b { font: 500 0.86rem/1.45 var(--fu-font, sans-serif); color: var(--fu-text-2, #b3c4d6); margin-top: 0.45rem; }
+.fu-cmdx-transit .bar { height: 6px; margin-top: 0.8rem; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+.fu-cmdx-transit .bar i { display: block; height: 100%; background: linear-gradient(90deg, #ffb53d, #ff6a4a); }
+.fu-cmdx-transit .n { display: flex; justify-content: space-between; margin-top: 0.45rem; font: 700 0.8rem/1 var(--fu-font-mono, monospace); color: #ffd58a; }
+.fu-cmdx-transit .f { font: 600 0.72rem/1.3 var(--fu-font, sans-serif); color: var(--fu-text-dim, #7d91a8); margin-top: 0.6rem; }
+.fu-cmdx-nv { position: absolute; top: 5.2rem; right: 1rem; padding: 0.3rem 0.55rem; display: none; font: 700 0.7rem/1 var(--fu-font-mono, monospace);
+  letter-spacing: 0.14em; color: #aaffb0; background: rgba(4,20,6,0.8); border: 1px solid rgba(120,255,140,0.5); border-radius: 2px; }
+.fu-cmdx-nv.show { display: block; }
+.fu-cmdx-nv.thermal { color: #fff; background: rgba(30,30,30,0.85); border-color: rgba(255,255,255,0.5); }
 @keyframes fu-cmdx-in { from { opacity: 0; transform: translateY(-0.4rem); } to { opacity: 1; transform: none; } }
 @keyframes fu-cmdx-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 `;
@@ -157,6 +185,20 @@ export interface RadioState {
   exit?: string;
 }
 
+/** Feedback 3 (#26): the nearest action for the HUD chip. */
+export interface CombatChip {
+  /** «Frente con Francia», «Combate: ofensiva sobre Lyon», «2.ª División acorazada (Francia)». */
+  title: string;
+  /** Second line (the mission's target, the way there). */
+  sub: string;
+  /** «14 km · NE». */
+  dist: string;
+  /** In contact now (enemy within reach): no travel button. */
+  contact: boolean;
+  /** Button label («Ir al combate», «Ir al frente más cercano»), empty = no button. */
+  go: string;
+}
+
 export interface DebriefRow {
   label: string;
   value: string;
@@ -185,6 +227,14 @@ export class CommandOverlay {
   private readonly debrief: HTMLDivElement;
   private readonly loading: HTMLDivElement;
   private readonly radio: HTMLDivElement;
+  private readonly combat: HTMLDivElement;
+  private readonly transit: HTMLDivElement;
+  private readonly nv: HTMLDivElement;
+  private lastCombat = '';
+  /** «Ir al combate» clicked on the chip. */
+  onGo: (() => void) | null = null;
+  /** The world marker of the nearest action (scene position) and its text; null = none. */
+  combatMarker: { pos: THREE.Vector3; text: string; contact: boolean } | null = null;
   private lastRadio = '';
   private noticeT = 0;
   private titleT = 0;
@@ -222,7 +272,16 @@ export class CommandOverlay {
     this.debrief = el('div', 'fu-cmdx-debrief');
     this.loading = el('div', 'fu-cmdx-loading', '');
     this.radio = el('div', 'fu-cmdx-radio');
-    this.root.append(this.canvas, this.info, this.alerts, this.radio, this.notice, this.form, this.help, this.title, this.loading, this.dialog, this.debrief);
+    this.combat = el('div', 'fu-cmdx-combat fu-cmd-interactive');
+    this.combat.addEventListener('click', (ev) => {
+      if ((ev.target as HTMLElement).closest('button')) {
+        ev.stopPropagation();
+        this.onGo?.();
+      }
+    });
+    this.transit = el('div', 'fu-cmd-panel fu-cmdx-transit');
+    this.nv = el('div', 'fu-cmdx-nv');
+    this.root.append(this.canvas, this.info, this.combat, this.nv, this.alerts, this.radio, this.transit, this.notice, this.form, this.help, this.title, this.loading, this.dialog, this.debrief);
     parent.appendChild(this.root);
   }
 
@@ -241,7 +300,51 @@ export class CommandOverlay {
     this.help.style.opacity = '1';
   }
 
+  /** The nearest-action chip (null hides it). */
+  setCombat(c: CombatChip | null): void {
+    const key = c ? JSON.stringify(c) : '';
+    if (key === this.lastCombat) return;
+    this.lastCombat = key;
+    if (!c) {
+      this.combat.classList.remove('show');
+      return;
+    }
+    this.combat.className = `fu-cmdx-combat fu-cmd-interactive show${c.contact ? ' contact' : ''}`;
+    this.combat.innerHTML = `<span class="ic"></span><div class="w"><span>${esc(c.title)}</span>${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</div>
+      <span class="d">${esc(c.dist)}</span><button ${c.go ? '' : 'hidden'}><kbd>G</kbd>${esc(c.go)}</button>`;
+  }
+
+  get combatText(): string {
+    return this.combat.classList.contains('show') ? (this.combat.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
+  }
+
+  /** The march card shown while the unit travels to the action behind the fade (null hides it). */
+  setTransit(s: { title: string; body: string; pct: number; left: string; time: string; foot: string } | null): void {
+    if (!s) {
+      this.transit.classList.remove('show');
+      return;
+    }
+    this.transit.classList.add('show');
+    this.transit.innerHTML = `<div class="k">${esc(t('command.transit.kicker'))}</div><div class="h">${esc(s.title)}</div><div class="b">${esc(s.body)}</div>
+      <div class="bar"><i style="width:${Math.max(0, Math.min(100, s.pct)).toFixed(1)}%"></i></div>
+      <div class="n"><span>${esc(s.left)}</span><span>${esc(s.time)}</span></div><div class="f">${esc(s.foot)}</div>`;
+  }
+
+  get transitText(): string {
+    return this.transit.classList.contains('show') ? (this.transit.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
+  }
+
+  /** Night-vision / thermal mode badge ('' hides it). */
+  setVision(mode: '' | 'nv' | 'thermal', text: string): void {
+    this.nv.className = `fu-cmdx-nv${mode ? ' show' : ''}${mode === 'thermal' ? ' thermal' : ''}`;
+    this.nv.textContent = text;
+  }
+
   hide(): void {
+    this.setCombat(null);
+    this.setTransit(null);
+    this.setVision('', '');
+    this.combatMarker = null;
     this.root.classList.add('fu-cmd-hidden');
     document.body.classList.remove('fu-cmd-on');
     this.closeDialog(-1);
@@ -514,6 +617,56 @@ export class CommandOverlay {
       g.fillStyle = 'rgba(255,213,138,0.95)';
       g.textAlign = 'center';
       g.fillText(waypointText, x, y - 18);
+    }
+    // The nearest action (#26): always on screen — a red ring on it, or an arrow on the edge pointing to it.
+    const cm = this.combatMarker;
+    if (cm) {
+      P.copy(cm.pos).project(camera);
+      const on = P.z < 1 && P.z > -1;
+      let x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
+      const col = 'rgba(255,106,74,0.95)';
+      g.textAlign = 'center';
+      g.font = '700 12px "Barlow Condensed", sans-serif';
+      if (!on || x < 30 || x > W - 30 || y < 70 || y > H - 50) {
+        const dx = on ? x - W / 2 : -(x - W / 2), dy = on ? y - H / 2 : -(y - H / 2);
+        const a = Math.atan2(dy, dx);
+        x = W / 2 + Math.cos(a) * (W / 2 - 56);
+        y = H / 2 + Math.sin(a) * (H / 2 - 56);
+        g.save();
+        g.translate(x, y);
+        g.rotate(a);
+        g.fillStyle = col;
+        g.beginPath();
+        g.moveTo(18, 0);
+        g.lineTo(-8, -12);
+        g.lineTo(-3, 0);
+        g.lineTo(-8, 12);
+        g.closePath();
+        g.fill();
+        g.restore();
+        g.fillStyle = 'rgba(0,0,0,0.6)';
+        g.fillText(cm.text, x + 1, y + 29);
+        g.fillStyle = col;
+        g.fillText(cm.text, x, y + 28);
+      } else {
+        const r = 11 + (cm.contact ? Math.sin(this.time * 6) * 2 : 0);
+        g.strokeStyle = col;
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(x, y, r, 0, Math.PI * 2);
+        g.moveTo(x - r - 6, y);
+        g.lineTo(x - r + 3, y);
+        g.moveTo(x + r - 3, y);
+        g.lineTo(x + r + 6, y);
+        g.moveTo(x, y - r - 6);
+        g.lineTo(x, y - r + 3);
+        g.stroke();
+        g.fillStyle = 'rgba(0,0,0,0.6)';
+        g.fillText(cm.text, x + 1, y - r - 9);
+        g.fillStyle = col;
+        g.fillText(cm.text, x, y - r - 10);
+      }
+      this.drawnLabels.push(`combat: ${cm.text}`);
     }
     // Where the force under the cursor comes from.
     if (hover) {

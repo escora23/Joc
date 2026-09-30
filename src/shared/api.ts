@@ -419,6 +419,18 @@ export interface CommandEnterParams {
   context?: 'peace' | 'border' | 'front' | 'enemyLand' | 'sea' | 'air';
   /** Entered from a visible ground battle: the entities the battle layer was showing (§9.6), to keep them. */
   battleHandoff?: BattleHandoff;
+  /**
+   * Feedback 3 (#26/#29e): taken from a front badge, the Guerra panel, a battle, an alert or a mission: the place of
+   * the action (continuous tile coords) and what it is. Command mode takes the unit there at once (a march on the
+   * real clock when it is far, the local autopilot when it is near) and the exit looks back at it.
+   */
+  goal?: CommandGoal;
+}
+
+export interface CommandGoal {
+  x: number;
+  y: number;
+  label: string;
 }
 
 /** v2 (W5/W6, §9.6): what the ground battle layer was showing when the player took control from it. */
@@ -549,7 +561,13 @@ export interface AppController {
   /** Deterministic session for shots & playtests (fixed seed, auto spawn, optional fast-forward). */
   startScriptedGame(opts: ScriptedGameOptions): Promise<void>;
   /** playing -> command: dive into the unit (must be the human's tank/jet/ship). */
-  enterCommandMode(unitId: number): Promise<void>;
+  enterCommandMode(unitId: number, goal?: CommandGoal): Promise<void>;
+  /**
+   * Feedback 3 (#26/#29e): take control at the action (a front, an offensive's contact, a battle, an alert's place):
+   * picks the best own unit for it (engaged there, else the nearest division) and enters with that goal. Returns
+   * false (with an explanation toast) when no unit can go.
+   */
+  enterCommandAt(target: { x: number; y: number; label: string; frontKey?: number; attackId?: number; kind?: 'tank' | 'jet' | 'ship' }): Promise<boolean>;
   /** command -> playing: climb back to orbit, apply results. */
   exitCommandMode(): Promise<void>;
   /** Any in-game state -> menu. */

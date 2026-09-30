@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import type {
-  AppController, AppState, CommandEnterParams, FrameInfo, GameContext, ScriptedGameOptions, Subsystem,
+  AppController, AppState, CommandEnterParams, CommandGoal, FrameInfo, GameContext, ScriptedGameOptions, Subsystem,
 } from '../shared/api';
 import {
   DEFAULT_START_WORLD_TIME, HUMAN_ID, MAP_H, MAP_W, MENU_WORLD_TIME_SCALE, OBSERVATION_ENTER_KM, OBSERVATION_LEAVE_KM, TICK_MS, UNIT_DEFS,
@@ -12,7 +12,9 @@ import {
 import { EventBus, type GameEvents } from '../shared/events';
 import { latLonToTile, tileAtXY, tileToLatLon, tileX, tileXYToLatLon, tileY, worldTimeForSubsolarLon, wrapX } from '../shared/geo';
 import { deriveLocalForces } from '../shared/localForces';
-import { setLanguage } from '../shared/i18n';
+import { setLanguage, t } from '../shared/i18n';
+import { tileKm as tileKmXY } from '../command/goto';
+import { UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType } from '../shared/types';
 import { qualityProfile, type QualityProfile } from '../shared/quality';
 import { hashString } from '../shared/rng';
 import { createSettingsStore } from '../shared/settings';
@@ -133,7 +135,7 @@ export async function bootstrap(): Promise<void> {
       }
       ctx.sim.setSpeed(opts.speed ?? 1);
     },
-    async enterCommandMode(unitId) {
+    async enterCommandMode(unitId, goal) {
       if (state !== 'playing' || ctx.command.active) return;
       const u0 = ctx.sim.view.units.get(unitId);
       if (!u0 || u0.owner !== HUMAN_ID || !UNIT_DEFS[u0.type].command || !(u0.hp > 0)) {
@@ -143,7 +145,7 @@ export async function bootstrap(): Promise<void> {
       // v2 (§9.2): the unit stops where it is in the sim first; the local scene is then built exactly there.
       ctx.sim.send({ type: 'unitControl', unitId, controlled: true });
       await waitSimUpdate(600);
-      const params = commandParams(unitId);
+      const params = commandParams(unitId, goal);
       if (!params) {
         ctx.sim.send({ type: 'unitControl', unitId, controlled: false });
         bus.emit('uiSound', { kind: 'error' });
@@ -153,12 +155,40 @@ export async function bootstrap(): Promise<void> {
       input.setEnabled(false);
       // From a visible ground battle the view stays on the battle: command mode's first view is this one (§9.6), and
       // it glides from there down to the unit. Otherwise the camera dives to the unit first.
-      if (!params.battleHandoff?.camera) await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
+      // Taken at a distant action (#26): no dive to the unit; the march to the action starts behind the fade.
+      const far = !!params.goal && tileKmXY(params.x ?? 0, params.y ?? 0, params.goal.x, params.goal.y) > 12;
+      if (!params.battleHandoff?.camera && !far) await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
       await ctx.post.fadeTo(1, isShot ? 1 : 350);
       await ctx.command.enter(params);
       setState('command');
       bus.emit('commandEnter', { params });
       await ctx.post.fadeTo(0, isShot ? 1 : 500);
+    },
+    async enterCommandAt(target) {
+      if (state !== 'playing' || ctx.command.active) return false;
+      const id = unitForAction(target);
+      if (!id) {
+        bus.emit('uiSound', { kind: 'error' });
+        bus.emit('toast', { text: t('command.at.none', { place: target.label }), kind: 'warning', durationMs: 4200 });
+        return false;
+      }
+      // A whole front: the point of its line nearest the chosen unit (the offensive's contact when one is given).
+      let gx = target.x, gy = target.y;
+      const f = target.frontKey && !target.attackId ? ctx.sim.view.frontByKey.get(target.frontKey) : undefined;
+      const u = ctx.sim.view.units.get(id);
+      if (f && u) {
+        let bd = Infinity;
+        for (let i = 0; i + 1 < f.samples.length; i += 2) {
+          const d = tileKmXY(u.x, u.y, f.samples[i], f.samples[i + 1]);
+          if (d < bd) {
+            bd = d;
+            gx = f.samples[i];
+            gy = f.samples[i + 1];
+          }
+        }
+      }
+      await app.enterCommandMode(id, { x: gx, y: gy, label: target.label });
+      return true;
     },
     async exitCommandMode() {
       if (state !== 'command') return;
@@ -182,7 +212,9 @@ export async function bootstrap(): Promise<void> {
       }
       await Promise.race([waitFrames(3), new Promise<void>((r) => setTimeout(r, 5000))]);
       await ctx.post.fadeTo(0, 400);
-      await ctx.cameraRig.flyTo(at ? { lat: at.lat, lon: at.lon, altitudeKm: 2500, tilt: 0.3 } : { altitudeKm: 2500, tilt: 0.3 }, 2000);
+      // Feedback 3 (#29e): the strategic camera ends looking at the place of the action (the unit's new position), close
+      // enough to read the front there, instead of a continental view.
+      await ctx.cameraRig.flyTo(at ? { lat: at.lat, lon: at.lon, altitudeKm: EXIT_ALT_KM, tilt: 0.45 } : { altitudeKm: EXIT_ALT_KM, tilt: 0.45 }, 2000);
       ctx.cameraRig.setMode('game');
       input.setEnabled(true);
     },
@@ -241,6 +273,8 @@ export async function bootstrap(): Promise<void> {
     },
   };
   let lastSpeed: GameSpeed = 1;
+  /** Strategic camera altitude after command mode: the place of the action with its front readable (#29e). */
+  const EXIT_ALT_KM = 900;
 
   // ---------------------------------------------------------------------------------------------
   // Subsystems (constructed in dependency-free order; they may only call each other from init/update)
@@ -324,7 +358,34 @@ export async function bootstrap(): Promise<void> {
     });
   }
 
-  function commandParams(unitId: number): CommandEnterParams | null {
+  /**
+   * Feedback 3 (#26): the own unit that should take the player to an action. A division first (the ground fight is
+   * where the action is): one engaged there (joined to that offensive, attached to that front, or already within
+   * 40 km), else the nearest free one; a fighter squadron for an air target; a warship for a sea target.
+   */
+  function unitForAction(target: { x: number; y: number; frontKey?: number; attackId?: number; kind?: 'tank' | 'jet' | 'ship' }): number {
+    const view = ctx.sim.view;
+    const want = target.kind ?? 'tank';
+    let best = 0, bestScore = Infinity;
+    for (const u of view.units.values()) {
+      if (u.owner !== HUMAN_ID || UNIT_DEFS[u.type].command !== want || !(u.hp > 0) || u.state === UnitState.Controlled) continue;
+      if (want === 'jet' && u.type !== UnitType.FighterSquadron) continue;
+      const km = tileKmXY(u.x, u.y, target.x, target.y);
+      const order = u.order >= 0 ? UNIT_ORDER_KINDS[u.order] : '';
+      let score = km;
+      if (target.attackId && order === 'join' && u.mission === target.attackId) score *= 0.2;
+      else if (target.frontKey && u.frontKey === target.frontKey && (u.mode === UnitMode.Front || u.mode === UnitMode.Offensive)) score *= 0.35;
+      // A healthier unit is worth a detour of a few km.
+      score *= 1.3 - 0.3 * u.hp;
+      if (score < bestScore) {
+        bestScore = score;
+        best = u.id;
+      }
+    }
+    return best;
+  }
+
+  function commandParams(unitId: number, goal?: CommandGoal): CommandEnterParams | null {
     const view = ctx.sim.view;
     const u = view.units.get(unitId);
     if (!u || u.owner !== HUMAN_ID) return null;
@@ -353,6 +414,7 @@ export async function bootstrap(): Promise<void> {
       seed: hashString(`${view.config?.seed ?? 0}:${unitId}:${view.tick}`), worldTimeSec: frame.worldTime,
       difficulty: view.config?.difficulty ?? 'normal', heading: u.heading, x, y, integrity, formation, alt: u.alt, context,
       ...(handoff ? { battleHandoff: handoff } : {}),
+      ...(goal ? { goal } : {}),
     };
   }
 

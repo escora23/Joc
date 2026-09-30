@@ -596,3 +596,68 @@ registerShot('command-garage', 'command', 'Model check: the ground vehicles of b
   I.simulate(4, 1 / 30);
   await freezeAndWait(s, I);
 });
+
+/**
+ * Feedback 3 (#27, command side): a tank of a staged war 1.3 km from a real enemy factory (or 2.4 km from a real enemy
+ * city with &target=city), taken under control; the shot fires `&shots=` HE rounds at it through the normal weapon
+ * (projectiles, the building hit test, the sync to the sim) and frames the damage: lower, scorched, burning, debris;
+ * a city loses houses and whole blocks. `&live=1` stops after the entry (the verifier fires itself).
+ */
+registerShot('command-strike', 'command', 'Tank shells hitting a real enemy structure or city in command mode: damage, fire, collapse, synced to the sim (&target=factory|city, &shots=n)', async (s) => {
+  const { ctx } = s;
+  const target = s.params.get('target') === 'city' ? 'city' : 'factory';
+  await startSession(s, -1.2, Number(s.params.get('hour') ?? 16));
+  const foe0 = nearestNation(s, 44.1, -1.2);
+  if (foe0) connectNation(s, foe0, 42.65, -1.2);
+  await waitView(s, () => !!humanBorder(s, 42.1, -1.2, foe0), 90_000);
+  const b = humanBorder(s, 42.1, -1.2, foe0);
+  if (!b) throw new Error('no border near the staging point');
+  const tile = b.fy * MAP_W + b.fx;
+  ctx.sim.debug({ type: 'war', a: b.foe, b: HUMAN_ID, mobilizeTicks: 0 });
+  ctx.sim.debug({ type: 'spawnStructure', structure: target === 'city' ? StructureType.City : StructureType.Factory, owner: b.foe, tile, level: target === 'city' ? 3 : 2 });
+  await ctx.sim.fastForward(2);
+  const id = await spawnNearEdge(s, UnitType.ArmoredDivision, b, 1);
+  await walkToward(s, id, b.fx + 0.5, b.fy + 0.5, target === 'city' ? 2.4 : 1.3);
+  await ctx.app.enterCommandMode(id);
+  ctx.sim.setSpeed(0);
+  (window as unknown as { __strikeTarget?: number }).__strikeTarget = [...ctx.sim.view.structures.values()].find((x) => x.tile === tile)?.id ?? 0;
+  if (live(s)) return;
+  const I = internalsOrThrow();
+  await waitFramesUntil(s, () => I.civil.structRecs.length > 0 || I.civil.houseRecs.some((h) => h.cityId > 0), 900);
+  await settle(s, I, 1);
+  const n = Number(s.params.get('shots') ?? 14);
+  await strikeFire(s, I, n);
+  I.simulate(Number(s.params.get('burn') ?? 150), 1 / 30);
+  await s.waitFrames(8);
+  await freezeAndWait(s, I);
+});
+
+/** Aim at the staged target (the factory, or the nearest standing house of the city) and fire `n` HE rounds. */
+export async function strikeFire(s: ShotContext, I: CommandInternals, n: number): Promise<void> {
+  const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; fire(): void; snapTurret?(): void; selectAmmo?(i: 0 | 1): void };
+  c.selectAmmo?.(1);
+  const sid = (window as unknown as { __strikeTarget?: number }).__strikeTarget ?? 0;
+  for (let k = 0; k < n; k++) {
+    const p = I.controller!.ent.pos;
+    const st = I.civil.structRecs.find((r) => r.id === sid);
+    let aim: THREE.Vector3 | null = null;
+    if (st) aim = new THREE.Vector3(st.x, (st.y0 + st.y1) / 2, st.z);
+    else {
+      let bd = Infinity;
+      for (const h of I.civil.houseRecs) {
+        if (h.down || h.cityId !== sid) continue;
+        const d = Math.hypot(h.x - p.x, h.z - p.z);
+        if (d < bd) {
+          bd = d;
+          aim = new THREE.Vector3(h.x, h.y + h.h * 0.5, h.z);
+        }
+      }
+    }
+    if (!aim) break;
+    c.aimAt(aim);
+    c.snapTurret?.();
+    c.fire();
+    I.simulate(50, 1 / 30);
+    await s.waitFrames(1);
+  }
+}
