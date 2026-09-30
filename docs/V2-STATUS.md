@@ -1007,3 +1007,100 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
 * The per-hour figures average the last 24 game hours (divided by the hours since the blockade began when younger), so
   a fresh blockade's figure moves a lot in its first hours (the chip read +990 then +1,913 gold/h in the same run).
 * Submarines do not exist in the game, so there is no sub-hunting.
+
+## Feedback #3 fix pass 2 (2026-09-30) — verifier failures on items 26, 28, 29d, 29e, 27
+
+> `git log --grep "fix 2"`. Rules: DESIGN_V2 §18.2, §18.4, §19.1 («Fix pass 2»); code map: CODEMAP §27.1. Headless
+> `npx tsx src/sim/test/f3-audit.mjs` **45/45** (new: M1c, M5b, M8) and `--only aihuman` **3/3** (M9); regression
+> audits `naval-audit` 22/22, `w4-audit` 43/43, `air-audit` 25/25, `command-audit` 35/35; `i18n-check` 0 missing es/en;
+> `npx tsc --noEmit` and `npm run build` clean. Browser (Chromium/SwiftShader, real UI, no-HMR dev server):
+> `node tools/f3c-entry-verify.mjs` **12/12 twice** (0 page errors), the verifier's own `tools/_v3_entry.mjs` **8/8**
+> (badge, mission, Esc exits); frames in `shots/feedback3-fix-2/`.
+
+### #26 / #29e: taking control at a front puts you at the action — fixed
+* **Cause (confirmed).** Two faults stacked. (1) After the first leg the march aimed at the joined offensive's live
+  point (`AttackView.contactX/Y`, the rally point), which sits 6-27 km behind the sub-tile contact line and moves.
+  (2) Near the line every leg crawled: the page receives the sim's view only every ~4 real s at ×300-×400 (the worker
+  runs several ticks per loop), and each move asked for where the unit could have been *at the last view*, so a 2.3 km
+  leg took 2,600-3,000 game s — the unit advanced at the line's own 3 km/h and the line ran away (seen in real play:
+  8 legs, 48-51 km, still 3.5 km short, «legs»).
+* **Fix.** With a front, a battle or a mission on a front as the entry point (`CommandGoal.frontKey / attackId`, set by
+  the badge, the Guerra row, the battle strip, the alert, and «Al mando, a su misión» for a join), every leg goes to the
+  **live contact**: the nearest point of that front's contact line from the one local derivation (the offensive's
+  stretch while far) or an enemy division when nearer. The march keeps adding legs until **the sim** puts enemy soldiers
+  in reach (a line at war within 2.6 km with enemy soldiers on it — the scene stands them 140-560 m beyond it — or an
+  enemy division within 4 km), up to 8 legs; otherwise it stops and says why (`command.transit.short.*`: the line moves
+  faster than the march / no route / no front / nobody on this stretch / blocked). Moves extrapolate the view's game
+  clock on the wall clock; legs near the line run from ×120. «Ir al combate» drives the last 4 km itself (no march).
+* **Measured, real UI, nothing pressed after the click** (f3c-entry-verify, second run):
+
+  | Entry | Legs, km | March | Contact | Scene builds |
+  |---|---|---|---|---|
+  | Guerra panel «Tomar el control aquí» (P1) | 2, 30.7 km | 13.9 real s | enemy at 2.1 km | 1 (1.3 s) |
+  | Double click on the front badge (B1) | 2, 29.1 km (stopped: enemy in reach) | 9.4 real s | 2.4 km | 1 (1.6 s) |
+  | «Al mando, a su misión» (M1) | 2, 27.7 km | 12.5 real s | 1.8 km | 1 (1.5 s) |
+  | A division already on the front, from its Guerra row (F1) | 2, 29.1 km | 14.3 real s | 2.1 km | 1 (1.5 s) |
+
+  The verifier's `_v3_entry.mjs`: B1 contact at 70.8 real s (enemy 2.1 km, one march of 30 km), M1 at 70.3 s (2.1 km);
+  Esc → exit decision → the strategic camera ends above the place (42.53, −0.02). Frames:
+  `shots/feedback3-fix-2/entry2/*-contact.png` (the chip reads «Infantería de Suiza a tiro · 2 km», the red marker on
+  it), `shots/feedback3-fix-2/v3entry/`.
+
+### #26: under ~60 real seconds from take-control to contact — per-phase breakdown
+* For the division already on the front (F1: joined to the offensive, 25-29 km behind the live line, which is where the
+  sim keeps a joined division): click → command mode 6.0 s (the unit is stopped in the sim, one sim update, the fade),
+  **march 14.3 s** (2 legs behind the entry fade), **scene build 1.5 s**, intro 32.7 s = **10 rendered frames** of the
+  3.1 s swoop at SwiftShader's 3-4 s per frame; contact on the first frame of play; **63.2 real s** from the click. The
+  other entries: panel 12.2 + 13.9 + 1.3 + 31.8 (11 frames) = 59.2 s; badge 3.7 + 9.4 + 1.6 + 39.2 (9 frames), 77.4 s
+  to the first frame the page reported; mission 7.7 + 12.5 + 1.5 + 36.1 (10 frames) = 67.0 s.
+* **No second scene build**: `__cmdStats.builds` holds one entry (no `relocating` rebuild) in all four entries, twice.
+* On a GPU the intro is its 3.1 s and the fade/entry a second or two, so the same entries take about 20-30 s, well under
+  the ~60 s criterion; the march part is sim-bound (9-14 real s on this 4-CPU container). The G path from 126 km behind
+  the line (f3c-verify go) is unchanged in shape (a march with its legs, then one rebuild): see the run below.
+
+### #29d / #28: a warship's bombardment is a mission that ends, with its report — fixed
+* `bombard` on a structure is now a mission on it (`missionTarget` = the structure; the card's «Al mando, a su misión»
+  and the mission line see it). It ends by itself when the structure is **destroyed** or **taken**, when the **war
+  ends**, when a **new order** replaces it, or when the ship is **sunk**; each emits `afterAction` (kind 'mission',
+  order 'bombard', result, duration, naval damage done) shown in the feed and REGISTRO («El destructor 3 terminó su
+  bombardeo: Fábrica destruida (cerca de …) — Duró 27 h. Daño del fuego naval: 135 puntos de integridad …»). The ship
+  then holds its station with no order (it no longer sits on «bombard» on rubble).
+* **Lifted blockades** report too: when our blockade ends (or one that stopped our ships), an `afterAction` (order
+  'blockade') gives how long it held, ships seized / sunk / turned back, the prize gold and the trade the blockaded
+  lost; it replaces the «Bloqueo levantado» alert in place (same group).
+* CAP / support stations have no natural end (a patrol runs until another order; fuel is handled by the relief
+  rotation), so they get no report; strikes already had theirs.
+* **Measured:** f3-audit M8 — a level-2 coastal factory: order accepted, mission target set, destroyed after 27 h, report
+  'destroyed' 0.9 h after the last hit (damage 1.35), the ship's order −1; a second bombardment cut short by peace:
+  report 'ended'. M5b: a blockade lifted after 4 h: report with seized 0, sunk 0, the enemy's lost trade 1,200 gold.
+
+### #28: the AI uses the same missions against the player — fixed
+* The AI's division missions were set once: a division that took «defend» when the AI had no offensive never
+  reconsidered, so none joined the offensive its war plan later launched on the human. Now every pass re-plans:
+  defending / attached / idle divisions join the AI's running offensive nearest them (one defender stays on a sector
+  under a real threat), and a joined division assaults — or razes, if the AI hates the enemy — a structure within 6
+  tiles of the spearhead (one such order per pass).
+* **Measured, nothing forced** (f3-audit `aihuman`, M9: 30 real AIs, armies and fleets given, 300 game hours, no
+  scripted offensive): the enemy's own war plan launched 1 offensive on the human; **join 6** (divisions joining that
+  offensive), **assault 3** on the human's border defence posts and factories, 3 artillery hits on them. M7 (forced
+  offensive) and M6 still pass.
+
+### #28: the join preview must visibly add strength — fixed
+* The sim now publishes the share of the offensive's pressured tiles with armour near (`AttackView.armorCover`); the
+  outlook adds a division's ×1.5 stretch only where there is no armour yet (joined divisions stand together at the
+  spearhead) and flags `gains` when the change is ≥ max(0.1 km/h, 3 %).
+* When a join adds nothing (power at the ×2 cap, armour already at the tip): the Guerra panel's button reads
+  **«Unirse · no acelera»**, and its tooltip, the card's «Unirse a la ofensiva» tooltip and the right-click chip say it
+  plainly («… no la haría avanzar más deprisa (5,6 km/h con o sin ella). Mejor úsala para asaltar Puesto defensivo de
+  X, cerca de la punta.»); the advisor proposes that assault instead of the join.
+* **Measured:** f3-audit M1c — 4 divisions joined, a 5th: preview 5.63 → ≈ 5.63 km/h, `gains` false; measured over
+  the same window with and without it: 5.62 vs 5.62 km/h (Δ 0.00, predicted Δ 0.00). M1 (2 divisions joining an
+  unsupported offensive): preview 3.53 → ≈ 5.30, measured 5.07 (4 % off; was 5.59, 10 % off).
+
+### #27: repair at +8 %/h after the 2 h pause — the sim was right; card and verifier fixed
+* Headless D3 is exact. In the browser the structure's hp is published every 5 ticks while it repairs, and the 3 h
+  window of f3-verify D4 included the 2 h pause after the staged hit: 30 ticks − 20 of pause = 10 of repair, minus up to
+  4 ticks of publication lag = the 6 ticks (+0.048) the verifier saw. D4 now measures the repair where it runs: the
+  expected gain in the first window from the last hit's tick, and the rate over the next window (target 8 %/h ± 1).
+* The card's «Reparar · precio · N h» and «reparando, lista en …» now include what is left of the 2 h pause
+  (`StructureView.hitTick`), so the hours it states are the hours it takes.

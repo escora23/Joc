@@ -3123,6 +3123,8 @@ command-mode half of 27) is another workstream that uses the hooks named in §18
 3. **Repair.** No free self-repair any more. «Reparar» on the card pays `repairCost = upgradeCost(type, level) × 0.5 ×
    (1 − hp)` up front (rounded to 100); the structure regains **8 %/h** (a heavily damaged 0.30 → 1.00 in 8.75 h), paused
    **2 h** after every new hit; the AI repairs by itself (air defence and cities first) when it has twice the price.
+   The card's hours include what is left of that pause (fix 2: `StructureView.hitTick`), so «Reparar · 7.400 · 7,6 h»
+   is the time it really takes. The map sees the structure's hp every 5 ticks while it repairs (half an hour).
 4. **Capture changes owner.** When its tile is taken the structure changes owner (defence posts too), taken in the
    fighting at **≤ 0.60 hp**, its production queue and upgrade lost. It is destroyed instead when the taker's division
    was ordered to **raze** it (§18.2), or when the land falls to nobody.
@@ -3160,11 +3162,12 @@ command-mode half of 27) is another workstream that uses the hooks named in §18
 | Division | Mantener, Mover, Unirse al frente, Atacar hacia aquí, Volver | as before (§6.4) |
 | Fighter | Patrulla aérea (defend a border / city / an offensive's sky), Escoltar, Interceptar | §25 (Feedback 2) |
 | Bomber / drones | Atacar objetivo, Apoyar ofensiva (drones) | §25; strikes on cities confirmed (§18.1.6) |
-| Warship | **Bloquear** (a port within 6 tiles: no trade ship leaves it, its trade income stops; card «bloqueado por X»), Bombardear costa, Escoltar convoy, Patrullar | M5 |
+| Warship | **Bloquear** (a port within 6 tiles: no trade ship leaves it, its trade income stops; card «bloqueado por X»), **Bombardear** (a coastal structure: −5 %/h on the enemy's structures within 1.6 tiles of it, −0.15 %/h of the local garrison), Escoltar convoy, Patrullar | M5; M8 (fix 2): a level-2 factory destroyed in 27 h, then the mission ends by itself with its report and the ship waits for orders |
 
 Every mission runs by itself until done or cancelled: a join ends with its offensive (the division stays attached); an
-assault or raze ends when the target is captured, destroyed or no longer hostile; a defence lasts until another
-order. Visible on the map: the defended sector's ring (100 km), the spearhead marker of a joined offensive, the
+assault or raze ends when the target is captured, destroyed or no longer hostile; a warship's bombardment of a structure
+ends when it is destroyed or taken, when the war ends, when a new order replaces it or when the ship is sunk (each with
+its after-action report); a defence lasts until another order. Visible on the map: the defended sector's ring (100 km), the spearhead marker of a joined offensive, the
 artillery reach and a red target ring on every structure under assault (double ring to raze). Every order chip shows
 the effect, the risk (wear −0.2 %/h; air risk for aircraft) and the ETA before the click.
 
@@ -3178,7 +3181,21 @@ publishes `divAtk`, `divDef`, `navalAtk` and `planKmh` so the UI never re-derive
 **The AI uses the same missions**: divisions join its running offensive (or one in three first assaults a structure
 near the line: defence posts, bases, SAM, cities last), defend the threatened sector otherwise; warships blockade the
 nearest enemy port; it repairs. M6: 1,500 ticks of AI wars: join 9, defend 128, assault 8, blockade 2 orders, 8
-artillery hits on structures.
+artillery hits on structures. **Fix 2:** the missions are re-planned on every pass, not set once: a division defending
+or attached goes with the offensive nearest it when one runs (one defender stays on a sector under a real threat), and
+a joined division assaults — or razes, when the AI hates the enemy (opinion < −60) — a structure within 6 tiles
+(150 km) of the spearhead, one such order per pass. Against the human with nothing scripted (f3-audit M9, 300 h, 30
+real AIs with armies and fleets): its own war plan launched an offensive on the human, 6 of its divisions joined it and
+3 assaults hit the human's border posts and factories.
+
+**A join that adds nothing is not offered as one (fix 2).** The ×1.5 push acts on the tiles near a division, and joined
+divisions follow the spearhead together; the sim publishes the share of the pressured tiles that have armour near
+(`AttackView.armorCover`, smoothed) and the outlook adds a division's stretch only where there is no armour yet. When
+the change is under max(0.1 km/h, 3 %) (`gains` false: power at the ×2 cap with armour already at the tip), the
+Guerra panel's button reads «Unirse · no acelera», its tooltip, the card's and the chip's say so in plain words with
+the km/h it stays at and the better use (assault the structure at the spearhead, else defend a sector), and the advisor
+proposes that assault instead of the join. f3-audit M1c: 4 divisions + a 5th: preview 5.63 → ≈ 5.63 km/h, measured
+5.62 with and 5.62 without it.
 
 ### 18.3 One number per front (29a)
 
@@ -3197,7 +3214,9 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
   our offensive, bombers enter target mode, warships blockade the nearest enemy port. During a war an advisor alert
   («Asesor: 2 escuadrones de caza sin misión») appears at most every 12 game hours.
 * **After-action reports** (`afterAction` event): when an offensive the player fought ends (either side), a strike
-  lands or its aircraft is shot down, or a division mission ends (captured / destroyed / razed / cancelled / lost): an
+  lands or its aircraft is shot down, a warship's bombardment ends (fix 2: destroyed / taken / peace / a new order /
+  sunk, with the naval damage done), a blockade of ours — or one that stopped our ships — is lifted (how long it held,
+  ships seized / sunk / turned back, prize gold, the trade the blockaded lost), or a division mission ends (captured / destroyed / razed / cancelled / lost): an
   alert in the feed and REGISTRO log, clickable to fly there (a unit's report selects it), with the result, duration,
   tiles taken and lost (≈ km²), losses on both sides, the damage done and the divisions that supported it.
 * **Damage reports** (`structureDamaged` event): a structure of ours changing state, losing a level or destroyed (with
@@ -3243,6 +3262,22 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
   panel, the battle strip (your division in that battle with its hand-off, else the nearest marches there), «Al mando»
   on an alert about the war at a place, «Al mando, a su misión» on a unit card with a mission. The exit ends the climb
   at 900 km looking at the unit's new position (the place of the action), not a continental view.
+
+**Fix pass 2 — to the live contact, not the rally point.** A joined offensive's live point (`AttackView.contactX/Y`)
+and a front's samples sit 6-27 km behind the sub-tile contact line and move while the clock runs fast; marching to them
+left the unit out of sight of the enemy. Now, when a front, a battle or a mission on a front is the entry point
+(`CommandGoal.frontKey / attackId`), every leg goes to the **live contact**: the nearest point of that front's contact
+line in the one local derivation (while far, the stretch of it by the offensive), or an enemy division when it is
+nearer; and the march goes on **until the sim puts enemy soldiers within reach** — a contact line at war within
+2.6 km with enemy soldiers on it (the scene stands them 140-560 m beyond the line, so one is inside the 4 km contact
+radius), or an enemy division within 4 km — or gives up after 8 legs, saying why («La línea con Suiza se mueve más
+deprisa que la marcha…», no route, no front, the enemy has nobody on that stretch). Two fixes made the legs converge:
+the moves extrapolate the game clock on the wall clock (the view reaches the page only every few real seconds at
+×300, and the unit had been asked only for where it could have been at the last view, crawling at the line's own
+speed), and the legs near the line run from ×120. The scene is built once, where contact is; «Ir al combate» drives
+the last 4 km itself (no march, no rebuild). Measured in real play (f3c-entry-verify): Guerra panel, badge double
+click, «Al mando, a su misión» and a division already on the front all reach contact (enemy at 2.0-2.1 km) with 2 legs
+of 28-36 km in 13-16 real s and one scene build.
 
 ### 19.2 Structures and cities hit in command mode (#27)
 

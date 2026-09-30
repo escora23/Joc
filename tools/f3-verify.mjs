@@ -309,7 +309,59 @@ async function advisor() {
   await page.close();
 }
 
-const sections = { missions, card, civil, advisor };
+// ---------------------------------------------------------------------------------------------------------------------
+/** Fix 2 (#28/29d): a warship bombarding an enemy coastal structure until it is rubble ends its mission with a report. */
+async function bombard() {
+  const page = await open('f3-missions', '&run=10&panel=0');
+  const setup = await page.evaluate(async () => {
+    const v = __front.ctx.sim.view;
+    const world = __front.ctx.world;
+    const { isWaterTerrain } = await import('/src/shared/terrain.ts');
+    const W = 1600;
+    const enemies = new Set(v.wars.filter((w) => w.aggressor === 1 || w.target === 1).map((w) => (w.aggressor === 1 ? w.target : w.aggressor)));
+    for (const s of v.structures.values()) {
+      if (!enemies.has(s.owner) || s.type === 0 || s.type === 4) continue;
+      const x = s.tile % W, y = Math.floor(s.tile / W);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+        const t = (y + dy) * W + x + dx;
+        if (isWaterTerrain(world.terrain[t])) return { sid: s.id, tile: s.tile, type: s.type, water: t, hp: s.hp, level: s.level, owner: s.owner };
+      }
+    }
+    return null;
+  });
+  row('N0', 'an enemy structure on the coast', JSON.stringify(setup), !!setup);
+  if (!setup) return page.close();
+  // One of our warships off that coast (spawned there), a level-1 target already damaged (the report comes in hours).
+  const shipId = await page.evaluate(async (st) => {
+    const ctx = __front.ctx;
+    const before = new Set(ctx.sim.view.units.keys());
+    ctx.sim.debug({ type: 'spawnUnit', unit: 2, owner: 1, tile: st.water, targetTile: -1 });
+    ctx.sim.debug({ type: 'damageStructure', tile: st.tile, amount: Math.max(0, st.hp - 0.35), by: 1 });
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const u = [...ctx.sim.view.units.values()].find((x) => !before.has(x.id) && x.type === 2 && x.owner === 1);
+      if (u) return u.id;
+    }
+    return 0;
+  }, setup);
+  await page.evaluate(({ id, st }) => __front.ctx.sim.send({ type: 'unitOrder', unitIds: [id], order: 'bombard', tile: st.tile, targetId: st.sid }), { id: shipId, st: setup });
+  const acc = await until(page, (id) => __front.ctx.sim.view.units.get(id)?.mission || null, shipId, 15000);
+  row('N1', 'the warship takes the bombardment as a mission on that structure', `ship ${shipId}, mission ${acc} (structure ${setup.sid})`, acc === setup.sid);
+  let t = 0, rep = null;
+  while (t < 400 && !rep) {
+    await runTicks(page, 40, 4);
+    t += 40;
+    rep = await page.evaluate(() => window.__f3.aar.find((e) => e.order === 'bombard') ?? null);
+  }
+  const feed = await page.evaluate(() => window.__fuAlerts.list().filter((a) => a.kind === 'afterAction').map((a) => `${a.title} — ${a.body}`));
+  const ship = await page.evaluate((id) => { const u = __front.ctx.sim.view.units.get(id); return u ? { order: u.order, mission: u.mission } : null; }, shipId);
+  row('N2', 'the structure is destroyed and the mission ends with an after-action report', rep ? `${rep.result} after ${((rep.tick - rep.startTick) / 10).toFixed(0)} h, damage ${rep.damage}; ship now ${JSON.stringify(ship)}` : `none after ${t} ticks`, rep?.result === 'destroyed' && ship?.order === -1);
+  row('N3', 'the report is in the alert feed and the REGISTRO log, in words', feed.find((x) => /bombardeo/i.test(x)) ?? feed.join(' | ').slice(0, 300), feed.some((x) => /bombardeo/i.test(x) && /fuego naval/i.test(x)));
+  await shot(page, 'n3-bombard-report');
+  await page.close();
+}
+
+const sections = { missions, card, civil, advisor, bombard };
 for (const [k, fn] of Object.entries(sections)) {
   if (only && !only.has(k)) continue;
   try {

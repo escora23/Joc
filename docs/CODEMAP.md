@@ -1522,6 +1522,40 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
 * Shot `command-strike` (`&target=factory|city`, `&shots=`, `&live=1`), `strikeFire`; verifier `node
   tools/f3c-verify.mjs [--only go,panel,strike,city,night,alert]` → `shots/feedback3-command/verify/`.
 
+### 27.1 Fix pass 2 (items 26-30 after the verifier) — where it lives
+
+* Entry at the action (`src/command/index.ts`): `CommandGoal.frontKey / attackId` (shared/api.ts; set by
+  `bootstrap.enterCommandAt` and the card's «Al mando, a su misión» for a join) → `entryFrontKey / entryAttackId`;
+  `liveContact(x, y)` (the nearest point of that front's contact line from `deriveLocalForces`, the offensive's stretch
+  while far, an enemy division when nearer), `simContact(x, y)` (a line at war within `CONTACT_LINE_KM` 2.6 km with
+  enemy soldiers on it, or an enemy division within `REACH_M`), `nextLegFromSim` (to the live contact, up to
+  `MAX_LEGS` 8; `marchShort` = empty / noRoute / noLine / legs / stalled → `shortNotice`, strings
+  `command.transit.short.*`), `contactInfo()` (log). `marchTo` extrapolates the view's clock on the wall clock
+  (`lastCvSec / lastCvWall`), follow-on legs from `FOLLOW_RATE_MIN` ×120, `NEAR_DRIVE_KM` (4 km: G drives, no march).
+  Timing for tools: `__cmdStats.builds` (every scene build, `relocating` = a rebuild), `__cmdStats.entryTimes`
+  (enter / marchEnd / buildEnd / play, intro frames), `transits[].legs / short`; `window.__marchDebug = true` logs the
+  march every second. Verifier: `node tools/f3c-entry-verify.mjs [--only panel,badge,mission,front]`.
+* Warship bombardment as a mission (`src/sim/units.ts`): `orderWarship 'bombard'` sets `missionTarget` (the structure
+  given, else the enemy's structure on that tile); the station step ends it (`missionEnd(u, result, 'bombard')`:
+  destroyed / captured / ended (peace) / cancelled (new order) / lost (sunk)); `bombard()` adds to `missionDealt`.
+  Lifted blockade report: `NavalSystem.end` (`src/sim/naval.ts`) emits `afterAction` order 'blockade' with `seized /
+  sunk / turnedBack / gold / enemyLost / blockadeId`. UI: `src/ui/hud/aar.ts` branches `order === 'blockade'` and
+  `'bombard'` (strings `aar.bombard.*`, `aar.blockade.*` in `src/ui/i18n/f3.ts`).
+* Join preview: `Attack.armorCover` (sim/attacks.ts: share of the pressured tiles with an attacking division near,
+  smoothed) → `AttackView.armorCover` → `OutlookInput.armorCover`; `offensiveOutlook` returns `gains` and `cover`.
+  UI helpers `joinOutlook(hs, a)` and `spearheadTarget(hs, a)` (`forcesInfo.ts`); «Unirse · no acelera» in `fronts.ts`
+  (`.fu-war-send--flat`), the card's join tip (`selection.ts`), the chip (`orderCtl.ts hintFor`, `chip.hint.joinMax /
+  joinPush`), the advisor (`forces.ts suggest`: assault at the spearhead, `adv.s.assault`).
+* AI missions (`src/sim/ai/military.ts`): divisions re-planned every pass (`SimUnit.order / missionTarget`,
+  `SimAttack.liveX / liveY` in shared/simapi.ts): defend / attach / idle → join the offensive nearest them (one defender
+  kept on a threatened sector); a joined division assaults (or razes, opinion < −60) a structure within 6 tiles of the
+  spearhead, one order per pass (`assaultTarget(…, maxTiles)`).
+* Repair hours: `repairHours(hp, hitTick, tick)` (shared/damage.ts) adds what is left of the 2 h pause;
+  `StructureView.hitTick`.
+* Headless: `npx tsx src/sim/test/f3-audit.mjs` adds M1c (capped join), M5b (lifted blockade report), M8 (bombard
+  mission and reports), section `aihuman` = M9 (no forced offensive). Browser: `tools/f3-verify.mjs` section `bombard`
+  (N0-N3) and the D4 repair window.
+
 ## 28. War at sea (owner item 30) — where it lives
 
 Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` (headless, N1-N11), `tools/naval-verify.mjs`
