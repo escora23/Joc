@@ -617,20 +617,74 @@ registerShot('command-strike', 'command', 'Tank shells hitting a real enemy stru
   ctx.sim.debug({ type: 'spawnStructure', structure: target === 'city' ? StructureType.City : StructureType.Factory, owner: b.foe, tile, level: target === 'city' ? 3 : 2 });
   await ctx.sim.fastForward(2);
   const id = await spawnNearEdge(s, UnitType.ArmoredDivision, b, 1);
-  await walkToward(s, id, b.fx + 0.5, b.fy + 0.5, target === 'city' ? 2.4 : 1.3);
+  await walkToward(s, id, b.fx + 0.5, b.fy + 0.5, target === 'city' ? 2.4 : 0.8);
   await ctx.app.enterCommandMode(id);
   ctx.sim.setSpeed(0);
-  (window as unknown as { __strikeTarget?: number }).__strikeTarget = [...ctx.sim.view.structures.values()].find((x) => x.tile === tile)?.id ?? 0;
-  if (live(s)) return;
+  const sid = [...ctx.sim.view.structures.values()].find((x) => x.tile === tile)?.id ?? 0;
+  (window as unknown as { __strikeTarget?: number }).__strikeTarget = sid;
   const I = internalsOrThrow();
   await waitFramesUntil(s, () => I.civil.structRecs.length > 0 || I.civil.houseRecs.some((h) => h.cityId > 0), 900);
+  // Where the crew can see the target (the player would drive up to a crest): the nearest spot within 1.5 km with
+  // the target in sight.
+  vantage(I, sid);
+  if (live(s)) return;
   await settle(s, I, 1);
   const n = Number(s.params.get('shots') ?? 14);
   await strikeFire(s, I, n);
   I.simulate(Number(s.params.get('burn') ?? 150), 1 / 30);
+  // Frame the target through the gunner's sight (the damage is what the picture is about).
+  const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; snapTurret?(): void; setZoom?(on: boolean): void };
+  const st = I.civil.structRecs.find((r) => r.id === sid);
+  const cityHouses = I.civil.houseRecs.filter((h) => h.cityId === sid);
+  const look = st ? new THREE.Vector3(st.x, (st.y0 + st.y1) * 0.45, st.z)
+    : cityHouses.length ? new THREE.Vector3(cityHouses.reduce((a, h) => a + h.x, 0) / cityHouses.length, cityHouses[0].y + 8, cityHouses.reduce((a, h) => a + h.z, 0) / cityHouses.length) : null;
+  if (look && s.params.get('zoom') !== '0') {
+    c.aimAt(look);
+    c.snapTurret?.();
+    c.setZoom?.(true);
+    I.simulate(4, 1 / 30);
+  }
   await s.waitFrames(8);
   await freezeAndWait(s, I);
 });
+
+/** Move the formation (locally, as a short drive) to the nearest spot within 1.5 km from which the target is seen. */
+function vantage(I: CommandInternals, sid: number): void {
+  const P = I.controller!.ent;
+  const st = I.civil.structRecs.find((r) => r.id === sid);
+  const houses = I.civil.houseRecs.filter((h) => h.cityId === sid);
+  const pts = st ? [new THREE.Vector3(st.x, (st.y0 + st.y1) / 2, st.z)] : houses.filter((_, i) => i % 12 === 0).map((h) => new THREE.Vector3(h.x, h.y + h.h * 0.6, h.z));
+  if (!pts.length) return;
+  const seen = (ex: number, ey: number, ez: number, t: THREE.Vector3): boolean => {
+    for (let k = 1; k < 40; k++) {
+      const f = k / 40;
+      if (I.ground.heightAt(ex + (t.x - ex) * f, ez + (t.z - ez) * f) > ey + (t.y - ey) * f - 0.5) return false;
+    }
+    return true;
+  };
+  let best: { x: number; z: number; n: number; d: number } | null = null;
+  for (const r of [0, 150, 300, 500, 750, 1000, 1500]) {
+    for (let k = 0; k < (r ? 24 : 1); k++) {
+      const a = (k / 24) * Math.PI * 2;
+      const x = P.pos.x + Math.cos(a) * r, z = P.pos.z + Math.sin(a) * r;
+      const y = I.ground.heightAt(x, z);
+      if (y < 1 || I.ground.normalAt(x, z, new THREE.Vector3(), 4).y < 0.9) continue;
+      const n = pts.filter((t) => seen(x, y + 3, z, t)).length;
+      if (n > 0 && (!best || n > best.n * 1.5 || (n >= best.n && r < best.d))) best = { x, z, n, d: r };
+    }
+    if (best && best.n >= Math.min(4, pts.length)) break;
+  }
+  if (!best || best.d === 0) return;
+  const dx = best.x - P.pos.x, dz = best.z - P.pos.z;
+  const t = st ? pts[0] : pts[0];
+  for (const e of I.world.ents) {
+    if (!e.formation) continue;
+    e.pos.x += dx;
+    e.pos.z += dz;
+    e.pos.y = I.ground.heightAt(e.pos.x, e.pos.z);
+    e.yaw = Math.atan2(-(t.x - e.pos.x), -(t.z - e.pos.z));
+  }
+}
 
 /** Aim at the staged target (the factory, or the nearest standing house of the city) and fire `n` HE rounds. */
 export async function strikeFire(s: ShotContext, I: CommandInternals, n: number): Promise<void> {
@@ -643,11 +697,20 @@ export async function strikeFire(s: ShotContext, I: CommandInternals, n: number)
     let aim: THREE.Vector3 | null = null;
     if (st) aim = new THREE.Vector3(st.x, (st.y0 + st.y1) / 2, st.z);
     else {
+      // The nearest house the gun can see (a crest in between would take the round).
+      const eye = p.clone().setY(p.y + 3);
+      const seen = (x: number, y: number, z: number): boolean => {
+        for (let k = 1; k < 40; k++) {
+          const f = k / 40;
+          if (I.ground.heightAt(eye.x + (x - eye.x) * f, eye.z + (z - eye.z) * f) > eye.y + (y - eye.y) * f - 0.5) return false;
+        }
+        return true;
+      };
       let bd = Infinity;
       for (const h of I.civil.houseRecs) {
         if (h.down || h.cityId !== sid) continue;
         const d = Math.hypot(h.x - p.x, h.z - p.z);
-        if (d < bd) {
+        if (d < bd && seen(h.x, h.y + h.h * 0.6, h.z)) {
           bd = d;
           aim = new THREE.Vector3(h.x, h.y + h.h * 0.5, h.z);
         }

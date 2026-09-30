@@ -52,7 +52,7 @@ import { NightKit } from './night';
 import { FLIGHT_CEILING_M, Forces } from './forces';
 import { TacMap } from './tacmap';
 import { fmtDur, wireIncursionAlerts } from './alerts';
-import { alongRoute, atWar, combatTargets, planRoute, tileBearing, tileKm, type CombatTarget, type Route, type Targets } from './goto';
+import { alongRoute, atWar, combatTargets, planRoute, routeProgress, tileBearing, tileKm, type CombatTarget, type Route, type Targets } from './goto';
 
 registerCommandStrings();
 
@@ -75,7 +75,7 @@ const STRUCT_KEY: Record<number, string> = { 0: 'city', 1: 'port', 2: 'factory',
 const STOP_KM: Record<CommandKind, number> = { tank: 1.2, jet: 12, ship: 8 };
 const HOP_KM: Record<CommandKind, number> = { tank: 2.5, jet: 30, ship: 12 };
 /** An enemy entity this close is contact: the chip says so and there is nothing to travel to. */
-const REACH_M: Record<CommandKind, number> = { tank: 3000, jet: 15000, ship: 12000 };
+const REACH_M: Record<CommandKind, number> = { tank: 4000, jet: 15000, ship: 12000 };
 /** Beyond this the chip offers «Ir al frente más cercano» (a far unit) instead of «Ir al combate». */
 const FAR_KM: Record<CommandKind, number> = { tank: 25, jet: 150, ship: 60 };
 /** A march takes about this many real seconds (the clock rate follows), between ×300 and ×3600. */
@@ -92,7 +92,7 @@ const HOUSE_DMG = 0.005;
 const BLOCK_DMG = 0.03;
 const BLOCK_DOWN_SHARE = 0.4;
 /** Blast radius (m) that knocks down the houses around an impact. */
-const BLAST_M = { he: 0, ap: 0, naval: 14, missile: 16, shipMissile: 24, bomb: 38 };
+const BLAST_M = { he: 10, ap: 0, naval: 14, missile: 16, shipMissile: 24, bomb: 38 };
 /** A border of a nation at peace closer than this drops travel to ×1 and warns (§9.7.1). */
 const BORDER_WARN_M = 2000;
 
@@ -710,6 +710,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   // Structures and cities hit in command mode (owner feedback #3, item 27)
   // -----------------------------------------------------------------------------------------------
   const hitAt = new THREE.Vector3();
+  let sceneryLog = 0;
   function weaponOf(p: Proj): keyof typeof HIT_DMG {
     if (p.kind === 'bomb') return 'bomb';
     if (p.kind === 'missile') return kind === 'ship' ? 'shipMissile' : 'missile';
@@ -723,6 +724,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const r = civil.hitTest(a, b, hitAt);
     if (!r) return null;
     if (p.player || p.owner?.formation) {
+      if (sceneryLog++ < 40) console.info(`[command] ${p.kind} hit ${r.struct ? `structure ${r.struct.id}` : `house of city ${r.house?.cityId ?? 0} (owner ${r.house?.owner ?? 0})`} at ${hitAt.x.toFixed(0)},${hitAt.y.toFixed(0)},${hitAt.z.toFixed(0)}`);
       if (r.struct) hitStructure(r.struct, weaponOf(p));
       else if (r.house) hitHouse(r.house, weaponOf(p), hitAt);
     }
@@ -810,7 +812,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const allies = view.players[city.owner]?.allies.length ?? 0;
     const body = t('command.civil.body', {
       city: cityName(cityId), nation: name, civ: formatNumber(Math.round(civ / 100) * 100), v: Math.abs(CIVILIAN_OPINION_VICTIM),
-      a: Math.abs(CIVILIAN_OPINION_ALLY), n: allies, w: Math.abs(CIVILIAN_OPINION_WORLD), days: Math.round(CASUS_BELLI_TICKS / 240),
+      allies: allies > 0 ? t('command.civil.allies', { n: allies, a: Math.abs(CIVILIAN_OPINION_ALLY) }) : '', w: Math.abs(CIVILIAN_OPINION_WORLD), days: Math.round(CASUS_BELLI_TICKS / 240),
     });
     const i = await decide(t('command.civil.title', { city: cityName(cityId) }), body, peace ? t('command.civil.peace', { nation: name }) : t('command.civil.note'), [
       { label: t('command.civil.go'), cls: 'danger', key: 'Enter' },
@@ -1476,6 +1478,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (entryGoal) return entryGoal;
     const { nearest, mission } = targets;
     // The mission's place counts while the unit is not there yet (standing in its sector, the fight is the nearest enemy).
+    // A defended sector is own ground: it only leads when no fighting is known (the fight is where the enemy is).
+    if (mission && mission.order === 'defend' && nearest) return nearest;
     if (mission && mission.km > STOP_KM[kind] + HOP_KM[kind] && (!nearest || mission.km <= nearest.km * 1.5 + 5)) return mission;
     return nearest;
   }
@@ -1544,6 +1548,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
 
   /** «Ir al combate» (G, or the chip's button). */
   async function goToCombat(): Promise<void> {
+    if (marchLegs === 0) marchLegs = 1;
     if (phase !== 'play' || decision || !params || !overlay) return;
     const P = player();
     if (!P || !forces) return;
@@ -1618,6 +1623,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     input.releaseLock();
     hud?.setCinematic(true);
     if (!prebuild) await ctx.post.fadeTo(1, ctx.app.isShot ? 1 : 450);
+    // Nothing to draw behind the fade: the frames stay cheap and the sim gets the machine.
+    scene.visible = false;
     console.info(`[command] march to ${title}: ${route.km.toFixed(1)} km by ${route.pts.length - 1} legs at ×${rate}`);
     requested = effRate = rate;
     throttled = false;
@@ -1626,41 +1633,56 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     ctx.sim.setClock('travel', rate, focus, false);
     sentClock = { mode: 'travel', rate, throttled: false, at: performance.now() };
     const sec0 = ctx.sim.view.command?.sec ?? 0;
-    let lastSend = 0, km = 0, stopBy = 'arrived';
+    let lastSend = 0, km = 0, stopBy = 'arrived', stall = 0, lastKm = -1, stallSince = performance.now();
     let pt = alongRoute(route, 0);
     const reachKm = kind === 'tank' ? 5 : kind === 'ship' ? 25 : 60;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     for (;;) {
       await sleep(80);
-      if (!active) return null;
-      const cv = ctx.sim.view.command;
-      const gs = cv ? Math.max(0, cv.sec - sec0) : 0;
-      km = Math.min(route.km, (speed * gs) / 3600);
-      pt = alongRoute(route, km);
-      const now = performance.now();
-      if (now - lastSend > 200) {
-        lastSend = now;
-        ctx.sim.send({ type: 'controlledMove', unitId: p0.unitId, x: pt.x, y: pt.y, heading: pt.heading });
-        if (now - sentClock.at > 1000) {
-          ctx.sim.setClock('travel', rate, { x: pt.x, y: pt.y }, false);
-          sentClock.at = now;
-        }
+      if (!active) {
+        scene.visible = true;
+        return null;
       }
       const uv = unitView();
-      if (km >= route.km - 1e-3) break;
-      if (transitAbort) {
-        stopBy = 'player';
-        break;
-      }
       if (!uv || !(uv.hp > 0)) {
         stopBy = 'lost';
         break;
       }
-      if (km > 2 && enemyNearTile(pt.x, pt.y, reachKm)) {
+      // Progress is where the sim has the unit (it checks every move against the speed and the game time since the
+      // last one, and snaps a move beyond it); the next move asks for the point the clock allows by now.
+      km = routeProgress(route, uv.x, uv.y);
+      const cv = ctx.sim.view.command;
+      const gs = cv ? Math.max(0, cv.sec - sec0) : 0;
+      const want = Math.min(route.km, Math.max(km, (speed * gs) / 3600));
+      pt = alongRoute(route, want);
+      const now = performance.now();
+      if (now - lastSend > 150) {
+        lastSend = now;
+        ctx.sim.send({ type: 'controlledMove', unitId: p0.unitId, x: pt.x, y: pt.y, heading: pt.heading });
+        if (now - sentClock.at > 1000) {
+          ctx.sim.setClock('travel', rate, { x: uv.x, y: uv.y }, false);
+          sentClock.at = now;
+        }
+      }
+      if (km >= route.km - 0.25) break;
+      if (transitAbort) {
+        stopBy = 'player';
+        break;
+      }
+      if (km > 2 && enemyNearTile(uv.x, uv.y, reachKm)) {
         stopBy = 'enemy';
         break;
       }
-      const leftKm = route.km - km;
+      // Nothing moves any more (blocked): stop where it is.
+      if (Math.abs(km - lastKm) >= 0.01 || lastKm < 0) stallSince = now;
+      stall = now - stallSince;
+      lastKm = km;
+      if (stall > 30000) {
+        console.info(`[command] march stalled at ${km.toFixed(1)} km (sim ${cv?.sec.toFixed(0)} s, moves ${JSON.stringify(cv?.moves)}, log ${JSON.stringify(cv?.log.slice(-2))})`);
+        stopBy = 'player';
+        break;
+      }
+      const leftKm = Math.max(0, route.km - km);
       const leftH = leftKm / speed;
       overlay.setTransit({
         title: t('command.transit.title', { what: title }),
@@ -1671,18 +1693,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         foot: t('command.transit.foot'),
       });
     }
-    // The last position exactly, then tactical time again.
-    ctx.sim.send({ type: 'controlledMove', unitId: p0.unitId, x: pt.x, y: pt.y, heading: pt.heading });
+    // Tactical time again, where the sim has the unit.
     requested = effRate = 1;
-    ctx.sim.setClock('tactical', 1, { x: pt.x, y: pt.y }, false);
+    const uEnd = unitView();
+    ctx.sim.setClock('tactical', 1, uEnd ? { x: uEnd.x, y: uEnd.y } : { x: pt.x, y: pt.y }, false);
     sentClock = { mode: 'tactical', rate: 1, throttled: false, at: performance.now() };
-    const t1 = performance.now();
-    while (performance.now() - t1 < 4000) {
-      const uv = unitView();
-      if (!uv || tileKm(uv.x, uv.y, pt.x, pt.y) < 0.3) break;
-      await sleep(60);
-    }
+    await sleep(300);
     overlay.setTransit(null);
+    scene.visible = true;
     const cv = ctx.sim.view.command;
     transits.push({ km, gameSec: cv ? cv.sec - sec0 : 0, realMs: performance.now() - wall0, rate, stop: stopBy });
     console.info(`[command] march ended (${stopBy}): ${km.toFixed(1)} km in ${((performance.now() - wall0) / 1000).toFixed(1)} real s`);
@@ -1736,12 +1754,24 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     phase = 'play';
     phaseT = 0;
+    // The march took game hours: the local clock catches up with the sim's.
+    localSec = ctx.sim.view.command?.sec ?? localSec;
     hud?.setCinematic(false);
     updateInfo(performance.now());
     refreshTargets(true);
     arrivalNotice(c, stopBy);
     await ctx.post.fadeTo(0, ctx.app.isShot ? 1 : 500);
+    // The line moved while the unit marched (fronts are alive): if the action is still out of reach, go on to where it
+    // is now (at most two more legs, then the player drives).
+    const next = chosenTarget();
+    const P = player();
+    const inReach = !!P && !!forces && forces.nearestHostile(P.pos).dist < REACH_M[kind];
+    if (stopBy === 'arrived' && next && !inReach && next.km - STOP_KM[kind] >= HOP_KM[kind] && marchLegs < 3) {
+      marchLegs++;
+      await goToCombat();
+    } else marchLegs = 0;
   }
+  let marchLegs = 0;
 
   function arrivalNotice(c: CombatTarget, stopBy: string): void {
     const P = player();
@@ -2125,7 +2155,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       hud.onExitClick = () => void requestExit();
       overlay = new CommandOverlay(ctx.uiRoot);
       tacmap = new TacMap(overlay.root);
-      overlay.onGo = () => void goToCombat();
+      overlay.onGo = () => {
+        marchLegs = 0;
+        void goToCombat();
+      };
       tacmap.onPick = (p) => {
         waypoint = p ? new THREE.Vector3(p.x, ground!.surfaceAt(p.x, p.z) + (kind === 'jet' ? 300 : 20), p.z) : null;
         autopilot = !!p && requested > 1;
@@ -2365,6 +2398,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       overlay?.hide();
       tacmap?.close();
       night.reset();
+      scene.visible = true;
+      transitAbort = true;
       world?.reset();
       fx?.clear();
       scatter?.resetStream();
@@ -2411,7 +2446,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         if (input.hit('Equal') || input.hit('NumpadAdd') || input.hit('BracketRight')) stepRate(1);
         if (input.hit('Minus') || input.hit('NumpadSubtract') || input.hit('Slash')) stepRate(-1);
         if (input.hit('KeyH')) overlay.toggleHelp();
-        if (input.hit('KeyG')) void goToCombat();
+        if (input.hit('KeyG')) {
+          marchLegs = 0;
+          void goToCombat();
+        }
         if (input.hit('KeyN')) {
           const m = night.cycleVision();
           ctx.post.setExposure((1 + atmos.night * 1.5) * night.exposureMul);
@@ -2708,8 +2746,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (stripSeen.get(key) === sig) return;
     stripSeen.set(key, sig);
     if (!own) overlay.pushAlert(a.severity, a.title, a.body ?? '');
+    if (phase === 'transit') {
+      // A march only stops for a critical alert (it runs on its own clock).
+      if (a.severity === 'critical') transitAbort = true;
+      return;
+    }
     if (a.severity !== 'warning') dropToTactical('command.travel.alert');
-    if (a.severity === 'critical' && phase === 'transit') transitAbort = true;
   });
   void ENT_DEFS;
   return api;

@@ -1489,3 +1489,34 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
 * `aar.ts` — after-action reports (`afterAction`), damage reports, the periodic idle-units alert; `window.__fuAar`.
 * Shots (`src/ui/shotsF3.ts`): `f3-damage`, `f3-city-damage`, `f3-card`, `f3-civil`, `f3-missions`, `f3-advisor`.
 * i18n: `src/ui/i18n/f3.ts` (also overrides `help.units.body`, `help.structures.body`).
+
+## 27. Feedback 3, command side (owner items 26, 27 in command mode, 29b, 29e) — where it lives
+
+* `src/command/goto.ts` — `combatTargets` (nearest battle / front point / enemy unit / port and the mission target),
+  `missionTarget`, `planRoute` (straight or tile BFS over passable tiles, never a nation at peace), `alongRoute`,
+  `routeProgress`, `tileKm`, `tileBearing`.
+* `src/command/index.ts` — «Ir al combate»: `refreshTargets`, `chosenTarget`, `updateCombat` (chip + world marker),
+  `goToCombat` (G / chip button), `marchTo` (the march behind the fade: clock ×300…×3600, moves ≤ 4.5 km ahead of the
+  sim's position, stops on arrival / enemy / critical alert / Esc), `relocate` (rebuild the scene with `build(p, true)`,
+  which keeps the session's tallies), `afterIntro` (entry notice, goal finishing), entry `goal` handled in `enter()`
+  (march before the build). Phase `'transit'`. Structures: `sceneryHit`, `hitStructure`, `hitHouse`, `askCivilian`,
+  `structPending` flushed in `flushCasualties` as `commandStructureHit`, `burnFires`. Constants `STOP_KM`, `HOP_KM`,
+  `REACH_M`, `FAR_KM`, `TRANSIT_*`, `HIT_DMG`, `HOUSE_DMG`, `BLOCK_DMG`, `BLAST_M`. Tools: `__cmd.goCombat()`,
+  `__cmd.targets()`, `__cmdStats.combat / transit / transits / target / nearestHostileM / night / vision / flares /
+  fires`.
+* `src/command/civil.ts` — `HouseRec` (house → sim city + block, `collapseHouse`, `blockDown`, `housesNear`), `StructRec`,
+  `hitTest`, damaged structure models (height by `standingShare`, scorched materials, debris), rubble on `view.ruins`,
+  `fires`.
+* `src/command/world.ts` — `WorldHooks.sceneryHit` (shells, bombs, missiles stop at buildings).
+* `src/command/night.ts` — `NightKit`: headlights / searchlight, illumination flares, N vision modes (canvas filter +
+  thermal emissive), L lights.
+* `src/command/player/jet.ts` — bombs (B). `player/tank.ts selectAmmo` (staging).
+* `src/command/hud/overlay.ts` — `setCombat` chip, `combatMarker` (ring / edge arrow), `setTransit` march card,
+  `setVision` badge.
+* App/UI: `bootstrap.ts enterCommandMode(unitId, goal)`, `enterCommandAt` + `unitForAction`, exit camera `EXIT_ALT_KM`
+  900 km; `src/ui/hud/takeAction.ts` (`frontAction`, `takeControlAtFront`, `takeControlAtPlace`); buttons in
+  `fronts.ts` (`.fu-war-take`), `frontBadges.ts` (double click), `battleStrip.ts` (`.fu-bstrip-take`), `alerts.ts`
+  (`.fu-alert-take`), `selection.ts` (`.fu-tc-mission`). Strings in `src/command/strings.ts` (also the `hud.takeHere*`
+  and `hud.takeMission*` UI keys); `help.command.body` (w3.ts) explains it.
+* Shot `command-strike` (`&target=factory|city`, `&shots=`, `&live=1`), `strikeFire`; verifier `node
+  tools/f3c-verify.mjs [--only go,panel,strike,city,night]` → `shots/feedback3-command/verify/`.

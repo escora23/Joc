@@ -266,3 +266,24 @@ export function alongRoute(r: Route, km: number): { x: number; y: number; headin
   const p = r.pts[r.pts.length - 1];
   return { x: p.x, y: p.y, heading: 0, done: true };
 }
+
+/** How far along a route (km) the point (x, y) is: its projection on the nearest leg. */
+export function routeProgress(r: Route, x: number, y: number): number {
+  let best = Infinity, at = 0, acc = 0;
+  for (let k = 1; k < r.pts.length; k++) {
+    const a = r.pts[k - 1], b = r.pts[k];
+    const kx = kmPerTileX((a.y + b.y) / 2);
+    const bx = wdx(a.x, b.x) * kx, by = (b.y - a.y) * TILE_KM;
+    const px = wdx(a.x, x) * kx, py = (y - a.y) * TILE_KM;
+    const L2 = bx * bx + by * by;
+    const f = L2 > 0 ? Math.max(0, Math.min(1, (px * bx + py * by) / L2)) : 0;
+    const d = Math.hypot(px - bx * f, py - by * f);
+    const L = Math.sqrt(L2);
+    if (d < best) {
+      best = d;
+      at = acc + L * f;
+    }
+    acc += L;
+  }
+  return at;
+}

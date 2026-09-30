@@ -124,7 +124,7 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
 .fu-cmdx-radio .cd .n { min-width: 4.5rem; text-align: right; font-size: 0.9rem; }
 .fu-cmdx-radio .x { font: 700 0.72rem/1.2 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #aee9ff; margin-top: 0.4rem; }
 /* Feedback 3 (#26): the nearest action — what, how far, which way — with «G Ir al combate». */
-.fu-cmdx-combat { position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 0.6rem;
+.fu-cmdx-combat { position: absolute; top: 3.2rem; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 0.6rem;
   padding: 0.4rem 0.5rem 0.4rem 0.75rem; background: rgba(20,6,4,0.8); border: 1px solid rgba(255,106,74,0.55); border-radius: 3px;
   font: 700 0.78rem/1.2 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #ffd0c4; max-width: 44rem; pointer-events: auto; }
 .fu-cmdx-combat.show { display: flex; }
@@ -630,8 +630,14 @@ export class CommandOverlay {
       if (!on || x < 30 || x > W - 30 || y < 70 || y > H - 50) {
         const dx = on ? x - W / 2 : -(x - W / 2), dy = on ? y - H / 2 : -(y - H / 2);
         const a = Math.atan2(dy, dx);
-        x = W / 2 + Math.cos(a) * (W / 2 - 56);
-        y = H / 2 + Math.sin(a) * (H / 2 - 56);
+        // On an inner rectangle (clear of the chip and compass at the top and the panels at the bottom).
+        const hw = W / 2 - 60, top = 150, bot = H - 150;
+        const cx = Math.cos(a), cy = Math.sin(a);
+        const kx = Math.abs(cx) > 1e-6 ? hw / Math.abs(cx) : Infinity;
+        const ky = cy < 0 ? (H / 2 - top) / -cy : cy > 0 ? (bot - H / 2) / cy : Infinity;
+        const k = Math.min(kx, ky);
+        x = W / 2 + cx * k;
+        y = H / 2 + cy * k;
         g.save();
         g.translate(x, y);
         g.rotate(a);

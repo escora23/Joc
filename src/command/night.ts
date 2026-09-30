@@ -16,8 +16,8 @@ import type { Atmos } from './env/sky';
 
 export type VisionMode = 'off' | 'nv' | 'thermal';
 
-const NV_FILTER = 'grayscale(1) sepia(1) hue-rotate(58deg) saturate(3.2) brightness(2.1) contrast(1.12)';
-const THERMAL_FILTER = 'grayscale(1) contrast(1.55) brightness(1.05)';
+const NV_FILTER = 'grayscale(1) sepia(1) hue-rotate(72deg) saturate(2.2) brightness(1.3) contrast(1.08)';
+const THERMAL_FILTER = 'grayscale(1) contrast(1.4) brightness(0.78)';
 const FLARE_EVERY_S = 12;
 const FLARE_LIFE_S = 26;
 
@@ -35,7 +35,7 @@ export class NightKit {
   private readonly head: THREE.SpotLight;
   private readonly headTarget = new THREE.Object3D();
   private readonly flares: Flare[] = [];
-  private flareT = 4;
+  private flareT = 1.5;
   private readonly saved = new Map<THREE.MeshStandardMaterial, { e: THREE.Color; i: number }>();
   private readonly tmp = new THREE.Vector3();
 
@@ -68,7 +68,7 @@ export class NightKit {
       if (m === 'thermal') {
         if (!this.saved.has(mat)) this.saved.set(mat, { e: mat.emissive.clone(), i: mat.emissiveIntensity });
         mat.emissive.setRGB(1, 1, 1);
-        mat.emissiveIntensity = mat === M!.wreck ? 0.35 : 0.9;
+        mat.emissiveIntensity = mat === M!.wreck ? 0.2 : 0.42;
       } else {
         const s = this.saved.get(mat);
         if (s) {
@@ -82,7 +82,7 @@ export class NightKit {
 
   /** Exposure multiplier the sights add (night vision amplifies light; thermal does not need it). */
   get exposureMul(): number {
-    return this.vision === 'nv' ? 1.6 : this.vision === 'thermal' ? 0.55 : 1;
+    return this.vision === 'nv' ? 1.2 : this.vision === 'thermal' ? 0.5 : 1;
   }
 
   /**
@@ -94,8 +94,9 @@ export class NightKit {
     // Headlights / searchlight (not on a jet: its instruments and the moon do).
     if (vehicle && vehicle.kind !== 'jet' && this.lightsOn && dark > 0) {
       const fwx = -Math.sin(vehicle.yaw), fwz = -Math.cos(vehicle.yaw);
-      const up = vehicle.kind === 'ship' ? 12 : 2.4;
-      this.head.position.set(vehicle.pos.x + fwx * 3, vehicle.pos.y + up, vehicle.pos.z + fwz * 3);
+      const up = vehicle.kind === 'ship' ? 12 : 1.5;
+      const ahead = vehicle.kind === 'ship' ? 20 : 4.6;
+      this.head.position.set(vehicle.pos.x + fwx * ahead, vehicle.pos.y + up, vehicle.pos.z + fwz * ahead);
       const reach = vehicle.kind === 'ship' ? 500 : 60;
       this.headTarget.position.set(vehicle.pos.x + fwx * reach, vehicle.pos.y + (vehicle.kind === 'ship' ? 0 : 0.5), vehicle.pos.z + fwz * reach);
       this.headTarget.updateMatrixWorld();
@@ -103,9 +104,11 @@ export class NightKit {
       this.head.distance = vehicle.kind === 'ship' ? 1500 : 220;
       if (fx) {
         // The lamps themselves.
-        const sx = Math.cos(vehicle.yaw) * 1.3, sz = -Math.sin(vehicle.yaw) * 1.3;
-        fx.particles.glow(this.head.position.x + sx, this.head.position.y - 0.9, this.head.position.z + sz, 0.5, 5, 4.6, 3.8, 0.9 * dark);
-        fx.particles.glow(this.head.position.x - sx, this.head.position.y - 0.9, this.head.position.z - sz, 0.5, 5, 4.6, 3.8, 0.9 * dark);
+        const sx = Math.cos(vehicle.yaw) * 1.4, sz = -Math.sin(vehicle.yaw) * 1.4;
+        if (vehicle.kind === 'tank') {
+          fx.particles.glow(this.head.position.x + sx, this.head.position.y - 0.2, this.head.position.z + sz, 0.28, 5, 4.6, 3.8, 0.9 * dark);
+          fx.particles.glow(this.head.position.x - sx, this.head.position.y - 0.2, this.head.position.z - sz, 0.28, 5, 4.6, 3.8, 0.9 * dark);
+        }
       }
     } else this.head.intensity = 0;
     // Illumination flares over the fighting.
@@ -143,7 +146,7 @@ export class NightKit {
       f.life = 0;
       f.light.intensity = 0;
     }
-    this.flareT = 4;
+    this.flareT = 1.5;
     this.flaresFired = 0;
     this.lightsOn = true;
     void this.scene;

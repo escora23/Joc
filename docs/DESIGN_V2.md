@@ -3202,3 +3202,64 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
   tiles taken and lost (≈ km²), losses on both sides, the damage done and the divisions that supported it.
 * **Damage reports** (`structureDamaged` event): a structure of ours changing state, losing a level or destroyed (with
   civilians and troops killed and «Repárala desde su ficha»), and our own weapons changing an enemy structure's state.
+
+## 19. Feedback 3, command side (owner items 26, 27 in command mode, 29b, 29e)
+
+### 19.1 Getting to the action (#26)
+
+* **What and where** (`src/command/goto.ts combatTargets`, every 0.5 s): the nearest place to fight for the vehicle —
+  an offensive's live contact touching the human (`AttackView.contactX/Y`, preferred up to 25 % farther), the nearest
+  point of a front line at war (`FrontView.samples`), an enemy unit of the vehicle's kind at war (division / warship /
+  airborne aircraft), an enemy port for a warship — and the unit's own mission target (join → the offensive's contact,
+  assault / raze / blockade → the structure, defend → the sector, attack / move → the order's point). The mission wins
+  while the unit is not there yet and it is not much farther than the nearest action.
+* **Always on screen**: a chip under the compass («Frente con Francia · 14 km · noreste», the mission or a nearer action
+  on its second line, and the button «Ir al combate» / «Ir al frente más cercano» beyond 25 km for a tank, 150 km for a
+  jet, 60 km for a ship), and a red ring on the place in the world (an arrow on the screen edge when it is out of view).
+  In contact (an enemy entity within 3 km, 15 km in the air, 12 km at sea) the chip turns into «Carro de Suiza a tiro ·
+  1,2 km · norte» and the ring sits on that enemy.
+* **G «Ir al combate»** (or the chip's button): near (the place less than 2.5 km beyond the stop point) the autopilot
+  drives there (compressed when nothing is in reach); farther, the unit **marches**: the screen fades to a march card,
+  the clock runs ×300…×3600 for the whole world (like a move order on the strategic map; the rate makes the march take
+  ~6 real s), the unit moves in the sim along a route by own or friendly ground (`planRoute`: straight, else a
+  breadth-first search that never enters a nation at peace; water for ships), every move checked by the sim
+  (`controlledMove` clamp, ≤ 4.5 km per message), and the scene is rebuilt where it stops: 1.2 km short of the line
+  (2.4 km from an enemy unit; 12 km for a jet, 8 km for a ship), facing it. It stops early on an enemy unit within 5 km,
+  a critical alert or Esc. When the line moved during the march, up to two more legs follow by themselves.
+* **Far from any fight**: on entry the notice says where the nearest fighting is and offers G («Pulsa G para ir al
+  frente más cercano»).
+* **Taking control at the action** (29e): `app.enterCommandAt({x, y, label, frontKey?, attackId?})` picks the unit
+  (joined to that offensive ×0.2, on that front ×0.35, else the nearest; healthier preferred) and enters with a `goal`:
+  when it is more than 2.5 km away the march runs **behind the entry fade, before the scene is built** (one build, at
+  the action). Entry points: double click on a front badge, «Tomar el control aquí» on a front row of the Guerra
+  panel, the battle strip (your division in that battle with its hand-off, else the nearest marches there), «Al mando»
+  on an alert about the war at a place, «Al mando, a su misión» on a unit card with a mission. The exit ends the climb
+  at 900 km looking at the unit's new position (the place of the action), not a continental view.
+
+### 19.2 Structures and cities hit in command mode (#27)
+
+* Projectiles (tank shells, the jet's missiles and new bombs — B, 4 per sortie — the ship's guns and missiles) collide
+  with the structures and city houses of the scene (`civil.hitTest`: structure footprints up to their standing height,
+  houses as boxes; `World.hooks.sceneryHit`), explode there and, when fired by the player's formation, damage the real
+  thing through `commandStructureHit` (flushed every 2 s with the casualties): **structure** HE 5 %, AP 2 %, naval gun
+  6 %, jet missile 12 %, ship missile 20 %, bomb 30 % of its hp; **city**: each house knocked down 0.5 %, and when 40 %
+  of a city block's houses are down the block is reported (3 % and its bit in `StructureView.blocks`). A bomb or a
+  missile brings down the houses within its blast (38 / 16 / 24 m). The sim's one rule does the rest: state, function,
+  level loss, rubble, civilians and troops killed, the owner's damage report, casus belli and opinion for a city.
+* A house belongs to block `floor(angle / 22.5°)` of its sim city; the blocks the shared mask `collapsedBlocks` says are
+  down (by state or reported) are drawn as scorched heaps, so command mode and the strategic model agree.
+* **Before the first shot at a city**: a dialog with the consequences in numbers (civilians per heavy hit, −20 / −12 /
+  −5 opinion, casus belli 30 days, escalation; «es una declaración de guerra» when at peace); no damage before
+  «Atacar la ciudad». A structure of a nation at peace asks the existing fire-first question (a declaration of war).
+  Own and allied structures and cities only stop the rounds.
+* **What you see**: damaged structures drawn at 85 / 60 % height, scorched material, debris around, smoke (damaged) or
+  flames and smoke (heavily damaged); collapsed houses as dark heaps with a fire per collapsed block; rubble piles on the
+  sim's ruins, smoking for 2 game days, labelled «Escombros · Fábrica». The ten nearest fires burn (`fx.burn` /
+  `fx.column`) and light the ground at night. The debrief lists the hits and each structure's state after them.
+
+### 19.3 Night (#29b)
+
+* Moonlight and exposure (as before), plus `src/command/night.ts`: the vehicle's headlights (a ship's searchlight) on
+  by themselves after dusk (L toggles), illumination flares over the fighting every 12 s while an enemy is within 4 km
+  (25 s under a parachute, a strong point light), the fires of damaged structures, and **N**: night vision (green,
+  amplified, exposure ×1.6) → thermal white-hot (vehicles and soldiers emissive against a dark ground) → off.
