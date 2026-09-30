@@ -181,3 +181,33 @@ What it means (each is a hard requirement; the owner-proxy critic checks them as
       and damage done.
     - e. **Take control from anywhere it makes sense:** a unit card, a mission, a battle strip, an alert. You enter
       at the action (see 26), and on exit you return to the strategic camera looking at that place.
+
+## Owner feedback #3b (added while the Feedback 3 command-mode agent was running) — MANDATORY, item 30
+
+Verbatim (Spanish):
+
+> Okey, también que de alguna manera puedas hacer bloqueos de rutas marítimas o secuestrar barcos o destruirlos y cosas así
+
+30. **Real naval warfare on the sea lanes.** Some of this already exists in the code (port blockade in
+    src/sim/units.ts `blockaded()`, trade-ship capture `captureTrade`, economy.ts stops a blockaded port's trade), so
+    first check what is really there and prove it in play. Then finish it so it is understandable and matters.
+    - **Blockade a sea route, not only a port.** Order warships to close a lane or chokepoint: Gibraltar, Suez, Bosporus,
+      Hormuz, Malacca, the Channel, Panama, or any stretch of a real trade route you click. Enemy (or embargoed)
+      trade ships and transports must reroute the long way (visible, slower, less income) or be stopped.
+    - **Seize or sink ships.**
+      - When your warships (or a player-controlled warship in command mode) intercept a trade ship, transport or
+        crippled enemy vessel, you choose: **board and seize it** (it becomes yours, with its cargo and gold, shown
+        in your colour, sailing to your nearest port) or **sink it**.
+      - Transports carrying troops can be sunk (troops lost) or forced to turn back.
+      - Doing this at peace is an act of piracy/war: a clear warning and preview before confirming (opinion,
+        casus belli, escalation), as for civilian strikes.
+    - **Counterplay.** Convoys escorted by warships, alternative routes, breaking a blockade with your fleet and air
+      power, sub-hunting if submarines exist. You get located alerts when your ships are stopped, seized or sunk,
+      when a route is closed, and when the AI blockades you. The AI uses blockades and seizures against the player.
+    - **Readable on the map.** Blocked lanes are drawn (hatched/red on the route), rerouted ships show their new
+      route, and seized ships change colour. The Guerra/Fuerzas panels and the port card show lost trade income per
+      hour due to the blockade.
+    - **In command mode.** From a warship: hail a ship ("Deténgase para inspección"), fire a warning shot, board
+      (short sequence), or sink it, all synced to the sim.
+
+Handled in the Feedback 3 round (a dedicated naval pass) and verified with items 26–29; the owner-proxy critic checks it as item 30.
