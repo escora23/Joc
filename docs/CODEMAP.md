@@ -1497,7 +1497,8 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
   `routeProgress`, `tileKm`, `tileBearing`.
 * `src/command/index.ts` — «Ir al combate»: `refreshTargets`, `chosenTarget`, `updateCombat` (chip + world marker),
   `goToCombat` (G / chip button), `marchTo` (the march behind the fade: clock ×300…×3600, moves ≤ 4.5 km ahead of the
-  sim's position, stops on arrival / enemy / critical alert / Esc), `relocate` (rebuild the scene with `build(p, true)`,
+  sim's position, stops on arrival / enemy / critical alert / Esc; follow-on legs chained from `nextLegFromSim` behind the
+  same fade), `relocate` (rebuild the scene with `build(p, true)`,
   which keeps the session's tallies), `afterIntro` (entry notice, goal finishing), entry `goal` handled in `enter()`
   (march before the build). Phase `'transit'`. Structures: `sceneryHit`, `hitStructure`, `hitHouse`, `askCivilian`,
   `structPending` flushed in `flushCasualties` as `commandStructureHit`, `burnFires`. Constants `STOP_KM`, `HOP_KM`,
@@ -1519,4 +1520,4 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
   (`.fu-alert-take`), `selection.ts` (`.fu-tc-mission`). Strings in `src/command/strings.ts` (also the `hud.takeHere*`
   and `hud.takeMission*` UI keys); `help.command.body` (w3.ts) explains it.
 * Shot `command-strike` (`&target=factory|city`, `&shots=`, `&live=1`), `strikeFire`; verifier `node
-  tools/f3c-verify.mjs [--only go,panel,strike,city,night]` → `shots/feedback3-command/verify/`.
+  tools/f3c-verify.mjs [--only go,panel,strike,city,night,alert]` → `shots/feedback3-command/verify/`.

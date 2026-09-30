@@ -161,18 +161,18 @@ async function panel() {
 async function alert() {
   const page = await open('f3-missions', '&run=10&panel=0');
   // The live war raises its own alerts (offensives, losses, strikes); wait for one that offers «Al mando».
-  let ok = await until(page, () => !!document.querySelector('.fu-alert-take'), null, 240000, 1000);
+  let ok = await until(page, () => !!document.querySelector('.fu-alert-take:not(.fu-hidden)'), null, 240000, 1000);
   if (!ok) {
     await page.evaluate(() => __front.ctx.sim.setSpeed?.(3));
-    ok = await until(page, () => !!document.querySelector('.fu-alert-take'), null, 240000, 1000);
+    ok = await until(page, () => !!document.querySelector('.fu-alert-take:not(.fu-hidden)'), null, 240000, 1000);
   }
-  const title = await page.evaluate(() => document.querySelector('.fu-alert-take')?.closest('.fu-alert')?.innerText.replace(/\s+/g, ' ').slice(0, 160) ?? '');
+  const title = await page.evaluate(() => document.querySelector('.fu-alert-take:not(.fu-hidden)')?.closest('.fu-alert')?.innerText.replace(/\s+/g, ' ').slice(0, 160) ?? '');
   row('A1', 'an alert about the war at a place offers «Al mando»', title || 'no alert with the button', !!ok);
   if (!ok) return page;
   await shot(page, 'alert-0');
-  const place = await page.evaluate(() => { const b = document.querySelector('.fu-alert-take'); return b ? true : false; });
+  const place = await page.evaluate(() => { const b = document.querySelector('.fu-alert-take:not(.fu-hidden)'); return b ? true : false; });
   const t0 = Date.now();
-  await uiClick(page, '.fu-alert-take');
+  await uiClick(page, '.fu-alert-take:not(.fu-hidden)');
   const inPlay = await until(page, () => window.__cmdStats?.phase === 'play' ? window.__cmdStats : null, null, 300000, 500);
   const c = await waitContact(page, 300000);
   const s = await stats(page);
@@ -184,6 +184,42 @@ async function alert() {
   const cam = await page.evaluate(() => __front.ctx.cameraRig.getState());
   row('A3', 'exit: the strategic camera looks at the place of the action', `cam ${cam.lat.toFixed(2)}, ${cam.lon.toFixed(2)} @ ${Math.round(cam.altitudeKm)} km; unit ${where.lat.toFixed(2)}, ${where.lon.toFixed(2)}`, Math.abs(cam.lat - where.lat) < 1 && Math.abs(cam.lon - where.lon) < 1 && cam.altitudeKm < 1500);
   await shot(page, 'alert-2-exit');
+  return page;
+}
+
+/** #27 from the air: the fighter's bombs (B) on a real enemy factory; the sim's hp, level and the report. */
+async function bomb() {
+  const page = await open('command-strike', '&live=1&target=factory&unit=jet');
+  await until(page, () => window.__cmdStats?.phase === 'play', null, 240000, 500);
+  await until(page, () => window.__cmd.civil.structRecs.some((r) => r.id === window.__strikeTarget), null, 180000, 500);
+  const s0 = await structNow(page);
+  const out = [];
+  for (let k = 0; k < 4; k++) {
+    // The release point: where a bomb dropped at the jet's speed falls onto the factory (the pilot's job; staged).
+    const r = await page.evaluate(() => {
+      const I = window.__cmd;
+      const c = I.controller, e = c.ent;
+      const st = I.civil.structRecs.find((q) => q.id === window.__strikeTarget);
+      if (!st || typeof c.bomb !== 'function') return 'no target or no bombs';
+      const h = 350, g = 9.81;
+      const vx = e.vel.x, vy = e.vel.y, vz = e.vel.z;
+      const tf = (vy + Math.sqrt(vy * vy + 2 * g * h)) / g;
+      e.pos.set(st.x - vx * tf, st.y1 + h, st.z - vz * tf);
+      c.bomb();
+      I.simulate(Math.ceil(tf * 30) + 20, 1 / 30);
+      return `bombs left ${c.bombs}`;
+    });
+    out.push(r);
+    await sleep(3000);
+  }
+  const s1 = await until(page, (h) => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return s && (s.hp < h - 0.2 || s.level < 2) ? s : null; }, s0?.hp ?? 1, 60000, 500);
+  const s2 = await structNow(page);
+  const dmg = await page.evaluate(() => window.__f3c.dmg.map((e) => `${e.hpBefore.toFixed(2)}→${e.hp.toFixed(2)} st${e.state}${e.levelLost ? ' LEVEL' : ''} (${e.cause})`));
+  row('B1', 'the fighter bombs hit the real factory: hp falls in the sim (30 % a bomb), a level goes at hp 0, the owner is told', `${out.join(', ')}; L${s0?.level} hp ${s0?.hp} → L${s2?.level} hp ${s2?.hp}; events ${dmg.join(', ')}`, !!s1 && dmg.length > 0);
+  await page.evaluate(() => window.__cmd.simulate(90, 1 / 30));
+  const vis = await page.evaluate(() => ({ fires: window.__cmd.civil.fires.length }));
+  row('B2', 'seen from the jet: fire and smoke on the factory', JSON.stringify(vis), vis.fires > 0);
+  await shot(page, 'bomb-1');
   return page;
 }
 
@@ -252,7 +288,19 @@ async function strike() {
   await sleep(4000);
   const vis = await page.evaluate(() => ({ fires: window.__cmd.civil.fires.length, recs: window.__cmd.civil.structRecs.map((r) => `${r.id}:${(r.y1 - r.y0).toFixed(0)}m`) }));
   row('S3', 'the model in command mode shows it: lower, scorched, debris, smoke or fire', JSON.stringify(vis), vis.fires > 0);
+  // Through the gunner's sight, as the player would look at it.
+  await page.evaluate(() => {
+    const I = window.__cmd;
+    const st = I.civil.structRecs.find((r) => r.id === window.__strikeTarget);
+    if (!st) return;
+    I.controller.aimAt(new I.camera.position.constructor(st.x, (st.y0 + st.y1) * 0.45, st.z));
+    I.controller.snapTurret?.();
+    I.controller.setZoom?.(true);
+    I.simulate(4, 1 / 30);
+  });
+  await sleep(6000);
   await shot(page, 'strike-1-damaged');
+  await page.evaluate(() => window.__cmd.controller.setZoom?.(false));
   // Exit and look at it on the strategic map: its card.
   await page.evaluate(() => window.__cmd.debrief());
   await until(page, () => __front.ctx.app.state === 'playing', null, 120000, 500);
@@ -279,14 +327,18 @@ async function city() {
     window.__asks = [];
     ov.ask = (title, body, extra, buttons) => { window.__asks.push(`${title} | ${body} | ${extra}`); return ask(title, body, extra, buttons); };
   });
-  await fireAt(page, 1);
-  let dlg = null;
-  // The round flies ~1.5 s of local time: many SwiftShader frames.
-  // (a slow SwiftShader frame can hold the round in the air for minutes of real time: wait up to 15 min)
-  for (let i = 0; i < 2250 && !dlg; i++) {
-    dlg = page.__logs.find((l) => /civilian target: asking/.test(l)) ?? (await page.evaluate(() => window.__asks?.[0] ?? null).catch(() => null));
-    if (!dlg) await sleep(400);
+  // Rounds one at a time until one reaches a house (a crest or a short round takes some): the first hit asks.
+  let dlg = null, fired = 0;
+  const asked = async () => page.__logs.find((l) => /civilian target: asking/.test(l)) ?? (await page.evaluate(() => window.__asks?.[0] ?? null).catch(() => null));
+  for (let r = 0; r < 8 && !dlg; r++) {
+    await fireAt(page, 1);
+    fired++;
+    for (let i = 0; i < 150 && !dlg; i++) {
+      dlg = await asked();
+      if (!dlg) await sleep(400);
+    }
   }
+  if (dlg) dlg = `after ${fired} round(s): ${dlg}`;
   row('C1', 'the first shot at a city asks first, with the consequences in numbers', dlg ?? 'no dialog', !!dlg && /civil/i.test(dlg));
   await shot(page, 'city-0-confirm');
   await page.keyboard.press('Enter');
@@ -340,12 +392,12 @@ async function night() {
   const l2 = await frameLight(page);
   const v2 = (await stats(page))?.vision;
   await shot(page, 'night-2-thermal');
-  row('N3', 'N again: thermal (white-hot bodies on a cold ground)', `${v2}: mean luma ${l2.mean.toFixed(1)}, lit ${(l2.lit * 100).toFixed(1)} %`, v2 === 'thermal');
+  row('N3', 'N again: thermal (white-hot bodies on a cold ground)', `${v2}: mean luma ${l2.mean.toFixed(1)}, lit ${(l2.lit * 100).toFixed(1)} %`, v2 === 'thermal' && l2.mean > 25);
   await page.keyboard.press('KeyN');
   return page;
 }
 
-const sections = { strike, city, night, go, panel, alert };
+const sections = { strike, city, night, go, panel, alert, bomb };
 for (const [name, fn] of Object.entries(sections)) {
   if (only && !only.has(name)) continue;
   console.log(`--- ${name}`);

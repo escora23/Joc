@@ -17,7 +17,7 @@ import type { Atmos } from './env/sky';
 export type VisionMode = 'off' | 'nv' | 'thermal';
 
 const NV_FILTER = 'grayscale(1) sepia(1) hue-rotate(72deg) saturate(2.2) brightness(1.3) contrast(1.08)';
-const THERMAL_FILTER = 'grayscale(1) contrast(1.4) brightness(0.78)';
+const THERMAL_FILTER = 'grayscale(1) contrast(1.3) brightness(1.0)';
 const FLARE_EVERY_S = 12;
 const FLARE_LIFE_S = 26;
 
@@ -68,7 +68,7 @@ export class NightKit {
       if (m === 'thermal') {
         if (!this.saved.has(mat)) this.saved.set(mat, { e: mat.emissive.clone(), i: mat.emissiveIntensity });
         mat.emissive.setRGB(1, 1, 1);
-        mat.emissiveIntensity = mat === M!.wreck ? 0.2 : 0.42;
+        mat.emissiveIntensity = mat === M!.wreck ? 0.16 : 0.3;
       } else {
         const s = this.saved.get(mat);
         if (s) {
@@ -82,7 +82,7 @@ export class NightKit {
 
   /** Exposure multiplier the sights add (night vision amplifies light; thermal does not need it). */
   get exposureMul(): number {
-    return this.vision === 'nv' ? 1.2 : this.vision === 'thermal' ? 0.5 : 1;
+    return this.vision === 'nv' ? 1.2 : this.vision === 'thermal' ? 0.6 : 1;
   }
 
   /**

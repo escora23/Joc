@@ -3229,7 +3229,11 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
   breadth-first search that never enters a nation at peace; water for ships), every move checked by the sim
   (`controlledMove` clamp, ≤ 4.5 km per message), and the scene is rebuilt where it stops: 1.2 km short of the line
   (2.4 km from an enemy unit; 12 km for a jet, 8 km for a ship), facing it. It stops early on an enemy unit within 5 km,
-  a critical alert or Esc. When the line moved during the march, up to two more legs follow by themselves.
+  a critical alert or Esc. When the unit arrives but the action is still out of reach (the line moved during the march, the
+  far view of it was coarse, or the joined offensive's spearhead went on), up to three more legs follow **behind the same
+  fade**, judged from the sim alone (`nextLegFromSim`: no scene rebuild between legs; each follow-on leg gets 40 % of the
+  first leg's real time); the scene is built once, where the last leg stops. After the build, an enemy the scene shows
+  beyond gun reach still gets one more short march.
 * **Far from any fight**: on entry the notice says where the nearest fighting is and offers G («Pulsa G para ir al
   frente más cercano»).
 * **Taking control at the action** (29e): `app.enterCommandAt({x, y, label, frontKey?, attackId?})` picks the unit

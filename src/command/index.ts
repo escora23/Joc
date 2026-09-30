@@ -758,6 +758,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (block >= 0) sp.blocks.push(block);
   }
 
+  let lastHitNotice = '';
   function hitStructure(r: StructRec, w: keyof typeof HIT_DMG): void {
     if (friendlyOwner(r.owner)) return;
     if (ctx.sim.view.pairState(HUMAN_ID, r.owner) !== 'war') {
@@ -770,9 +771,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     structHitIds.add(r.id);
     hud?.hitMarker(false);
     const s = ctx.sim.view.structures.get(r.id);
-    if (s && overlay && !overlay.noticeText) {
+    // The hit notice follows every hit (a newer one replaces it; any other notice is left alone).
+    if (s && overlay && (!overlay.noticeText || overlay.noticeText === lastHitNotice)) {
       const after = Math.max(0, s.hp - (structPending.get(r.id)?.dmg ?? 0));
-      overlay.showNotice(t('command.hit.struct', { what: t(`structure.${STRUCT_KEY[s.type] ?? 'city'}`), nation: nationName(s.owner), pct: Math.round(after * 100), state: t(`card.dmg.${['intact', 'damaged', 'heavy', 'destroyed'][damageState(after)]}`) }), 2.5);
+      lastHitNotice = t('command.hit.struct', { what: t(`structure.${STRUCT_KEY[s.type] ?? 'city'}`), nation: nationName(s.owner), pct: Math.round(after * 100), state: t(`card.dmg.${['intact', 'damaged', 'heavy', 'destroyed'][damageState(after)]}`) });
+      overlay.showNotice(lastHitNotice, 2.5);
     }
   }
 
