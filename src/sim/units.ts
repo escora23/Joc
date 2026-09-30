@@ -24,7 +24,7 @@ import {
   kmhToKmPerTick, structureLevel, ARMOR_RAIL_KMH,
 } from '../shared/constants';
 import {
-  ASSAULT_DEPTH_TILES, DEFEND_TILES, DIVISION_ARTILLERY_TILES, DIVISION_SHELL_PER_HOUR, RAZE_SHELL_MUL,
+  ASSAULT_DEPTH_TILES, ASSAULT_FLOOR_HP, DEFEND_TILES, DIVISION_ARTILLERY_TILES, DIVISION_SHELL_PER_HOUR, RAZE_SHELL_MUL,
   baseCapacity, bombardStation, canTransit, hostileTo, shipComponent, homeTypeOf, inferOrder, isAircraft, orderCheck, planDivision, strikeTarget, tileCx,
   tileCy, tileKm, type StationLike,
 } from '../shared/orders';
@@ -2262,7 +2262,12 @@ export class UnitSystem {
     const s = g.structureMap.get(u.missionTarget);
     if (!s || s.owner !== u.enemy) return;
     if (tileKm(u.x, u.y, s.x, s.y) > (DIVISION_ARTILLERY_TILES + 0.5) * TILE_KM) return;
-    const dmg = DIVISION_SHELL_PER_HOUR * (u.order === orderCode('raze') ? RAZE_SHELL_MUL : 1) * Math.max(0.25, u.hp / u.maxHp);
+    const raze = u.order === orderCode('raze');
+    let dmg = DIVISION_SHELL_PER_HOUR * (raze ? RAZE_SHELL_MUL : 1) * Math.max(0.25, u.hp / u.maxHp);
+    // An assault wants the structure intact enough to use: suppressive fire never takes it below ASSAULT_FLOOR_HP (nor
+    // costs it a level); an order to raze shells it to the ground.
+    if (!raze) dmg = Math.min(dmg, s.hp - ASSAULT_FLOOR_HP);
+    if (dmg <= 0) return;
     g.emit({ type: 'combat', tick: g.tick, kind: 'artillery', owner: u.owner, fromX: u.x, fromY: u.y, toX: s.x + (this.rnd() - 0.5) * 0.6, toY: s.y + (this.rnd() - 0.5) * 0.6, hit: true });
     const before = s.hp;
     g.economy.damage(s, dmg, u.owner, 'artillery');

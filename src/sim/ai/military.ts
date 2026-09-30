@@ -57,7 +57,18 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
   }
   const rich = (type: UnitType, k: number) => p.gold > g.unitCost(p.id, type) * k;
   // v2: only a declared war makes an enemy (strikes, missiles and armor act on it alone).
-  const atWar = b.enemy > 0 && alive(g.player(b.enemy)) && g.war.atWar(p.id, b.enemy);
+  // The war plan's enemy; failing that (a war declared on us, a call to arms), the first war we are in.
+  let enemyId = b.enemy > 0 && alive(g.player(b.enemy)) && g.war.atWar(p.id, b.enemy) ? b.enemy : 0;
+  if (!enemyId) {
+    for (const w of g.war.warsOf(p.id)) {
+      const o = w.a === p.id ? w.b : w.a;
+      if (alive(g.player(o))) {
+        enemyId = o;
+        break;
+      }
+    }
+  }
+  const atWar = enemyId > 0;
   const reserveGold = atWar ? 1.2 : 1.8;
 
   // --- production -----------------------------------------------------------------------------------
@@ -74,7 +85,7 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
   }
 
   // --- operations -----------------------------------------------------------------------------------
-  const enemy = atWar ? g.player(b.enemy)! : null;
+  const enemy = atWar ? g.player(enemyId)! : null;
   // v2 escalation ladder (§5.10): L1 (military targets) from the end of our mobilization, L2 (cities, ports,
   // factories) after 72 h of war, when the enemy went L2 first, or in a war of conquest.
   let level = 0;
@@ -107,7 +118,9 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
   // Naval path planning is expensive: at most one warship gets new orders per pass.
   let shipOrders = 0;
   const reserve = Math.max(0.15, b.prof.reserve + b.diff.reserveDelta);
-  const offensive = p.troops > p.maxTroops * (reserve + 0.05);
+  // On the offensive with troops above the reserve, or while our own offensive against the enemy runs (its troops are
+  // committed there; the divisions go with them, Feedback 3).
+  const offensive = p.troops > p.maxTroops * (reserve + 0.05) || pushing;
   // Our side of the front facing the biggest incoming assault (defensive armor goes there).
   let threatFront = -1;
   {
@@ -129,14 +142,31 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
         // Posture: on the offensive (troops above the reserve) the tanks spearhead our attack on the enemy front
         // (a division at an enemy front launches assaults on its own); on the defensive they dig in on our side
         // of the most threatened front, where defending armor makes attackers bleed.
+        // Feedback 3 (#28): the same missions as the player. On the offensive: join our running offensive against the
+        // enemy (the division follows its spearhead and adds its power), or assault an enemy structure near the line
+        // (defence posts first: they slow our advance); on the defensive: defend the threatened sector.
         const targetsEnemy = u.targetTile >= 0 && g.ownerOf(u.targetTile) !== p.id;
         if (offensive && enemy) {
           if (u.state !== UnitState.Idle) break;
+          let joined = false;
+          // One division in three goes after a structure near the line first (a defence post in the way, a base).
+          if (rng.next() < 0.35) {
+            const tgt = assaultTarget(ctx, p, enemy, enemyAim >= 0 ? enemyAim : here);
+            if (tgt && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'assault', tile: tgt.tile, targetId: tgt.id })) break;
+          }
+          for (const a of g.outgoingAttacks(p.id)) {
+            if (a.defender !== enemy.id || a.naval || a.state === 'retreating') continue;
+            joined = g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'join', tile: -1, targetId: a.id });
+            if (joined) break;
+          }
+          if (joined) break;
           const tgt = enemyAim >= 0 ? enemyAim : enemy.capitalTile;
           if (tgt >= 0) g.issue(p.id, { type: 'deployArmor', unitId: u.id, targetTile: tgt });
         } else if (targetsEnemy || u.state === UnitState.Idle) {
           const hold = threatFront >= 0 ? threatFront : ourFront >= 0 ? ourFront : b.homeTile;
-          if (hold >= 0 && (targetsEnemy || u.targetTile !== hold)) g.issue(p.id, { type: 'deployArmor', unitId: u.id, targetTile: hold });
+          if (hold >= 0 && (targetsEnemy || u.targetTile !== hold)) {
+            if (!g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'defend', tile: hold, targetId: 0 })) g.issue(p.id, { type: 'deployArmor', unitId: u.id, targetTile: hold });
+          }
         }
         break;
       }
@@ -192,6 +222,18 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
         if (u.state !== UnitState.Idle && u.state !== UnitState.Moving) break;
         if (shipOrders > 0 || rng.next() < 0.6) break;
         let dest = -1;
+        // Feedback 3 (#28): blockade the enemy's nearest port (its trade stops) when one lies within reach.
+        if (enemy && rng.next() < 0.5) {
+          const port = nearestOf(ctx, enemy.id, StructureType.Port, here);
+          if (port && dist2(port.tile, here) < 320 * 320) {
+            const water = waterBeside(ctx, port.tile);
+            if (water >= 0 && u.targetTile === water) break;
+            if (water >= 0 && g.issue(p.id, { type: 'unitOrder', unitIds: [u.id], order: 'blockade', tile: water, targetId: 0 })) {
+              shipOrders++;
+              break;
+            }
+          }
+        }
         if (enemy) {
           // Shell the enemy coast near the front, or near their capital.
           const near = enemyAim >= 0 && ctx.g.isShore(enemyAim) ? enemyAim : coastOf(ctx, enemy, here);
@@ -222,6 +264,55 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
       }
     }
   }
+}
+
+/**
+ * Feedback 3: an enemy structure worth assaulting near `near`: a defence post (it slows our advance), an army base or
+ * airbase, a city last; within 6 tiles of our land (the sim checks the exact depth and refuses the rest).
+ */
+function assaultTarget(ctx: AiContext, p: SimPlayer, enemy: SimPlayer, near: number): SimStructure | null {
+  const g = ctx.g;
+  let best: SimStructure | null = null, bestV = 0;
+  for (const s of g.structures(enemy.id)) {
+    if (s.built < 1) continue;
+    const d = Math.sqrt(dist2(s.tile, near));
+    if (d > 14) continue;
+    const v = (s.type === StructureType.DefensePost ? 4 : s.type === StructureType.ArmyBase || s.type === StructureType.Airbase ? 3
+      : s.type === StructureType.SamSite ? 2.5 : s.type === StructureType.City ? 1.5 : 1) / (1 + d / 6);
+    if (v > bestV) {
+      bestV = v;
+      best = s;
+    }
+  }
+  void p;
+  return best;
+}
+
+function nearestOf(ctx: AiContext, owner: number, type: StructureType, near: number): SimStructure | null {
+  let best: SimStructure | null = null, bd = Infinity;
+  for (const s of ctx.g.structures(owner, type)) {
+    const d = dist2(s.tile, near);
+    if (d < bd) {
+      bd = d;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** A water tile next to a coastal tile (the blockade station off a port), -1 if none. */
+function waterBeside(ctx: AiContext, tile: number): number {
+  const g = ctx.g;
+  const x = tile % MAP_W, y = (tile / MAP_W) | 0;
+  for (let r = 1; r <= 3; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const t = (y + dy) * MAP_W + (((x + dx) % MAP_W) + MAP_W) % MAP_W;
+        if (t >= 0 && t < MAP_W * (MAP_W / 2) && g.isWater(t)) return t;
+      }
+    }
+  }
+  return -1;
 }
 
 function nearestDist2(list: readonly number[], t: number): number {

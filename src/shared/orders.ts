@@ -277,6 +277,8 @@ export const DIVISION_ARTILLERY_TILES = 2;
 /** Artillery damage of one division on its assault target per game hour (×1.5 when ordered to raze). */
 export const DIVISION_SHELL_PER_HOUR = 0.04;
 export const RAZE_SHELL_MUL = 1.5;
+/** An assault's suppressive fire never takes its target below this hp (it wants to capture it, not destroy it). */
+export const ASSAULT_FLOOR_HP = 0.15;
 /** A defending division holds its sector: fronts within this many tiles of its anchor (~100 km). */
 export const DEFEND_TILES = 4;
 
@@ -691,8 +693,8 @@ const nearMul = (n: number, frontage: number): number => 1 + 0.5 * Math.min(1, (
  * drone swarms in close support, warships bombarding its coast. The same rules as the sim (sim/attacks.ts): each
  * division ×1.25 attack power (at most ×2) and ×1.5 pressure on the tiles within ARMOR_REACH_TILES of it; drones ×1.15
  * power and ×1.15 speed unless the enemy owns the sky; naval bombardment ×1.15 power. The expected km/h is the MEASURED
- * speed scaled by the model's ratio (so the badge, the Guerra panel, the unit card and every dialog tell one number);
- * before the first measurement it is the plains speed.
+ * speed scaled by the square root of the model's change (so the badge, the Guerra panel, the unit card and every dialog
+ * start from one number); before the first measurement it is the plains speed.
  */
 export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; drones?: number; naval?: number } = {}): OffensiveOutlook {
   const d0 = a.divAtk ?? 0, d1 = d0 + Math.max(0, add.divisions ?? 0);
@@ -709,7 +711,9 @@ export function offensiveOutlook(a: OutlookInput, add: { divisions?: number; dro
   const near = nearMul(d1, a.frontageTiles) / nearMul(d0, a.frontageTiles);
   const plan0 = a.planKmh ?? 0;
   let kmh: number;
-  if (a.advanceKmh > 0.05 && plan0 > 0.05) kmh = a.advanceKmh * (plan / plan0) * near;
+  // The measured speed answers the model's with an elasticity of ½ (terrain, forts, the mop-up and the war's logistics
+  // bucket absorb part of any extra power; calibrated in src/sim/test/f3-audit.mjs M1).
+  if (a.advanceKmh > 0.05 && plan0 > 0.05) kmh = a.advanceKmh * Math.sqrt((plan / plan0) * near);
   else kmh = plan * nearMul(d1, a.frontageTiles);
   return { ratio, planKmh: plan, kmh: Math.min(ADVANCE_MAX_KMH * 1.5, kmh), divisions: d1, armorMul: armorMul(d1) };
 }
