@@ -210,4 +210,17 @@ Verbatim (Spanish):
     - **In command mode.** From a warship: hail a ship ("Deténgase para inspección"), fire a warning shot, board
       (short sequence), or sink it, all synced to the sim.
 
+    - **Owner addition (verbatim):** "Y evidentemente que si lo haces pues tengas x ganancias o x consecuencias. O elegir
+      bloquear solo x barcos para no ponerte a todos los países en contra."
+      - **Selective blockade.** When setting a blockade you choose whom it applies to: only one nation, only nations at
+        war with you, a list of nations, only military/transport ships, or everyone. The default is the enemy only.
+        Neutral ships you let through keep sailing normally.
+      - **Explicit payoff and cost, shown before confirming and tracked afterwards.** Gains: gold per hour taken from
+        seized cargo, the enemy's lost trade income, troops denied. Costs: opinion change per affected nation,
+        casus belli, escalation risk, how many nations would be angered, and your own trade hit by retaliation or
+        embargo.
+      - **Consequences follow what you actually did.** Stopping a third country's ships angers that country
+        (and its allies). Sticking to the enemy's ships does not. AI nations react accordingly: protest, embargo,
+        escort their convoys, join the war.
+
 Handled in the Feedback 3 round (a dedicated naval pass) and verified with items 26–29; the owner-proxy critic checks it as item 30.
