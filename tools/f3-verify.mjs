@@ -204,7 +204,7 @@ async function card() {
   row('D1', 'the card: state, function and who hit it', text ?? '(none)', /Dañada · funciona al 60 %/.test(text ?? '') && /atacada por/.test(text ?? ''));
   const repBtn = page.locator('.fu-w4-repair');
   const label = await repBtn.innerText().catch(() => '');
-  row('D2', 'the repair button with its price and hours', label.replace(/\s+/g, ' '), /Reparar · [\d.]+ · [\d,]+ h/.test(label));
+  row('D2', 'the repair button with its price and hours', label.replace(/\s+/g, ' '), /Reparar · [\d.]+ · [\d,]+ h/i.test(label));
   const feed = await page.evaluate(() => [...document.querySelectorAll('.fu-alert')].map((a) => a.innerText.replace(/\s+/g, ' ')).join(' | '));
   row('D3', 'the damage report in the alert feed', feed.slice(0, 300), /alcanzada por|funciona al/.test(feed));
   await shot(page, 'd1-card');
@@ -216,7 +216,7 @@ async function card() {
     const s = [...__front.ctx.sim.view.structures.values()].find((x) => x.owner === 1 && x.type === 2);
     return { hp: s?.hp ?? -1, repairing: !!s?.repairing, gold: __front.ctx.sim.view.human.gold };
   });
-  row('D4', '«Reparar» pays and the structure regains integrity (+8 %/h, 3 h)', `hp ${hp0.toFixed(3)} → ${s1.hp.toFixed(3)}, repairing ${s1.repairing}, gold ${Math.round(g0)} → ${Math.round(s1.gold)}`, s1.hp > hp0 + 0.15);
+  row('D4', '«Reparar» pays and the structure regains integrity (+8 %/h after the 2 h pause that follows a hit)', `hp ${hp0.toFixed(3)} → ${s1.hp.toFixed(3)} in 3 h, repairing ${s1.repairing}, gold ${Math.round(g0)} → ${Math.round(s1.gold)}`, s1.hp > hp0 + 0.05 && s1.gold < g0 - 20000);
   await shot(page, 'd4-repairing');
   await page.close();
 }
@@ -257,7 +257,7 @@ async function civil() {
 async function advisor() {
   const page = await open('f3-advisor');
   const adv = await until(page, () => window.__fuForces?.advisor?.() || null, null, 20000);
-  row('A1', 'the advisor lists idle units by type with a mission', (adv ?? '').replace(/\s+/g, ' '), /sin misión/.test(adv ?? '') && /Dar misión/.test(adv ?? ''));
+  row('A1', 'the advisor lists idle units by type with a mission', (adv ?? '').replace(/\s+/g, ' '), /sin misión/i.test(adv ?? '') && /Dar misión/i.test(adv ?? ''));
   const missions = await page.evaluate(() => window.__fuForces.missions());
   row('A2', 'every Fuerzas row shows its mission', missions.map((m) => m.mission).join(' | ').slice(0, 300), missions.length > 0 && missions.every((m) => /Misión|Sin misión/.test(m.mission)));
   await shot(page, 'a1-advisor');

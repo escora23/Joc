@@ -22,6 +22,7 @@ import { latLonToTile, latLonToVec3, worldTimeForSubsolarLon } from '../shared/g
 import { registerShot, type ShotContext } from '../shared/shots';
 import { StructureType as S, UnitType as U, type UnitView } from '../shared/types';
 import { issueOrders, previewOrders } from './hud/orderCtl';
+import { fxInternal } from '../render/fx/index';
 import { STRUCT_IDS } from './hud/forcesInfo';
 
 const at = (lat: number, lon: number) => latLonToTile(lat, lon);
@@ -58,13 +59,20 @@ async function smoke(s: ShotContext): Promise<void> {
   await s.waitFrames(6);
 }
 
-/** Let the explosions of the staged hits play out far away (they would white out a close camera), then pause. */
-async function settleBlasts(s: ShotContext, lat: number, lon: number): Promise<void> {
-  s.ctx.cameraRig.setState({ lat, lon, altitudeKm: 3000, tilt: 0, heading: 0 });
+/** Jump the effects clock past the staged hits' blasts (their fireballs would otherwise stay frozen in view). */
+async function settleBlasts(s: ShotContext): Promise<void> {
   await s.waitFrames(6);
-  s.ctx.sim.setSpeed(1);
-  await s.wait(Number(s.params.get('settle') ?? 9000));
-  s.ctx.sim.setSpeed(0);
+  const fx = fxInternal(s.ctx);
+  if (fx) {
+    // Jump the effect clock past the demolition fireballs (no whiteout: quietScreen).
+    // Twice: the first jump makes the delayed secondary blasts due; they fire on the next frames and the second jump
+    // lets them burn out too.
+    fx.quietScreen = true;
+    fx.advance(Number(s.params.get('settle') ?? 30));
+    await s.waitFrames(8);
+    fx.advance(Number(s.params.get('settle') ?? 30));
+    fx.quietScreen = false;
+  }
   await s.waitFrames(4);
 }
 
@@ -105,16 +113,18 @@ registerShot('f3-damage', 'units', 'Feedback #3 item 27: one structure type in e
   const tiles = [t0, t0 + 1, t0 + MAP_W, t0 + MAP_W + 1];
   for (const tile of tiles) sim.debug({ type: 'spawnStructure', structure: type, owner: HUMAN_ID, tile, level });
   await until(s, () => tiles.every((tl) => structAt(ctx, tl)), 30000);
+  // Frame first: the demolition fireball and its fire are sized for the camera that sees them happen.
+  const lat = (tileLat(tiles[0]) + tileLat(tiles[3])) / 2, lon = (tileLon(tiles[0]) + tileLon(tiles[3])) / 2;
+  const alt = Number(params.get('alt') ?? 24);
+  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.13), lon, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.85), heading: 0 });
+  await waitFrames(6);
   // 1 intact, 2 damaged (0.6), 3 heavily damaged (0.25), 4 destroyed: hit until it is rubble.
   sim.debug({ type: 'damageStructure', tile: tiles[1], amount: 0.4, by: 0 });
   sim.debug({ type: 'damageStructure', tile: tiles[2], amount: 0.75, by: 0 });
   for (let k = 0; k < level + 1; k++) sim.debug({ type: 'damageStructure', tile: tiles[3], amount: 1.2, by: 0 });
   await until(s, () => ctx.sim.view.ruins.some((r) => r.tile === tiles[3]), 20000);
   s.setUiVisible(false);
-  const lat = (tileLat(tiles[0]) + tileLat(tiles[3])) / 2, lon = (tileLon(tiles[0]) + tileLon(tiles[3])) / 2;
-  await settleBlasts(s, lat, lon);
-  const alt = Number(params.get('alt') ?? 30);
-  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.1), lon, altitudeKm: alt, tilt: Number(params.get('tilt') ?? 0.8), heading: 0 });
+  await settleBlasts(s);
   await smoke(s);
   const items = tiles.map((tl, i) => {
     const st = structAt(ctx, tl);
@@ -135,13 +145,14 @@ registerShot('f3-city-damage', 'units', 'Feedback #3 item 27: a level-8 city hea
   sim.debug({ type: 'spawnStructure', structure: S.City, owner: HUMAN_ID, tile: left, level: 8 });
   sim.debug({ type: 'spawnStructure', structure: S.City, owner: HUMAN_ID, tile: right, level: 8 });
   await until(s, () => !!structAt(ctx, left) && !!structAt(ctx, right), 30000);
+  const lat = tileLat(left), lon = (tileLon(left) + tileLon(right)) / 2;
+  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.13), lon, altitudeKm: Number(params.get('alt') ?? 11), tilt: Number(params.get('tilt') ?? 1.0), heading: 0 });
+  await waitFrames(6);
   const hp = Number(params.get('hp') ?? 0.3);
   sim.debug({ type: 'damageStructure', tile: right, amount: 1 - hp, by: 0, block: 5 });
   await until(s, () => (structAt(ctx, right)?.hp ?? 1) < 0.99, 10000);
   s.setUiVisible(false);
-  const lat = tileLat(left), lon = (tileLon(left) + tileLon(right)) / 2;
-  await settleBlasts(s, lat, lon);
-  ctx.cameraRig.setState({ lat: lat - Number(params.get('back') ?? 0.09), lon, altitudeKm: Number(params.get('alt') ?? 14), tilt: Number(params.get('tilt') ?? 0.95), heading: 0 });
+  await settleBlasts(s);
   await smoke(s);
   const st = structAt(ctx, right);
   captions(s, t('shot.f3.city'), [

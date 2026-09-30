@@ -565,18 +565,22 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
     setMeter('upg', up, up > 0 ? t('card.upgradingTo', { n: s.level + 1, p: Math.round(up * 100) }) : '');
     toggleClass(live.upgBox, 'fu-hidden', !(up > 0));
     const lv = structLive(s);
-    const gph = goldPerHour(s.type, s.level);
-    const goldSig = `${gph}:${s.level}`;
+    const full = goldPerHour(s.type, s.level);
+    // Feedback 3: a damaged structure earns at its function; the card says so next to the intact figure.
+    const fnNow = s.built >= 1 ? functionFactor(s.hp) : 1;
+    const gph = Math.round(full * fnNow);
+    const goldSig = `${gph}:${full}:${s.level}`;
     if (sigs.gold !== goldSig) {
       sigs.gold = goldSig;
-      live.gold.replaceChildren(...(gph > 0 ? [icon('gold'), h('b', { class: 'fu-mono' }, t('card.goldPerHour', { n: formatNumber(gph) })), h('small', null, t(`card.gold.${structId(s.type)}`))] : []));
-      toggleClass(live.gold, 'fu-hidden', gph <= 0);
+      live.gold.replaceChildren(...(full > 0 ? [icon('gold'), h('b', { class: 'fu-mono' }, t('card.goldPerHour', { n: formatNumber(gph) })),
+        h('small', null, fnNow < 1 ? t('card.dmg.goldOf', { full: formatNumber(full) }) : t(`card.gold.${structId(s.type)}`))] : []));
+      toggleClass(live.gold, 'fu-hidden', full <= 0);
     }
-    const effSig = `${s.level}:${JSON.stringify(lv)}`;
+    const effSig = `${s.level}:${JSON.stringify(lv)}:${fnNow}`;
     if (sigs.eff !== effSig) {
       sigs.eff = effSig;
       const rows = (list: [string, string][]) => list.map(([a, b]) => h('div', { class: 'fu-w4-er' }, h('span', null, a), h('b', { class: 'fu-mono' }, b)));
-      live.now.replaceChildren(h('div', { class: 'fu-w4-eh' }, t('card.now', { n: s.level })), ...rows(levelEffects(s.type, s.level, lv)));
+      live.now.replaceChildren(h('div', { class: 'fu-w4-eh' }, fnNow < 1 ? t('card.dmg.now', { n: s.level, p: Math.round(fnNow * 100) }) : t('card.now', { n: s.level })), ...rows(levelEffects(s.type, s.level, lv)));
       if (s.level < max) live.next.replaceChildren(h('div', { class: 'fu-w4-eh' }, t('card.nextLevel', { n: s.level + 1 })), ...rows(levelEffects(s.type, s.level + 1, { radar: lv.radar })));
       else live.next.replaceChildren(h('div', { class: 'fu-w4-eh' }, t('card.upgrade.maxShort')));
     }

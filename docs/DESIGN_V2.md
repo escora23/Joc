@@ -3126,7 +3126,7 @@ command-mode half of 27) is another workstream that uses the hooks named in §18
 4. **Capture changes owner.** When its tile is taken the structure changes owner (defence posts too), taken in the
    fighting at **≤ 0.60 hp**, its production queue and upgrade lost. It is destroyed instead when the taker's division
    was ordered to **raze** it (§18.2), or when the land falls to nobody.
-5. **City hits.** Every hit of `d` hp on a city of level L kills `d × L × 30,000` civilians (at most half the
+5. **City hits.** Every hit of `d` hp on a city of level L kills `d × L × 6,000` civilians (at most half the
    population) and `min(1 % × d × troops, 6,000 × L × d)` of the owner's troops. The population then regrows at its
    normal drift. The owner is told (damage report, §18.4).
 6. **Civilian targets and diplomacy.** A city is a civilian target (ports and factories stay strategic L2 targets).

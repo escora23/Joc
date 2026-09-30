@@ -195,7 +195,7 @@ function damage() {
     g.economy.damage(city, 0.55, HUMAN_ID, 'bomber');
     step(1);
     const ev = events.filter((e) => e.type === 'structureDamaged').pop();
-    row('D4', 'city L5 hit 0.55 hp: civilians and troops killed', `civilians ${Math.round(pop0 - P.pop)} (event ${ev?.civilians}), troops ${Math.round(tr0 - P.troops)} (event ${ev?.troops})`, 'civilians ≈ 82,500, troops > 0', ev && ev.civilians > 50_000 && ev.troops > 0);
+    row('D4', 'city L5 hit 0.55 hp: civilians and troops killed', `civilians ${Math.round(pop0 - P.pop)} (event ${ev?.civilians}), troops ${Math.round(tr0 - P.troops)} (event ${ev?.troops})`, 'civilians ≈ 16,500 (6,000 × level × hp), troops > 0', ev && ev.civilians > 10_000 && ev.troops > 0);
     const dV = g.diplomacy.opinion(E, HUMAN_ID) - opV, dA = g.diplomacy.opinion(A, HUMAN_ID) - opA, dN = g.diplomacy.opinion(N, HUMAN_ID) - opN;
     row('D4', 'opinion of the striker: victim / victim\'s ally / third nation', `${dV} / ${dA} / ${dN}`, '≈ −20 / −12 / −5', dV <= -15 && dA <= -8 && dN <= -3 && dN > dA);
     row('D4', 'casus belli: victim and its ally against the striker, not the third', `${g.diplomacy.hasCasusBelli(E, HUMAN_ID)} / ${g.diplomacy.hasCasusBelli(A, HUMAN_ID)} / ${g.diplomacy.hasCasusBelli(N, HUMAN_ID)}`, 'true / true / false',

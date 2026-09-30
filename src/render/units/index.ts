@@ -1642,21 +1642,28 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       if (!anchor) continue;
       const km = structKm(st.type, st.level);
       if (dst >= 2 && fx.particles.rand() < dt * 3) fx.burn(anchor, fx.visKm(anchor, km * 0.18, 6), 1.5);
-      if (fx.particles.rand() < dt * (dst >= 2 ? 6 : 3)) smokeAt(fx, anchor, km, dst >= 2 ? 1.3 : 0.9);
+      puffs(fx, anchor, km, dst >= 2 ? 1.3 : 0.9, dt * (dst >= 2 ? 10 : 5));
     }
     for (const r of view.ruins) {
       if (view.tick - r.tick > 480) continue;
       const anchor = structAnchor.get(-(r.tile + 1));
-      if (anchor && fx.particles.rand() < dt * 2) smokeAt(fx, anchor, structKm(r.type, r.level), 0.8);
+      if (anchor) puffs(fx, anchor, structKm(r.type, r.level), 0.8, dt * 3);
     }
   }
 
+  /** `n` puffs on average (fractional: the remainder by chance), so the column keeps its density at any frame rate. */
+  function puffs(fx: FxInternal, anchor: THREE.Vector3, km: number, k: number, n: number): void {
+    for (let i = 0; i < 6 && n > 0; i++, n--) {
+      if (n < 1 && fx.particles.rand() > n) break;
+      smokeAt(fx, anchor, km, k);
+    }
+  }
   const U2 = new THREE.Vector3();
   /** A puff of dark smoke rising from a damaged structure (size from its footprint, a pixel floor from afar). */
   function smokeAt(fx: FxInternal, anchor: THREE.Vector3, km: number, k: number): void {
     T.subVectors(env.camPos, anchor);
     if (T.dot(anchor) < 0) return;
-    const s = fx.visKm(anchor, km * 0.18 * k, 5) / EARTH_RADIUS_KM;
+    const s = fx.visKm(anchor, km * 0.3 * k, 6) / EARTH_RADIUS_KM;
     U2.copy(anchor).normalize();
     const jx = (fx.particles.rand() - 0.5) * s * 2, jz = (fx.particles.rand() - 0.5) * s * 2;
     fx.particles.emit(PK.Smoke, anchor.x + jx + U2.x * s * 0.5, anchor.y + U2.y * s * 0.5, anchor.z + jz + U2.z * s * 0.5, U2.x * s * 0.5, U2.y * s * 0.5, U2.z * s * 0.5,

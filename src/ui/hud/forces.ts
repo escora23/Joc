@@ -24,7 +24,7 @@ import { isNavigableTerrain } from '../../shared/terrain';
 import { selectedUnitIds } from './orderCtl';
 import { HUMAN_ID, MAP_W, UNIT_DEFS, structureLevel } from '../../shared/constants';
 import { tileXYToLatLon } from '../../shared/geo';
-import { formatNumber, getLanguage, t } from '../../shared/i18n';
+import { formatNumber, getLanguage, t, tn } from '../../shared/i18n';
 import { StructureType, UnitMode, UnitState, UnitType, type AttackView, type ProductionView, type UnitOrderKind, type UnitView } from '../../shared/types';
 
 export interface ForcesPanel {
@@ -317,7 +317,7 @@ export function createForces(hs: HudShared): ForcesPanel {
     const total = rows.reduce((a, r) => a + r.n, 0);
     const els: HTMLElement[] = [h('b', null, t('adv.title', { n: total }))];
     for (const r of rows) {
-      const label = t(`adv.idle.${unitId(r.type)}`, { n: r.n });
+      const label = tn(`adv.idle.${unitId(r.type)}`, r.n);
       const row = h('div', { class: 'fu-fo-adv-row' }, h('span', null, r.s ? `${label}: ${r.s.text}` : `${label}: ${t('adv.s.none')}`));
       if (r.s) {
         const sg = r.s;

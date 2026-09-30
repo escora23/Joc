@@ -45,7 +45,7 @@ export const REBUILD_DISCOUNT = 0.5;
 export const CAPTURE_MAX_HP = 0.6;
 
 /** City hits (per 1.0 hp of damage and per city level): civilians killed, and the owner's troops killed (share, cap). */
-export const CITY_CIVILIANS_PER_HP_LEVEL = 30_000;
+export const CITY_CIVILIANS_PER_HP_LEVEL = 6_000;
 export const CITY_TROOPS_SHARE_PER_HP = 0.01;
 export const CITY_TROOPS_CAP_PER_LEVEL = 6_000;
 

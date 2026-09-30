@@ -16,7 +16,7 @@ import { describeXY } from '../places';
 import { HUMAN_ID, MAP_W } from '../../shared/constants';
 import { DAMAGE_IDS, damageState, functionFactor } from '../../shared/damage';
 import { tileXYToLatLon } from '../../shared/geo';
-import { formatNumber, t } from '../../shared/i18n';
+import { formatNumber, t, tn } from '../../shared/i18n';
 import type { SimEventMap } from '../../shared/protocol';
 import { UnitMode, UnitState, UnitType, type UnitView } from '../../shared/types';
 
@@ -144,7 +144,7 @@ export function wireAfterAction(hs: HudShared, alerts: AlertCenter): void {
     lastIdleTick = v.tick;
     const n = new Map<number, number>();
     for (const u of idle) n.set(u.type, (n.get(u.type) ?? 0) + 1);
-    const parts = [...n].map(([type, k]) => t(`adv.idle.${UNIT_ID[type] ?? 'armoredDivision'}`, { n: k }));
+    const parts = [...n].map(([type, k]) => tn(`adv.idle.${UNIT_ID[type] ?? 'armoredDivision'}`, k));
     const ll = tileXYToLatLon(idle[0].x, idle[0].y);
     alerts.raise({
       kind: 'advisorIdle', severity: 'info', icon: 'info', lat: ll.lat, lon: ll.lon, groupKey: 'advisor:idle', unitId: idle[0].id,
