@@ -141,6 +141,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
 
   function setTab(tb: Tab): void {
     tab = tb;
+    toggleClass(intro, 'fu-hidden', tb === 'sea');
     for (const [k, b] of tabBtns) toggleClass(b, 'is-on', k === tb);
     listKey = '';
     update();

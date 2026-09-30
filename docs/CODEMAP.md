@@ -1521,3 +1521,45 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
   and `hud.takeMission*` UI keys); `help.command.body` (w3.ts) explains it.
 * Shot `command-strike` (`&target=factory|city`, `&shots=`, `&live=1`), `strikeFire`; verifier `node
   tools/f3c-verify.mjs [--only go,panel,strike,city,night,alert]` → `shots/feedback3-command/verify/`.
+
+## 28. War at sea (owner item 30) — where it lives
+
+Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` (headless, N1-N11), `tools/naval-verify.mjs`
+(browser, sections blockade / port / command → `shots/feedback3-naval/verify/`). Shots (`src/ui/shotsNaval.ts`):
+`naval-sea`, `naval-dialog` (&who=, &action=), `naval-strait`, `naval-panel`, `naval-port`; `command-merchant`
+(`src/command/shots.ts`, &war=1, &act=hail|board).
+
+* `src/shared/naval.ts` — THE rule set: `BlockadeSpec` (`who` / `ships` / `action`, `blockadeSpec()` normaliser,
+  `DEFAULT_BLOCKADE`), `blockadeApplies`, `CHOKEPOINTS` + `chokepointTile` / `chokepointNear`, `canalTiles()` (Suez,
+  Panama), `pathCrossesZone`, `zoneDist2`, constants (`BLOCKADE_RADIUS_TILES`, `INTERCEPT_TILES`, `PIRACY_OPINION`,
+  `PIRACY_*_CAP`, `PIRACY_EMBARGO_OPINION`, `PIRACY_WAR_OPINION`, `HEAVE_TO_TICKS`), views `BlockadeView`,
+  `NavalEconomyView`.
+* `src/sim/naval.ts` — `NavalSystem` (`g.naval`, saved with the graph): `assign` / `release` (warships), `step` (zones in
+  force, `version` → `WaterNav.clearAvoidCache`, route re-check of ships at sea, `hourly` ledger), `route` (direct / detour /
+  blocked / run it: `runChance`), `targetFor` (escorts), `intercept` (seize / sink / turn back), `onShipLost`,
+  `onPrizeDelivered`, `commandError` / `commandIntercept` (hail, warn, board, sink), `piracy` (opinion, casus belli),
+  `views` / `economyView` / `portLoss`, AI queries `chokepointsFor` / `activeAgainst` / `blockadeOfUnit` (`SimNavalApi`).
+* `src/sim/water.ts` — canal tiles sailable, `findPathAvoid` (A* skipping nodes in the zones, LOS never crossing them).
+* `src/sim/units.ts` — warship `blockade` order → `naval.assign` (strait snap); `blockaded(port)` = `portBlockade`;
+  `launchTrade` through `naval.route` (merchant paid for the direct trip: `directKm`, `routeKm`, `slotRate`); target
+  acquisition in blockade mode via `targetFor`; boarding within `INTERCEPT_TILES`; `takePrize`, `turnBack`, `setPath`
+  (keeps the sailed waypoints), `escortNear`, `convoyTroops`; `UnitMode.Prize / Detour / HoveTo`; blockading warships
+  return to their station after a chase. `Unit` fields in `state.ts` (`blockadeId`, `prize`, `detourBy`, `stoppedBy`,
+  `directKm`, `routeKm`, `slotRate`, `navalVer`, `hoveUntil`, `passedBy`).
+* `src/sim/diplomacy.ts` — REMEMBERED `piracy`, `piracyAlly`, `piracyWorld`; `grantCasusBelli`.
+* `src/sim/ai/navalwar.ts` — `onShipStopped` (grievances in `Brain.navalGrief`), `thinkNavalWar` (protest, embargo, war
+  with calls to arms, escorts, breaking blockades), `blockadeTile` (military.ts: close a strait, else the enemy port).
+* Protocol: `unitOrder.blockade`, `navalIntercept`, debug `issueAs`; events `blockade`, `shipStopped`, `shipRerouted`,
+  `prizeDelivered` (and `shipCaptured` kept); `TickUpdate.blockades` / `naval`; `StructureView.tradeLoss / tradeLossBy /
+  tradeCut / rerouted`; client `GameView.blockades` / `naval`.
+* UI: `hud/blockade.ts` (the dialog; `window.__fuBlockade`), `hud/navalInfo.ts` (names, spec text, ships through a zone,
+  trade exposure), `hud/navalPanel.ts` (Guerra › Mar, `createSeaTab`; `hs.openSea`), `hud/blockadeBadges.ts` (map
+  chips), `hud/navalNews.ts` (alerts), `orderCtl.issueOrders` (blockade → dialog), `selection.ts` (port card line,
+  `.fu-blk-card`), `forces.ts` (`.fu-fo-naval`), `forcesInfo.ts` (modes, warship card line), `css/naval.css`,
+  `i18n/naval.ts` (es / en, also command-mode strings and `command.help.ship`).
+* Render: `render/units/overlays.ts` ring style 4 (hatched zone), `render/units/index.ts updateOverlays` (every zone),
+  `render/units/routes.ts` (planned route of Detour / Prize ships).
+* Command mode: `command/models/ships.ts buildMerchant / buildTroopShip`, `command/world.ts` kinds `merchant` /
+  `transport`, `command/ai.ts merchant()` (never an AI target), `command/forces.ts reconcileMerchant` (src kind
+  `merchant`), `command/intercept.ts ShipIntercept` (panel, E / R / F / X), `command/index.ts` (onKill → sink,
+  `__cmdStats.intercept`, `__cmdStats.merchants`).

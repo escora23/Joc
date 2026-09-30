@@ -184,8 +184,8 @@ export function createSeaTab(hs: HudShared): SeaTab {
     close.disabled = !free.length || (!!held && held.owner === HUMAN_ID);
     const go = btn(t('fr.go'), 'target', 'fu-btn--ghost', () => fly(x, y, 1800));
     return h('div', { class: 'fu-sea-strait' },
-      h('b', null, t(`naval.cp.${key}`)),
-      h('span', { class: 'fu-war-note' }, held ? t('naval.strait.held', { name: hs.name(held.owner) }) : t('naval.strait.pass', { e: enemy, n: neutral })),
+      h('div', { class: 'fu-sea-strait-name' }, h('b', null, t(`naval.cp.${key}`)),
+        h('span', { class: 'fu-war-note' }, held ? held.owner === HUMAN_ID ? t('naval.strait.heldYou') : t('naval.strait.held', { name: hs.name(held.owner) }) : t('naval.strait.pass', { e: enemy, n: neutral }))),
       h('span', { class: 'fu-sea-strait-acts' }, go, close),
     );
   }

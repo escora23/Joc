@@ -141,7 +141,7 @@ async function blockade() {
   // V7: the Guerra panel «Mar».
   await page.keyboard.press('KeyG');
   await sleep(1500);
-  await uiClick(page, page.locator('.fu-nt-tab', { hasText: 'Mar' }));
+  await uiClick(page, page.locator('.fu-warpanel .fu-nt-tab', { hasText: 'Mar' }));
   await sleep(2500);
   const sea = await page.evaluate(() => document.querySelector('.fu-sea')?.textContent?.replace(/\s+/g, ' ') ?? '');
   row('V7', 'Guerra › Mar: our blockade with its gains, stops and consequences; the straits', sea.slice(0, 400), /Estrecho de Gibraltar/.test(sea) && /Botín/.test(sea) && /Cerrar un paso/i.test(sea));
@@ -160,7 +160,7 @@ async function port() {
   await page.keyboard.press('Escape');
   await page.keyboard.press('KeyG');
   await sleep(1500);
-  await uiClick(page, page.locator('.fu-nt-tab', { hasText: 'Mar' }));
+  await uiClick(page, page.locator('.fu-warpanel .fu-nt-tab', { hasText: 'Mar' }));
   await sleep(2500);
   const sea = await page.evaluate(() => document.querySelector('.fu-sea')?.textContent?.replace(/\s+/g, ' ') ?? '');
   row('P3', 'Guerra › Mar lists the blockade against us, with «Romper el bloqueo» and «Escoltar mercantes»', sea.slice(0, 400), /bloquea/.test(sea) && /Romper el bloqueo/.test(sea) && /Escoltar mercantes/.test(sea));
