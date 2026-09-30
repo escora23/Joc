@@ -3211,15 +3211,19 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
   an offensive's live contact touching the human (`AttackView.contactX/Y`, preferred up to 25 % farther), the nearest
   point of a front line at war (`FrontView.samples`), an enemy unit of the vehicle's kind at war (division / warship /
   airborne aircraft), an enemy port for a warship — and the unit's own mission target (join → the offensive's contact,
-  assault / raze / blockade → the structure, defend → the sector, attack / move → the order's point). The mission wins
-  while the unit is not there yet and it is not much farther than the nearest action.
+  assault / raze / blockade → the structure, defend → the sector, attack / move → the order's point). A front's or an
+  offensive's point is taken on the contact line of the one local derivation (`deriveLocalForces`: the line the battle
+  view and the command scene draw), not on the coarse tile samples. An enemy the scene already shows within 15 km comes
+  first («Enemigo a la vista: infantería de Francia»); then the action the player was sent to; the mission wins while
+  the unit is not there yet and it is not much farther than the nearest action (a defended sector never pulls the unit
+  away from a fight).
 * **Always on screen**: a chip under the compass («Frente con Francia · 14 km · noreste», the mission or a nearer action
   on its second line, and the button «Ir al combate» / «Ir al frente más cercano» beyond 25 km for a tank, 150 km for a
   jet, 60 km for a ship), and a red ring on the place in the world (an arrow on the screen edge when it is out of view).
   In contact (an enemy entity within 3 km, 15 km in the air, 12 km at sea) the chip turns into «Carro de Suiza a tiro ·
   1,2 km · norte» and the ring sits on that enemy.
-* **G «Ir al combate»** (or the chip's button): near (the place less than 2.5 km beyond the stop point) the autopilot
-  drives there (compressed when nothing is in reach); farther, the unit **marches**: the screen fades to a march card,
+* **G «Ir al combate»** (or the chip's button): near (less than 0.8 km beyond the stop point, or under fire in the last
+  30 s) the autopilot drives there; farther, the unit **marches**: the screen fades to a march card,
   the clock runs ×300…×3600 for the whole world (like a move order on the strategic map; the rate makes the march take
   ~6 real s), the unit moves in the sim along a route by own or friendly ground (`planRoute`: straight, else a
   breadth-first search that never enters a nation at peace; water for ships), every move checked by the sim
@@ -3229,8 +3233,8 @@ cards call them. An offensive whose measured speed is below 0.05 km/h reads «pr
 * **Far from any fight**: on entry the notice says where the nearest fighting is and offers G («Pulsa G para ir al
   frente más cercano»).
 * **Taking control at the action** (29e): `app.enterCommandAt({x, y, label, frontKey?, attackId?})` picks the unit
-  (joined to that offensive ×0.2, on that front ×0.35, else the nearest; healthier preferred) and enters with a `goal`:
-  when it is more than 2.5 km away the march runs **behind the entry fade, before the scene is built** (one build, at
+  (joined to that offensive ×0.2, on that front ×0.35, else the nearest; healthier preferred) and enters with a `goal` (moved onto the local contact line):
+  when it is more than 2 km away the march runs **behind the entry fade, before the scene is built** (one build, at
   the action). Entry points: double click on a front badge, «Tomar el control aquí» on a front row of the Guerra
   panel, the battle strip (your division in that battle with its hand-off, else the nearest marches there), «Al mando»
   on an alert about the war at a place, «Al mando, a su misión» on a unit card with a mission. The exit ends the climb

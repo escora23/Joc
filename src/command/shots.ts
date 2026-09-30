@@ -652,7 +652,7 @@ registerShot('command-strike', 'command', 'Tank shells hitting a real enemy stru
 function vantage(I: CommandInternals, sid: number): void {
   const P = I.controller!.ent;
   const st = I.civil.structRecs.find((r) => r.id === sid);
-  const houses = I.civil.houseRecs.filter((h) => h.cityId === sid);
+  const houses = I.civil.houseRecs.filter((h) => h.cityId === sid && !h.down);
   const pts = st ? [new THREE.Vector3(st.x, (st.y0 + st.y1) / 2, st.z)] : houses.filter((_, i) => i % 12 === 0).map((h) => new THREE.Vector3(h.x, h.y + h.h * 0.6, h.z));
   if (!pts.length) return;
   const seen = (ex: number, ey: number, ez: number, t: THREE.Vector3): boolean => {
@@ -691,6 +691,7 @@ export async function strikeFire(s: ShotContext, I: CommandInternals, n: number)
   const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; fire(): void; snapTurret?(): void; selectAmmo?(i: 0 | 1): void };
   c.selectAmmo?.(1);
   const sid = (window as unknown as { __strikeTarget?: number }).__strikeTarget ?? 0;
+  let moves = 0;
   for (let k = 0; k < n; k++) {
     const p = I.controller!.ent.pos;
     const st = I.civil.structRecs.find((r) => r.id === sid);
@@ -716,7 +717,14 @@ export async function strikeFire(s: ShotContext, I: CommandInternals, n: number)
         }
       }
     }
-    if (!aim) break;
+    if (!aim) {
+      // Nothing standing in sight: drive to where more of the city shows (as a player would), once per round.
+      const before = I.controller!.ent.pos.clone();
+      vantage(I, sid);
+      if (I.controller!.ent.pos.distanceTo(before) < 1 || moves++ > 5) break;
+      k--;
+      continue;
+    }
     c.aimAt(aim);
     c.snapTurret?.();
     c.fire();

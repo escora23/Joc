@@ -250,6 +250,9 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     }
     if (s === 'command') {
       closeAllModals();
+      // Command mode fills the screen: the side panels close (Guerra y frentes, Fuerzas).
+      frontsPanel.close();
+      forces.close();
       hs.flags.commandEntered = true;
     }
     if (s === 'playing') {

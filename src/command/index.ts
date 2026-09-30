@@ -20,7 +20,7 @@ import { formatNumber, playerName, t } from '../shared/i18n';
 import type { QualityProfile } from '../shared/quality';
 import { Rng } from '../shared/rng';
 import { easeInOutCubic } from '../shared/math';
-import { holderAt } from '../shared/localForces';
+import { deriveLocalForces, holderAt } from '../shared/localForces';
 import { localSideText } from '../shared/localForcesText';
 import { isWaterTerrain } from '../shared/terrain';
 import type { CommandKind } from '../shared/types';
@@ -73,7 +73,7 @@ const STRUCT_KEY: Record<number, string> = { 0: 'city', 1: 'port', 2: 'factory',
  * the real clock (the whole world runs with it, like a strategic move); closer, the local autopilot drives.
  */
 const STOP_KM: Record<CommandKind, number> = { tank: 1.2, jet: 12, ship: 8 };
-const HOP_KM: Record<CommandKind, number> = { tank: 2.5, jet: 30, ship: 12 };
+const HOP_KM: Record<CommandKind, number> = { tank: 0.8, jet: 20, ship: 6 };
 /** An enemy entity this close is contact: the chip says so and there is nothing to travel to. */
 const REACH_M: Record<CommandKind, number> = { tank: 4000, jet: 15000, ship: 12000 };
 /** Beyond this the chip offers «Ir al frente más cercano» (a far unit) instead of «Ir al combate». */
@@ -85,14 +85,14 @@ const TRANSIT_RATE_MAX = 3600;
 /**
  * Feedback 3 (#27): what one hit of the controlled unit's weapons takes from a real structure (hp share, the sim's
  * scale: a tank's HE shell 5 %, AP 2 % (its 20 HE rounds take a level), a ship's gun 6 %, a jet's missile 12 %, a ship's missile 20 %, a bomb 30 %)
- * and from a city: each house knocked down 0.5 %, each city block collapsed (40 % of its houses down) 3 % more.
+ * and from a city: each house knocked down 0.5 %, each city block collapsed (25 % of its houses down) 3 % more.
  */
 const HIT_DMG = { he: 0.05, ap: 0.02, naval: 0.06, missile: 0.12, shipMissile: 0.2, bomb: 0.3 };
 const HOUSE_DMG = 0.005;
 const BLOCK_DMG = 0.03;
-const BLOCK_DOWN_SHARE = 0.4;
+const BLOCK_DOWN_SHARE = 0.25;
 /** Blast radius (m) that knocks down the houses around an impact. */
-const BLAST_M = { he: 10, ap: 0, naval: 14, missile: 16, shipMissile: 24, bomb: 38 };
+const BLAST_M = { he: 12, ap: 0, naval: 14, missile: 16, shipMissile: 24, bomb: 38 };
 /** A border of a nation at peace closer than this drops travel to ×1 and warns (§9.7.1). */
 const BORDER_WARN_M = 2000;
 
@@ -731,6 +731,21 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     return hitAt;
   }
 
+  /** A round that landed next to a building still brings it down when the blast reaches it. */
+  function groundBlast(p: Proj, at: THREE.Vector3): void {
+    if (!civil || !(p.player || p.owner?.formation)) return;
+    const w = weaponOf(p);
+    const r = BLAST_M[w];
+    if (r <= 0) return;
+    const st = civil.structRecs.find((s) => Math.abs(at.x - s.x) < s.half + r * 0.5 && Math.abs(at.z - s.z) < s.half + r * 0.5);
+    if (st) {
+      hitStructure(st, w);
+      return;
+    }
+    const near = civil.housesNear(at.x, at.z, r * 0.6);
+    if (near.length) hitHouse(near[0], w, at);
+  }
+
   function friendlyOwner(o: number): boolean {
     const view = ctx.sim.view;
     return o === HUMAN_ID || o <= 0 || view.hasTreaty(HUMAN_ID, o, 'alliance') || !!view.human?.allies.includes(o);
@@ -814,6 +829,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       city: cityName(cityId), nation: name, civ: formatNumber(Math.round(civ / 100) * 100), v: Math.abs(CIVILIAN_OPINION_VICTIM),
       allies: allies > 0 ? t('command.civil.allies', { n: allies, a: Math.abs(CIVILIAN_OPINION_ALLY) }) : '', w: Math.abs(CIVILIAN_OPINION_WORLD), days: Math.round(CASUS_BELLI_TICKS / 240),
     });
+    console.info(`[command] civilian target: asking — ${body}`);
     const i = await decide(t('command.civil.title', { city: cityName(cityId) }), body, peace ? t('command.civil.peace', { nation: name }) : t('command.civil.note'), [
       { label: t('command.civil.go'), cls: 'danger', key: 'Enter' },
       { label: t('command.civil.hold'), cls: 'pri', key: 'Esc' },
@@ -1100,6 +1116,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       },
       onNeutralHit: (e) => void askFireFirst(e.nation),
       sceneryHit: (pr, a, b) => sceneryHit(pr, a, b),
+      groundBlast: (pr, at) => groundBlast(pr, at),
     };
     fx.hooks = {
       sound: (cue, gain) => sfx(cue, gain),
@@ -1473,8 +1490,23 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (entryGoal) entryGoal.km = tileKm(tp.x, tp.y, entryGoal.tx, entryGoal.ty);
   }
 
-  /** Where «Ir al combate» goes: the action the player was sent to, else the mission when it is about as near, else the nearest. */
+  /** An enemy the scene already shows within 15 km (the fight you can see), as a target in tile coords. */
+  function sceneFoe(): CombatTarget | null {
+    const P = player();
+    if (!P || !forces) return null;
+    const h = forces.nearestHostile(P.pos);
+    if (!h.ent || h.dist > 15_000) return null;
+    const tp = tileOf(h.ent.pos.x, h.ent.pos.z);
+    return { kind: 'unit', tx: tp.x, ty: tp.y, km: h.dist / 1000, owner: h.ent.nation, order: h.ent.kind };
+  }
+
+  /**
+   * Where «Ir al combate» goes: an enemy already in the scene, else the action the player was sent to, else the
+   * mission when it is about as near, else the nearest action.
+   */
   function chosenTarget(): CombatTarget | null {
+    const foe = sceneFoe();
+    if (foe && (!entryGoal || foe.km < entryGoal.km + 3)) return foe;
     if (entryGoal) return entryGoal;
     const { nearest, mission } = targets;
     // The mission's place counts while the unit is not there yet (standing in its sector, the fight is the nearest enemy).
@@ -1490,6 +1522,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (c.kind === 'battle') return t('command.obj.battle', { nation });
     if (c.kind === 'front') return t('command.obj.front', { nation });
     if (c.kind === 'port') return t('command.obj.port', { nation });
+    if (c.kind === 'unit' && !c.unitId && c.order) return t('command.obj.seen', { what: t(`command.type.${c.order}`), nation });
     if (c.kind === 'unit') {
       const u = c.unitId ? ctx.sim.view.units.get(c.unitId) : undefined;
       return t('command.obj.unit', { unit: u ? unitLabel(u.type, u.serial) : '', nation });
@@ -1569,7 +1602,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       return;
     }
     const tp = tileOf(P.pos.x, P.pos.z);
-    const stop = c.kind === 'unit' ? STOP_KM[kind] * 2 : STOP_KM[kind];
+    const stop = c.kind === 'unit' && c.unitId ? STOP_KM[kind] * 2 : STOP_KM[kind];
     const title = targetTitle(c);
     const nearWaypoint = (): void => {
       const f = Math.max(0, (c.km - stop) / Math.max(0.001, c.km));
@@ -1723,8 +1756,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const h = forces.nearestHostile(P.pos);
     const contact = !!h.ent && h.dist < REACH_M[kind];
     if (entryGoal) {
-      if (!contact && entryGoal.km - STOP_KM[kind] >= 0.8) void goToCombat();
-      else arrivalNotice(entryGoal, 'arrived');
+      // Sent to an action: arrived there (the march ran behind the entry fade) or still short of it.
+      const goal = entryGoal;
+      if (goal.km < STOP_KM[kind] + HOP_KM[kind]) entryGoal = null;
+      refreshTargets(true);
+      const next = chosenTarget();
+      if (!contact && next && next.km - STOP_KM[kind] >= HOP_KM[kind]) {
+        marchLegs = 1;
+        void goToCombat();
+      } else arrivalNotice(next ?? goal, 'arrived');
       return;
     }
     const c = chosenTarget();
@@ -1762,11 +1802,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     arrivalNotice(c, stopBy);
     await ctx.post.fadeTo(0, ctx.app.isShot ? 1 : 500);
     // The line moved while the unit marched (fronts are alive): if the action is still out of reach, go on to where it
-    // is now (at most two more legs, then the player drives).
+    // is now (at most four more legs, then the player drives). A goal reached is done: the live line leads from here.
+    if (entryGoal && entryGoal.km < STOP_KM[kind] + HOP_KM[kind]) entryGoal = null;
+    refreshTargets(true);
     const next = chosenTarget();
     const P = player();
     const inReach = !!P && !!forces && forces.nearestHostile(P.pos).dist < REACH_M[kind];
-    if (stopBy === 'arrived' && next && !inReach && next.km - STOP_KM[kind] >= HOP_KM[kind] && marchLegs < 3) {
+    if (stopBy === 'arrived' && next && !inReach && next.km - STOP_KM[kind] >= HOP_KM[kind] && marchLegs < 5) {
       marchLegs++;
       await goToCombat();
     } else marchLegs = 0;
@@ -2298,10 +2340,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (p.goal) {
         const ux = p.x ?? 0, uy = p.y ?? 0;
         goalLabel = p.goal.label;
-        const gt = Math.floor(p.goal.y) * MAP_W + Math.floor(p.goal.x);
-        entryGoal = { kind: 'battle', tx: p.goal.x, ty: p.goal.y, km: tileKm(ux, uy, p.goal.x, p.goal.y), owner: ctx.sim.view.owner[gt] ?? 0 };
+        // The place of the action on the contact line itself (the one local derivation: the line the scene draws).
+        let gx = p.goal.x, gy = p.goal.y;
+        const glf = kind === 'tank' ? deriveLocalForces(ctx.sim.view, gx, gy, 30, HUMAN_ID) : null;
+        const gfr = glf?.fronts.find((q) => atWar(ctx.sim.view, q.a === HUMAN_ID ? q.b : q.a) && (q.a === HUMAN_ID || q.b === HUMAN_ID));
+        if (gfr) {
+          gx = gfr.nearest.x;
+          gy = gfr.nearest.y;
+        }
+        const gt = Math.floor(gy) * MAP_W + Math.floor(gx);
+        const gfoe = gfr ? (gfr.a === HUMAN_ID ? gfr.b : gfr.a) : ctx.sim.view.owner[gt] ?? 0;
+        entryGoal = { kind: 'battle', tx: gx, ty: gy, km: tileKm(ux, uy, gx, gy), owner: gfoe };
         if (entryGoal.km - STOP_KM[kind] >= HOP_KM[kind]) {
-          const route = planRoute(ux, uy, p.goal.x, p.goal.y, STOP_KM[kind], passableTile, kind === 'jet' ? 4000 : 2500);
+          const route = planRoute(ux, uy, gx, gy, STOP_KM[kind], passableTile, kind === 'jet' ? 4000 : 2500);
           if (route && route.km > 0.5) {
             overlay?.show(kind);
             const at = await marchTo(route, entryGoal, true);
@@ -2430,7 +2481,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         input.endFrame();
         return;
       }
-      if (!internals?.hold) phaseT += phase === 'intro' ? Math.max(realDt, wallDt) : realDt;
+      if (!internals?.hold) phaseT += phase === 'intro' || phase === 'debrief' ? Math.max(realDt, wallDt) : realDt;
       const view = ctx.sim.view;
       // Keys that are not driving.
       if (overlay.dialogOpen) {

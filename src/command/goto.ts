@@ -12,6 +12,7 @@
 
 import { HUMAN_ID, MAP_H, MAP_W, TILE_KM } from '../shared/constants';
 import type { GameView } from '../shared/api';
+import { deriveLocalForces } from '../shared/localForces';
 import { StructureType, UNIT_ORDER_KINDS, UnitMode, UnitType, type CommandKind, type UnitView } from '../shared/types';
 
 const DEG = Math.PI / 180;
@@ -53,6 +54,8 @@ export interface CombatTarget {
   order?: string;
   /** For a mission on a structure: its id. */
   structureId?: number;
+  /** For a front: its key. */
+  frontKey?: number;
 }
 
 export interface Targets {
@@ -82,19 +85,32 @@ export function combatTargets(view: GameView, ux: number, uy: number, kind: Comm
     const foe = a.attacker === HUMAN_ID ? a.defender : a.defender === HUMAN_ID ? a.attacker : 0;
     if (!foe || !atWar(view, foe)) continue;
     if (kind === 'ship') continue;
-    offer({ kind: 'battle', tx: a.contactX, ty: a.contactY, km: tileKm(ux, uy, a.contactX, a.contactY), owner: foe });
+    offer({ kind: 'battle', tx: a.contactX, ty: a.contactY, km: tileKm(ux, uy, a.contactX, a.contactY), owner: foe, frontKey: a.frontKey });
   }
   // Fronts at war: the nearest point of the contact line.
   if (kind !== 'ship') {
     for (const f of view.fronts) {
       const foe = f.a === HUMAN_ID ? f.b : f.b === HUMAN_ID ? f.a : 0;
       if (!foe || !atWar(view, foe)) continue;
+      // Samples are the centres of side a's contact tiles: the contact edge is half a tile along the advance.
       const s = f.samples;
       for (let i = 0; i + 1 < s.length; i += 2) {
-        const km = tileKm(ux, uy, s[i], s[i + 1]);
-        if (!best || km < (best as CombatTarget).km) offer({ kind: 'front', tx: s[i], ty: s[i + 1], km, owner: foe });
+        const cx = s[i] + f.dirX * 0.5, cy = s[i + 1] + f.dirY * 0.5;
+        const km = tileKm(ux, uy, cx, cy);
+        if (!best || km < (best as CombatTarget).km) offer({ kind: 'front', tx: cx, ty: cy, km, owner: foe, frontKey: f.key });
       }
     }
+  }
+  // Near a front, the one derivation of the local line (shared/localForces: the sub-tile line the battle view and the
+  // command scene draw) gives the exact nearest point of it.
+  // For an offensive, the line where its contact is; for a front, the point of its line nearest the unit.
+  const b0 = best as CombatTarget | null;
+  if (b0 && b0.frontKey && (b0.kind === 'front' || b0.kind === 'battle') && b0.km < 400) {
+    const battle = b0.kind === 'battle';
+    const ax = battle ? b0.tx : ux, ay = battle ? b0.ty : uy;
+    const lf = deriveLocalForces(view, ax, ay, battle ? 30 : Math.min(250, Math.max(30, b0.km + 15)), HUMAN_ID);
+    const fr = lf.fronts.find((q) => q.key === b0.frontKey);
+    if (fr) best = { ...b0, tx: fr.nearest.x, ty: fr.nearest.y, km: tileKm(ux, uy, fr.nearest.x, fr.nearest.y) };
   }
   // Enemy units the vehicle can fight.
   for (const u of view.units.values()) {

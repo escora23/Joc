@@ -130,7 +130,7 @@ export class NightKit {
       f.pos.x += 1.5 * dt;
       const k = Math.min(1, f.life / 3, (FLARE_LIFE_S - f.life) / 1.2 + 0.1);
       f.light.position.copy(f.pos);
-      f.light.intensity = 2600 * k * Math.max(0.3, dark);
+      f.light.intensity = 420 * k * Math.max(0.3, dark);
       if (fx) {
         fx.particles.glow(f.pos.x, f.pos.y, f.pos.z, 9, 9, 8, 6, k);
         fx.particles.glow(f.pos.x, f.pos.y, f.pos.z, 32, 1.4, 1.3, 1, 0.5 * k);

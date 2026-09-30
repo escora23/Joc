@@ -192,6 +192,8 @@ export interface WorldHooks {
    * first, as the impact point, or null. The world then explodes it there; the scenery owner applies the damage.
    */
   sceneryHit?(p: Proj, a: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 | null;
+  /** A shell, bomb or missile exploded on the ground here: buildings within its blast take it (near misses count). */
+  groundBlast?(p: Proj, at: THREE.Vector3): void;
 }
 
 /** Active soldier instances per team and model; the rest of a big battle stands in the crowd. */
@@ -1058,6 +1060,7 @@ export class World {
             fx.playAt('explosionSmall', p.pos, 0.35);
           } else fx.explosion(p.pos, big, 'ground');
           this.splashDamage(p, p.pos, null);
+          if (!water) this.hooks.groundBlast?.(p, p.pos);
         }
         this.retire(p);
       }

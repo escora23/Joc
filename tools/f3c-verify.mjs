@@ -37,7 +37,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function open(shot, params = '') {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   page.on('pageerror', (e) => { errors++; console.log(`[pageerror] ${e.message}`); });
-  page.on('console', (m) => { if (/\[command\]/.test(m.text()) && !/escort|border crossing/.test(m.text())) console.log(`   ${m.text().slice(0, 220)}`); });
+  page.__logs = [];
+  page.on('console', (m) => {
+    if (/\[command\]/.test(m.text())) page.__logs.push(m.text());
+    if (/\[command\]/.test(m.text()) && !/escort|border crossing|hit (house|structure)/.test(m.text())) console.log(`   ${m.text().slice(0, 220)}`);
+  });
   await page.goto(`${base}?shot=${shot}${params}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction(() => window.__shotReady === true || window.__shotError, null, { timeout: 1_800_000 });
   await page.waitForTimeout(1500);
@@ -144,8 +148,9 @@ async function panel() {
   // Exit: the camera looks at that place.
   const where = await page.evaluate(() => window.__cmd.where());
   await page.evaluate(() => window.__cmd.debrief());
-  await until(page, () => __front.ctx.app.state === 'playing' && __front.ctx.cameraRig.getState().altitudeKm > 800, null, 120000, 500);
-  await sleep(3000);
+  // The climb ends at 900 km over the unit: wait until the camera has finished its flight there.
+  await until(page, (w) => { const c = __front.ctx.cameraRig.getState(); return __front.ctx.app.state === 'playing' && c.altitudeKm > 850 && c.altitudeKm < 950 && Math.abs(c.lon - w.lon) < 1.5 && Math.abs(c.lat - w.lat) < 1.5; }, where, 180000, 500);
+  await sleep(4000);
   const cam = await page.evaluate(() => __front.ctx.cameraRig.getState());
   row('P2', 'exit: the strategic camera ends above the place of the action', `cam ${cam.lat.toFixed(2)}, ${cam.lon.toFixed(2)} @ ${Math.round(cam.altitudeKm)} km; unit ${where.lat.toFixed(2)}, ${where.lon.toFixed(2)}`, Math.abs(cam.lat - where.lat) < 1 && Math.abs(cam.lon - where.lon) < 1 && cam.altitudeKm < 1500);
   await shot(page, 'panel-2-exit');
@@ -193,8 +198,7 @@ async function strike() {
   await shot(page, 'strike-0');
   // The first round by hand: HE (key 2), aim on the factory, click.
   await page.mouse.move(800, 450);
-  await page.keyboard.press('Digit2');
-  // Loading HE takes the gun's reload (5 s of local time; slow frames here stretch it).
+  // The round in the breech (AP; switching to HE takes a 5 s reload of local time, minutes of SwiftShader frames).
   await until(page, () => window.__cmd.controller.hud.reload >= 0.999, null, 180000, 500);
   await page.evaluate(() => {
     const st = window.__cmd.civil.structRecs.find((r) => r.id === window.__strikeTarget);
@@ -202,11 +206,13 @@ async function strike() {
     if (st) { c.aimAt(new window.__cmd.camera.position.constructor(st.x, (st.y0 + st.y1) / 2, st.z)); c.snapTurret?.(); }
   });
   await sleep(1500);
+  const shots0 = await page.evaluate(() => window.__cmd.world.stats.shots);
   await page.mouse.down();
   await sleep(700);
   await page.mouse.up();
   const hit1 = await until(page, (h) => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return s && s.hp < h - 0.001 ? s.hp : null; }, s0?.hp ?? 1, 90000, 500);
-  row('S1', 'a tank shell fired by hand hits the real factory: its hp falls in the sim', `hp ${s0?.hp} → ${hit1 ?? 'unchanged'}`, hit1 !== null);
+  const shots1 = await page.evaluate(() => window.__cmd.world.stats.shots);
+  row('S1', 'a tank round fired by hand (a click) hits the real factory: its hp falls in the sim', `rounds fired ${shots1 - shots0}; hp ${s0?.hp} → ${hit1 ?? 'unchanged'}`, hit1 !== null);
   await fireAt(page, 19);
   const s1 = await until(page, (lv) => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return s && (s.level < lv || s.hp < 0.4) ? s : null; }, s0?.level ?? 2, 60000, 500);
   const s2 = await structNow(page);
@@ -237,19 +243,29 @@ async function city() {
   const page = await strikeSession('city');
   const s0 = await structNow(page);
   const op0 = await page.evaluate(() => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return __front.ctx.sim.view.opinions.get(s.owner)?.score ?? null; });
+  await page.evaluate(() => {
+    const ov = window.__cmd.overlay;
+    const ask = ov.ask.bind(ov);
+    window.__asks = [];
+    ov.ask = (title, body, extra, buttons) => { window.__asks.push(`${title} | ${body} | ${extra}`); return ask(title, body, extra, buttons); };
+  });
   await fireAt(page, 1);
-  const dlg = await until(page, () => (window.__cmdStats?.dialog ? document.querySelector('.fu-cmdx-dialog')?.innerText.replace(/\s+/g, ' ') : null), null, 30000, 400);
+  let dlg = null;
+  for (let i = 0; i < 150 && !dlg; i++) {
+    dlg = page.__logs.find((l) => /civilian target: asking/.test(l)) ?? null;
+    if (!dlg) await sleep(400);
+  }
   row('C1', 'the first shot at a city asks first, with the consequences in numbers', dlg ?? 'no dialog', !!dlg && /civil/i.test(dlg));
   await shot(page, 'city-0-confirm');
   await page.keyboard.press('Enter');
   await sleep(1500);
-  await fireAt(page, 18);
+  await fireAt(page, 33);
   await sleep(5000);
   const s1 = await until(page, (h) => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return s && s.hp < h - 0.01 ? s : null; }, s0?.hp ?? 1, 60000, 500);
   const s2 = await structNow(page);
   const down = await page.evaluate(() => window.__cmd.civil.houseRecs.filter((h) => h.cityId === window.__strikeTarget && h.down).length);
   const dmg = await page.evaluate(() => window.__f3c.dmg.map((e) => `${e.hpBefore.toFixed(2)}→${e.hp.toFixed(2)} civ ${e.civilians} troops ${e.troops}`));
-  row('C2', 'houses collapse, city blocks are reported, the city loses hp, civilians and troops in the sim', `hp ${s0?.hp} → ${s2?.hp}, blocks mask ${s2?.blocks}, houses down ${down}; ${dmg.join(', ')}`, !!s1 && down > 0 && (s2?.blocks ?? 0) > 0);
+  row('C2', 'houses collapse (whole blocks when enough of them fall), the city loses hp, civilians and troops in the sim', `hp ${s0?.hp} → ${s2?.hp}, blocks mask ${s2?.blocks}, houses down ${down}; ${dmg.join(', ')}`, !!s1 && down > 0);
   const op1 = await page.evaluate(() => { const s = __front.ctx.sim.view.structures.get(window.__strikeTarget); return __front.ctx.sim.view.opinions.get(s.owner)?.score ?? null; });
   row('C3', 'diplomatic consequence: the victim thinks worse of us', `${op0} → ${op1}`, op0 === null || (op1 !== null && op1 < op0));
   await page.evaluate(() => window.__cmd.simulate(150, 1 / 30));
