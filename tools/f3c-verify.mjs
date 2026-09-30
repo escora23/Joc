@@ -251,7 +251,8 @@ async function city() {
   });
   await fireAt(page, 1);
   let dlg = null;
-  for (let i = 0; i < 150 && !dlg; i++) {
+  // The round flies ~1.5 s of local time: many SwiftShader frames.
+  for (let i = 0; i < 900 && !dlg; i++) {
     dlg = page.__logs.find((l) => /civilian target: asking/.test(l)) ?? null;
     if (!dlg) await sleep(400);
   }

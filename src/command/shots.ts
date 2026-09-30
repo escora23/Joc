@@ -728,7 +728,8 @@ export async function strikeFire(s: ShotContext, I: CommandInternals, n: number)
     c.aimAt(aim);
     c.snapTurret?.();
     c.fire();
-    I.simulate(50, 1 / 30);
+    // The round's flight (up to ~2.5 s to 1.5 km), then the next.
+    I.simulate(80, 1 / 30);
     await s.waitFrames(1);
   }
 }
