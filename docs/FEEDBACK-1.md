@@ -224,3 +224,51 @@ Verbatim (Spanish):
         escort their convoys, join the war.
 
 Handled in the Feedback 3 round (a dedicated naval pass) and verified with items 26–29; the owner-proxy critic checks it as item 30.
+
+## Owner feedback #4 (after playing artifact version 6) — MANDATORY, item 31
+
+Verbatim (Spanish):
+
+> cuando estés en modo control del barco podrás ver los barcos mercantes y eso y dispararlos bloquearlos o cosas asi no? desde el modo control digo, y cuando disparas a un barco, te sale quieres declararle la guerra a X y le puedes dar a que no pero se dispara
+
+31. **Firing on a nation at peace in command mode is asked BEFORE the shot, and "No" really means no shot.**
+    - **Root cause (read from the code):**
+      - src/command/world.ts `damage()` only asks when a round has already been fired and HIT a `neutral` entity
+        (`hooks.onNeutralHit` → src/command/index.ts `askFireFirst`). The muzzle flash, the shell, the impact and the
+        splash have already happened when the dialog opens.
+      - After "No disparar", the rounds still in flight (bursts, CIWS, machine gun) play out and can re-open the dialog.
+      - src/command/hud/overlay.ts `ask()` maps Enter to the FIRST button, and the first button is "Declarar la guerra":
+        a dangerous default.
+      - For merchants and transports, this "declare war?" prompt contradicts the item-30 piracy model (stop panel E/R/F/X
+        with piracy costs).
+    - **Required:**
+      - **Ask before any round leaves the barrel.** When the trigger is pulled and the aim (the target under the
+        reticle, or the ballistic impact point within a small tolerance) is a unit, ship, structure or house of a nation
+        at peace, nothing fires until the player decides.
+      - **"No disparar" cancels the shot completely:** no muzzle flash, no sound, no projectile, no ammo spent, no
+        impact. The trigger stays released until the button is pressed again, so there is no automatic re-fire, and the
+        same target is not asked about again for a few seconds unless the player fires at it again on purpose.
+        A round already in the air that a neutral wanders into never damages it, never shows a hit on it and never
+        re-opens the dialog.
+      - **Safe defaults:** Enter and Esc both mean "No disparar". War or piracy only happen with an explicit click (or
+        an explicit key shown on that button).
+      - **Merchant and troop transport ships at peace (naval command mode):** the choice follows the item-30 model and
+        shows the same costs and sim events as the stop panel and the strategic blockade:
+        - "Disparo de advertencia": no damage, the ship stops;
+        - "Abordar" (when close enough);
+        - "Hundir": piracy, with the opinion and casus belli shown;
+        - "Declarar la guerra a X";
+        - "No disparar".
+      - **Same coherent rule for the tank, the jet and the ship.** Cities keep their civilian-target confirmation, which
+        must also be asked before the shot.
+      - **Blockades from command mode too.** On the warship, a clear key or button "Bloquear esta zona" opens the item-30
+        blockade dialog for the strait or area the ship is in, so the owner can start a blockade without leaving
+        command mode. The stop panel already lets you see merchants and hail, warn, board or sink them: make sure it is
+        easy to find (hint in the controls bar, first-time tip).
+    - **Verify in real play:**
+      - Fire at a merchant of a nation at peace, choose No: nothing is fired, there is no splash, no ammo is spent, there
+        is no damage and the dialog does not repeat.
+      - Choose Hundir: the piracy consequences match the stop panel.
+      - Choose Declarar la guerra: war is declared.
+      - A tank firing at a patrol of a nation at peace behaves the same way.
+      - "Bloquear esta zona" from the warship works.
