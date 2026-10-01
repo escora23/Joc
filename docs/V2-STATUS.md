@@ -1127,3 +1127,98 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
   + 0.45 / 0.08 = 5.6 h of repair, the time it takes.
 * The card's «Reparar · precio · N h» and «reparando, lista en …» now include what is left of the 2 h pause
   (`StructureView.hitTick`), so the hours it states are the hours it takes.
+
+## Feedback #3 fix pass 3 (2026-10-01) — verifier failures on items 26/29e, 27 (command side), 30, 29a/29d, clear map
+
+> `git log --grep "fix 3"`. Code map: CODEMAP §27.2. `npx tsc --noEmit` and `npm run build` clean; `npx tsx
+> tools/i18n-check.mjs` 0 missing es/en; headless `npx tsx src/sim/test/f3-audit.mjs` **45/45**. Browser (Chromium /
+> SwiftShader, real UI, no-HMR dev server, nothing pressed that a player would not press): the verifier's own
+> `tools/_v4_strip.mjs` **5/5 twice**, new `tools/f3c-destroy-verify.mjs` **7/7**, `tools/naval-verify.mjs --only
+> command` **8/8** (new C1b, C1c, C3a), new `tools/f3-clearmap-verify.mjs` **4/4**; frames in `shots/feedback3-fix-3/`.
+
+### #26 / #29e: «Tomar el control aquí» on the battle strip — fixed
+* **Cause (as found).** `battleStrip.ts` entered with the battle's own division and no goal, so no march ran.
+* **Fix.** The strip enters with the same goal as every front entry: the battle's `frontKey` and, when it is our
+  offensive, its `attackId` (`takeAction.frontAction`); the march to the live contact runs leg by leg. With no division
+  of ours in the battle it goes through `takeControlAtFront` (the panel's path).
+* **Measured** (`_v4_strip.mjs`, near Zaragoza, «AVANCE 2,7 KM/H» on strip and badge): click → 2 legs / 32-34 km of
+  march → play at 61.6 s and 62.8 s, **contact on the first frame of play** (enemy infantry at 2.1 / 1.7 km), one scene
+  build; Esc → the strategic camera over the place (42.54, −0.01). As measured in fix pass 2, about 30 s of that is the
+  3.1 s intro swoop drawn at SwiftShader's 3-4 s per frame; on a GPU the same entry is ~30 s. Frames:
+  `strip/strip-1-contact.png`, `strip2/strip-1-contact.png`.
+
+### #27 command side: a structure destroyed in command mode, end to end — fixed
+* **Models readable up close.** Command mode no longer stretches the strategic icon model to the footprint (a 1.1 km ×
+  26 m slab). `src/command/models/structures.ts` builds every type at its real size in metres: the factory is rows of
+  sawtooth-roofed halls with pilasters and glazing, banded chimneys, tanks, a brick office, a rail spur, a fenced yard;
+  the port quays, gantry cranes, warehouses and container stacks; the airbase a marked runway, hangars, shelters and a
+  tower; army base, defence post, SAM site, silo, radar and naval yard likewise. Each building stands on the ground under
+  it and aprons/runways drape over the relief (`Civil.drapeModel`). Frames: `destroy2/d0-view.png`, `d0-sight.png`
+  (the gunner's sight full of hall facades and roofs; the banding the verifier saw was the stretched slab's flat faces).
+* **Destruction in the scene follows the sim.** The level decides how many buildings stand; the damage state scorches
+  and collapses them (damaged: some blackened and holed; heavy: about half down into tilted heaps, chimneys broken);
+  rubble is the same compound with every building a heap (`ruin-<tile>`), with fires and smoke.
+* **Rounds.** HE 0.08 per hit on a structure (was 0.05: twenty HE could not bring down a level-2 factory); the HUD says
+  what the sim did: «Fábrica de Suiza pierde un nivel (ahora nivel 1): edificios derrumbados», then «Fábrica de Suiza
+  destruida: queda en escombros».
+* **Strategic card.** A destroyed structure keeps a card: «ESCOMBROS DE FÁBRICA · Fábrica · Suiza — Destruida · en
+  escombros (era de nivel 1) · integridad 0 % · no produce nada — Destruida por Comandante hace un momento…».
+* **Measured** (`f3c-destroy-verify`, factory L2 at 0.8 km): D1 rounds hit (1 → 0.92); D2 the sim takes a level (event
+  `levelLost`, cause command), the model is rebuilt with fewer buildings (26,274 → 14,622 vertices), notice as above;
+  D3 more rounds: destroyed (event `destroyed`, by 1), ruin on its tile, rubble compound drawn; D4 the notice; D5 the
+  card. Frames `destroy2/d1-level-lost.png` (collapsed halls burning), `d2-rubble-view.png`, `d2-rubble-sight.png`,
+  `d3-card.png`.
+* **City hits reach the sim as the dialog says.** A round that brings houses down is a heavy hit on the city: the
+  weapon's whole damage goes to the sim (plus a little per extra house), so civilians and garrison die there; the dialog
+  quotes exactly one such round («Cada proyectil tuyo que derriba casas mata a unos 1.400 civiles…» for a level-3 city
+  and a tank's HE); the sim emits `structureDamaged` for any civilian or troop loss, so the alert feed shows them; the
+  command HUD says «Impacto en <ciudad>: N edificios abajo · unos X civiles muertos». Measured (C1): hp 1 → 0.755,
+  4 houses down, 2 loss events: **4,410 civilians, 45 troops**.
+
+### #30 command mode: see the ship you hail, board it in a visible sequence — fixed
+* The stop panel's ship is **marked in the world**: corner brackets sized to the hull with «Convoy de tropas de Suiza ·
+  546 m», or a coloured arrow at the screen edge when it is out of view; the **view swings to it** once when the panel
+  first names it (and on E / R / X), unless the player moves the mouse. The panel keeps its ship (300 m hysteresis: two
+  ships at the same range swapped it every frame) and **Tab** names the next ship in reach («Tab · otro buque a la vista
+  (1 más)»; Tab was being eaten by the tank's vehicle switch).
+* **Boarding is a short sequence**: a camera cut-in (behind the launch as it crosses toward the ship, then off the hull
+  for the climb and the flags); our launch with its four-man team crosses with a wake, the team climbs the hull, the ship's flag comes down and ours goes up (radio lines: «Lancha
+  abarloada…», «Equipo en cubierta, puente asegurado. Arriando su bandera.»); the prize keeps our flag and leaves the
+  panel. The leftover «Aquí no hay combates…» notice is taken down when a ship to stop is in reach.
+* **Measured** (`naval-verify --only command`): C1 panel; **C1b** marker «ship: Convoy de tropas de Suiza · 546 m»
+  and the target on screen at (−0.04, −0.05) after the swing; **C1c** Tab → the merchant; C2 heave-to; **C3a** the
+  boarding party object crossing in three frames; C3 merchant seized, sailing to our port under our flag; C4 warning
+  shot (opinion −33 → −36); C5 sink at peace asks, 5,000 troops lost — **8/8** in `naval5` and `naval7` (Tab is now
+  read by the command loop every frame: in one run between them a press was lost and the convoy got boarded instead).
+  Frames `naval7/c1b-marked.png`, `c3-board-0..2.png` (the launch, from behind, heading for the container ship),
+  `c3-boarded.png`.
+
+### #29a / #29d: the numbers say the same thing — fixed
+* **Strike report** in the bombard report's words with the target's name. Measured (`f3-verify --only civil` 5/5, the
+  same staged strike as the verifier's c3-after, sim 1.00 → 0.30): «1.º Bombardero: impacto en Ciudad de Toulouse:
+  pierde un nivel (ahora nivel 4) y funciona al 25 % — cerca de Toulouse (Francia)…», the same words as the damage
+  alert; a hit that takes no level reads «…: −40 puntos de integridad (100 = un nivel entero), queda al 60 %»
+  (`afterAction` strike now carries `targetId / hpAfter / levelLost / level`).
+* **One distance per objective**: entered from a battle, the chip's objective is that battle, the same `battleKm` as
+  the card's «Combate con X a N km»; the card's «Destino a N km» reuses the chip's distance when the destination marks
+  the same spot; the front line in the card is given to 0.1 km under 10 km. **Markers de-cluttered**: the objective and
+  destination markers are placed first, place labels never sit on them, and the destination's text is dropped when it
+  marks the objective (strip2/strip-1-contact.png: one marker, one label).
+
+### Clear map and 3D artefacts — fixed
+* **Glare discs.** Beyond ~20-75 km of camera distance every fx sprite is capped at ~40 px and never HDR-bright (no
+  bloom disc): `particles.ts vFar`. M1 at 1,200 km over the running front: largest near-white blob **19-20 px** (was
+  100-200 px).
+* **Diagonal bands.** They were the contested-land stripes, a fixed 0.75-tile period that grew into screen-wide bands
+  below ~100 km; they now keep 24-48 px a period by zoom octaves (crossfaded) and dim up close. Also: globe relief
+  shadows need an 80 m occluder on rugged ground (no self-shadowing of plains), battle shadows fade out 2.5-6 km from
+  the camera (acne moiré). M2 60 km / M3 25 km: no periodic bands (3 / 0 alternations); `destroy2/d3-card.png` shows
+  the fine stripes where `destroy/d3-card.png` (before) had broad bands.
+* **Orange blotches at low altitude.** The occupied-land speckle (hard orange discs from a few km) fades out between
+  250 and 90 km (the lighter fill and the border still say «occupied»); crater glow only within ~1.5 km of the camera;
+  the battle terrain's wood/field edges are de-aliased with the pixel footprint. M4 at 3 km: orange share **0 %**
+  (was 1.1 % of the frame).
+
+### Notes
+* Contact time from the strip is ~62 s on SwiftShader, of which the march is sim-bound and the intro is rendering-bound
+  (10 frames of a 3.1 s swoop); the entry has nothing left that waits on purpose.

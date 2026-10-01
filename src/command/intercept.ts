@@ -188,6 +188,30 @@ class BoardingFx {
       }
     });
   }
+  /**
+   * The cut-in camera: behind the launch as it crosses (the boarded ship ahead of it), then off the hull where the team
+   * climbs, then on the flags.
+   */
+  shot(t: number, total: number, pos: THREE.Vector3, look: THREE.Vector3): void {
+    const e = this.ship;
+    const to = this.board(this.tmp2);
+    if (t < total * 0.56) {
+      const dir = this.side.copy(to).sub(this.from).setY(0).normalize();
+      pos.copy(this.boat.position).addScaledVector(dir, -48);
+      pos.x += -dir.z * 10;
+      pos.z += dir.x * 10;
+      pos.y = 13;
+      look.copy(e.pos).setY(e.height * 0.4);
+    } else {
+      const out = this.side.copy(to).sub(e.pos).setY(0).normalize();
+      pos.copy(to).addScaledVector(out, 85);
+      pos.x += -out.z * 40;
+      pos.z += out.x * 40;
+      pos.y = 22;
+      look.copy(this.focus);
+    }
+  }
+  private readonly tmp2 = new THREE.Vector3();
   dispose(): void {
     this.root.removeFromParent();
   }
@@ -200,6 +224,11 @@ export class ShipIntercept {
   private boardFx: BoardingFx | null = null;
   /** The ship the player picked with Tab (null: the nearest) and how many others are in reach. */
   private picked: Ent | null = null;
+  private nextReq = false;
+  /** Tab (read by the command loop every frame): name the next ship in reach. */
+  requestNext(): void {
+    this.nextReq = true;
+  }
   private others = 0;
   /** Prizes taken in this session keep our flag (ship unit id → its flag). */
   private readonly prizes = new Map<number, BoardingFx>();
@@ -271,9 +300,12 @@ export class ShipIntercept {
     }
     // Tab: the next ship in reach (nearest first), kept until it leaves the 12 km or the player picks another.
     cands.sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
-    if (allowInput && !this.asking && !this.boarding && cands.length > 1 && input.hit('Tab')) {
-      const i = this.target ? cands.indexOf(this.target) : -1;
-      this.picked = cands[(i + 1) % cands.length];
+    if (this.nextReq) {
+      this.nextReq = false;
+      if (!this.asking && !this.boarding && cands.length > 1) {
+        const i = this.target ? cands.indexOf(this.target) : -1;
+        this.picked = cands[(i + 1) % cands.length];
+      }
     }
     if (this.picked && (!this.picked.alive || !cands.includes(this.picked))) this.picked = null;
     if (this.picked) best = this.picked;
@@ -296,16 +328,10 @@ export class ShipIntercept {
         this.d.sound('error');
       } else {
         this.boardFx?.update(b.t, BOARD_S, b.ent);
-        // The cut-in: from abeam of the target, low over the water, on the boat, the climb, the flags.
+        // The cut-in: behind the launch as it crosses, then on the climb and the flags.
         if (this.boardFx && this.d.cutIn) {
-          const fx = this.boardFx.focus;
-          const side = this.cutSide.copy(player.pos).sub(b.ent.pos).setY(0).normalize();
-          const across = this.cutTmp.set(-side.z, 0, side.x);
-          // Off to one side of the gap between the two hulls, far enough to hold both ships and the boat in frame.
-          const gap = player.pos.distanceTo(b.ent.pos);
-          this.cutPos.copy(player.pos).add(b.ent.pos).multiplyScalar(0.5).addScaledVector(across, gap * 0.55 + 160);
-          this.cutPos.y = 34;
-          this.d.cutIn(this.cutPos, fx);
+          this.boardFx.shot(b.t, BOARD_S, this.cutPos, this.cutLook);
+          this.d.cutIn(this.cutPos, this.cutLook);
         }
         if (b.t >= 3.2 && b.t - dt < 3.2) this.say(t('naval.cmd.boardAlong'));
         if (b.t >= BOARD_S * 0.62 && b.t - dt < BOARD_S * 0.62) this.say(t('naval.cmd.boardDeck'));
@@ -393,8 +419,7 @@ export class ShipIntercept {
   }
   private readonly markerPos = new THREE.Vector3();
   private readonly cutPos = new THREE.Vector3();
-  private readonly cutTmp = new THREE.Vector3();
-  private readonly cutSide = new THREE.Vector3();
+  private readonly cutLook = new THREE.Vector3();
 
   private paint(html: string): void {
     if (html === this.lastHtml) return;

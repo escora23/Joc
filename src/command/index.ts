@@ -2844,6 +2844,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           night.lightsOn = !night.lightsOn;
           overlay.showNotice(t(night.lightsOn ? 'command.lights.on' : 'command.lights.off'), 2.5, true);
         }
+        // Ships: Tab names the next ship in reach on the stop panel (read here, every frame, so no press is lost).
+        if (kind === 'ship' && input.hit('Tab')) intercept?.requestNext();
         if (kind !== 'ship' && input.hit('Tab')) {
           // Next vehicle of the formation (alive), in slot order.
           const alive = formation.filter((m) => m.alive);

@@ -315,7 +315,7 @@ export class ShipController implements Controller {
       cam.position.lerp(this.cutIn.pos, dt > 0 ? Math.min(1, dt * 3) : 1);
       cam.up.set(0, 1, 0);
       cam.lookAt(this.cutIn.look);
-      cam.fov += (40 - cam.fov) * Math.min(1, dt * 4 + (dt === 0 ? 1 : 0));
+      cam.fov += (26 - cam.fov) * Math.min(1, dt * 4 + (dt === 0 ? 1 : 0));
       cam.updateProjectionMatrix();
       cam.updateMatrixWorld();
       this.projectMarkers();
