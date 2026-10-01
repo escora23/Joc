@@ -1555,6 +1555,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const foe = sceneFoe();
     if (foe && (!entryGoal || foe.km < entryGoal.km + 3)) return foe;
     if (entryGoal) return entryGoal;
+    // Fix pass 3 (#29a): entered from a ground battle, that battle is the objective — the chip, its marker, the card's
+    // «Combate con X a N km» and the destination line all measure the same point (battleKm), never two numbers.
+    const P0 = player();
+    const bk = kind === 'tank' && P0 ? battleKm(P0) : null;
+    if (bk && battleFocus && bk.km > STOP_KM[kind]) {
+      const tp = tileOf(bk.x, bk.z);
+      return { kind: 'battle', tx: tp.x, ty: tp.y, km: bk.km, owner: battleFocus.a === HUMAN_ID ? battleFocus.b : battleFocus.a };
+    }
     const { nearest, mission } = targets;
     // The mission's place counts while the unit is not there yet (standing in its sector, the fight is the nearest enemy).
     // A defended sector is own ground: it only leads when no fighting is known (the fight is where the enemy is).
@@ -1591,6 +1599,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const dist = h.dist >= 1000 ? `${formatNumber(h.dist / 1000, 1)} km` : `${Math.round(h.dist / 10) * 10} m`;
       overlay.setCombat({ title: t('command.obj.contact', { what: t(`command.type.${e.kind}`), nation: nationName(e.nation) }), sub: t('command.obj.contactSub'), dist: `${dist} · ${dirWord(brg)}`, contact: true, go: '' });
       overlay.combatMarker = { pos: tmp3.copy(e.pos).setY(e.pos.y + e.height + 4), text: dist, contact: true };
+      chipAim = { x: e.pos.x, z: e.pos.z, km: h.dist / 1000 };
       if (entryGoal && entryGoal.km < STOP_KM[kind] * 4) entryGoal = null;
       return;
     }
@@ -1598,6 +1607,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!c) {
       overlay.setCombat(null);
       overlay.combatMarker = null;
+      chipAim = null;
       return;
     }
     const tp = tileOf(P.pos.x, P.pos.z);
@@ -1612,9 +1622,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const sp = frame.sceneOfTile(c.tx, c.ty, { x: 0, z: 0 });
     const y = ground.surfaceAt(sp.x, sp.z);
     overlay.combatMarker = { pos: tmp3.set(sp.x, (Number.isFinite(y) ? Math.max(0, y) : 0) + (kind === 'jet' ? 400 : 40), sp.z), text: `${targetTitle(c)} · ${formatNumber(km, km < 10 ? 1 : 0)} km`, contact: false };
+    chipAim = { x: sp.x, z: sp.z, km };
     if (entryGoal && km < STOP_KM[kind] + 0.6) entryGoal = null;
   }
   const tmp3 = new THREE.Vector3();
+  /** Where the chip's objective is in the scene and its distance (the card's destination line reuses it, #29a). */
+  let chipAim: { x: number; z: number; km: number } | null = null;
 
   /** A tile the march may cross: never water for a tank (land for a ship), never a nation at peace without leave. */
   function passableTile(tile: number): boolean {
@@ -2189,7 +2202,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         const bk = battleKm(P)!;
         const foe = battleFocus.a === HUMAN_ID ? battleFocus.b : battleFocus.a;
         land = t('command.land.ownBattle', { nation: nationName(foe), km: kmText(bk.km) });
-      } else if (fr && other && fr.nearest.distKm < 60) land = t('command.land.ownFront', { nation: nationName(other), km: formatNumber(fr.nearest.distKm, 0) });
+      } else if (fr && other && fr.nearest.distKm < 60) land = t('command.land.ownFront', { nation: nationName(other), km: kmText(fr.nearest.distKm) });
       else if (view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID)) land = t('command.land.ownWar');
       else land = t('command.land.own');
     } else if (o === 0) {
@@ -2210,14 +2223,17 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const clock = clockKind === 'decision' ? t('command.clock.decision') : clockKind === 'tactical' ? t('command.clock.tactical')
       : clockKind === 'throttled' ? t('command.clock.throttled', { rate: Math.round(requested) }) : t('command.clock.travel', { rate, span });
     let travel = '';
+    // updateCombat first: the chip's objective of this frame is the one the destination line may share.
+    updateCombat();
     if (waypoint) {
-      const d = Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z);
+      // The same objective as the chip (the waypoint on it or on its near edge): the chip's distance, one number.
+      const same = chipAim && Math.hypot(waypoint.x - chipAim.x, waypoint.z - chipAim.z) < 1500;
+      const d = same ? chipAim!.km * 1000 : Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z);
       const hours = d / 1000 / UNIT_DEFS[params.unitType].speedKmh;
       const time = hours >= 1 ? `${formatNumber(hours, 1)} h` : `${Math.round(hours * 60)} min`;
       travel = `${autopilot ? `${t('command.travel.autopilot')} · ` : ''}${t('command.travel.eta', { km: formatNumber(d / 1000, d < 10_000 ? 1 : 0), time })}`;
     }
     updateRadio(inc, P);
-    updateCombat();
     const uv = unitView();
     overlay.setInfo({
       unit: unitLabel(params.unitType, uv?.serial ?? 0), place, land, landColor: o ? colorCss(o) : '#6f8aa3',

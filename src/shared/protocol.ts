@@ -221,6 +221,11 @@ export type SimEvent =
       x: number; y: number; startTick: number; tilesTaken: number; tilesLost: number; lossesOwn: number; lossesEnemy: number;
       unitId?: number; unitType?: UnitType; order?: UnitOrderKind; structure?: number; damage?: number; attackId?: number;
       units?: number[]; structuresTaken?: number; reason?: string;
+      /**
+       * A strike on a structure (fix pass 3, #29d): its id (named in the report), integrity left after the hit (-1:
+       * destroyed), whether it lost a level and the level it stands at now.
+       */
+      targetId?: number; hpAfter?: number; levelLost?: boolean; level?: number;
       /** A lifted blockade (order 'blockade'): ships seized / sunk / turned back, gold taken, the enemy's lost trade. */
       seized?: number; sunk?: number; turnedBack?: number; gold?: number; enemyLost?: number; blockadeId?: number;
     }

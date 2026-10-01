@@ -10,12 +10,12 @@ import * as THREE from 'three';
 import { h, setText, toggleClass } from '../dom';
 import { tip } from '../tooltip';
 import { icon } from '../icons';
-import { takeControlAtPlace } from './takeAction';
+import { frontAction, takeControlAtFront, takeControlAtPlace } from './takeAction';
 import { tx } from '../tx';
 import { hexToCss } from '../../shared/color';
 import { formatNumber, t } from '../../shared/i18n';
 import { HUMAN_ID, UNIT_DEFS } from '../../shared/constants';
-import { battleCentre, greatCircleKm, tileXYToLatLon } from '../../shared/geo';
+import { battleCentre, greatCircleKm, latLonToTileXY, tileXYToLatLon } from '../../shared/geo';
 import { frontName } from './forcesInfo';
 import { unitLabel } from './news';
 import { advanceText, combatDayText, isoOf, sidesOf, troopsText } from './frontsInfo';
@@ -53,19 +53,32 @@ export function createBattleStrip(hs: HudShared): BattleStrip {
       bd = d.km;
       best = du.id;
     }
+    // Fix pass 3 (#26/#29e): the same goal as every other front entry — this battle's front and, when it is our
+    // offensive (or theirs on us), its live contact — so a division listed here but standing well behind the line
+    // marches to the contact leg by leg instead of starting the scene where it waits.
+    const key = bv?.frontKey ?? 0;
+    const act = key ? frontAction(ctx.sim.view, key) : null;
+    const c0 = centreOfBattle() ?? ctx.battle.pointer?.() ?? null;
+    const label = title.textContent || t('fr.front');
     if (best) {
+      const bu = ctx.sim.view.units.get(best)!;
+      const gxy = c0 ? latLonToTileXY(c0.lat, c0.lon) : act ? { x: act.x, y: act.y } : { x: bu.x, y: bu.y };
       hs.sound('whoosh');
       hs.flags.commandEntered = true;
       hs.setMode({ kind: 'none' });
-      void ctx.app.enterCommandMode(best);
+      void ctx.app.enterCommandMode(best, { x: gxy.x, y: gxy.y, label, ...(key ? { frontKey: key } : {}), ...(act?.attackId ? { attackId: act.attackId } : {}) });
       return;
     }
-    const c = centreOfBattle() ?? ctx.battle.pointer?.() ?? null;
-    if (!c) {
+    if (key && act) {
+      hs.flags.commandEntered = true;
+      takeControlAtFront(hs, key);
+      return;
+    }
+    if (!c0) {
       hs.sound('error');
       return;
     }
-    takeControlAtPlace(hs, c.lat, c.lon, title.textContent ?? t('fr.front'), bv?.frontKey ?? 0);
+    takeControlAtPlace(hs, c0.lat, c0.lon, label, key);
   });
   tip(take, () => ({ title: t('hud.takeHere'), text: t('hud.takeHere.battle'), hotkey: 'T' }));
   const el = h('div', { class: 'fu-bstrip fu-hidden' },

@@ -81,9 +81,17 @@ export function wireAfterAction(hs: HudShared, alerts: AlertCenter): void {
         title = t('aar.strike.lost', { unit, name: hs.name(enemy) });
         severity = 'warning';
       } else {
-        const s = e.structure !== undefined && e.structure >= 0 ? t(`structure.${structId(e.structure)}`) : '';
-        title = e.result === 'destroyed' ? t('aar.strike.destroyed', { unit, s }) : s ? t('aar.strike.hit', { unit, s, dmg: Math.round((e.damage ?? 0) * 100) })
-          : t('aar.strike.front', { unit, n: formatNumber(Math.round(e.lossesEnemy)) });
+        // Fix pass 3 (#29d): the target by its name («Ciudad de Lyon», «Fábrica, cerca de Burdeos») and what the hit did
+        // in the damage alert's words: a level lost and the capacity left, or the integrity points and what is left.
+        const st = e.targetId ? view().structures.get(e.targetId) : undefined;
+        const s = e.structure !== undefined && e.structure >= 0
+          ? st ? structureName(hs, st) : t('structure.named', { s: t(`structure.${structId(e.structure)}`), place: describeXY(view(), e.x, e.y).name })
+          : '';
+        const hpA = e.hpAfter ?? -1;
+        title = e.result === 'destroyed' ? t('aar.strike.destroyed', { unit, s })
+          : s && e.levelLost ? t('aar.strike.hitLevel', { unit, s, n: e.level ?? 1, fn: Math.round(functionFactor(Math.max(0, hpA)) * 100) })
+            : s ? t('aar.strike.hit', { unit, s, dmg: Math.round((e.damage ?? 0) * 100), hp: Math.round(Math.max(0, hpA) * 100) })
+              : t('aar.strike.front', { unit, n: formatNumber(Math.round(e.lossesEnemy)) });
       }
       body = t('aar.strike.body', { place: where(e.x, e.y), own: e.lossesOwn, time: duration(e) });
       icon = e.unitType === UnitType.DroneSwarm ? 'droneSwarm' : 'bomber';

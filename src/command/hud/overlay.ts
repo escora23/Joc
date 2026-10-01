@@ -552,6 +552,19 @@ export class CommandOverlay {
     g.clearRect(0, 0, W, H);
     const maxD = kind === 'jet' ? 120_000 : kind === 'ship' ? 60_000 : 32_000;
     const placed: { x: number; y: number; w: number }[] = [];
+    // Fix pass 3 (#29a): the objective's marker and the destination marker go first — place labels never sit on them,
+    // and the destination's text is left out when it marks the same spot as the objective (one label, one number).
+    const onScreen = (v: THREE.Vector3): { x: number; y: number } | null => {
+      P.copy(v).project(camera);
+      if (P.z > 1 || P.z < -1) return null;
+      const x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
+      return x < 20 || x > W - 20 || y < 20 || y > H - 20 ? null : { x, y };
+    };
+    const cmS = this.combatMarker ? onScreen(this.combatMarker.pos) : null;
+    const wpS = waypoint ? onScreen(waypoint) : null;
+    const wpMerged = !!(cmS && wpS && Math.hypot(cmS.x - wpS.x, cmS.y - wpS.y) < 90);
+    if (cmS) placed.push({ x: cmS.x, y: cmS.y - 12, w: 240 });
+    if (wpS && !wpMerged) placed.push({ x: wpS.x, y: wpS.y - 10, w: 160 });
     const sorted = [...labels].map((l) => ({ l, d: camera.position.distanceTo(P.set(l.x, l.y, l.z)) })).filter((o) => o.d < maxD).sort((a, b) => rankOf(a.l) - rankOf(b.l) || a.d - b.d);
     this.drawnLabels.length = 0;
     for (const { l, d } of sorted) {
@@ -616,7 +629,7 @@ export class CommandOverlay {
       g.font = '700 11px "Barlow Condensed", sans-serif';
       g.fillStyle = 'rgba(255,213,138,0.95)';
       g.textAlign = 'center';
-      g.fillText(waypointText, x, y - 18);
+      if (!wpMerged) g.fillText(waypointText, x, y - 18);
     }
     // The nearest action (#26): always on screen — a red ring on it, or an arrow on the edge pointing to it.
     const cm = this.combatMarker;

@@ -21,6 +21,7 @@ import { buildStructModel, levelKey, type StructModelKey } from '../render/units
 import type { LocalFrame } from './frame';
 import type { Ground } from './stream';
 import { houseGeometry } from './models/props';
+import { buildCmdStructure } from './models/structures';
 
 export interface CivilLabel {
   /** Scene position of the label anchor. */
@@ -174,6 +175,8 @@ export class Civil {
   });
   private readonly structMats = new Map<number, THREE.MeshStandardMaterial>();
   private readonly structGeos = new Map<string, THREE.BufferGeometry>();
+  /** Highest point (m) of each built compound model (hit tests, labels). */
+  private readonly structTops = new Map<string, number>();
   private frame: LocalFrame | null = null;
   private ground: Ground | null = null;
   private kind: CommandKind = 'tank';
@@ -251,6 +254,14 @@ export class Civil {
     }
     this.roads = this.borders = this.rails = null;
     this.structGroup.clear();
+    // Compound models are per structure (and state): dispose them with the session.
+    for (const [k, g] of this.structGeos) {
+      if (this.structTops.has(k) && !g.getAttribute('aColor')) {
+        g.dispose();
+        this.structGeos.delete(k);
+        this.structTops.delete(k);
+      }
+    }
     this.gateGroup.clear();
     this.houses.count = 0;
     this.posts.count = 0;
@@ -627,31 +638,44 @@ export class Civil {
     const f = this.frame!;
     const info = STRUCT_KM[s.type];
     if (!info) return;
-    const key = levelKey(info.key, s.level);
-    let geo = this.structGeos.get(key);
-    if (!geo) {
-      geo = buildStructModel(key);
-      // The globe models carry colours in `aColor`; the command mode's standard material reads `color`.
-      const c = geo.getAttribute('aColor');
-      if (c) geo.setAttribute('color', c);
-      this.structGeos.set(key, geo);
-    }
     const owner = view.players[s.owner];
     const col = owner?.color ?? 0x888888;
-    // Feedback 3 (#27): the damage state (shared/damage.ts) — lower, scorched, smoking or burning.
+    // Feedback 3 (#27): the damage state (shared/damage.ts). Fix pass 3: the compound is built at its real size in
+    // metres (models/structures.ts: halls, chimneys, cranes, runway…), its buildings scorched or collapsed by the state
+    // and its level, instead of the strategic icon model stretched to the footprint.
     const state = damageState(s.hp);
     const standing = standingShare(s.hp);
-    const mkey = col * 4 + state;
-    let mat = this.structMats.get(mkey);
-    if (!mat) {
-      mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: state ? 0.95 : 0.8, metalness: 0.05 });
-      if (state === 1) mat.color.setRGB(0.68, 0.64, 0.6);
-      else if (state >= 2) mat.color.setRGB(0.4, 0.35, 0.31);
-      this.structMats.set(mkey, mat);
-    }
     const size = info.km * 1000 * (1 + 0.1 * (Math.max(1, Math.min(3, s.level)) - 1));
-    if (!geo.boundingBox) geo.computeBoundingBox();
-    const yScale = info.tallM / Math.max(0.02, geo.boundingBox!.max.y);
+    const gkey = `${s.type}:${s.level}:${state}:${col}:${s.id}`;
+    let geo = this.structGeos.get(gkey);
+    let top = this.structTops.get(gkey) ?? info.tallM;
+    let yScale = 1;
+    if (!geo) {
+      const cm = buildCmdStructure(s.type, s.level, state, size, col, s.id);
+      if (cm) {
+        geo = cm.geo;
+        top = cm.top;
+      } else {
+        geo = buildStructModel(levelKey(info.key, s.level));
+        const c = geo.getAttribute('aColor');
+        if (c) geo.setAttribute('color', c);
+        if (!geo.boundingBox) geo.computeBoundingBox();
+      }
+      this.structGeos.set(gkey, geo);
+      this.structTops.set(gkey, top);
+    }
+    const real = this.structTops.has(gkey) && !geo.getAttribute('aColor');
+    if (!real) {
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      yScale = (info.tallM / Math.max(0.02, geo.boundingBox!.max.y)) * Math.max(0.3, standing);
+    }
+    let mat = this.structMats.get(real ? 0 : col * 4 + state);
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.86, metalness: 0.05 });
+      if (!real && state === 1) mat.color.setRGB(0.68, 0.64, 0.6);
+      else if (!real && state >= 2) mat.color.setRGB(0.4, 0.35, 0.31);
+      this.structMats.set(real ? 0 : col * 4 + state, mat);
+    }
     const sx = x - f.offX, sz = z - f.offZ;
     // Ground the footprint: stand at the middle height of the footprint (the model's own apron hides the rest) with a
     // pad down to the lowest point so nothing floats on a slope.
@@ -666,11 +690,18 @@ export class Civil {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(sx, base, sz);
     m.rotation.y = Math.round(hash(s.id, 17) * 4) * (Math.PI / 2);
-    m.scale.set(size, yScale * Math.max(0.3, standing), size);
-    this.structRecs.push({ id: s.id, type: s.type, owner: s.owner, x: sx, z: sz, half: size * 0.5, y0: hmin - 1, y1: base + info.tallM * Math.max(0.3, standing) });
+    if (real) m.scale.set(1, 1, 1);
+    else m.scale.set(size, yScale, size);
+    const tallM = real ? top : info.tallM * Math.max(0.3, standing);
+    this.structRecs.push({ id: s.id, type: s.type, owner: s.owner, x: sx, z: sz, half: size * 0.5, y0: hmin - 1, y1: base + tallM });
     if (state >= 1) {
-      this.fires.push({ x: sx, y: base + info.tallM * standing * 0.6, z: sz, heat: state >= 2 ? 0.9 : 0.3, size: Math.max(1.5, Math.min(4, size / 300)) });
-      this.addDebris(sx, sz, size * 0.55, state >= 2 ? 26 : 12, s.id, 0.5);
+      // Fires in the ruined buildings, spread over the compound (not one plume in the middle).
+      const nF = state >= 2 ? 3 : 1;
+      for (let i = 0; i < nF; i++) {
+        const a = hash(s.id, 40 + i) * Math.PI * 2, rr = (i === 0 ? 0.1 : 0.3) * size;
+        this.fires.push({ x: sx + Math.cos(a) * rr, y: base + 6, z: sz + Math.sin(a) * rr, heat: state >= 2 ? 0.9 : 0.3, size: Math.max(1.5, Math.min(4, size / 300)) });
+      }
+      this.addDebris(sx, sz, size * 0.5, state >= 2 ? 40 : 14, s.id, 0.7);
     }
     m.castShadow = true;
     m.receiveShadow = true;
@@ -689,7 +720,7 @@ export class Civil {
     const es = getLanguage() === 'es';
     const typeName = t(`structure.${STRUCT_ID[s.type]}`);
     this.labels.push({
-      x: sx, y: base + info.tallM + 25, z: sz,
+      x: sx, y: base + tallM + 25, z: sz,
       text: np ? t('command.label.baseAt', { type: typeName, place: es ? np.nameEs : np.nameEn || np.nameEs }) : typeName,
       sub: state ? `${t('command.label.level', { n: s.level })} · ${t(`card.dmg.${DAMAGE_WORD[state]}`)}` : t('command.label.level', { n: s.level }), kind: 'base', color: css(col), owner: s.owner,
     });

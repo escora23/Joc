@@ -2886,7 +2886,7 @@ export class UnitSystem {
     }
     g.markHostile(u.owner, victim);
     let kind: 'structure' | 'division' | 'front' | 'ship' | 'none' = 'none';
-    let damage = 0, destroyed = false, targetId = 0, stype = -1;
+    let damage = 0, destroyed = false, targetId = 0, stype = -1, hpAfter = -1, levelLost = false, levelAfter = 0;
     if (u.strikeKind === SK_STRUCT) {
       const s = g.structureMap.get(u.targetStructure);
       kind = 'structure';
@@ -2895,7 +2895,7 @@ export class UnitSystem {
         stype = s.type;
         const direct = bomb ? BOMBER_DIRECT_DMG : DRONE_DIRECT_DMG;
         const splash = bomb ? BOMBER_STRUCT_DMG : DRONE_STRUCT_DMG;
-        const before = s.hp;
+        const before = s.hp, lvBefore = s.level;
         // Splash on the neighbours first (a destroyed target leaves the grid mid-query), then the direct hit.
         const near: typeof s[] = [];
         g.structGrid.query(s.x, s.y, 1.6, (o) => {
@@ -2906,6 +2906,12 @@ export class UnitSystem {
         g.weapons.damageStructure(s, direct, u.owner, cause);
         damage = Math.min(before, direct);
         destroyed = !g.structureMap.has(s.id);
+        // Fix pass 3 (#29d): what the hit did, in the words of the damage alert (a level lost, integrity now).
+        if (!destroyed) {
+          hpAfter = s.hp;
+          levelAfter = s.level;
+          levelLost = s.level < lvBefore;
+        }
       }
     } else if (u.strikeKind === SK_DIV || u.strikeKind === SK_SHIP) {
       const t = g.unitMap.get(u.targetUnit);
@@ -2933,6 +2939,7 @@ export class UnitSystem {
         type: 'afterAction', tick: g.tick, kind: 'strike', owner: u.owner, enemy: victim, result: destroyed ? 'destroyed' : 'hit',
         x: u.toX, y: u.toY, startTick: u.missionStart || g.tick, tilesTaken: 0, tilesLost: 0, lossesOwn: Math.round((1 - u.hp / u.maxHp) * 100),
         lossesEnemy: kind === 'front' ? Math.round(damage) : 0, unitId: u.id, unitType: u.type, order: 'strike', structure: stype, damage: +damage.toFixed(3),
+        ...(kind === 'structure' ? { targetId, hpAfter: +hpAfter.toFixed(3), levelLost, level: levelAfter } : {}),
       });
     }
   }
