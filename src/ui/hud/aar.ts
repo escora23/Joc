@@ -65,9 +65,11 @@ export function wireAfterAction(hs: HudShared, alerts: AlertCenter): void {
       // Ours: won / held / failed / cancelled. Theirs against us: the same words from our side.
       const res = ours ? e.result : e.result === 'won' ? 'theyWon' : e.result === 'held' ? 'theyHeld' : 'weHeld';
       title = t(`aar.off.${res}`, { name: hs.name(enemy), place: where(e.x, e.y) });
-      const km2 = Math.round(e.tilesTaken * 25 * 25 / 100) * 100;
-      body = t('aar.off.body', {
-        time: duration(e), taken: formatNumber(e.tilesTaken), km2: formatNumber(km2), lost: formatNumber(e.tilesLost),
+      // Always from our side: the land we took and the land we lost (an enemy offensive's gains are our losses).
+      const taken = ours ? e.tilesTaken : e.tilesLost, lost = ours ? e.tilesLost : e.tilesTaken;
+      const km2 = Math.round(taken * 25 * 25 / 100) * 100;
+      body = t(taken > 0 ? 'aar.off.body' : 'aar.off.bodyNone', {
+        time: duration(e), taken: formatNumber(taken), km2: formatNumber(km2), lost: formatNumber(lost),
         own: troopsText(ours ? e.lossesOwn : e.lossesEnemy), their: troopsText(ours ? e.lossesEnemy : e.lossesOwn),
       });
       if (ours && e.units?.length) body += ` ${t('aar.off.support', { n: e.units.length })}`;

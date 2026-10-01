@@ -119,6 +119,7 @@ export const esW7: Record<string, string> = {
   'msg.nukeNotAtWar': 'Las armas nucleares solo pueden lanzarse contra una nación con la que estás en guerra',
   'msg.nukeNoTarget': 'Apunta a territorio de una nación enemiga',
   'answer.commonMenace': '{player} nos amenaza a los dos: juntos estaremos más seguros',
+  'aar.off.bodyNone': 'Duró {time}. No ganamos terreno; casillas perdidas: {lost}. Bajas propias: {own}; enemigas: {their}.',
   // ---- tooltip sweep (§12.1) ----------------------------------------------------------------------------------------
   'w7.ratio.tick': 'Envía el {v} % de tus tropas en casa: {n} soldados.',
   'w7.ratio.send': 'Enviarías',
@@ -262,6 +263,7 @@ export const enW7: Record<string, string> = {
   'msg.nukeNotAtWar': 'Nuclear weapons can only be launched against a nation you are at war with',
   'msg.nukeNoTarget': 'Aim at the land of an enemy nation',
   'answer.commonMenace': '{player} threatens us both: together we will be safer',
+  'aar.off.bodyNone': 'It lasted {time}. No ground gained; tiles lost: {lost}. Own casualties: {own}; enemy: {their}.',
   'w7.ratio.tick': 'Sends {v} % of your troops at home: {n} soldiers.',
   'w7.ratio.send': 'You would send',
   'w7.tab.build.tip': 'The ten structures (keys 1 to 0): cities, ports, factories, defences, silos, bases and radar. Each slot shows its cost, its build time and what it does at every level.',
