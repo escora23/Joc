@@ -191,6 +191,9 @@ export class ShipIntercept {
   private target: Ent | null = null;
   private boarding: Boarding | null = null;
   private boardFx: BoardingFx | null = null;
+  /** The ship the player picked with Tab (null: the nearest) and how many others are in reach. */
+  private picked: Ent | null = null;
+  private others = 0;
   /** Prizes taken in this session keep our flag (ship unit id → its flag). */
   private readonly prizes = new Map<number, BoardingFx>();
   /** The ship the panel named last (the view turns to a new one once). */
@@ -243,15 +246,29 @@ export class ShipIntercept {
 
   update(dt: number, view: GameView, player: Ent, input: { hit(code: string): boolean }, allowInput: boolean): void {
     // The nearest foreign merchant / convoy within 12 km (not our own, not a prize already ours).
+    // The ship already named keeps the panel unless another is clearly nearer (300 m): two ships at about the same
+    // range must not swap the panel (and the view) back and forth.
     let best: Ent | null = null, bd = PANEL_M;
+    const cands: Ent[] = [];
     for (const e of this.d.world.ents) {
       if (!e.alive || (e.kind !== 'merchant' && e.kind !== 'transport') || e.team === 0 || e.src?.kind !== 'merchant') continue;
-      const dd = e.pos.distanceTo(player.pos);
+      if (e.pos.distanceTo(player.pos) < PANEL_M) cands.push(e);
+      const dd = e.pos.distanceTo(player.pos) - (e === this.target ? 300 : 0);
       if (dd < bd) {
         bd = dd;
         best = e;
       }
     }
+    // Tab: the next ship in reach (nearest first), kept until it leaves the 12 km or the player picks another.
+    cands.sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
+    if (allowInput && !this.asking && !this.boarding && cands.length > 1 && input.hit('Tab')) {
+      const i = this.target ? cands.indexOf(this.target) : -1;
+      this.picked = cands[(i + 1) % cands.length];
+    }
+    if (this.picked && (!this.picked.alive || !cands.includes(this.picked))) this.picked = null;
+    if (this.picked) best = this.picked;
+    this.others = cands.length - 1;
+    if (this.boarding) best = this.boarding.ent.alive ? this.boarding.ent : best;
     this.target = best;
     for (const [id, s] of this.hailed) this.hailed.set(id, s + dt);
     this.radioT = Math.max(0, this.radioT - dt);
@@ -339,7 +356,8 @@ export class ShipIntercept {
       ${li('X', 'naval.cmd.sink', can.sink, dist > SINK_M ? t('naval.cmd.why.range', { km: 8 }) : '')}</ul>
       ${war ? `<div class="w" style="color:#b3c4d6">${esc(t('naval.cmd.warNote'))}</div>` : `<div class="w">${esc(t('naval.cmd.peaceNote', { name: this.d.nameOf(owner), v: Math.abs(PIRACY_OPINION.seize), vs: Math.abs(PIRACY_OPINION.sink) }))}</div>`}
       ${this.boarding ? `<div class="radio">${esc(t('naval.cmd.boarding', { s: Math.max(0, Math.ceil(BOARD_S - this.boarding.t)) }))}</div><div class="bar"><i style="width:${Math.min(100, (this.boarding.t / BOARD_S) * 100).toFixed(0)}%"></i></div>` : ''}
-      ${this.radioT > 0 ? `<div class="radio">${esc(this.radio)}</div>` : ''}`;
+      ${this.radioT > 0 ? `<div class="radio">${esc(this.radio)}</div>` : ''}
+      ${this.others > 0 ? `<div class="w" style="color:#b3c4d6"><kbd style="font:700 0.66rem/1 monospace;padding:0.1rem 0.3rem;border:1px solid rgba(255,255,255,0.45);border-radius:2px;color:#fff">Tab</kbd> ${esc(t('naval.cmd.next', { n: this.others }))}</div>` : ''}`;
     this.panel.style.setProperty('--c', this.d.colorOf(owner));
     this.paint(html);
     // Fix pass 3: the ship the panel speaks of is marked in the world (brackets on it, or an arrow at the screen's

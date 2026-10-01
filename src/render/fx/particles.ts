@@ -61,9 +61,9 @@ void main() {
   vec4 mv = viewMatrix * vec4(p, 1.0);
   float dist = max(-mv.z, 1e-6);
   size = max(size, 1.5 * uPixelK * dist);
-  // Fix pass 3 (clear map): from the strategic zoom (camera beyond ~150 km) a puff, flash or fireball is never more
+  // Fix pass 3 (clear map): from the strategic zoom (camera beyond ~20-75 km) a puff, flash or fireball is never more
   // than ~40 px across and never HDR-bright (no bloom disc): the front, its units and its line stay readable under it.
-  vFar = smoothstep(0.02, 0.05, dist);
+  vFar = smoothstep(0.003, 0.012, dist);
   size = mix(size, min(size, 20.0 * uPixelK * dist), vFar);
   vec2 c = position.xy;
   vec2 off;

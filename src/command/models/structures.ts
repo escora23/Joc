@@ -16,11 +16,11 @@ import { StructureType } from '../../shared/types';
 import { GeoBuilder, shade } from './builder';
 
 const CONCRETE = 0x9b978d;
-const APRON = 0x8a877f;
+const APRON = 0x948c78;
 const ASPHALT = 0x3b3c3e;
 const ROOF = 0x7b8086;
 const ROOF_DARK = 0x5d6267;
-const WALL = 0xb9b2a4;
+const WALL = 0xaaa293;
 const BRICK = 0x8c5b45;
 const WHITE = 0xdcdad3;
 const RED = 0xb23b2f;

@@ -174,7 +174,31 @@ async function command() {
   const panel = await until(page, () => window.__cmdStats?.intercept?.target ? window.__cmdStats.intercept : null, null, 120000, 1000);
   row('C1', 'the stop panel for the foreign merchant alongside', panel ? `${panel.text.slice(0, 160)} (target ${panel.target.kind} at ${panel.target.distM} m)` : 'none', !!panel && /Dar el alto/.test(panel.text));
   await shot(page, 'c1-panel');
-  const target = panel?.target?.unitId ?? 0;
+  // Fix pass 3: the ship the panel names is marked in the world (brackets on it or an edge arrow) and the view swings
+  // to it; the frame after the swing must show it.
+  await sleep(6000);
+  const mark = await page.evaluate(() => window.__cmd.overlay.drawnLabels.find((l) => l.startsWith('ship: ')) ?? null);
+  const inView = await page.evaluate(() => {
+    const I = window.__cmd;
+    const id = window.__cmdStats?.intercept?.target?.unitId ?? 0;
+    const e = I.world.ents.find((x) => x.alive && x.src?.id === id);
+    if (!e) return null;
+    const p = e.pos.clone().project(I.camera);
+    return { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(3), on: Math.abs(p.x) < 0.95 && Math.abs(p.y) < 0.95 && p.z < 1 };
+  });
+  row('C1b', 'the hailed ship is marked in the world and the view turns to it', `marker «${mark}»; target on screen ${JSON.stringify(inView)}`, !!mark && !!inView?.on);
+  await shot(page, 'c1b-marked');
+  // Two ships in reach: Tab picks the merchant (the convoy is for C4/C5), as a player would.
+  for (let k = 0; k < 4; k++) {
+    if (await page.evaluate(() => window.__cmdStats?.intercept?.target?.kind === 'merchant')) break;
+    await page.keyboard.down('Tab');
+    await sleep(1500);
+    await page.keyboard.up('Tab');
+    await sleep(3000);
+  }
+  const picked = await page.evaluate(() => window.__cmdStats?.intercept?.target ?? null);
+  row('C1c', 'Tab: the panel names the other ship in reach (the merchant)', JSON.stringify(picked), picked?.kind === 'merchant');
+  const target = picked?.unitId ?? panel?.target?.unitId ?? 0;
   // C2: E hails it; the sim's ship heaves to.
   await page.keyboard.press('KeyE');
   const hove = await until(page, (id) => __front.ctx.sim.view.units.get(id)?.mode === 19, target, 90000, 1000);
@@ -208,6 +232,18 @@ async function command() {
     const going = await until(page, () => /abordaje|aboard/i.test(window.__cmdStats?.intercept?.text ?? '') || window.__nv.stops.some((e) => e.action === 'seized' || e.action === 'turnedBack') || null, null, 25000, 1000);
     if (going) break;
   }
+  // The boarding sequence on screen: the boat crossing, then the team on the hull, then the flags.
+  const fx = [];
+  for (let k = 0; k < 3; k++) {
+    const st = await page.evaluate(() => {
+      const g = window.__cmd.world.group.getObjectByName('boarding-fx');
+      return g ? { boat: g.children[0]?.position?.toArray().map((v) => Math.round(v)), visible: g.visible } : null;
+    });
+    fx.push(st);
+    await shot(page, `c3-board-${k}`);
+    await sleep(5000);
+  }
+  row('C3a', 'F: the boarding is a visible sequence (boat with its team crosses, climbs, flags change)', JSON.stringify(fx), fx.some((f) => !!f));
   const prize = await until(page, (id) => {
     if (window.__nv.stops.some((e) => e.unitId === id && e.action === 'turnedBack')) return 'turned back';
     const u = __front.ctx.sim.view.units.get(id);

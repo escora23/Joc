@@ -1556,6 +1556,39 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
   mission and reports), section `aihuman` = M9 (no forced offensive). Browser: `tools/f3-verify.mjs` section `bombard`
   (N0-N3) and the D4 repair window.
 
+### 27.2 Fix pass 3 (items 26-30 after the verifier, iteration 2) — where it lives
+
+* Battle strip entry (`src/ui/hud/battleStrip.ts`, «Tomar el control aquí»): the battle's own division enters with the
+  same `CommandGoal` as every front entry (`frontKey` of the battle view, `attackId` from `takeAction.frontAction`), so
+  the march to the live contact runs; no division listed → `takeControlAtFront`. Verifier: `tools/_v4_strip.mjs`.
+* Structures in command mode at real size: `src/command/models/structures.ts` `buildCmdStructure(type, level, state,
+  size, accent, seed)` (a `Compound` of halls / chimneys / tanks / cranes / runway / berms…; `state` 0-3 scorches and
+  collapses buildings, 3 = rubble compound). `GeoBuilder.anchor / drape` (`models/builder.ts`) record each part's ground
+  anchor in `geometry.userData.ranges`; `Civil.drapeModel` (`src/command/civil.ts`) sets every building on the ground
+  under its anchor (footings to the ground) and drapes aprons and runway marks vertex by vertex, again when finer terrain
+  streams in (`userData.draped` = `ground.stats.built`). `placeRubble` adds the rubble compound (`ruin-<tile>`).
+* Command-mode hits: `HIT_DMG.he` 0.08; a round that brings city houses down sends the weapon's whole damage
+  (`hitHouse`), the dialog quotes `cityCivilianLoss(level, HIT_DMG[main weapon])`; `EconomySystem.damage` emits
+  `structureDamaged` for any civilian or troop loss; the command HUD notices `command.hit.city / levelLost / destroyed`
+  (bus listener at the end of `createCommand`). Verifier: `node tools/f3c-destroy-verify.mjs` (D0-D5, C1).
+* Ruin card (`src/ui/hud/selection.ts` `buildRuin`): a selected structure that is destroyed keeps a card for its rubble
+  (`fallenTile` from `structureDamaged.destroyed`; strings `ruin.*`, `card.ruin.state`).
+* Strike report (`src/ui/hud/aar.ts`): `afterAction` strike carries `targetId / hpAfter / levelLost / level` (sim
+  units.ts `strike`); strings `aar.strike.hit` (points, 100 = a level, what is left) and `aar.strike.hitLevel`.
+* One distance per objective (`src/command/index.ts`): `chosenTarget()` prefers the watched battle (`battleKm`);
+  `chipAim` (the chip's objective in the scene) is reused by the card's destination line; `CommandOverlay.update`
+  places the objective and destination markers before place labels and drops the destination text when it marks the
+  same spot.
+* Naval stop panel (`src/command/intercept.ts`): `overlay.shipMarker` (brackets or edge arrow, `hud/overlay.ts`),
+  `ShipController.lookToward` (view swing, cancelled by the mouse), `BoardingFx` (boat with its team, the climb, their
+  flag down and ours up; the prize keeps our flag), `overlay.hideNotice(text)`. Verifier: `tools/naval-verify.mjs
+  --only command` (C1b, C3a added).
+* Clear map: `src/render/fx/particles.ts` (`vFar`: beyond ~150 km a sprite is at most ~40 px and never HDR-bright);
+  `src/render/globe/earth.ts` contested stripes by zoom octaves, relief shadows need an 80 m occluder on rugged ground;
+  `src/render/battle/common.ts` `battleShadow` fades out 2.5-6 km from the camera and `index.ts` skips the shadow pass
+  beyond 7 km; `battle/effects.ts` crater glow only within ~1.5 km; `battle/terrain.ts` noise thresholds widened with
+  the pixel footprint (`noiseK`, `edgeW`). Verifier: `node tools/f3-clearmap-verify.mjs` (M1-M4).
+
 ## 28. War at sea (owner item 30) — where it lives
 
 Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` (headless, N1-N11), `tools/naval-verify.mjs`
