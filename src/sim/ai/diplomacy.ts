@@ -51,6 +51,35 @@ function threatOf(ctx: AiContext, p: SimPlayer, except: number): number {
   return 0;
 }
 
+/**
+ * W7 (§5.2): an expansionist neighbour — a bordering major power at least 1.5× our strength that started a war of
+ * choice (§5.1 `unprovokedWar`) in the last 4,800 ticks. Nations next to it look for a defensive alliance among the others
+ * it worries, so that its next conquest meets a call to arms (the declaration dialog lists them, §4.2).
+ */
+export function menaceOf(ctx: AiContext, p: SimPlayer): number {
+  const g = ctx.g;
+  let best = 0, bestS = 0;
+  for (const id of g.neighborsOf(p.id)) {
+    if (id === 0 || id === p.id || g.isAllied(p.id, id)) continue;
+    const q = g.player(id);
+    if (!alive(q) || !isMajor(q)) continue;
+    const t = ctx.world.unprovoked.get(id);
+    if (t === undefined || g.tick - t > 4_800) continue;
+    const s = strength(q);
+    if (s < strength(p) * 1.5 || s <= bestS) continue;
+    best = id;
+    bestS = s;
+  }
+  return best;
+}
+
+/** Does `q` also have reason to fear `m` (it borders it, or it is cold toward it), and is it not on `m`'s side? */
+function fears(ctx: AiContext, q: SimPlayer, m: number): boolean {
+  const g = ctx.g;
+  if (q.id === m || g.isAllied(q.id, m) || g.diplomacy.hasTreaty(q.id, m, 'nap')) return false;
+  return g.sharesBorder(q.id, m) || g.diplomacy.opinion(q.id, m) <= -10;
+}
+
 function hasNavy(ctx: AiContext, p: number): boolean {
   return ctx.g.units(p, UnitType.Warship).length > 0;
 }
@@ -91,16 +120,19 @@ export function answerProposal(ctx: AiContext, b: Brain, p: SimPlayer, prop: Sim
     case 'alliance': {
       if (from.traitorUntilTick > g.tick) return no(r('answer.traitor'));
       if (relation(b, from.id).betrayedUs) return no(r('answer.betrayedUs'));
-      const need = 35 + bar;
       const enemy = commonEnemy(ctx, p.id, from.id);
       const threat = g.sharesBorder(p.id, from.id) && from.tiles >= p.tiles * 2;
       const protector = strength(from) >= strength(p) * 1.5 && !threat;
+      // A common menace (an expansionist neighbour both of us fear) is purpose enough between nations on fair terms.
+      const m = menaceOf(ctx, p);
+      const menace = m > 0 && m !== from.id && fears(ctx, from, m) ? m : 0;
+      const need = (menace && !enemy ? 10 : 35) + bar;
       const full = p.allies.size >= maxAllies(b);
       const napCounter = oe >= 0 && !dip.hasTreaty(p.id, from.id, 'nap') ? { kind: 'nap' as const } : undefined;
       if (full) return no(r('answer.tooManyAllies'), undefined, napCounter);
       if (oe < need) return no(low(need), worst, napCounter);
-      if (!enemy && !protector) return no(r('answer.noPurpose'), undefined, napCounter);
-      return yes(enemy ? r('answer.commonEnemy', { player: enemy }) : r('answer.protector'), best);
+      if (!enemy && !protector && !menace) return no(r('answer.noPurpose'), undefined, napCounter);
+      return yes(enemy ? r('answer.commonEnemy', { player: enemy }) : menace ? r('answer.commonMenace', { player: menace }) : r('answer.protector'), best);
     }
     case 'nap': {
       const need = 0 + bar;
@@ -308,6 +340,23 @@ export function thinkDiplomacy(ctx: AiContext, b: Brain, p: SimPlayer): void {
       }
     }
     if (best && bestScore > 0.9 && send(ctx, b, p, best.id, 'alliance')) return;
+    // A defensive alliance against an expansionist neighbour (W7, §5.2): another nation it also worries, on fair terms.
+    const m = menaceOf(ctx, p);
+    if (m) {
+      let pick: SimPlayer | null = null, pickS = 0;
+      for (const q of g.players()) {
+        if (q.id === p.id || q.id === m || !alive(q) || !isMajor(q) || q.id === HUMAN_ID || g.isAllied(p.id, q.id) || atWar(ctx, p.id, q.id) || busy(q.id)) continue;
+        if (q.traitorUntilTick > g.tick || !fears(ctx, q, m)) continue;
+        const o = dip.opinion(p.id, q.id);
+        if (o < 10) continue;
+        const sc = o / 50 + strength(q) / Math.max(1, strength(p)) * 0.2 + rng.next() * 0.3;
+        if (sc > pickS) {
+          pickS = sc;
+          pick = q;
+        }
+      }
+      if (pick && send(ctx, b, p, pick.id, 'alliance')) return;
+    }
   }
 
   // --- a pact with a neighbour while another threatens us (§5.2 NAP) --------------------------------

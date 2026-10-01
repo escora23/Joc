@@ -36,6 +36,7 @@ import { enW6, esW6 } from './i18n/w6';
 import { enF2, esF2 } from './i18n/f2';
 import { enF3, esF3 } from './i18n/f3';
 import { enNaval, esNaval } from './i18n/naval';
+import { enW7, esW7 } from './i18n/w7';
 import { initTooltips } from './tooltip';
 import type { GameOverReason } from '../shared/types';
 
@@ -64,6 +65,8 @@ export function createUi(ctx: GameContext): UiApi {
   registerDictionary('en', enF3);
   registerDictionary('es', esNaval);
   registerDictionary('en', enNaval);
+  registerDictionary('es', esW7);
+  registerDictionary('en', enW7);
   const root = ctx.uiRoot;
   const sound = (kind: UiSoundKind) => ctx.bus.emit('uiSound', { kind });
   initModals(root, (k) => sound(k));

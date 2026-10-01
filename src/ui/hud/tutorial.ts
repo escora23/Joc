@@ -3,8 +3,9 @@
 // A state machine driven by the real game state, never by a timer: each step shows while its trigger holds, highlights
 // the control involved and completes when the player actually does the thing. It starts in the spawn phase, can be
 // skipped, and its progress is a bit set saved in the settings (tutorialProgress), so a finished step never returns.
-// Steps 1–4, 7 and 10 need nothing from later stages; 5, 6, 8 and 9 (production, the Fuerzas panel, the Guerra panel,
-// command mode) are added by W7 through `steps` with the same shape.
+// Sequence: 1 capital, 2 expand, 3 city, 4 neighbours, 7 the clock (early: it waits for nothing), 5 army (base +
+// division), 6 move it (Fuerzas, right click), 9 command mode. Triggered steps show as soon as their trigger holds: 8 fronts (first tension or war),
+// 10 a proposal received, 11 the first war's offensive.
 
 import { h, setText, toggleClass } from '../dom';
 import { icon } from '../icons';
@@ -12,6 +13,7 @@ import { tip } from '../tooltip';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
 import { HUMAN_ID } from '../../shared/constants';
+import { UnitMode, UnitState, UnitType } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { StructureType } from '../../shared/types';
 
@@ -52,6 +54,18 @@ export function createTutorial(hs: HudShared): Tutorial {
     for (const p of view().proposals.values()) if (p.to === HUMAN_ID && p.status === 'pending') return true;
     return false;
   };
+  /** The human's armoured divisions in the field. */
+  const divisions = () => {
+    const out = [];
+    for (const u of view().units.values()) if (u.owner === HUMAN_ID && u.type === UnitType.ArmoredDivision && u.state !== UnitState.Destroyed) out.push(u);
+    return out;
+  };
+  const atWar = () => view().wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID);
+  /** An AI has stated a tension toward the human (§5.4) or is hostile to it. */
+  const tension = () => {
+    for (const o of view().opinions.values()) if (o.toward === HUMAN_ID && (o.tensionTick !== undefined || o.score <= -50)) return true;
+    return false;
+  };
   const steps: TutorialStep[] = [
     {
       n: 1, id: 'spawn', ico: 'flag', state: 'spawn', highlight: '.fu-sp-suggest',
@@ -73,6 +87,29 @@ export function createTutorial(hs: HudShared): Tutorial {
     {
       n: 7, id: 'clock', ico: 'clock', state: 'playing', highlight: '.fu-time-seg', ack: true,
       when: () => true, done: () => acked.has('clock'),
+    },
+    {
+      // 5: an army base (key 8), then a division produced there (8 game hours).
+      n: 5, id: 'army', ico: 'armoredDivision', state: 'playing',
+      highlight: `.fu-bb-slot[data-slot="structure-${StructureType.ArmyBase}"]`,
+      when: () => true, done: () => divisions().length > 0,
+    },
+    {
+      // 6: open Fuerzas (U), select the division, right-click where it should go (any accepted order).
+      n: 6, id: 'move', ico: 'move', state: 'playing', highlight: '.fu-forces-btn',
+      when: () => divisions().length > 0,
+      done: () => divisions().some((u) => u.order >= 0 || u.mode === UnitMode.Moving || u.mode === UnitMode.Rail),
+    },
+    {
+      // 9: take control of the division and drive it (command mode, travel with the time keys).
+      n: 9, id: 'command', ico: 'takeControl', state: 'playing', highlight: '.fu-forces-btn',
+      when: () => divisions().length > 0, done: () => hs.flags.commandEntered,
+    },
+    {
+      // 8: the first tension or war: the Guerra panel (G), a front's priority or a division sent to it.
+      n: 8, id: 'fronts', ico: 'swords', state: 'playing', highlight: '.fu-fronts-btn', interrupt: true,
+      when: () => atWar() || tension(),
+      done: () => hs.flags.frontAction || divisions().some((u) => u.mode === UnitMode.Front || u.mode === UnitMode.Offensive),
     },
     {
       // Owner item #23: the first war of the player explains how offensives work (one order, then managed).

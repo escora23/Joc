@@ -344,6 +344,9 @@ await scenario('nukes-sam-fallout', (note) => {
   g.applyDebug({ type: 'spawnStructure', structure: S.MissileSilo, owner: HUMAN_ID, tile: T(41.0, -3.0), level: 3 });
   g.applyDebug({ type: 'spawnStructure', structure: S.MissileSilo, owner: HUMAN_ID, tile: T(39.5, -4.0), level: 3 });
   run(g, 2);
+  // v2 (owner item 13): nuclear weapons only against a nation at war with the human.
+  expect(!g.issue(HUMAN_ID, { type: 'launch', weapon: U.AtomBomb, targetTile: T(48.0, 1.0), siloId: -1 }), 'atom bomb at peace rejected');
+  war(g, HUMAN_ID, a.id);
   // Atom bomb, no defense.
   expect(g.issue(HUMAN_ID, { type: 'launch', weapon: U.AtomBomb, targetTile: T(48.0, 1.0), siloId: -1 }), 'launch atom');
   const owners0 = g.owner.slice();

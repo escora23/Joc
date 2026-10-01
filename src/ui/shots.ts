@@ -76,6 +76,22 @@ registerShot('howto', 'ui', 'Help: first section (DESIGN_V2 §12.3)', async ({ w
   await wait(1200);
 }, 10);
 
+registerShot('encyclopedia', 'ui', 'Help › Enciclopedia: the factory entry with its per-level table (DESIGN_V2 §12.4)', async ({ wait, ctx }) => {
+  await wait(800);
+  openHelp(ctx, sound, 'encyclopedia');
+  await wait(400);
+  (document.querySelector('.fu-ency-item[data-ency="factory"]') as HTMLElement | null)?.click();
+  await wait(1000);
+}, 10);
+
+registerShot('encyclopedia-unit', 'ui', 'Help › Enciclopedia: the armoured division entry with its orders (DESIGN_V2 §12.4)', async ({ wait, ctx }) => {
+  await wait(800);
+  openHelp(ctx, sound, 'encyclopedia');
+  await wait(400);
+  (document.querySelector('.fu-ency-item[data-ency="armoredDivision"]') as HTMLElement | null)?.click();
+  await wait(1000);
+}, 10);
+
 registerShot('spawn', 'ui', 'Spawn phase: AI nations placed and labelled, human choosing a capital (DESIGN_V2 §10.13 view)', async ({ ctx, waitFrames, wait }) => {
   // The spawn view of §10.13: Europe and Africa from 12,000 km at noon there.
   await ctx.app.startScriptedGame({ humanSpawn: null, stayInSpawn: true, worldTimeSec: worldTimeForSubsolarLon(15) });

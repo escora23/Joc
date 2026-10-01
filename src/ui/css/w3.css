@@ -309,3 +309,31 @@
 
 /* Peace terms and demands keep the map visible: the band they preview is drawn on the globe. */
 .fu-modal-scrim:has(.fu-peace-modal) { justify-content: flex-start; padding-left: 3rem; background: rgba(2, 6, 12, 0.18); backdrop-filter: none; }
+
+/* Encyclopedia (§12.4, W7): entry list on the left, the entry on the right. */
+.fu-ency { display: grid; grid-template-columns: 12rem 1fr; gap: 0.9rem; min-height: 0; height: 100%; }
+.fu-ency-list { display: flex; flex-direction: column; gap: 0.1rem; overflow: auto; max-height: 58vh; padding-right: 0.3rem; border-right: 1px solid var(--fu-line); }
+.fu-ency-group { margin: 0.55rem 0 0.2rem; font: 700 0.68rem var(--fu-font-cond); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fu-text-3, #7d91a8); }
+.fu-ency-group:first-child { margin-top: 0; }
+.fu-ency-item { display: flex; align-items: center; gap: 0.45rem; padding: 0.28rem 0.4rem; background: transparent; border: 1px solid transparent; color: var(--fu-text-2); font: 600 0.8rem var(--fu-font-cond); text-align: left; cursor: pointer; }
+.fu-ency-item .fu-ico { width: 1.05rem; height: 1.05rem; flex: none; }
+.fu-ency-item:hover { color: var(--fu-text); }
+.fu-ency-item.is-on { color: var(--fu-text); border-color: var(--fu-accent); background: var(--fu-accent-dim); }
+.fu-ency-view { overflow: auto; max-height: 58vh; padding-right: 0.4rem; }
+.fu-ency-head { display: flex; gap: 0.8rem; align-items: flex-start; margin-bottom: 0.6rem; }
+.fu-ency-head > .fu-ico { width: 2.6rem; height: 2.6rem; flex: none; color: var(--fu-accent); }
+.fu-ency-head h4 { margin: 0 0 0.2rem; font: 700 1.05rem var(--fu-font-display); letter-spacing: 0.08em; text-transform: uppercase; }
+.fu-ency-purpose { margin: 0; font-size: 0.88rem; color: var(--fu-text-2); }
+.fu-ency-entry h5 { margin: 0.8rem 0 0.3rem; font: 700 0.72rem var(--fu-font-cond); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fu-accent); }
+.fu-ency-entry p { margin: 0 0 0.45rem; font-size: 0.86rem; line-height: 1.45; color: var(--fu-text-2); }
+.fu-ency-note { font-size: 0.8rem !important; opacity: 0.85; }
+.fu-ency-facts, .fu-ency-levels { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.fu-ency-facts th, .fu-ency-levels th { text-align: left; font-weight: 600; color: var(--fu-text-2); padding: 0.18rem 0.6rem 0.18rem 0; white-space: nowrap; vertical-align: top; }
+.fu-ency-facts td, .fu-ency-levels td { padding: 0.18rem 0.6rem 0.18rem 0; color: var(--fu-text); font-family: var(--fu-font-mono, monospace); font-size: 0.78rem; vertical-align: top; }
+.fu-ency-facts td { font-family: inherit; font-size: 0.82rem; }
+.fu-ency-levels tr:first-child th { color: var(--fu-accent); border-bottom: 1px solid var(--fu-line); }
+.fu-ency-levels tr + tr th, .fu-ency-levels tr + tr td { border-top: 1px solid rgba(255, 255, 255, 0.04); }
+.fu-ency-levels tr.is-cost td { color: var(--fu-gold, #ffd36b); }
+.fu-ency-orders { margin: 0.2rem 0 0.4rem; padding-left: 1.1rem; font-size: 0.84rem; line-height: 1.45; color: var(--fu-text-2); }
+.fu-ency-orders li { margin-bottom: 0.3rem; }
+.fu-ency-orders b { color: var(--fu-text); }

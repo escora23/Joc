@@ -398,20 +398,7 @@ export const en: Dictionary = {
 
   // ---- tutorial
   'tut.kicker': 'Military advisor',
-  'tut.next': 'Next',
   'tut.skip': 'Skip',
-  'tut.expand.title': 'Expand your nation',
-  'tut.expand.text': 'Click the free land next to your border. Your troops will advance and occupy it tile by tile.',
-  'tut.ratio.title': 'Pace your strength',
-  'tut.ratio.text': 'The slider below sets how many troops each attack uses. Shift + wheel changes it without letting go of the mouse.',
-  'tut.city.title': 'Found a city',
-  'tut.city.text': 'You have the gold. Press 1 and click your territory: cities raise your population cap and income.',
-  'tut.diplomacy.title': 'Diplomacy',
-  'tut.diplomacy.text': 'Right-click a neighbor to propose an alliance, impose an embargo or send a message.',
-  'tut.defense.title': 'Secure your borders',
-  'tut.defense.text': 'A defense post (4) doubles the area\'s resistance. A port (2) on the coast opens sea trade.',
-  'tut.command.title': 'Take control',
-  'tut.command.text': 'You have a controllable unit. Select it and press T to dive from orbit and fight in person.',
 
   // ---- end screen
   'end.victory': 'Victory',

@@ -77,7 +77,7 @@ export class WeaponSystem {
       return false;
     }
     // v2 (§5.10): the AI launches only at enemies, within its escalation level and the global caps; cruise missiles
-    // (conventional) need a war for everyone. The human may aim a nuclear weapon anywhere (§4.14).
+    // (conventional) need a war for everyone; the human aims nuclear weapons at a nation it is at war with (§4.14).
     const err = p.kind === 'human' ? this.humanLaunchError(p, weapon, to) : this.aiLaunchError(p, weapon, targetTile, to);
     if (err) {
       g.message(p.id, err);
@@ -154,11 +154,21 @@ export class WeaponSystem {
     return true;
   }
 
+  /**
+   * Missiles and bombs follow wars (owner item 13): a cruise missile needs a war with the nation it hits; a nuclear
+   * weapon must be aimed at the land of a nation the human is at war with (the UI's confirmation lists everyone else in
+   * the radius, §4.14, and the launch raises that war's escalation, §5.10). Independent territories and empty land are
+   * no nuclear target.
+   */
   private humanLaunchError(p: Player, weapon: WeaponType, to: number): string | null {
     const g = this.g;
-    if (weapon !== UnitType.CruiseMissile || to === 0) return null;
-    const D = g.playerById[to];
-    if (D && D.kind !== 'tribe' && !g.war.atWar(p.id, to)) return 'msg.notAtWar';
+    const D = to > 0 ? g.playerById[to] : undefined;
+    if (weapon === UnitType.CruiseMissile) {
+      if (D && D.kind !== 'tribe' && !g.war.atWar(p.id, to)) return 'msg.notAtWar';
+      return null;
+    }
+    if (!D || D.kind === 'tribe') return 'msg.nukeNoTarget';
+    if (!g.war.atWar(p.id, to)) return 'msg.nukeNotAtWar';
     return null;
   }
 

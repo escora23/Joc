@@ -494,14 +494,22 @@ function regrowthRun(tiles) {
   const c = tileOf(44, 0);
   const W = 1600;
   const cx = c % W, cy = Math.floor(c / W);
-  const r = Math.sqrt(tiles / Math.PI) * 1.25;
+  // The disc grows until it holds `tiles` land tiles (sea and the coast eat into a 5,000-tile disc around Iberia).
+  let r = Math.sqrt(tiles / Math.PI) * 1.25;
   stageLand(g, 0, (t) => g.owner[t] === H);
-  const got = stageLand(g, H, (t) => {
+  const inDisc = (t) => {
     let dx = Math.abs((t % W) - cx);
     if (dx > W / 2) dx = W - dx;
     const dy = Math.floor(t / W) - cy;
     return dx * dx + dy * dy <= r * r;
-  });
+  };
+  let got = stageLand(g, H, inDisc);
+  for (let k = 0; k < 12 && got < tiles; k++) {
+    r *= 1.12;
+    stageLand(g, H, inDisc);
+    got = 0;
+    for (let t = 0; t < g.owner.length; t++) if (g.owner[t] === H) got++;
+  }
   // Trim to the wanted size (farthest tiles back to nobody).
   if (got > tiles) {
     const list = [];

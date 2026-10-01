@@ -276,6 +276,7 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
       return;
     }
     ctx.sim.send({ type: 'setFrontPriority', frontKey: key, priority: p as 0 | 1 | 2 });
+    hs.flags.frontAction = true;
     hs.sound('confirm');
     ctx.bus.emit('toast', { text: t('fr.prio.set', { front: frontName(hs, key), level: t(PRIO_LABEL[p]) }), kind: 'info', durationMs: 2600 });
   }

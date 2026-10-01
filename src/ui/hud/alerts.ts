@@ -236,6 +236,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       return;
     }
     ctx.sim.send({ type: 'setFrontPriority', frontKey: key, priority: 2 });
+    hs.flags.frontAction = true;
     hs.sound('confirm');
     setText((btn.querySelector('span') ?? btn) as HTMLElement, t('alerts.priority.on'));
     btn.classList.add('is-on');

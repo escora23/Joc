@@ -110,8 +110,8 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
     speedBtns.set(sp, b);
     speeds.append(b);
   }
-  const iconBtn = (ico: string, titleKey: string, fn: () => void, tipKey?: string, hotkey?: string) => {
-    const b = h('button', { class: 'fu-btn fu-btn--ghost fu-btn--icon fu-time-btn' }, icon(ico));
+  const iconBtn = (ico: string, titleKey: string, fn: () => void, tipKey?: string, hotkey?: string, cls = '') => {
+    const b = h('button', { class: `fu-btn fu-btn--ghost fu-btn--icon fu-time-btn ${cls}`.trim() }, icon(ico));
     tip(b, () => ({ title: t(titleKey), text: tipKey ? t(tipKey) : undefined, hotkey }));
     b.addEventListener('click', () => {
       hs.sound('click');
@@ -145,8 +145,8 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
     chip,
     // Row 3: the panel tools (nations, alerts, help, settings, menu), on their own row.
     h('div', { class: 'fu-time-tools' },
-      nationsBtn, iconBtn('armoredDivision', 'forces.title', () => actions.forces?.(), 'tb.forces.tip', 'U'), iconBtn('swords', 'fr.title', () => actions.fronts?.(), 'tb.fronts.tip', 'G'), iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
-      iconBtn('help', 'hud.help', actions.help, 'tb.help.tip', 'F1'), iconBtn('settings', 'menu.settings', actions.settings, 'tb.settings.tip'), iconBtn('menu', 'hud.menu', actions.pause, 'tb.menu.tip', 'Esc')),
+      nationsBtn, iconBtn('armoredDivision', 'forces.title', () => actions.forces?.(), 'tb.forces.tip', 'U', 'fu-forces-btn'), iconBtn('swords', 'fr.title', () => actions.fronts?.(), 'tb.fronts.tip', 'G', 'fu-fronts-btn'), iconBtn('bell', 'alerts.log', () => actions.log?.(), 'alerts.log.tip', 'L'),
+      iconBtn('help', 'hud.help', actions.help, 'tb.help.tip', 'F1', 'fu-help-btn'), iconBtn('settings', 'menu.settings', actions.settings, 'tb.settings.tip'), iconBtn('menu', 'hud.menu', actions.pause, 'tb.menu.tip', 'Esc')),
     hegChip,
     doom,
   );

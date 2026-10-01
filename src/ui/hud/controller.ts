@@ -9,6 +9,7 @@ import { needsDeclaration, openDeclareWar } from './declare';
 import type { HudShared } from './shared';
 import { isListedForce } from './forcesInfo';
 import { issueOrders, openCivilianConfirm, previewOrders, selectedUnitIds } from './orderCtl';
+import { nukeAimError, openNukeConfirm } from './nukeConfirm';
 import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon } from '../../shared/geo';
 import { t } from '../../shared/i18n';
@@ -171,6 +172,25 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
         if (!e.shift) hs.setMode({ kind: 'none' });
         return;
       }
+      // Nuclear weapons (owner item 13, §4.14): only at a nation we are at war with, and only after the confirmation
+      // that lists who is in the radius and what it costs.
+      if (m.weapon !== UnitType.CruiseMissile) {
+        const why = nukeAimError(hs, e.tile);
+        if (why) {
+          hs.sound('error');
+          hooks.ripple(e.clientX, e.clientY, 'bad');
+          bus.emit('toast', { text: t(why), kind: 'warning', durationMs: 2600 });
+          return;
+        }
+        const weapon = m.weapon;
+        openNukeConfirm(hs, weapon, e.tile, () => {
+          fire();
+          hs.sound('confirm');
+          hooks.ripple(e.clientX, e.clientY, 'fire');
+        });
+        hs.setMode({ kind: 'none' });
+        return;
+      }
       fire();
       hs.sound('confirm');
       hooks.ripple(e.clientX, e.clientY, 'fire');
@@ -295,7 +315,10 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
     const weapon = WEAPON_HOTKEYS[lower];
     if (weapon !== undefined) {
       const cfg = ctx.sim.view.config;
-      const why = cfg && !cfg.nukes && weapon !== UnitType.CruiseMissile ? 'msg.nukesDisabled' : hs.ownStructures(StructureType.MissileSilo) === 0 ? 'msg.noSilo' : null;
+      const atWar = ctx.sim.view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID);
+      const why = cfg && !cfg.nukes && weapon !== UnitType.CruiseMissile ? 'msg.nukesDisabled'
+        : hs.ownStructures(StructureType.MissileSilo) === 0 ? 'msg.noSilo'
+          : !atWar ? (weapon === UnitType.CruiseMissile ? 'msg.notAtWar' : 'msg.nukeNotAtWar') : null;
       if (why) {
         hs.sound('error');
         bus.emit('toast', { text: t(why), kind: 'warning', durationMs: 2600 });

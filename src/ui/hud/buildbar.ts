@@ -8,7 +8,7 @@ import { tx } from '../tx';
 import { tip as sharedTip, type TipData } from '../tooltip';
 import { etaText, levelEffects, reachLine, speedLine, structurePurpose } from './forcesInfo';
 import type { HudShared } from './shared';
-import { BUILDABLE_UNITS, NUKE_DEFS, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS } from '../../shared/constants';
+import { BUILDABLE_UNITS, HUMAN_ID, NUKE_DEFS, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS } from '../../shared/constants';
 import { formatCompact, formatNumber, hasKey, inSentence, t } from '../../shared/i18n';
 import { STRUCTURE_TYPES, StructureType, UnitType, type BuildableUnit, type WeaponType } from '../../shared/types';
 
@@ -77,7 +77,7 @@ export function createBuildBar(hs: HudShared): BuildBar {
   const slots: Slot[] = [];
   const makeSlot = (kind: Slot['kind'], type: number, ico: string, key: string | null): Slot => {
     const cost = h('span', { class: 'fu-bb-cost fu-mono' }, '');
-    const el = h('button', { class: `fu-bb-slot is-${kind}` },
+    const el = h('button', { class: `fu-bb-slot is-${kind}`, 'data-slot': `${kind}-${type}` },
       key ? h('span', { class: 'fu-bb-key' }, key) : null,
       h('span', { class: 'fu-bb-ico' }, icon(ico)),
       cost,
@@ -136,6 +136,8 @@ export function createBuildBar(hs: HudShared): BuildBar {
     if (slot.kind === 'weapon') {
       if (view.config && !view.config.nukes && slot.type !== UnitType.CruiseMissile) return 'msg.nukesDisabled';
       if (hs.ownStructures(StructureType.MissileSilo) === 0) return 'msg.noSilo';
+      // Missiles and bombs follow wars (owner item 13): with no war, no target.
+      if (!view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID)) return slot.type === UnitType.CruiseMissile ? 'msg.notAtWar' : 'msg.nukeNotAtWar';
       if (me.gold < view.unitCost(slot.type as WeaponType)) return 'msg.notEnoughGold';
       return null;
     }

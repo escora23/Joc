@@ -15,3 +15,5 @@
 .fu-fo-advisor .fu-fo-adv-row span { flex: 1; min-width: 0; }
 .fu-aar { font-size: 0.74rem; line-height: 1.4; }
 .fu-aar b { font-weight: 600; }
+/* W7: nuclear launch confirmation — nations at peace inside the radius. */
+.fu-civil-warn { color: var(--fu-danger, #ff6a5a); font-size: 0.82rem; }

@@ -10,6 +10,7 @@ import { openModal, type ModalHandle } from './modal';
 import { tip } from './tooltip';
 import { tx } from './tx';
 import { mapLegend } from './legend';
+import { encyclopedia } from './encyclopedia';
 import { listSaves, saveToSlot, type SaveRecord } from '../app/autosave';
 import type { GameContext } from '../shared/api';
 import { DIFFICULTY_INDEX, HUMAN_MOBILIZE_TICKS, TENSION_LEAD_TICKS } from '../shared/constants';
@@ -183,6 +184,7 @@ const HELP_SECTIONS: [string, string][] = [
   ['alerts', 'bell'],
   ['command', 'takeControl'],
   ['victory', 'crown'],
+  ['encyclopedia', 'book'],
   ['legend', 'map'],
   ['keys', 'keyboard'],
 ];
@@ -253,6 +255,7 @@ export function openHelp(ctx: GameContext, sound: Sound, section = 'start', onCl
     const body = h('div', { class: 'fu-help-sec' }, h('h3', null, t(`help.${id}.title`)));
     if (id === 'legend') body.append(mapLegend());
     else if (id === 'keys') body.append(shortcutList());
+    else if (id === 'encyclopedia') body.append(encyclopedia(() => sound('click')));
     else {
       for (const para of t(`help.${id}.body`, params).split('\n')) body.append(h('p', null, para));
       const dg = helpDiagram(id);

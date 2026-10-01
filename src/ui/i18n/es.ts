@@ -400,20 +400,7 @@ export const es: Dictionary = {
 
   // ---- tutorial
   'tut.kicker': 'Asesor militar',
-  'tut.next': 'Siguiente',
   'tut.skip': 'Omitir',
-  'tut.expand.title': 'Expande tu nación',
-  'tut.expand.text': 'Haz clic en la tierra libre junto a tu frontera. Tus tropas avanzarán y ocuparán el terreno casilla a casilla.',
-  'tut.ratio.title': 'Dosifica tu fuerza',
-  'tut.ratio.text': 'El deslizador de abajo decide cuántas tropas envías en cada ataque. Mayús + rueda lo cambia sin soltar el ratón.',
-  'tut.city.title': 'Funda una ciudad',
-  'tut.city.text': 'Ya tienes oro. Pulsa 1 y haz clic en tu territorio: las ciudades aumentan tu población máxima y tus ingresos.',
-  'tut.diplomacy.title': 'Diplomacia',
-  'tut.diplomacy.text': 'Clic derecho sobre un vecino para proponer una alianza, imponer un embargo o enviarle un mensaje.',
-  'tut.defense.title': 'Asegura tus fronteras',
-  'tut.defense.text': 'Un puesto defensivo (4) duplica la resistencia de la zona. Un puerto (2) en la costa abre el comercio marítimo.',
-  'tut.command.title': 'Toma el control',
-  'tut.command.text': 'Tienes una unidad controlable. Selecciónala y pulsa T para bajar desde la órbita y combatir en persona.',
 
   // ---- end screen
   'end.victory': 'Victoria',
