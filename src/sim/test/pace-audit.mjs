@@ -1213,8 +1213,9 @@ async function endgame() {
   const s1 = heg().find((e) => e.stage === 'start');
   row('A18', `leader at ${((100 * g.playerById[HUMAN_ID].tiles) / g.landTiles).toFixed(1)} %, rival ×${(g.playerById[HUMAN_ID].tiles / g.playerById[rival].tiles).toFixed(2)}: countdown starts`, s1 ? `start at ${s1.tick}, until ${s1.untilTick}` : 'no event', `start, until = tick + ${rules[2]}`, !!s1 && s1.untilTick - s1.tick === rules[2]);
   for (let i = 0; i < 300; i++) step();
-  // The rival grows past leader / ratio: the hegemony breaks.
-  const give = land.slice(nH - Math.ceil(nH * 0.4), nH);
+  // The rival grows past leader / ratio: the hegemony breaks (to 1.1x the rival: under any duration's ratio, and the
+  // leader stays the larger, so the rival does not start a countdown of its own).
+  const give = land.slice(nH - Math.ceil((nH - 1.1 * nR) / 2.1), nH);
   stageLand(g, rival, (t) => give.includes(t));
   for (let i = 0; i < 30; i++) step();
   const br = heg().find((e) => e.stage === 'broken');

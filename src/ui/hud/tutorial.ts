@@ -237,8 +237,9 @@ export function createTutorial(hs: HudShared): Tutorial {
       }
       const me = view().human;
       if (me?.spawned && startTiles === 0 && view().phase === 'playing') startTiles = Math.max(1, me.tiles);
-      // Completion first (the player may do the thing before the step is shown: it never appears then).
-      for (const s of steps) if (!isDone(s) && s.state === st && s.done()) markDone(s);
+      // Completion first (the player may do the thing before the step is shown: it never appears then). Any state: the
+      // spawn step completes the moment the capital is founded, and the app is already 'playing' by the next check.
+      for (const s of steps) if (!isDone(s) && s.done()) markDone(s);
       const next = pick();
       if (!next) {
         if (current) hide();

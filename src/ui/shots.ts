@@ -6,6 +6,7 @@ import { openHelp, openLoadDialog, openSettings } from './dialogs';
 import { saveToSlot } from '../app/autosave';
 import { openDeclareWar } from './hud/declare';
 import { openPeaceDialog } from './hud/wardialogs';
+import { openNukeConfirm } from './hud/nukeConfirm';
 import { getHud } from './index';
 import { HUMAN_ID } from '../shared/constants';
 import { tileToLatLon, worldTimeForSubsolarLon } from '../shared/geo';
@@ -272,6 +273,21 @@ registerShot('peace-dialog', 'ui', 'Peace terms (§4.15): demanding a cession wi
   await wait(400);
   (m?.el.querySelectorAll('.fu-peace-opts button')[1] as HTMLElement | undefined)?.click();
   await wait(2600);
+});
+
+registerShot('nuke-confirm', 'ui', 'Nuclear launch confirmation (owner item 13, §4.14): only at a nation at war, with the radius, the escalation and the cost', async (s) => {
+  const { ctx, wait } = s;
+  await stageMidgame(s);
+  const n = neighbour(ctx);
+  ctx.sim.debug({ type: 'war', a: HUMAN_ID, b: n, mobilizeTicks: 0 });
+  await ticks(s, 4);
+  const p = ctx.sim.view.players[n];
+  const tile = p ? Math.floor(p.labelY) * 1600 + Math.floor(p.labelX) : -1;
+  const ll = tileToLatLon(tile);
+  ctx.cameraRig.setState({ lat: ll.lat, lon: ll.lon, altitudeKm: 2600, tilt: 0, heading: 0 });
+  const hud = getHud();
+  if (hud && tile >= 0) openNukeConfirm(hud.shared, UnitType.AtomBomb, tile, () => undefined);
+  await wait(1500);
 });
 
 registerShot('alert-attack', 'ui', 'Alerts: war declared on us, then an offensive grouped per front with place and troops; globe marker and minimap ping', async (s) => {
