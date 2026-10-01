@@ -3032,6 +3032,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       fx.ribbons.build(camera);
       lockBeeps(realDt);
       // --- HUD ---
+      hud.quietNear = overlay.shipMarker ? overlay.shipMarker.pos : null;
       hud.update(freeze ? 0 : realDt, controller.hud, camera, world, localClock, Math.max(0, localSec - startSec), input.locked, realDt);
       if (now - lastInfoWall > 250) {
         lastInfoWall = now;

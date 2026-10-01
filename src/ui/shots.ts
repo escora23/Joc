@@ -314,8 +314,11 @@ registerShot('auto-pause', 'ui', 'Auto-pause banner: an ultimatum paused the gam
   ctx.sim.setSpeed(1);
   const n = neighbour(ctx);
   ctx.sim.debug({ type: 'tension', from: n, to: HUMAN_ID, reasonKey: 'tension.border' });
-  ctx.sim.debug({ type: 'propose', from: n, to: HUMAN_ID, kind: 'demand', demand: { kind: 'cede', tiles: 40 }, ultimatum: true });
-  await wait(2500);
+  // A tribute (a band of land needs a shared border, and the nearest nation may only face us across the sea).
+  ctx.sim.debug({ type: 'propose', from: n, to: HUMAN_ID, kind: 'demand', demand: { kind: 'tribute' }, ultimatum: true });
+  const t0 = performance.now();
+  while (performance.now() - t0 < 60_000 && !document.querySelector('.fu-autopause:not(.fu-hidden)')) await wait(250);
+  await wait(1500);
 });
 
 registerShot('crisis-banner', 'ui', 'Crisis component: the red nuclear alarm with every weapon in flight (§8.2)', async (s) => {

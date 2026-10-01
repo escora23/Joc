@@ -426,6 +426,9 @@ export class CommandHud {
     }
   }
 
+  /** W7: a point whose entity already carries a label of its own (the stop panel's ship): no second name tag there. */
+  quietNear: THREE.Vector3 | null = null;
+
   private drawMarkers(g: CanvasRenderingContext2D, camera: THREE.PerspectiveCamera, world: World, W: number, H: number, s: HudState): void {
     const lockOn = s.lockState > 0 && s.lock.visible;
     let lockBest = 56;
@@ -488,7 +491,8 @@ export class CommandHud {
         g.stroke();
         g.fill();
         const near = Math.abs(x - cx) < 150 && Math.abs(y - cy) < 110;
-        if (near || d < (this.kind === 'tank' ? 420 : this.kind === 'jet' ? 2500 : 4000)) {
+        const quiet = !!this.quietNear && Math.hypot(e.pos.x - this.quietNear.x, e.pos.z - this.quietNear.z) < Math.max(60, e.radius * 1.5);
+        if (!quiet && (near || d < (this.kind === 'tank' ? 420 : this.kind === 'jet' ? 2500 : 4000))) {
           const txt = `${t(`command.type.${e.kind}`)}  ${d >= 1000 ? (d / 1000).toFixed(1) + ' km' : Math.round(d) + ' m'}`;
           const wTxt = g.measureText(txt).width;
           const score = Math.hypot(x - cx, y - cy) + d * 0.05;
