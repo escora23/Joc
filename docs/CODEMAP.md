@@ -1630,3 +1630,31 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   `transport`, `command/ai.ts merchant()` (never an AI target), `command/forces.ts reconcileMerchant` (src kind
   `merchant`), `command/intercept.ts ShipIntercept` (panel, E / R / F / X), `command/index.ts` (onKill → sink,
   `__cmdStats.intercept`, `__cmdStats.merchants`).
+
+## 29. W7 integration — where it lives
+
+* **Encyclopedia (§12.4):** `src/ui/encyclopedia.ts` builds Help › Enciclopedia (`dialogs.ts HELP_SECTIONS`
+  `'encyclopedia'`) from `STRUCTURE_DEFS`, `STRUCTURE_LEVELS` (through `hud/forcesInfo.ts levelEffects`, the same rows
+  as the structure card), `UNIT_DEFS`, `NUKE_DEFS` and the order tooltips; texts `ency.*` in `src/ui/i18n/w7.ts`.
+  Shots `encyclopedia`, `encyclopedia-unit`.
+* **Tutorial (§12.5):** `src/ui/hud/tutorial.ts` has all ten steps (sequence 1 2 3 4 7 5 6 9; 8, 10 and 11 interrupt).
+  Highlights use `.fu-forces-btn`, `.fu-fronts-btn` (top bar) and `.fu-bb-slot[data-slot="structure-7"]` (build bar);
+  `hs.flags.frontAction` is set by a priority change in `hud/fronts.ts` and `hud/alerts.ts`.
+* **Nuclear weapons only at war (owner item 13, §4.14):** sim `weapons.ts humanLaunchError`; UI
+  `hud/nukeConfirm.ts` (`nukeAimError`, `openNukeConfirm`), called from `hud/controller.ts` target mode; arsenal slot
+  and Z/X/C/V say why with no war (`buildbar.ts reason`).
+* **Defensive alliances against an expansionist (§5.2):** `sim/ai/diplomacy.ts menaceOf / fears`, used in
+  `thinkDiplomacy` (proposals) and `answerProposal` (alliance answers, `answer.commonMenace`).
+* **Corta capitulates sooner (§4.18):** `DURATION_RULES.short.capitulation` read by `war.ts checkCapitulations`.
+* **Tooltip sweep (§12.1):** every control has a tooltip; new ones in `buildbar.ts` (tabs, ratio, ticks),
+  `leaderboard.ts` / `minimap.ts` toggles, `modal.ts` close button, `selection.ts actionBtn` (default `<key>.tip`),
+  `alerts.ts` log filters, `controls.ts segmented` (per-option `tip`), offensive / peace / blockade dialogs, command HUD
+  (`data-tip` on the exit and «Ir al combate» buttons). `tools/w7-verify.mjs tips` scans every panel the way
+  `tooltip.ts findTarget` resolves a hover.
+* **Checks:** `tools/w7-verify.mjs` (tips, ency, nuke); `tools/playtest.mjs --speed 1|4 --difficulty easy|normal`
+  (adds the advisor, division move, factory upgrade, Guerra priority, nuclear refusal and confirmation, peace by
+  tribute and inbox steps to the extended run).
+* **Removed (W7, §24):** v1 constants and helpers nothing read (`sim/balance.ts` ARMOR_*/WARSHIP_*/NEUTRAL_*/… ,
+  `geo.ts` tileToVec3/neighbors8/…, `feed.ts` createToasts/createNukeAlarm, `dialogs.ts` openHowTo/openShortcuts,
+  `tooltip.ts untipped`, …), unused imports and locals (`tsc --noUnusedLocals` is clean), i18n keys shadowed by a later
+  dictionary, v1 tutorial strings, and 31 scratch probe scripts in `tools/_*.mjs`.

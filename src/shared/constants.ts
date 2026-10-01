@@ -162,7 +162,7 @@ export const MAX_PLAYER_ID = 2047;
  */
 export const DURATION_RULES = {
   // capitulation: scale on the §4.13 land-lost and exhaustion thresholds (W7: a short game's wars end sooner, §4.18).
-  short: { domination: 0.6, hegemonyLeader: 0.15, hegemony: 0.22, hegemonyRatio: 1.75, holdTicks: 1_200, timeLimit: 48_000, capitulation: 0.75 },
+  short: { domination: 0.6, hegemonyLeader: 0.15, hegemony: 0.22, hegemonyRatio: 1.5, holdTicks: 1_200, timeLimit: 48_000, capitulation: 0.75 },
   normal: { domination: 0.8, hegemonyLeader: 0.2, hegemony: 0.3, hegemonyRatio: 2, holdTicks: 2_400, timeLimit: 96_000, capitulation: 1 },
   long: { domination: 0.9, hegemonyLeader: 0.3, hegemony: 0.4, hegemonyRatio: 2.5, holdTicks: 4_800, timeLimit: 0, capitulation: 1 },
 } as const;

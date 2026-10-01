@@ -356,6 +356,17 @@ if (want('ency')) {
 if (want('nuke')) {
   log('NUKE: nuclear weapons only at war, with a confirmation');
   await closeModals();
+  // A game with nuclear weapons on (the staged war scene above has them off), Madrid, 600 ticks in; a war with the
+  // second-largest nation, staged; the largest stays at peace.
+  await page.evaluate(() => window.__front.ctx.app.startScriptedGame({ ticks: 600, nukes: true, speed: 1 }));
+  await until(() => window.__front.app.state === 'playing' && window.__front.ctx.sim.view.human?.alive, null, 400000, 1000);
+  await page.evaluate(() => {
+    const { ctx } = window.__front;
+    const v = ctx.sim.view;
+    const big = v.playerList.filter((q) => q.kind === 'nation' && q.alive && q.id !== 1 && v.pairState(1, q.id) === 'peace' && !v.human.allies.includes(q.id)).sort((a, b) => b.tiles - a.tiles);
+    if (big[1]) ctx.sim.debug({ type: 'war', a: 1, b: big[1].id, goal: 'border', mobilizeTicks: 0 });
+  });
+  await until(() => window.__front.ctx.sim.view.wars.some((w) => w.aggressor === 1 || w.target === 1), null, 20000, 500);
   const setup = await page.evaluate(() => {
     const { ctx } = window.__front;
     const v = ctx.sim.view;

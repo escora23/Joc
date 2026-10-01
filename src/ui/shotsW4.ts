@@ -67,14 +67,16 @@ async function stageForces(s: ShotContext, runTicks = 40): Promise<number> {
   spawn(U.Bomber, 40.5, -3.3);
   spawn(U.DroneSwarm, 40.5, -3.3);
   spawn(U.Warship, 41.0, 2.6);
-  await until(s, () => own(ctx, U.Warship).length > 0 && own(ctx, U.ArmoredDivision).length >= 3 && own(ctx, U.FighterSquadron).length >= 2);
+  // The spawned units arrive with the next sim update (seconds apart on a loaded software renderer).
+  await until(s, () => own(ctx, U.Warship).length > 0 && own(ctx, U.ArmoredDivision).length >= 3 && own(ctx, U.FighterSquadron).length >= 2, 90000);
   const divs = own(ctx, U.ArmoredDivision);
   const front = at(42.95, -0.6);
   sim.send({ type: 'unitOrder', unitIds: [divs[0].id, divs[1].id], order: 'attach', tile: front, targetId: 0 });
   sim.send({ type: 'unitOrder', unitIds: [divs[2].id], order: 'move', tile: at(41.7, -0.9), targetId: 0 });
   const fighters = own(ctx, U.FighterSquadron);
   sim.send({ type: 'unitOrder', unitIds: [fighters[0].id], order: 'cap', tile: at(42.6, -0.9), targetId: 0 });
-  sim.send({ type: 'unitOrder', unitIds: [own(ctx, U.Warship)[0].id], order: 'patrol', tile: at(41.2, 2.9), targetId: 0 });
+  const ws = own(ctx, U.Warship)[0];
+  if (ws) sim.send({ type: 'unitOrder', unitIds: [ws.id], order: 'patrol', tile: at(41.2, 2.9), targetId: 0 });
   sim.send({ type: 'buildUnit', unit: U.ArmoredDivision, structureId: -1 });
   sim.send({ type: 'buildUnit', unit: U.FighterSquadron, structureId: -1 });
   // A few game hours so the orders are under way (marching, on patrol, rail/road ETA).

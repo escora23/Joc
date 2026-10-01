@@ -654,9 +654,12 @@ surviving troops off (§4.6). The economy recounts fallout the tick a tile clear
 duration (`pace-audit nuke` measures the tile's income and growth before, during and after). Radii are in §6.3. This removes the empire-scale swings of A06.
 
 **Aim points.** The AI rejects any nuclear aim point whose outer radius covers land of a player it is not at war with
-(invariant 6). The human may aim anywhere; the confirmation dialog lists every nation whose land lies inside the outer
-radius, and a detonation on land of a nation not at war with the human counts as a nuclear attack on it
-(`nukedUsOrAlly`, a `retaliation` casus belli).
+(invariant 6). **W7 (owner item 13: missiles and bombs with a reason):** the human aims a nuclear weapon only at the land
+of a nation it is at war with (`weapons.ts humanLaunchError`: `msg.nukeNotAtWar` / `msg.nukeNoTarget`; the arsenal slot
+and the Z/X/C keys say so while the human has no war, and a cruise missile needs a war too). Before anything flies, a
+confirmation dialog (`ui/hud/nukeConfirm.ts`) names the target and its owner, the escalation the war rises to (L3 atom,
+L4 H-bomb and MIRV), every nation whose land lies inside the outer radius (those at peace in red: a detonation on their
+land counts as a nuclear attack on them, `nukedUsOrAlly`, a `retaliation` casus belli) and the §5.11 cost.
 
 ### 4.15 War score, exhaustion and peace
 
@@ -730,7 +733,7 @@ and its alliances were. Breaking the alliance, or a rival growing, resets the co
 
 | Duración | Dominación | Hegemonía (leader / bloc / ratio over the largest outsider, held) | Time limit | T14 target |
 |---|---|---|---|---|
-| Corta | 60 % of the land | ≥ 15 % / ≥ 22 % / ≥ 1.75×, held 5 days (1,200 ticks) | 200 days (48,000 ticks) | 18,000–42,000 ticks |
+| Corta | 60 % of the land | ≥ 15 % / ≥ 22 % / ≥ 1.5×, held 5 days (1,200 ticks); capitulation thresholds ×0.75 (W7) | 200 days (48,000 ticks) | 18,000–42,000 ticks |
 | Normal | 80 % | ≥ 20 % / ≥ 30 % / ≥ 2×, held 10 days (2,400 ticks) | 400 days (96,000 ticks) | 36,000–72,000 |
 | Larga | 90 % | ≥ 30 % / ≥ 40 % / ≥ 2.5×, held 20 days (4,800 ticks) | none | 60,000–120,000 |
 
@@ -842,6 +845,16 @@ the human-facing ones (`opinions` in `TickUpdate`, §14.5).
 | **Embargo** (unilateral, kept from v1) | No trade from the embargoing side | until lifted | immediate | – |
 
 Wars end all treaties between the pair. A treaty event (`treatyChanged`) always carries a reason key.
+
+**W7: defensive alliances against an expansionist neighbour.** A nation next to a major power at least 1.5× its
+strength that started a war of choice in the last 4,800 ticks (`ai/diplomacy.ts menaceOf`, the §5.1 `unprovokedWar`
+record) looks for an ally among the nations that also fear that power (they border it or are cold to it, ≤ −10, and
+have no treaty with it), and accepts such an alliance at opinion ≥ +10 instead of +35, with the reason «X nos amenaza a
+los dos: juntos estaremos más seguros» (`answer.commonMenace`). The human is never offered one of these by the AI (it
+proposes its own), but it meets them: its next conquest of a neighbour brings that neighbour's new allies in through
+the call to arms, which the declaration dialog lists before it confirms (§4.2). Measured on the autopilot human
+(`pace-audit game`, Normal): the first AI war on it moved from 19,067 / 13,704 / 41,302 (seeds 11 / 12 / 13) to
+13,984 / 15,914 / 19,189 ticks, with T14, T16, T17, T19 and T37 unchanged in kind (§16.8 results).
 
 ### 5.3 Proposals, deliberation and answers
 
@@ -1952,6 +1965,16 @@ Short sections, each with a small SVG diagram where it helps:
 A Help tab with one entry per unit and structure, generated from `UNIT_DEFS`, `STRUCTURE_LEVELS` and i18n: icon,
 purpose, a stats table per level, what counters it («Contrarrestado por: cazas y baterías SAM»), its orders and hotkeys.
 
+**As built (W7, `ui/encyclopedia.ts`, Help › Enciclopedia).** 22 entries in four groups: the ten structures, the five
+buildable units, the four silo weapons and the logistics units (transport, merchant, train). A structure entry shows
+cost (first one, +step per extra one, cap), build time in game hours and real seconds at 1x, key, maximum level, what
+it produces, the per-level table (the same rows as its card, `levelEffects`; the city shows levels 1, 2, 3, 5 and 10)
+with the upgrade cost and time to each level, what it is for in a war, what threatens it and how damage works. A unit
+entry shows cost, production time, where it is produced, speed (road and rail for divisions), reach, what command mode
+does with it, its use, its threats and every order it accepts with the order's own tooltip text. A weapon entry adds
+reach, flight time, blast radius and the escalation it requires. `tools/w7-verify.mjs ency` checks every entry against
+the shared tables.
+
 ### 12.5 Tutorial ("Asesor militar")
 
 State-driven, starts in the spawn phase, never advances on a timer, highlights the UI element involved, skippable, and
@@ -1973,6 +1996,15 @@ its progress is saved in settings.
 The tutorial **engine** (state machine, highlighting, persistence) is W3's; the full step list is completed and verified
 in the W7 integration stage, because steps 5, 6, 8 and 9 need W4's production and Fuerzas panel, W6's Guerra panel and
 W5's command mode (§16.1).
+
+**As built (W7, `ui/hud/tutorial.ts`).** The sequence is 1, 2, 3, 4, **7** (the clock waits for nothing, so it comes
+before the army instead of waiting behind a 300,000-gold base), 5, 6, 9; steps 8 (first tension or war: highlights the
+Guerra button, done by a front priority from the panel or an alert, or a division at a front), 10 (a proposal waiting)
+and the first-war offensive tip (11) interrupt the sequence as soon as their trigger holds. Step 5 highlights the army
+base slot and completes when a division exists; 6 highlights the Fuerzas button and completes on any order the
+division accepts; 9 completes on entering command mode. `tools/playtest.mjs` records every step shown
+(`window.__pt.tut`) and checks, at the end of a full run, that all ten were shown and completed and that a shown step
+stays put for 8 s (no timer).
 
 ### 12.6 Spawn onboarding
 
