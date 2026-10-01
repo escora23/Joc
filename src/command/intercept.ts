@@ -260,6 +260,8 @@ export class ShipIntercept {
     const cands: Ent[] = [];
     for (const e of this.d.world.ents) {
       if (!e.alive || (e.kind !== 'merchant' && e.kind !== 'transport') || e.team === 0 || e.src?.kind !== 'merchant') continue;
+      // A prize we took is ours now (the sim sails it to our port), whatever the scene still paints it as.
+      if (this.prizes.has(e.src.id) || view.units.get(e.src.id)?.owner === view.human?.id) continue;
       if (e.pos.distanceTo(player.pos) < PANEL_M) cands.push(e);
       const dd = e.pos.distanceTo(player.pos) - (e === this.target ? 300 : 0);
       if (dd < bd) {
@@ -297,10 +299,12 @@ export class ShipIntercept {
         // The cut-in: from abeam of the target, low over the water, on the boat, the climb, the flags.
         if (this.boardFx && this.d.cutIn) {
           const fx = this.boardFx.focus;
-          const side = this.cutPos.copy(player.pos).sub(b.ent.pos).setY(0).normalize();
+          const side = this.cutSide.copy(player.pos).sub(b.ent.pos).setY(0).normalize();
           const across = this.cutTmp.set(-side.z, 0, side.x);
-          this.cutPos.copy(b.ent.pos).addScaledVector(side, b.ent.radius * 0.6 + 140).addScaledVector(across, 90);
-          this.cutPos.y = 26;
+          // Off to one side of the gap between the two hulls, far enough to hold both ships and the boat in frame.
+          const gap = player.pos.distanceTo(b.ent.pos);
+          this.cutPos.copy(player.pos).add(b.ent.pos).multiplyScalar(0.5).addScaledVector(across, gap * 0.55 + 160);
+          this.cutPos.y = 34;
           this.d.cutIn(this.cutPos, fx);
         }
         if (b.t >= 3.2 && b.t - dt < 3.2) this.say(t('naval.cmd.boardAlong'));
@@ -390,6 +394,7 @@ export class ShipIntercept {
   private readonly markerPos = new THREE.Vector3();
   private readonly cutPos = new THREE.Vector3();
   private readonly cutTmp = new THREE.Vector3();
+  private readonly cutSide = new THREE.Vector3();
 
   private paint(html: string): void {
     if (html === this.lastHtml) return;

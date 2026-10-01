@@ -722,9 +722,9 @@ void main() {
           dotm += best * (k == 0 ? 1.0 - wn : wn);
         }
         dotm *= mix(1.0, 0.65, uOccNearK);
-        // Fix pass 3: below ~60-200 km the speckle fades out (the lighter fill and the border say «occupied»): seen from a
-        // few km its dots were big hard orange discs strewn over the ground.
-        dotm *= smoothstep(0.0015, 0.006, pxT);
+        // Fix pass 3: from 250 km down to 90 km the speckle fades out (the lighter fill and the border say «occupied»):
+        // seen from closer its dots were big hard orange discs strewn over the ground.
+        dotm *= 1.0 - uOccNearK;
         float vis = smoothstep(3.0, 6.0, 0.4 / pxT);
         albedo = mix(albedo, natO * 1.15, mix(0.3, dotm, vis) * occ * 0.9 * terr * landK);
       }
