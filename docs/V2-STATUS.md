@@ -1222,3 +1222,37 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
 ### Notes
 * Contact time from the strip is ~62 s on SwiftShader, of which the march is sim-bound and the intro is rendering-bound
   (10 frames of a 3.1 s swoop); the entry has nothing left that waits on purpose.
+
+## W7 integration and retune (2026-10-01) — DESIGN_V2 §16.8
+
+> `git log --grep "W7"`. Code map: CODEMAP §29. `npx tsc --noEmit` (also clean with `--noUnusedLocals`) and
+> `npm run build` pass; `npx tsx tools/i18n-check.mjs` 0 missing es/en, 0 «(a)».
+
+### What W7 added or fixed
+* **Encyclopedia** (Help › Enciclopedia, §12.4): 22 entries generated from the shared tables (per-level tables equal
+  the structure cards), uses, threats, orders. `w7-verify ency` 2/2.
+* **Tutorial** (§12.5): all ten steps (5 army, 6 move, 8 fronts, 9 command added). Found and fixed in real play: the
+  advisor showed **nothing** after the capital was founded (the spawn step only completed while the app was in the
+  spawn state, which it leaves on the same frame), so every later step was blocked.
+* **Tooltip sweep** (§12.1): 672-709 visible controls over every panel, card, dialog, settings tab, help section,
+  the pause/save/load menus and the command HUD: **all** have a tooltip (`w7-verify tips`). Added: build-bar tabs,
+  attack-ratio control and ticks, leaderboard/minimap toggles, modal close, nation-card and unit/structure-card buttons
+  (attack, alliance, embargo, «Ver»…), alert-log filters, offensive-dialog shares/intensity, peace-dialog terms,
+  blockade confirm/cancel, command-mode exit and «Ir al combate».
+* **Missiles and bombs with a reason** (owner item 13): the human may aim nuclear weapons only at a nation it is at war
+  with (sim and UI), after a confirmation that names the target, the escalation it causes, every nation in the radius
+  (those at peace in red) and the cost; the arsenal and Z/X/C/V say why with no war. `w7-verify nuke` 2/2.
+* **Defensive alliances against an expansionist neighbour** (§5.2): nations next to a stronger power that just
+  started a war of choice ally with others it worries; a conquest then meets calls to arms (listed in the declaration
+  dialog). First AI war on the autopilot human 19,067 / 13,704 / 41,302 → 13,984 / 15,914 / 19,189 (seeds 11-13).
+* **Corta** (§4.18): capitulation thresholds ×0.75 and hegemony ratio 1.5 → seed 11 ends by hegemony at 41,900.
+* **Night on the strategic map** (29b): structure/unit models keep a moonlight ambient; below ~300 km the territory
+  fill glows at half strength, so models and lights read instead of black plates on a bright carpet.
+* **Texts**: offensive reports count land from our side and never say «0 (≈ 0 km²)» or nest parentheses; one name per
+  ship in command mode (the stop panel's ship drops the generic tag).
+* **Removed**: v1 constants and helpers nothing read (47 in `sim/balance.ts`, geo/color/math helpers, the dead toast and
+  nuclear-alarm components in `feed.ts`, `openHowTo`, `openShortcuts`, …), every unused import and local, i18n keys
+  shadowed by a later dictionary, the v1 tutorial strings, 31 scratch probe scripts `tools/_*.mjs`. No `v2-stub` left.
+* Verifiers updated to the current design where they had gone stale: w3 V7t (9 auto-pause kinds, incursion on), w4 V5
+  (orders the units the chip says can comply, slower acks), w5 X1 (29e exit camera at 900 km tilted), endgame audit
+  (breaks the countdown for any duration's ratio), regrowth audit (stages 5,000 tiles).

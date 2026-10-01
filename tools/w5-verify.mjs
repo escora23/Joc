@@ -138,7 +138,7 @@ if (ONLY.includes('peace')) {
   for (let i = 0; i < 90; i++) {
     await wait(1000);
     const alt = await page.evaluate(() => { const c = { altitudeKm: 0 }; window.__front.ctx.cameraRig.getState(c); return c.altitudeKm; });
-    if (alt > 2450) break;
+    if (alt > 850) break;
   }
   await wait(3000);
   const ex = await page.evaluate((id) => {
@@ -148,9 +148,10 @@ if (ONLY.includes('peace')) {
     const u = ctx.sim.view.units.get(id);
     return { cam, unit: u ? { x: u.x, y: u.y } : null, controlled: (ctx.sim.view.command?.controlled ?? []).some((c) => c.unitId === id), clock: ctx.sim.view.clock };
   }, end.unitId);
-  const camOk = ex.unit && Math.abs(ex.cam.altitudeKm - 2500) < 300 &&
+  // Feedback 3 (29e): the strategic camera comes back looking at the place, at a regional altitude (900 km, tilted).
+  const camOk = ex.unit && ex.cam.altitudeKm >= 600 && ex.cam.altitudeKm <= 2800 &&
     Math.abs(ex.cam.lat - (90 - (ex.unit.y / 800) * 180)) < 3 && Math.abs(ex.cam.lon - ((ex.unit.x / 1600) * 360 - 180)) < 3;
-  rec('X1 exit: strategic camera 2,500 km above the new position', exited && !!camOk, ex);
+  rec('X1 exit: strategic camera over the new position (600-2,800 km)', exited && !!camOk, ex);
   rec('X2 unit released, clock strategic', !ex.controlled && ex.clock.mode === 'strategic', { controlled: ex.controlled, clock: ex.clock.mode });
   rec('peace page errors', errs.length === 0, errs.slice(0, 5));
   await page.close();

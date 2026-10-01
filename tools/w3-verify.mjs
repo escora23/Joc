@@ -230,7 +230,7 @@ for (const lang of langs) {
   log(`=== language ${lang} ===`);
   await page.evaluate(async (lang) => {
     const { ctx } = window.__front;
-    ctx.settings.set({ language: lang, tutorial: false, autoPause: { warOnYou: true, ultimatum: true, nukeAtYou: true, capitalThreat: true, invasion: true, proposal: true, peaceOffer: true, callToArms: true } });
+    ctx.settings.set({ language: lang, tutorial: false, autoPause: { warOnYou: true, ultimatum: true, nukeAtYou: true, capitalThreat: true, incursion: true, invasion: true, proposal: true, peaceOffer: true, callToArms: true } });
     window.__V.texts.length = 0;
     window.__V.paused.length = 0;
     window.__V.invs.clear();
@@ -622,7 +622,7 @@ for (const lang of langs) {
   const logged = consoleLines.filter((l) => l.startsWith('[sim] settings:')).length;
   row('V7s', 'the worker logs each settings message', `${logged} lines`, '>= 1', logged >= 1);
   // Settings > Juego: open it through the pause menu.
-  await page.evaluate(() => window.__front.ctx.settings.set({ autoPause: { warOnYou: true, ultimatum: true, nukeAtYou: true, capitalThreat: true, invasion: false, proposal: false, peaceOffer: false, callToArms: false } }));
+  await page.evaluate(() => window.__front.ctx.settings.set({ autoPause: { warOnYou: true, ultimatum: true, nukeAtYou: true, capitalThreat: true, incursion: true, invasion: false, proposal: false, peaceOffer: false, callToArms: false } }));
   await page.keyboard.press('Escape');
   await page.waitForSelector('.fu-pause .fu-pause-btn', { timeout: 15000 }).catch(() => {});
   await page.locator('.fu-pause .fu-pause-btn').nth(3).click().catch(() => {});
@@ -640,8 +640,9 @@ for (const lang of langs) {
     return { n: rowsEl.length, on, text: document.querySelector('.fu-settings')?.innerText ?? '' };
   });
   await shot('settings-juego');
-  const defaults = [true, true, true, true, false, false, false, false];
-  row('V7t', 'Settings > Juego: 8 auto-pause toggles with the §8.5 defaults', `${juego.n} toggles, on ${juego.on.map((x) => (x ? 1 : 0)).join('')}`, '8, 11110000', juego.n === 8 && juego.on.every((x, i) => x === defaults[i]));
+  // §8.5 defaults in AUTO_PAUSE_KINDS order (W5 added «incursion», on by default).
+  const defaults = [true, true, true, true, true, false, false, false, false];
+  row('V7t', 'Settings > Juego: 9 auto-pause toggles with the §8.5 defaults', `${juego.n} toggles, on ${juego.on.map((x) => (x ? 1 : 0)).join('')}`, '9, 111110000', juego.n === 9 && juego.on.every((x, i) => x === defaults[i]));
   row('V7u', 'crisisTime / observationTime / clouds / historical borders present (borders off)', `${JSON.stringify({ crisis: set.crisisTime, obs: set.observationTime, clouds: set.clouds, hist: set.historicalBorders })}`, 'present, hist false', set.crisisTime && set.observationTime !== undefined && set.clouds && set.historicalBorders === false && /crisis/i.test(juego.text));
   // Close the settings and the pause menu.
   for (let i = 0; i < 4 && (await page.locator('.fu-modal').count()); i++) {

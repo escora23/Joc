@@ -391,11 +391,16 @@ if (want('V5')) {
   }, null, 30000, 300)) ?? '';
   const n0 = await view(() => window.__w4.acks.length);
   await rightClick(820, 330);
-  const acks = await until((n) => window.__w4.acks.length > n ? window.__w4.acks.slice(n) : null, n0, 6000, 100);
-  await sleep(600);
-  const orderedIds = new Set((acks ?? []).flatMap((a) => a.unitIds));
+  // The sim acknowledges on its next update (seconds apart on a loaded software renderer); groups of different orders
+  // are acknowledged one by one.
+  const acks = await until((n) => window.__w4.acks.length > n ? window.__w4.acks.slice(n) : null, n0, 20000, 100);
+  await sleep(4000);
+  const acksAll = await view((n) => window.__w4.acks.slice(n), n0);
+  const orderedIds = new Set((acksAll ?? acks ?? []).flatMap((a) => a.unitIds));
+  // The chip says how many of the selection can carry the order out («18 de 20»): those are the ones sent.
+  const able = Number((chip.match(/(\d+) (?:de|of) \d+ (?:unidades|units)/i) ?? [])[1] ?? sel.length);
   row('V5', 'the chip reports «n de m»', chip.replace(/\s+/g, ' ').slice(0, 140), '«n de m unidades»', / de \d+ unidades| of \d+ units/i.test(chip));
-  row('V5', 'one right click orders every selected unit', `${orderedIds.size} of ${sel.length} in unitOrder commands`, 'all', orderedIds.size === sel.length);
+  row('V5', 'one right click orders every selected unit that can carry it out', `${orderedIds.size} of ${sel.length} in unitOrder commands (chip: ${able} able)`, 'all the able ones', orderedIds.size >= able && orderedIds.size > 0);
   await shot('v5-box-order');
 }
 
