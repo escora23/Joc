@@ -1,7 +1,7 @@
 /* FRONT ULTRA — in-game HUD (owner: ui). */
 
 .fu-hud-root { position: absolute; inset: 0; pointer-events: none; }
-.fu-hud { position: absolute; inset: 0; pointer-events: none; }
+.fu-hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; } /* above the map-anchored badges, strip and markers (z 2-4) */
 .fu-hud > div { position: absolute; }
 .fu-hud-top { top: 0.9rem; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; }
 .fu-hud-under { top: 5.9rem; left: 0; right: 0; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; width: 46rem; }

@@ -261,6 +261,11 @@ async function installHelpers() {
       const s = window.__fuTutorial?.();
       if (s && s.step && (!pt.tut.length || pt.tut[pt.tut.length - 1].step !== s.step)) pt.tut.push({ step: s.step, n: s.n, tick: ctx.sim.view.tick, at: performance.now() });
     }, 250);
+    // While waiting for a diplomatic answer the player reads an auto-pause banner (an ultimatum, a new war...) and
+    // resumes: the answer only comes with the clock running.
+    pt.resumeIfAutoPaused = () => {
+      if (ctx.sim.view.speed === 0 && document.querySelector('.fu-autopause:not(.fu-hidden)')) window.__front.app.setSpeed(1);
+    };
     window.__pt = pt;
   });
 }
@@ -634,6 +639,10 @@ try {
     const nRows = await rows.count();
     let sent = null;
     for (let i = 0; i < Math.min(nRows, 10) && !sent; i++) {
+      // Like a player: the pointer rests on the list (its order freezes while hovered), then clicks the row.
+      const lb = await page.locator('.fu-nations .fu-nt-list').boundingBox();
+      if (lb) await page.mouse.move(lb.x + lb.width / 2, lb.y + 20, { steps: 2 });
+      await sleep(400);
       await rows.nth(i).click();
       await sleep(900);
       // First proposal button that is shown and enabled (alliance, else NAP, trade, open borders), with 5 % of the
@@ -662,6 +671,7 @@ try {
     // The answer: 120–240 ticks later, one sentence with at least one reason.
     const ans = await until((id) => {
       const p = window.__front.ctx.sim.view.proposals.get(id);
+      window.__pt.resumeIfAutoPaused();
       if (!p || p.status === 'considering' || p.status === 'pending') return null;
       const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
       return a ? { status: p.status, delay: p.resolvedTick - p.createdTick, reasons: p.reasons?.length ?? 0, title: a.title, body: a.body, gold: p.gold } : null;
@@ -702,6 +712,7 @@ try {
     const good0 = await page.evaluate(() => window.__fuAudio?.stats?.().cues?.chimeGood ?? 0);
     const ans = await until((id) => {
       const p = window.__front.ctx.sim.view.proposals.get(id);
+      window.__pt.resumeIfAutoPaused();
       if (!p || p.status === 'considering' || p.status === 'pending') return null;
       const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
       return a ? { status: p.status, title: a.title, body: a.body, age: a.age, updated: a.updatedTick, created: p.createdTick, resolved: p.resolvedTick, now: window.__front.ctx.sim.view.tick } : null;
@@ -832,6 +843,7 @@ try {
     await resetUi();
     const ans = await until((id) => {
       const p = window.__front.ctx.sim.view.proposals.get(id);
+      window.__pt.resumeIfAutoPaused();
       if (!p || p.status === 'considering' || p.status === 'pending') return null;
       const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
       return a ? { status: p.status, reasons: p.reasons?.length ?? 0, title: a.title, body: a.body } : null;
@@ -1399,8 +1411,11 @@ try {
 
     await step('exit command mode (Esc) -> result applied', async () => {
       const n0 = await countEvents('commandResultApplied');
-      // First Esc ends the fight and shows the combat report; the second leaves right away.
+      // Esc asks «¿Volver al mapa estratégico?» (Enter = back to the map, Esc = keep commanding); confirming shows
+      // the combat report, and a last Esc leaves right away.
       await page.keyboard.press('Escape');
+      await sleep(1500);
+      await page.keyboard.press('Enter');
       await sleep(6000);
       await shot('12b-command-debrief');
       if ((await state()) === 'command') await page.keyboard.press('Escape');
@@ -1525,7 +1540,8 @@ try {
       await resetUi();
       const ans = await until((id) => {
         const p = window.__front.ctx.sim.view.proposals.get(id);
-        if (!p || p.status === 'considering' || p.status === 'pending') return null;
+        window.__pt.resumeIfAutoPaused();
+      if (!p || p.status === 'considering' || p.status === 'pending') return null;
         const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
         return a ? { status: p.status, title: a.title, body: a.body } : null;
       }, sent.id, 220000, 1000);

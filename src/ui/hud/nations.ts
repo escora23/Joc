@@ -62,6 +62,11 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
   tip(tabInbox, () => ({ title: t('nations.tab.inbox'), text: t('nations.tab.inbox.tip'), now: [[t('inbox.pending'), String(pendingCount())]] }));
   tip(closeBtn, () => ({ title: t('common.close'), text: t('nations.close.tip'), hotkey: 'N / Esc' }));
   const listBox = h('div', { class: 'fu-nt-list' });
+  // The order is frozen while the pointer is over the list: rows that jump as territories change would move under the
+  // cursor between aiming and clicking. Contents keep updating; the ranking is applied again when the pointer leaves.
+  let listHover = false;
+  listBox.addEventListener('pointerenter', () => (listHover = true));
+  listBox.addEventListener('pointerleave', () => (listHover = false));
   const detailBox = h('div', { class: 'fu-nt-detail fu-hidden' });
   const inboxBox = h('div', { class: 'fu-nt-inbox fu-hidden' });
   const body = h('div', { class: 'fu-nt-body' }, listBox, detailBox, inboxBox);
@@ -175,7 +180,8 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
         stateChip(p.id),
         opinionChip(p.id),
       );
-      if (r.parentElement !== listBox || r.previousElementSibling !== prev) {
+      if (r.parentElement !== listBox) listBox.append(r);
+      else if (!listHover && r.previousElementSibling !== prev) {
         if (prev) prev.after(r);
         else listBox.prepend(r);
       }
@@ -533,10 +539,19 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
     } else if (force || acc % 10 === 0) renderList();
   }
 
+  /** Like the Fuerzas drawer: start under the clock and speed widget, so time stays in reach while talking. */
+  function dock(): void {
+    const tr = el.parentElement?.querySelector<HTMLElement>('.fu-hud-tr .fu-time')?.getBoundingClientRect();
+    const top = tr && tr.height > 0 ? Math.round(tr.bottom + 8) : 14;
+    if (el.style.top !== `${top}px`) el.style.top = `${top}px`;
+  }
+  window.addEventListener('resize', () => isOpen && dock());
+
   function open(id?: number): void {
     if (!isOpen) {
       isOpen = true;
       el.classList.remove('fu-hidden');
+      dock();
       hs.flags.nationsOpened = true;
       hs.sound('open');
       ctx.bus.emit('panelToggled', { panel: 'nations', open: true });

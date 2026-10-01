@@ -21,7 +21,7 @@
 //   V11  a division by rail Sevilla -> Zaragoza: km / 100 h ± 10 %, on the rail line                  (acceptance 11)
 //   V14  a selected unit / structure draws its effect ring                                          (acceptance 14)
 //   V15  close-zoom model sizes: warship, division, airbase, radar, SAM at 300 / 100 / 40 / 8 km     (FEEDBACK-1)
-//   V17  the hourglass badge while producing or building; no v2-stub markers                        (acceptance 17)
+//   V17  the hourglass badge while producing or building; no stub markers left                      (acceptance 17)
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';

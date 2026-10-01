@@ -254,7 +254,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     }
     if (e.aggressor === HUMAN_ID) {
       warStartTiles.set(e.target, me?.tiles ?? 0);
-      alert({ kind: 'warByUs', severity: 'warning', icon: 'attack', actors: [e.target], groupKey: `war:${e.target}`, title: t('alert.warByUs.title', { name: name(e.target) }), body: t('alert.warByUs.body', { hours }) });
+      alert({ kind: 'warByUs', severity: 'warning', icon: 'attack', actors: [e.target], groupKey: `war:${e.target}`, title: t('alert.warByUs.title', { name: name(e.target) }), body: t(hours > 0 ? 'alert.warByUs.body' : 'alert.warByUs.bodyNow', { hours }) });
     } else if (e.parentWar && me?.allies.includes(e.aggressor)) {
       alert({ kind: 'allyJoined', severity: 'info', icon: 'alliance', actors: [e.aggressor, e.target], title: t('toast.allyJoined', { name: name(e.aggressor) }), body: t('alert.allyJoined.body', { enemy: name(e.target) }) });
     } else if (me?.allies.includes(e.target)) {
@@ -481,7 +481,7 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       if (g.mobilizing) {
         const hours = Math.max(0, Math.round(Math.max(0, g.eta) / 10));
         if (!flagged.has(key)) {
-          alert({ kind: 'mobilization', severity: 'warning', icon: 'troops', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30, frontKey, title: t('alert.mobilization.title', { name: name(g.attacker), place: place.text }), body: t('alert.mobilization.body', { hours, troops: formatCompact(g.troops) }) });
+          alert({ kind: 'mobilization', severity: 'warning', icon: 'troops', lat: ll.lat, lon: ll.lon, actors: [g.attacker], groupKey: key, ttlSec: 30, frontKey, title: t('alert.mobilization.title', { name: name(g.attacker), place: place.text }), body: t(hours > 0 ? 'alert.mobilization.body' : 'alert.mobilization.bodyNow', { hours, troops: formatCompact(g.troops) }) });
         }
         flagged.set(key, now);
         continue;

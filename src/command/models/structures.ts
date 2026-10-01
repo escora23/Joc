@@ -167,12 +167,22 @@ class Compound {
       return this;
     });
   }
-  /** A fence line (posts and a mesh band) from (x0, z0) to (x1, z1). */
+  /**
+   * A fence line (posts and a mesh band) from (x0, z0) to (x1, z1). The band is built from short segments that drape
+   * over the relief: one box a kilometre long, anchored at its middle, stood at the height of that one point and (with
+   * the footing reaching down to the ground at its ends) turned into a wall hundreds of metres tall across a valley.
+   */
   fence(x0: number, z0: number, x1: number, z1: number): this {
     const len = Math.hypot(x1 - x0, z1 - z0);
     const ry = Math.atan2(-(z1 - z0), x1 - x0);
-    const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
-    this.g.box(len, 2.2, 0.15, 0x6e7276, mx, 1.3, mz, 0, ry, 0);
+    const segs = Math.max(1, Math.ceil(len / 20));
+    const prev = this.g.drape;
+    this.g.drape = true;
+    for (let i = 0; i < segs; i++) {
+      const t = (i + 0.5) / segs;
+      this.g.box(len / segs + 0.1, 2.2, 0.15, 0x6e7276, x0 + (x1 - x0) * t, 1.3, z0 + (z1 - z0) * t, 0, ry, 0);
+    }
+    this.g.drape = prev;
     const n = Math.min(40, Math.floor(len / 25));
     for (let i = 0; i <= n; i++) {
       const t = i / Math.max(1, n);
