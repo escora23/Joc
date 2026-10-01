@@ -118,16 +118,6 @@ function colourForHue(h: number, prefL = 0.71, cap = 0.17): { L: number; C: numb
   return { ...best, hex: oklchToHex(best.L, best.C, h) };
 }
 
-/** Clamp any colour into the nation range (custom human colours, legacy settings). */
-export function clampNationColor(hex: number): number {
-  const c = hexToOklch(hex);
-  const L = Math.min(NATION_L_MAX - 0.02, Math.max(NATION_L_MIN + 0.02, c.L));
-  const C = Math.max(NATION_C_MIN + 0.02, Math.min(0.2, c.C));
-  const mc = maxChroma(L, c.h);
-  if (mc < NATION_C_MIN + 0.01) return colourForHue(c.h, L).hex;
-  return oklchToHex(L, Math.min(C, mc), c.h);
-}
-
 // -------------------------------------------------------------------------------------------------
 // The human's 16 presets
 // -------------------------------------------------------------------------------------------------

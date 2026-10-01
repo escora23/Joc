@@ -4,6 +4,8 @@
 import { h, leave, type Child } from './dom';
 import { icon } from './icons';
 import { tx } from './tx';
+import { tip } from './tooltip';
+import { t } from '../shared/i18n';
 
 export interface ModalOptions {
   titleKey: string;
@@ -56,7 +58,7 @@ function kicker(key: string): HTMLElement {
 }
 
 export function openModal(opts: ModalOptions): ModalHandle {
-  const closeBtn = h('button', { class: 'fu-close', title: 'Esc' }, icon('close'));
+  const closeBtn = tip(h('button', { class: 'fu-close' }, icon('close')), () => ({ title: t('w7.close'), text: t('w7.close.tip'), hotkey: 'Esc' }));
   const head = h('div', { class: 'fu-modal-head' },
     h('div', { style: 'flex:1;display:flex;flex-direction:column;gap:.45rem' },
       opts.kickerKey ? kicker(opts.kickerKey) : null,

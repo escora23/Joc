@@ -57,23 +57,6 @@ export type StructModelKey = (typeof STRUCT_MODELS)[number];
 // Ships
 // -------------------------------------------------------------------------------------------------
 
-function shipOutline(beam: number, bowLen: number, sternRound: number): [number, number][] {
-  const b = beam / 2;
-  return [
-    [0, -0.5],
-    [b * 0.55, -0.5 + bowLen * 0.45],
-    [b * 0.92, -0.5 + bowLen],
-    [b, -0.5 + bowLen + 0.08],
-    [b, 0.5 - sternRound],
-    [b * 0.85, 0.5],
-    [-b * 0.85, 0.5],
-    [-b, 0.5 - sternRound],
-    [-b, -0.5 + bowLen + 0.08],
-    [-b * 0.92, -0.5 + bowLen],
-    [-b * 0.55, -0.5 + bowLen * 0.45],
-  ];
-}
-
 /** Half-beam of a fine-bowed hull: 0 at the stem, full from `full` (0..1 of the length), a slightly narrower transom. */
 function fineBeam(B: number, full: number, transom = 0.85): (t: number) => number {
   return (t) => {

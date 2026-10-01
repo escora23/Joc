@@ -367,7 +367,6 @@ export class NukeSystem {
   private scratch: Float32Array;
   private m4 = new THREE.Matrix4();
   private v = new THREE.Vector3();
-  private v2 = new THREE.Vector3();
   private q = new THREE.Quaternion();
   private s = new THREE.Vector3();
   private camFwd = new THREE.Vector3();
@@ -643,7 +642,7 @@ export class NukeSystem {
       for (let i = 0; i < n && puffN < this.maxPuffs; i++) {
         const role = s.rnd[i * 6], r1 = s.rnd[i * 6 + 1], r2 = s.rnd[i * 6 + 2], r3 = s.rnd[i * 6 + 3], r4 = s.rnd[i * 6 + 4], r5 = s.rnd[i * 6 + 5];
         let h: number, rad: number, th: number, size: number, alpha: number, heat: number, ao: number, dust: number;
-        let ox = 0, oy = 0, oz = 0; // outward normal in (radial, up) space
+        let ox = 0, oy = 0; // outward normal in (radial, up) space
         th = r1 * Math.PI * 2;
         if (role === ROLE_STEM) {
           const hf = r2;

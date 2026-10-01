@@ -68,9 +68,6 @@ export const en: Dictionary = {
   'setup.difficulty': 'Difficulty',
   'setup.aiCount': 'AI nations',
   'setup.aiCount.hint': 'Rivals placed at real countries and named after them.',
-  'setup.tribes': 'Tribes',
-  'setup.tribes.hint': 'Small factions that occupy empty land.',
-  'setup.tribesShort': 'tribes',
   'setup.speed': 'Game speed',
   'setup.rules': 'Rules',
   'setup.nukes': 'Nuclear weapons',
@@ -157,7 +154,6 @@ export const en: Dictionary = {
   'keys.Wheel': 'Wheel',
   'keys.space': 'Space',
   'keys.click': 'Expand / attack / select',
-  'keys.rightClick': 'Diplomacy menu',
   'keys.ratio': 'Attack force',
   'keys.build': 'Build structures',
   'keys.weapons': 'Aim strategic weapons',
@@ -311,7 +307,6 @@ export const en: Dictionary = {
   'personality.opportunist': 'Opportunist',
   'kind.human': 'Player',
   'kind.nation': 'Nation',
-  'kind.tribe': 'Tribe',
   'kind.rebel': 'Rebels',
   'ustate.idle': 'Standing by',
   'ustate.moving': 'Moving',
@@ -447,7 +442,6 @@ export const en: Dictionary = {
   'structure.airbase.desc': 'Produces fighter squadrons, bombers and drone swarms.',
   'structure.armyBase.desc': 'Produces armored divisions that reinforce your fronts.',
   'structure.navalYard.desc': 'Builds warships that rule the sea lanes. Coast only.',
-  'structure.radar.desc': 'Early warning of enemy missiles and aircraft.',
 
   // ---- units
   'unit.transportShip': 'Transport',

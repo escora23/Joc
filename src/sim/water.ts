@@ -39,7 +39,6 @@ export class WaterNav {
   // --- coarse graph (cell components) ---
   /** Node id per navigable tile (-1 elsewhere). */
   private node: Int32Array;
-  private nodeCount = 0;
   /** Representative tile of each node (the node tile closest to the cell centre). */
   private nodeRep!: Int32Array;
   private adjStart!: Int32Array;
@@ -310,7 +309,6 @@ export class WaterNav {
       }
     }
     const n = reps.length;
-    this.nodeCount = n;
     this.nodeRep = Int32Array.from(reps);
     // 2. Links between pieces of neighbouring cells (scan every horizontal & vertical tile contact across a cell edge).
     const pairs = new Set<number>();

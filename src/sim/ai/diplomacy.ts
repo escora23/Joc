@@ -16,7 +16,7 @@
 import { HUMAN_ID, DIFFICULTY_INDEX } from '../../shared/constants';
 import type { ProposalAnswer, SimPlayer, SimProposal, SimWar } from '../../shared/simapi';
 import { UnitType, type Demand, type ReasonView, type WarGoal } from '../../shared/types';
-import { alive, isMajor, landShare, relation, strength, type AiContext } from './context';
+import { alive, isMajor, relation, strength, type AiContext } from './context';
 import type { Brain } from './state';
 import { answerWhite, pressing } from './warplan';
 
@@ -452,7 +452,3 @@ export function recordBetrayal(ctx: AiContext, breaker: number, victim: number):
   }
 }
 
-/** Is `p` the kind of runaway the pack should gang up on? */
-export function leaderShareOf(ctx: AiContext, p: SimPlayer): number {
-  return landShare(ctx, p);
-}

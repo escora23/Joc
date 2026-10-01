@@ -121,7 +121,6 @@ export class CommandHud {
   private w = 1;
   private h = 1;
   private helpT = 0;
-  private objTotal = 1;
   private lastWarn = '';
   onExitClick: () => void = () => undefined;
   /** Hide the "click to aim" hint (shots, pointer locked). */
@@ -161,6 +160,8 @@ export class CommandHud {
     this.intro = el('div', 'fu-cmd-intro');
     this.over = el('div', 'fu-cmd-over');
     this.exitBtn = el('button', 'fu-cmd-exit fu-cmd-interactive');
+    this.exitBtn.dataset.tip = 'command.exit';
+    this.exitBtn.dataset.tipText = 'w7.cmd.exit.tip';
     this.exitBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       this.onExitClick();
@@ -187,7 +188,6 @@ export class CommandHud {
     this.dmgDirs = [];
     this.vigLevel = 0;
     this.helpT = 0;
-    this.objTotal = info.objective;
     this.over.className = 'fu-cmd-over';
     this.over.innerHTML = '';
     this.banner.className = 'fu-cmd-banner';

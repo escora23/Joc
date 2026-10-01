@@ -10,14 +10,13 @@
 //   who is nuked retaliates. Targets are the densest value in blast range (cities, silos, the front), never
 //   where the blast would spill onto our own or allied land, and SAM umbrellas are cracked with cruise missiles.
 
-import { HUMAN_ID, MAP_W, NUKE_DEFS } from '../../shared/constants';
+import { MAP_W, NUKE_DEFS } from '../../shared/constants';
 import type { SimAttack, SimPlayer, SimStructure } from '../../shared/simapi';
 import { StructureType, UNIT_ORDER_KINDS, UnitState, UnitType, type WeaponType } from '../../shared/types';
 import { alive, isMajor, relation, type AiContext } from './context';
 import { nuclearThreat } from './economy';
 import { dist2, friendlyShare, ownerShare, tileAt } from './mapindex';
 import type { Brain } from './state';
-import { atWar } from './diplomacy';
 import { blockadeTile } from './navalwar';
 
 /** Reach in tiles from the airbase (§6.3: 1,000 / 2,000 / 1,000 km) and the cruise missile's 2,500 km. */
@@ -443,32 +442,6 @@ export function thinkNukes(ctx: AiContext, b: Brain, p: SimPlayer): void {
       break;
     }
   }
-}
-
-/** The nation that most deserves a nuclear strike from `p` (hostility, grudges, coalition, size), if any. */
-function pickNukeTarget(ctx: AiContext, b: Brain, p: SimPlayer): SimPlayer | undefined {
-  const g = ctx.g;
-  const w = ctx.world;
-  let best: SimPlayer | undefined, bestScore = 3;
-  for (const q of g.players()) {
-    if (q.id === p.id || !alive(q) || !isMajor(q) || q.tiles < 400 || g.isAllied(p.id, q.id)) continue;
-    let s = Math.log10(q.tiles) * 0.6;
-    if (q.id === b.enemy) s += 3;
-    if (atWar(ctx, p.id, q.id)) s += 2;
-    if (w.leader === q.id && w.leaderShare > b.diff.coalitionShare) s += 2 + b.prof.coalition * 2;
-    const r = b.relations.get(q.id);
-    if (r) {
-      s += -r.trust * 1.5 + Math.min(3, r.grievance * 0.5);
-      if (g.tick - r.nukedTick < 6000) s += 5;
-      if (r.betrayedUs) s += 2;
-    }
-    if (q.id === HUMAN_ID) s *= b.diff.humanFocus;
-    if (s > bestScore) {
-      bestScore = s;
-      best = q;
-    }
-  }
-  return best;
 }
 
 /** Best aim tile for `weapon` on `q`: dense value, blast on the victim, away from our land and allies. */

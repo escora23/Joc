@@ -13,8 +13,7 @@
 //   NASA maps (texture.flipY = true, default): verified numerically, max error 2e-7.
 
 import {
-  DAY_LENGTH_SEC, EARTH_RADIUS_KM, MAP_H, MAP_W, RELIEF_EXAGGERATION, SUBSOLAR_LAT_DEG, TOPO_MAX_METERS,
-} from './constants';
+  DAY_LENGTH_SEC, EARTH_RADIUS_KM, MAP_H, MAP_W, RELIEF_EXAGGERATION, SUBSOLAR_LAT_DEG } from './constants';
 import type { LatLon, TileXY, Vec3Like } from './types';
 
 export const DEG = Math.PI / 180;
@@ -80,22 +79,6 @@ export function neighbors4(tile: number, out: Int32Array | number[]): number {
   return n;
 }
 
-/** 8-neighbourhood with horizontal wrap. */
-export function neighbors8(tile: number, out: Int32Array | number[]): number {
-  const x = tile % MAP_W;
-  const y = (tile / MAP_W) | 0;
-  let n = 0;
-  for (let dy = -1; dy <= 1; dy++) {
-    const yy = y + dy;
-    if (yy < 0 || yy >= MAP_H) continue;
-    for (let dx = -1; dx <= 1; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      out[n++] = yy * MAP_W + wrapX(x + dx);
-    }
-  }
-  return n;
-}
-
 /** Shortest signed horizontal difference b - a in tile units, honoring the wrap. */
 export function wrapDX(ax: number, bx: number): number {
   let d = bx - ax;
@@ -109,17 +92,6 @@ export function tileDistance(a: number, b: number): number {
   const dx = wrapDX(tileX(a), tileX(b));
   const dy = tileY(b) - tileY(a);
   return Math.sqrt(dx * dx + dy * dy);
-}
-
-export function tileDistanceSq(a: number, b: number): number {
-  const dx = wrapDX(tileX(a), tileX(b));
-  const dy = tileY(b) - tileY(a);
-  return dx * dx + dy * dy;
-}
-
-/** Relative real-world area of a tile in row y (cos(lat)). */
-export function tileAreaWeight(y: number): number {
-  return Math.cos((90 - ((y + 0.5) / MAP_H) * 180) * DEG);
 }
 
 // --- Sphere ------------------------------------------------------------------------------------
@@ -138,10 +110,6 @@ export function tileXYToVec3<T extends Vec3Like>(fx: number, fy: number, radius:
   const lon = (wrapX(fx) / MAP_W) * 360 - 180;
   const lat = 90 - (fy / MAP_H) * 180;
   return latLonToVec3(lat, lon, radius, out);
-}
-
-export function tileToVec3<T extends Vec3Like>(tile: number, radius: number, out: T): T {
-  return tileXYToVec3(tileX(tile) + 0.5, tileY(tile) + 0.5, radius, out);
 }
 
 /** Inverse of latLonToVec3 (any radius). */
@@ -194,15 +162,6 @@ export function slerpLatLon(a: LatLon, b: LatLon, t: number, out: LatLon = { lat
 
 export function kmToUnits(km: number): number {
   return km / EARTH_RADIUS_KM;
-}
-
-export function unitsToKm(u: number): number {
-  return u * EARTH_RADIUS_KM;
-}
-
-/** Topology texture gray value (0..255) -> meters. The globe shader must use the same mapping. */
-export function topoToMeters(gray: number): number {
-  return (gray / 255) * TOPO_MAX_METERS;
 }
 
 /**

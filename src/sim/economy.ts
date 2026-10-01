@@ -10,10 +10,9 @@ import {
 import { tileKm } from '../shared/orders';
 import { STRUCTURE_TYPES, StructureType, UnitType } from '../shared/types';
 import {
-  CIVILIANS_PER_CITY_LEVEL, CIVILIANS_PER_TILE, DEMOLISH_REFUND, GOLD_BASE_PER_TICK, GOLD_PER_CITY_LEVEL_PER_TICK,
+  DEMOLISH_REFUND, GOLD_BASE_PER_TICK, GOLD_PER_CITY_LEVEL_PER_TICK,
   GOLD_PER_TILE_PER_TICK, RAIL_MAX_LINK, RAIL_MAX_LINKS_PER_STATION,
-  TRADE_MIN_DISTANCE, baseMaxTroops, kindCapMul, kindGoldMul, kindGrowthMul, troopGrowthPerTick,
-} from './balance';
+  TRADE_MIN_DISTANCE, baseMaxTroops, kindCapMul, kindGoldMul, kindGrowthMul, troopGrowthPerTick } from './balance';
 import type { Game } from './game';
 import { Mode, Player, Structure } from './state';
 import {
@@ -21,7 +20,7 @@ import {
   isCivilian, rebuildCost, repairCost,
 } from '../shared/damage';
 import type { StructureDamageCause } from '../shared/types';
-import { dist2, latCos, wdx } from './spatial';
+import { dist2, wdx } from './spatial';
 
 const STATION_TYPES = new Set<number>([StructureType.City, StructureType.Port, StructureType.Factory]);
 
@@ -481,7 +480,6 @@ export class EconomySystem {
   step(): void {
     const g = this.g;
     const tick = g.tick;
-    const diff = g.difficulty;
     // Players at war with anyone regrow at half rate (§4.6).
     const atWar = this.atWarSet;
     atWar.clear();

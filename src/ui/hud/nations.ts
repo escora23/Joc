@@ -18,7 +18,7 @@ import { tip, type TipData } from '../tooltip';
 import { tx } from '../tx';
 import type { AlertCenter } from './alerts';
 import { betrayalOf, openDeclareWar } from './declare';
-import { answer, askHelp, donate, focusNation, leaveTreaty, nationRelation, propose, toggleEmbargo, whyNotPropose } from './diplomacy';
+import { answer, askHelp, donate, focusNation, leaveTreaty, propose, toggleEmbargo, whyNotPropose } from './diplomacy';
 import { bandCentre, deliberationLeft, inboxCountdown, OPEN_STATUS, previewBand, proposalWhat, reasonLine, reasonsQuoted } from './inboxText';
 import type { HudShared } from './shared';
 import { goldField, openDemandDialog, openPeaceDialog } from './wardialogs';

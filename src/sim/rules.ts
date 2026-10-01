@@ -2,7 +2,7 @@
 // Game implements shared/orders.ts RulesView through this adapter; the client implements the same interface over its
 // GameView (sim/rulesView.ts), so the order preview and the sim's validation are one function.
 
-import { TILE_COUNT, TILE_KM } from '../shared/constants';
+import { TILE_COUNT } from '../shared/constants';
 import { landComponents, type FrontLike, type RulesView, type StructureLike, type UnitLike } from '../shared/orders';
 import { UnitMode, type PairState, type PlayerKind, type TreatyKind } from '../shared/types';
 import type { Game } from './game';
@@ -84,5 +84,3 @@ export function createSimRules(g: Game): SimRules {
   };
 }
 
-/** Km per tile along a meridian (ranges in tiles are converted with it). */
-export const KM_PER_TILE = TILE_KM;

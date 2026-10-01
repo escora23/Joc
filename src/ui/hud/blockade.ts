@@ -207,6 +207,8 @@ export function openBlockadeDialog(hs: HudShared, ids: number[], tile: number, i
   // ---- modal ------------------------------------------------------------------------------------------------------
   const go = h('button', { class: 'fu-btn fu-btn--primary' }, tx('naval.go')) as HTMLButtonElement;
   const cancel = h('button', { class: 'fu-btn' }, tx('common.cancel'));
+  tip(go, () => ({ title: t('naval.go'), text: t('w7.blockade.go.tip', { n: ids.length, place }) }));
+  tip(cancel, () => ({ title: t('common.cancel'), text: t('dialog.cancel.tip') }));
   const m = openModal({
     titleKey: 'naval.dlg.title', titleParams: { place }, kickerKey: 'naval.dlg.kicker', narrow: false, className: 'fu-blk-dialog',
     body: [

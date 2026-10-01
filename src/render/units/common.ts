@@ -83,11 +83,6 @@ export function refreshEnv(
 
 export const km = (v: number): number => v / EARTH_RADIUS_KM;
 
-/** World units per pixel at a world position. */
-export function worldPerPixel(p: THREE.Vector3): number {
-  return env.pixelK * env.camPos.distanceTo(p);
-}
-
 // -------------------------------------------------------------------------------------------------
 // Unit visual scale: real size (km) and minimum on-screen size (px). Drawn size = max(real, minPx * wpp).
 // -------------------------------------------------------------------------------------------------

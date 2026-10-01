@@ -39,7 +39,7 @@ import { VehicleKind } from './models';
 import { PK } from './particles';
 import { buildProps, createPropsShared, type PropsResult, type PropsShared } from './props';
 import { buildTerrain, createTerrainShared, type TerrainPatch, type TerrainShared } from './terrain';
-import { createShadowPass, shadowStats, type ShadowPass } from './shadow';
+import { createShadowPass, type ShadowPass } from './shadow';
 import { makeDetailTexture, makePuffTexture } from './textures';
 import { createVehicles, type FormationSlot, type Vehicles, type VehicleCounts } from './vehicles';
 

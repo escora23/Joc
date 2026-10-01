@@ -46,18 +46,6 @@ export async function putSave(rec: SaveRecord): Promise<void> {
   db.close();
 }
 
-export async function getSave(key: string): Promise<SaveRecord | null> {
-  const db = await openDb();
-  const rec = await new Promise<SaveRecord | null>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).get(key);
-    req.onsuccess = () => resolve((req.result as SaveRecord | undefined) ?? null);
-    req.onerror = () => reject(req.error);
-  });
-  db.close();
-  return rec;
-}
-
 /** v2 (W3): every save record (autosave + manual slots), newest first, without their blobs' contents being copied. */
 export async function listSaves(): Promise<SaveRecord[]> {
   const db = await openDb();

@@ -3,7 +3,6 @@
 // Owner: shared. Subsystems may ignore fields that do not apply to them, but must not invent their own presets.
 
 export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra';
-export const QUALITY_LEVELS: readonly QualityLevel[] = ['low', 'medium', 'high', 'ultra'];
 
 export interface QualityProfile {
   level: QualityLevel;

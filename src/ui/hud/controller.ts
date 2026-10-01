@@ -10,7 +10,7 @@ import type { HudShared } from './shared';
 import { isListedForce } from './forcesInfo';
 import { issueOrders, openCivilianConfirm, previewOrders, selectedUnitIds } from './orderCtl';
 import { nukeAimError, openNukeConfirm } from './nukeConfirm';
-import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
+import { HUMAN_ID, STRUCTURE_DEFS } from '../../shared/constants';
 import { tileToLatLon } from '../../shared/geo';
 import { t } from '../../shared/i18n';
 import { isPlayableTerrain, isWaterTerrain } from '../../shared/terrain';
@@ -450,6 +450,3 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
   });
 }
 
-export function isCommandable(type: number): boolean {
-  return !!UNIT_DEFS[type as UnitType]?.command;
-}

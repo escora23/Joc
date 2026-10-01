@@ -30,10 +30,6 @@ export function midiToHz(m: number): number {
   return 440 * Math.pow(2, (m - 69) / 12);
 }
 
-export function dbToGain(db: number): number {
-  return Math.pow(10, db / 20);
-}
-
 export function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
@@ -208,10 +204,3 @@ export function softClipCurve(n = 4096): Float32Array<ArrayBuffer> {
   return c;
 }
 
-/** Periodic wave with the given harmonic amplitudes (organ / reed / bell-ish timbres). */
-export function harmonicWave(ac: BaseAudioContext, amps: readonly number[]): PeriodicWave {
-  const real = new Float32Array(amps.length + 1);
-  const imag = new Float32Array(amps.length + 1);
-  for (let i = 0; i < amps.length; i++) imag[i + 1] = amps[i];
-  return ac.createPeriodicWave(real, imag, { disableNormalization: false });
-}

@@ -17,7 +17,7 @@ import { enemyNear } from '../render/units/shots';
 import type { GameContext } from '../shared/api';
 import { HUMAN_ID, MAP_H, MAP_W } from '../shared/constants';
 import { DAMAGE_IDS, damageState, functionFactor } from '../shared/damage';
-import { formatNumber, t } from '../shared/i18n';
+import { t } from '../shared/i18n';
 import { latLonToTile, latLonToVec3, worldTimeForSubsolarLon } from '../shared/geo';
 import { registerShot, type ShotContext } from '../shared/shots';
 import { StructureType as S, UnitType as U, type UnitView } from '../shared/types';
@@ -102,7 +102,7 @@ function captions(s: ShotContext, title: string, items: { lat: number; lon: numb
 }
 
 registerShot('f3-damage', 'units', 'Feedback #3 item 27: one structure type in every damage state (intact, damaged, heavily damaged, rubble) up close, with captions (&type=Factory|SamSite|ArmyBase|Airbase|…)', async (s) => {
-  const { ctx, params, waitFrames, wait } = s;
+  const { ctx, params, waitFrames } = s;
   await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-40) });
   const sim = ctx.sim;
   const type = TYPES[params.get('type') ?? 'Factory'] ?? S.Factory;
@@ -137,7 +137,7 @@ registerShot('f3-damage', 'units', 'Feedback #3 item 27: one structure type in e
 }, 10);
 
 registerShot('f3-city-damage', 'units', 'Feedback #3 item 27: a level-8 city heavily damaged — collapsed blocks (one reported by command mode), debris, smoke and fire', async (s) => {
-  const { ctx, params, waitFrames, wait } = s;
+  const { ctx, params, waitFrames } = s;
   await ctx.app.startScriptedGame({ ticks: 100, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-40) });
   const sim = ctx.sim;
   sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(39.4, -3.2), radius: 12 });

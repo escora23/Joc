@@ -2,7 +2,7 @@
 // Guerra panel's «Mar» tab, the map chips, the port card and the alerts all name blockades, specs and ships the same
 // way, from the same rule set as the sim (shared/naval.ts).
 
-import { HUMAN_ID, MAP_W, PORT_TRADE_GOLD_PER_HOUR, UNIT_DEFS, structureLevel } from '../../shared/constants';
+import { HUMAN_ID, MAP_W, PORT_TRADE_GOLD_PER_HOUR, structureLevel } from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
 import {
   BLOCKADE_RADIUS_TILES, CHOKEPOINTS, blockadeApplies, chokepointNear, chokepointTile, pathCrossesZone,
@@ -155,9 +155,6 @@ export function zoneAt(hs: HudShared, tile: number): { kind: BlockadeView['kind'
   }
   return port ? { kind: 'port', portId: port, x, y } : { kind: 'sea', x, y };
 }
-
-/** Km/h of merchants (a detour's hours in the preview). */
-export const MERCHANT_KMH = UNIT_DEFS[UnitType.TradeShip].speedKmh;
 
 /** «4 apresados · 1 hundido · 3 desviados» (the counts that are not zero). */
 export function stopsText(b: { seized: number; sunk: number; turnedBack: number; rerouted: number; passed: number }): string {

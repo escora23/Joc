@@ -46,10 +46,6 @@ export function strength(p: SimPlayer): number {
   return p.troops + p.maxTroops * 0.15;
 }
 
-export function randRange(ctx: AiContext, r: [number, number]): number {
-  return r[0] + ctx.rng.int(Math.max(1, r[1] - r[0] + 1));
-}
-
 /**
  * A tile the nation owns: its capital, else the last known home tile, else one found around it, else (rarely, for
  * scattered remnants whose capital fell) a scan of the map. -1 when nothing is found.

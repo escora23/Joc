@@ -9,7 +9,8 @@ import type { HudShared } from './shared';
 import { HUMAN_ID } from '../../shared/constants';
 import { hexToCss } from '../../shared/color';
 import { tileXYToLatLon, tileToLatLon } from '../../shared/geo';
-import { formatCompact } from '../../shared/i18n';
+import { formatCompact, t } from '../../shared/i18n';
+import { tip } from '../tooltip';
 import type { PlayerView } from '../../shared/types';
 
 const ROWS = 10;
@@ -35,7 +36,7 @@ export interface Leaderboard {
 export function createLeaderboard(hs: HudShared): Leaderboard {
   const ctx = hs.ctx;
   const body = h('div', { class: 'fu-lb-rows' });
-  const collapse = h('button', { class: 'fu-lb-toggle', title: 'Tab' }, icon('chevronUp'));
+  const collapse = tip(h('button', { class: 'fu-lb-toggle' }, icon('chevronUp')), () => ({ title: t('hud.leaderboard'), text: t('w7.lb.toggle.tip'), hotkey: 'Tab' }));
   const el = h('div', { class: 'fu-lb fu-glass fu-interactive' },
     h('div', { class: 'fu-lb-head' }, h('div', { class: 'fu-panel-title' }, icon('crown'), tx('hud.leaderboard')), h('span', { class: 'fu-kbd' }, 'Tab'), collapse),
     h('div', { class: 'fu-lb-cols fu-caps' }, h('span', null, '#'), tx('hud.lb.nation'), tx('hud.lb.land'), tx('hud.lb.troops')),

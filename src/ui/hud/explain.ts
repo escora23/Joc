@@ -117,10 +117,3 @@ export function warsTip(hs: HudShared): TipData {
   return { title: t('tb.wars'), text: t('tb.wars.purpose'), now, lines: [mine.length ? t('tb.wars.click') : t('tb.wars.none')] };
 }
 
-export function clockRateText(rate: number): string {
-  // Game time per real second.
-  if (rate >= 3600) return t('clock.per.hours', { n: rate / 3600 });
-  if (rate >= 60) return t('clock.per.minutes', { n: Math.round(rate / 60) });
-  return t('clock.per.seconds', { n: Math.round(rate) });
-}
-

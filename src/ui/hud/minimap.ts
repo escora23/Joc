@@ -6,6 +6,8 @@
 import { h, toggleClass } from '../dom';
 import { icon } from '../icons';
 import { tx } from '../tx';
+import { tip } from '../tooltip';
+import { t } from '../../shared/i18n';
 import type { HudShared } from './shared';
 import type { CameraState } from '../../shared/api';
 import { EARTH_RADIUS_KM, HUMAN_ID, MAP_H, MAP_W } from '../../shared/constants';
@@ -32,7 +34,7 @@ export function createMinimap(hs: HudShared): Minimap {
   const base = h('canvas', { class: 'fu-mm-base', width: MW, height: MH }) as HTMLCanvasElement;
   const over = h('canvas', { class: 'fu-mm-over', width: MW * 2, height: MH * 2 }) as HTMLCanvasElement;
   const coords = h('span', { class: 'fu-mono fu-mm-coords' }, '');
-  const hideBtn = h('button', { class: 'fu-lb-toggle', title: 'M' }, icon('chevronUp'));
+  const hideBtn = tip(h('button', { class: 'fu-lb-toggle' }, icon('chevronUp')), () => ({ title: t('hud.minimap'), text: t('w7.mm.toggle.tip'), hotkey: 'M' }));
   const el = h('div', { class: 'fu-mm fu-glass fu-brackets fu-interactive' },
     h('div', { class: 'fu-mm-head' }, h('div', { class: 'fu-panel-title' }, icon('map'), tx('hud.minimap')), coords, h('span', { class: 'fu-kbd' }, 'M'), hideBtn),
     h('div', { class: 'fu-mm-frame' }, base, over, h('div', { class: 'fu-mm-grid' })),

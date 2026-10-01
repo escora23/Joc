@@ -211,7 +211,7 @@ export function planRoute(ux: number, uy: number, tx: number, ty: number, stopKm
   const key = (x: number, y: number) => (y - cy + R) * size + (x - cx + R);
   const q: number[] = [cx, cy];
   prev[key(cx, cy)] = -1;
-  let bestK = key(cx, cy), bestD = tileKm(cx + 0.5, cy + 0.5, tx, ty), bx = cx, by = cy;
+  let bestK = key(cx, cy), bestD = tileKm(cx + 0.5, cy + 0.5, tx, ty);
   for (let h = 0; h < q.length; h += 2) {
     const x = q[h], y = q[h + 1];
     for (let dy = -1; dy <= 1; dy++) {
@@ -233,8 +233,6 @@ export function planRoute(ux: number, uy: number, tx: number, ty: number, stopKm
         if (d < bestD && d >= stopKm * 0.5) {
           bestD = d;
           bestK = k;
-          bx = nx;
-          by = ny;
         }
       }
     }

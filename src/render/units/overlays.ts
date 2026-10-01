@@ -4,7 +4,7 @@
 // analytic horizon test instead of the depth buffer, so relief never hides a ring.
 
 import * as THREE from 'three';
-import { EARTH_RADIUS_KM, TILE_KM } from '../../shared/constants';
+import { EARTH_RADIUS_KM } from '../../shared/constants';
 import { latLonToVec3, tangentFrame } from '../../shared/geo';
 import type { LatLon } from '../../shared/types';
 import { sharedUniforms } from './common';
@@ -249,4 +249,3 @@ export class Overlays {
   }
 }
 
-export const tilesToKm = (tiles: number): number => tiles * TILE_KM;

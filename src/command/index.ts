@@ -229,7 +229,6 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let ifvs: Ent[] = [];
   /** Integrity of the controlled unit as last sent (0..1) and on entry. */
   let integrity = 1;
-  let integrity0 = 1;
   let vehiclesLost = 0;
   let nextVehicleT = -1;
   // Clock and travel.
@@ -1133,7 +1132,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     me.nation = HUMAN_ID;
     me.formation = true;
     me.src = { kind: 'formation', id: p.unitId, owner: HUMAN_ID, share: kind === 'jet' ? 1 / 3 : 0.25 };
-    integrity0 = integrity = Math.max(0.01, Math.min(1, p.integrity ?? 1));
+    integrity = Math.max(0.01, Math.min(1, p.integrity ?? 1));
     const n = kind === 'tank' ? Math.max(1, Math.ceil(integrity * 4 - 1e-6)) : kind === 'jet' ? Math.max(1, Math.ceil(integrity * 3 - 1e-6)) : 1;
     formation = [me];
     ifvs = [];

@@ -597,6 +597,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     };
     for (const f of ['all', 'danger', 'warning', 'info'] as const) {
       const b = h('button', { type: 'button', class: f === filter ? 'is-on' : '' }, tx(`alerts.filter.${f}`));
+      tip(b, () => ({ title: t(`alerts.filter.${f}`), text: t(`w7.alerts.filter.${f}.tip`, { n: all.filter((a) => f === 'all' || (f === 'danger' ? SEV_ORDER[a.input.severity] >= 2 : a.input.severity === f)).length }) }));
       b.addEventListener('click', () => {
         filter = f;
         seg.querySelectorAll('button').forEach((x) => x.classList.toggle('is-on', x === b));

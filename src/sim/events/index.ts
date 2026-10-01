@@ -189,13 +189,6 @@ export function createWorldEventDirector(game: SimGame): ForcibleWorldEventDirec
     }
   }
 
-  /** Land share of the biggest nation. */
-  function leaderShare(): number {
-    let top = 0;
-    for (const p of game.players()) if (p.alive && (p.kind === 'nation' || p.kind === 'human')) top = Math.max(top, p.tiles);
-    return top / Math.max(1, game.world.landTiles);
-  }
-
   /** Next kind from the bag (refilled and reshuffled when empty; hurricanes and quakes are the most common). */
   function pickKind(): WorldEventKind | null {
     // Where a rebellion has a cause (occupation, exhaustion, a nuclear strike) it comes first.

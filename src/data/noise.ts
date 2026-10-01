@@ -82,10 +82,3 @@ export class Simplex3 {
   }
 }
 
-/** Integer hash -> [0, 1). Worker-safe, deterministic. */
-export function hash01(x: number, y: number, seed: number): number {
-  let h = (Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(seed | 0, 0x9e3779b1)) >>> 0;
-  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}

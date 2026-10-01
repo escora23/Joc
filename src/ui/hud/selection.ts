@@ -29,7 +29,7 @@ import type { HudShared } from './shared';
 import { HUMAN_ID, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS, structureLevel, upgradeCost, upgradeTicks } from '../../shared/constants';
 import { hexToCss } from '../../shared/color';
 import { tileXYToLatLon } from '../../shared/geo';
-import { formatCompact, formatNumber, t } from '../../shared/i18n';
+import { formatCompact, formatNumber, hasKey, t } from '../../shared/i18n';
 import {
   StructureType, UnitMode, UnitState, UnitType, type AttackView, type BuildableUnit, type RuinView, type StructureView, type UnitOrderKind, type UnitView, type WeaponType,
 } from '../../shared/types';
@@ -117,6 +117,8 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
   };
   const actionBtn = (ico: string, labelKey: string, fn: () => void, cls = '', params?: Record<string, string | number>) => {
     const b = h('button', { class: `fu-btn fu-btn--sm ${cls}` }, icon(ico), tx(labelKey, params));
+    // Every card button explains itself (§12.1); callers that need live numbers replace this tooltip with their own.
+    tip(b, () => ({ title: t(labelKey, params), text: hasKey(`${labelKey}.tip`) ? t(`${labelKey}.tip`) : undefined }));
     b.addEventListener('click', () => fn());
     b.addEventListener('mouseenter', () => hs.sound('hover'));
     return b;

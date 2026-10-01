@@ -116,10 +116,6 @@ export function icon(name: IconName, cls = 'fu-ico'): SVGElement {
   return svgFrom(`<svg ${A}>${body}</svg>`, cls);
 }
 
-export function iconMarkup(name: IconName): string {
-  return `<svg ${A} class="fu-ico" aria-hidden="true">${P[name] ?? P.info}</svg>`;
-}
-
 export const STRUCTURE_ICON: Record<StructureType, string> = {
   [StructureType.City]: 'city',
   [StructureType.Port]: 'port',
@@ -151,8 +147,3 @@ export const UNIT_ICON: Record<UnitType, string> = {
   [UnitType.Shell]: 'target',
 };
 
-/** Emote glyphs (drawn with system emoji fonts where available, with a text fallback). */
-export const EMOTE_GLYPH: Record<string, string> = {
-  wave: '👋', thumbsUp: '👍', thumbsDown: '👎', laugh: '😂', angry: '😠', skull: '💀', heart: '❤️', handshake: '🤝',
-  fire: '🔥', nuke: '☢️', clown: '🤡', crown: '👑', peace: '☮️', target: '🎯', shock: '😱', cry: '😢',
-};

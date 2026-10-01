@@ -111,7 +111,6 @@ export const DIFFICULTIES: readonly Difficulty[] = ['easy', 'normal', 'hard', 'i
  * crisis and observation time slow the whole world down whatever the speed (DESIGN_V2 §2.2).
  */
 export type GameSpeed = 0 | 0.5 | 1 | 2 | 4;
-export const GAME_SPEEDS: readonly GameSpeed[] = [0, 0.5, 1, 2, 4];
 
 // --- v2 (W1): clock -----------------------------------------------------------------------------
 /** Which clock drives the world (§2.2). Precedence: tactical/travel > crisis = observation > strategic. */
@@ -132,7 +131,6 @@ export interface ClockView {
 }
 /** Setup option «Duración»: victory thresholds and the time limit (§4.18). */
 export type GameDuration = 'short' | 'normal' | 'long';
-export const GAME_DURATIONS: readonly GameDuration[] = ['short', 'normal', 'long'];
 
 // --- v2 (W1): war -------------------------------------------------------------------------------
 /** The state between two players (§4.1). Independent territories and unclaimed land are outside it. */
@@ -193,7 +191,6 @@ export type AttackState =
 export type OffensiveIntensity = 0 | 1 | 2;
 
 export type Personality = 'conqueror' | 'turtle' | 'trader' | 'nuker' | 'opportunist';
-export const PERSONALITIES: readonly Personality[] = ['conqueror', 'turtle', 'trader', 'nuker', 'opportunist'];
 
 export type PlayerKind = 'human' | 'nation' | 'tribe' | 'rebel';
 

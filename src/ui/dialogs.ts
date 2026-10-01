@@ -282,15 +282,6 @@ export function openHelp(ctx: GameContext, sound: Sound, section = 'start', onCl
   return m;
 }
 
-/** v1 entry point kept for the main menu: the help opens on its first section. */
-export function openHowTo(sound: Sound, onClose?: () => void, ctx?: GameContext): ModalHandle {
-  if (ctx) return openHelp(ctx, sound, 'start', onClose);
-  const ok = h('button', { class: 'fu-btn fu-btn--primary' }, tx('common.understood'));
-  const m = openModal({ titleKey: 'help.title', kickerKey: 'help.kicker', body: h('div', null, tx('help.start.body', { mob: 6, lead: 24 }, 'p'), mapLegend()), foot: [ok], wide: true, onClose });
-  ok.addEventListener('click', () => m.close());
-  return m;
-}
-
 // -------------------------------------------------------------------------------------------------
 // Keyboard shortcuts
 // -------------------------------------------------------------------------------------------------
@@ -336,14 +327,6 @@ function shortcutList(): HTMLElement {
     list.append(h('div', { class: 'fu-keys-row' }, kk, tx(label, undefined, 'div')));
   }
   return list;
-}
-
-export function openShortcuts(sound: Sound, onClose?: () => void): ModalHandle {
-  const ok = h('button', { class: 'fu-btn fu-btn--primary' }, tx('common.close'));
-  const m = openModal({ titleKey: 'keys.title', kickerKey: 'keys.kicker', body: shortcutList(), foot: [ok], onClose });
-  ok.addEventListener('click', () => m.close());
-  void sound;
-  return m;
 }
 
 // -------------------------------------------------------------------------------------------------

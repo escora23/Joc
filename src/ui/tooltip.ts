@@ -181,13 +181,3 @@ export function initTooltips(root: HTMLElement): void {
   };
 }
 
-/** Elements (under root) that are interactive but have no tooltip: the sweep of §12.1. */
-export function untipped(root: ParentNode): Element[] {
-  const out: Element[] = [];
-  root.querySelectorAll('button, input, .fu-interactive[data-tipme]').forEach((el) => {
-    if (registry.has(el) || (el as HTMLElement).dataset.tip || (el as HTMLElement).title) return;
-    if (findTarget(el.parentElement)) return;
-    out.push(el);
-  });
-  return out;
-}

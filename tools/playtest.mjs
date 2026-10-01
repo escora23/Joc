@@ -98,6 +98,9 @@ const stopAfter = Number(args.steps || 1e9);
  * alert click-to-fly, save/continue. Without it the v1 feature tour (every structure, nukes, command mode, invasion,
  * radial, end screen) runs afterwards as "extended" steps. */
 const STAGE2_ONLY = args.stage2 === 'true';
+/** W7: the game speed the scripted actions run at (1 or 4) and the difficulty of the run (easy or normal). */
+const SPEED = Number(args.speed || 1);
+const DIFFICULTY = String(args.difficulty || 'easy');
 const STEP_TIMEOUT_MS = 240_000;
 let stage = 'stage2';
 /**
@@ -250,6 +253,12 @@ async function installHelpers() {
       orig(type, payload);
     };
     ctx.bus.on('worldHover', (e) => { window.__lastHover = e.tile; window.__lastHoverPick = { unitId: e.unitId, structureId: e.structureId, island: !!e.islandLabel }; });
+    // W7 (§12.5): every advisor step shown during the run, in order, with the tick it appeared at.
+    pt.tut = [];
+    setInterval(() => {
+      const s = window.__fuTutorial?.();
+      if (s && s.step && (!pt.tut.length || pt.tut[pt.tut.length - 1].step !== s.step)) pt.tut.push({ step: s.step, n: s.n, tick: ctx.sim.view.tick, at: performance.now() });
+    }, 250);
     window.__pt = pt;
   });
 }
@@ -372,10 +381,12 @@ try {
     await shot('02-setup');
   });
 
-  await step('setup: Easy difficulty -> START -> spawn phase', async () => {
+  await step(`setup: ${DIFFICULTY} difficulty -> START -> spawn phase`, async () => {
     // Raw mouse clicks (see clickEl): the selected card must read as selected before START.
-    await clickEl('.fu-diff--easy');
-    check(await until(() => document.querySelector('.fu-diff--easy')?.classList.contains('is-on'), null, 15000, 200), 'the Easy card did not select');
+    // A fresh advisor (§12.5): the tutorial starts in the spawn phase with no step done.
+    await page.evaluate(() => window.__front.ctx.settings.set({ tutorial: true, tutorialProgress: 0 }));
+    await clickEl(`.fu-diff--${DIFFICULTY}`);
+    check(await until((d) => document.querySelector(`.fu-diff--${d}`)?.classList.contains('is-on'), DIFFICULTY, 15000, 200), `the ${DIFFICULTY} card did not select`);
     await sleep(500);
     await clickEl('.fu-setup-start');
     await waitState('spawn', 120000);
@@ -383,7 +394,8 @@ try {
     const n = await page.evaluate(() => window.__front.ctx.sim.view.playerList.filter((p) => p.spawned).length);
     check(n > 5, `only ${n} spawned players`);
     const diff = await page.evaluate(() => window.__front.ctx.sim.view.config?.difficulty);
-    check(diff === 'easy', `the game runs on ${diff}, not Easy`);
+    check(diff === DIFFICULTY, `the game runs on ${diff}, not ${DIFFICULTY}`);
+    check(await until(() => window.__fuTutorial?.().step === 'spawn', null, 15000, 250), `the advisor does not open on «Funda tu capital» (${JSON.stringify(await page.evaluate(() => window.__fuTutorial?.()))})`);
     return `${n} players spawned, difficulty ${diff}`;
   });
 
@@ -545,7 +557,7 @@ try {
     return `${details.join(', ')} -> ${st.tiles} tiles${misses.length ? `; skipped: ${misses.join('; ')}` : ''}`;
   });
 
-  await step('speed 4x (+ key), then 1x (button)', async () => {
+  await step(`speed 4x (+ key), then ${SPEED}x (button)`, async () => {
     await page.keyboard.press('Equal');
     await sleep(250);
     await page.keyboard.press('Equal');
@@ -555,8 +567,8 @@ try {
     await shot('04-speed-4x');
     // The headless harness acts ~10x slower than a player (software WebGL), so the scripted actions run at 1x
     // (the 1x button) to keep the game clock in step with what a player would do in the same number of moves.
-    await page.locator('.fu-time-seg button').nth(2).click({ force: true }); // [pause, 0.5x, 1x, 2x, 4x]; the advisor may pulse it
-    check(await until(() => window.__front.ctx.sim.view.speed === 1, null, 10000), '1x button did not work');
+    await page.locator('.fu-time-seg button').nth(SPEED === 4 ? 4 : 2).click({ force: true }); // [pause, 0.5x, 1x, 2x, 4x]; the advisor may pulse it
+    check(await until((sp) => window.__front.ctx.sim.view.speed === sp, SPEED, 10000), `${SPEED}x button did not work`);
     // Short test on a slow software renderer: grant the treasury the arsenal needs, troops, and a ring of land
     // around the capital (debug actions, like the scripted shots' head start) so ten structures fit.
     await page.evaluate(() => {
@@ -568,6 +580,16 @@ try {
     });
     await until(() => window.__front.ctx.sim.view.human.tiles > 300, null, 15000);
     return JSON.stringify(await humanStats());
+  });
+
+  // The advisor never advances on a timer: the step shown now is still shown 8 s later; «Entendido» on the clock tip.
+  await step('advisor: a step waits for the player (no timer)', async () => {
+    const a = await page.evaluate(() => window.__fuTutorial?.() ?? null);
+    await sleep(8000);
+    const b = await page.evaluate(() => window.__fuTutorial?.() ?? null);
+    const seen = await page.evaluate(() => window.__pt.tut.map((x) => x.step));
+    check(a && b && a.step && a.step === b.step, `the advisor moved on by itself: ${a?.step} -> ${b?.step}`);
+    return `«${b.step}» still shown after 8 s; seen ${seen.join(' > ')}`;
   });
 
   // ---------------------------------------------------------------------------------------------- build (city)
@@ -693,6 +715,19 @@ try {
     const ageH = /(\d+)/.test(ans.age) ? Number(ans.age.match(/(\d+)/)[1]) : 0;
     check(ans.updated >= ans.resolved && ageH <= Math.round((ans.now - ans.resolved) / 10) + 1, `the answered entry reads «${ans.age}» (sent ${ans.created}, answered ${ans.resolved}, now ${ans.now})`);
     return `pact to ${cand.id} (opinion ${cand.op}): ${ans.status} — «${ans.title}» ${ans.body} (${ans.age})`;
+  });
+
+  // The city and the pact are done: the advisor shows the clock tip, which ends with «Entendido».
+  await step('advisor: «Entendido» on the clock tip', async () => {
+    await resetUi();
+    const st = await until(() => (window.__fuTutorial?.().step === 'clock' ? window.__fuTutorial() : null), null, 15000, 250);
+    const seen = await page.evaluate(() => window.__pt.tut.map((x) => x.step));
+    check(st, `the clock tip is not shown (now «${(await page.evaluate(() => window.__fuTutorial?.()))?.step}», seen ${seen.join(' > ')})`);
+    check(st.highlighted.includes('fu-time-seg'), `the clock tip does not highlight the speed buttons (${st.highlighted})`);
+    await shot('14e-advisor-clock');
+    await page.locator('.fu-tut .fu-btn--primary').click({ force: true });
+    check(await until(() => window.__fuTutorial?.().step !== 'clock', null, 8000, 250), '«Entendido» did not close the clock tip');
+    return `seen ${seen.join(' > ')}; now «${(await page.evaluate(() => window.__fuTutorial?.()))?.step}»`;
   });
 
   // ---------------------------------------------------------------------------------------------- war via the dialog
@@ -1074,6 +1109,91 @@ try {
       return `unit ${tankId}`;
     });
 
+    // §12.5 steps 5 and 6: the division, then «Mueve tu división» through the Fuerzas panel and a right click.
+    await step('move the division: Fuerzas (U), its row, a right click on our land', async () => {
+      await resetUi();
+      check(tankId >= 0, 'no division (previous step failed)');
+      const tut = await page.evaluate(() => window.__fuTutorial?.() ?? null);
+      await page.keyboard.press('u');
+      const row = `.fu-forces:not(.fu-hidden) .fu-fo-row[data-unit="${tankId}"]`;
+      await page.waitForSelector(row, { timeout: 20000 });
+      await page.locator(row).click({ force: true });
+      check(await until((id) => { const s = window.__fuHud.shared.selection; return s.kind === 'unit' ? s.id === id : s.kind === 'units' && s.ids.includes(id); }, tankId, 10000, 200), 'the row did not select the division');
+      // A tile of ours 6-12 tiles from the division, inside our land (8 neighbours ours).
+      const dest = await page.evaluate((id) => {
+        const v = window.__front.ctx.sim.view, u = v.units.get(id), pt = window.__pt;
+        const at = Math.floor(u.y) * 1600 + Math.floor(u.x);
+        let best = -1, bd = 1e9;
+        for (const t of pt.humanTiles()) {
+          const d = pt.dist(t, at);
+          if (d < 6 || d > 12 || !pt.playable(t)) continue;
+          let inner = true;
+          for (const n of [t - 1, t + 1, t - 1600, t + 1600, t - 1601, t - 1599, t + 1599, t + 1601]) if (v.owner[n] !== 1) inner = false;
+          if (inner && Math.abs(d - 9) < bd) { bd = Math.abs(d - 9); best = t; }
+        }
+        return best;
+      }, tankId);
+      check(dest >= 0, 'no destination tile of ours near the division');
+      await page.keyboard.press('u');
+      const ll = await tileLL(dest);
+      await lookAt(ll.lat, ll.lon, 900);
+      const p = await hoverTile(dest);
+      await sleep(800);
+      const chip = await page.evaluate(() => document.querySelector('.fu-chip:not(.fu-hidden)')?.innerText ?? '');
+      // One pointerdown/up pair created together (a CDP release can arrive seconds later on a long frame).
+      await page.evaluate(({ x, y }) => {
+        const c = window.__front.ctx.canvas;
+        const o = { clientX: x, clientY: y, button: 2, buttons: 2, bubbles: true, pointerId: 1, pointerType: 'mouse' };
+        c.dispatchEvent(new PointerEvent('pointerdown', o));
+        c.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 }));
+      }, p);
+      const moving = await until((id) => { const u = window.__front.ctx.sim.view.units.get(id); return u && (u.order >= 0 || u.mode === 1 || u.mode === 2) ? { order: u.order, mode: u.mode } : null; }, tankId, 15000, 300);
+      check(moving, `the division took no order (chip «${chip.replace(/\s+/g, ' ').slice(0, 120)}»)`);
+      await sleep(1500);
+      await shot('06b-division-moving');
+      return `chip «${chip.replace(/\s+/g, ' ').slice(0, 120)}»; order ${moving.order}, mode ${moving.mode}; advisor before: ${tut?.step}`;
+    });
+
+    // §6.1, owner item 15: upgrading shows a real improvement (the card's level and effects, and the model).
+    await step('upgrade a factory from its card: level 2, more output, a bigger model', async () => {
+      await resetUi();
+      const f = await page.evaluate(() => [...window.__front.ctx.sim.view.structures.values()].find((s) => s.owner === 1 && s.type === 2 && s.built >= 1 && s.level === 1) ?? null);
+      check(f, 'no finished level-1 factory of ours');
+      const ll = await tileLL(f.tile);
+      await lookAt(ll.lat - 0.15, ll.lon, 40, 0.9);
+      await page.evaluate((id) => window.__fuHud.shared.select({ kind: 'structure', id }), f.id);
+      await page.waitForSelector('.fu-sel:not(.fu-hidden) .fu-w4-up', { timeout: 15000 });
+      await sleep(1500);
+      const v0 = await page.evaluate(() => window.__units?.modelStats?.() ?? null);
+      const before = await page.locator('.fu-sel').innerText();
+      await shot('05b-factory-L1');
+      await page.locator('.fu-sel .fu-w4-up').click({ force: true });
+      const up = await until((id) => { const s = window.__front.ctx.sim.view.structures.get(id); return s && s.level >= 2 ? s.level : null; }, f.id, 120000, 1000);
+      check(up, 'the factory never reached level 2');
+      await sleep(3000);
+      const after = await page.locator('.fu-sel').innerText();
+      await shot('05c-factory-L2');
+      const g = (txt) => (txt.match(/(\d[\d.]*) oro\/h|(\d[\d,]*) gold\/h/) ?? [])[0] ?? '?';
+      check(before !== after, 'the card did not change');
+      return `card ${g(before)} -> ${g(after)}; factory models ${JSON.stringify(v0?.factory ?? v0)}`;
+    });
+
+    // §12.5 step 8 / §11.3: the Guerra y frentes panel (G), a front at «alta» priority.
+    await step('Guerra panel (G): raise a front\'s priority', async () => {
+      await resetUi();
+      await page.keyboard.press('g');
+      await page.waitForSelector('.fu-warpanel:not(.fu-hidden)', { timeout: 20000 });
+      await sleep(1200);
+      await shot('09b-guerra-panel');
+      const btn = page.locator('.fu-warpanel button', { hasText: /^\s*Alta\s*$|^\s*High\s*$/ }).first();
+      check(await btn.count(), 'no «Alta» priority button in the Guerra panel');
+      await btn.click({ force: true });
+      const set = await until(() => window.__front.ctx.sim.view.fronts.some((f) => (f.a === 1 && f.priorityA === 2) || (f.b === 1 && f.priorityB === 2)), null, 10000, 300);
+      check(set, 'no front of ours at high priority');
+      await page.keyboard.press('g');
+      return 'a front of ours set to «alta»';
+    });
+
     // ---------------------------------------------------------------------------------------------- nukes
     await until(() => [...window.__front.ctx.sim.view.structures.values()].some((s) => s.owner === 1 && s.type === 5 && s.built >= 1), null, 90000);
     const nukeTarget = (minDist) => page.evaluate((minDist) => {
@@ -1083,7 +1203,8 @@ try {
       // (a neighbour answers a nuke by marching straight into our silo).
       const neighbours = new Set();
       for (const t of pt.humanTiles()) for (const n of [t - 1, t + 1, t - 1600, t + 1600]) if (v.owner[n] !== 1) neighbours.add(v.owner[n]);
-      const cands = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && !neighbours.has(p.id));
+      // Owner item 13: nuclear weapons only against a nation we are at war with.
+      const cands = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && !neighbours.has(p.id) && v.pairState(1, p.id) === 'war');
       let best = null;
       for (const p of cands) {
         const t = Math.floor(p.labelY) * 1600 + Math.floor(p.labelX);
@@ -1095,6 +1216,41 @@ try {
       return best;
     }, minDist);
 
+    // A far nation we are not at war with is put at war first (staged: the playtest cannot wait weeks for an escalation),
+    // after checking that a bomb aimed at it while at peace is refused.
+    let nukeEnemy = -1;
+    await step('a nuclear weapon at a nation at peace is refused; at war it asks first', async () => {
+      await resetUi();
+      const peace = await page.evaluate(() => {
+        const v = window.__front.ctx.sim.view, pt = window.__pt;
+        const cap = v.human.capitalTile;
+        const c = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && v.pairState(1, p.id) === 'peace')
+          .map((p) => ({ id: p.id, tile: Math.floor(p.labelY) * 1600 + Math.floor(p.labelX), tiles: p.tiles }))
+          .filter((p) => v.owner[p.tile] === p.id && pt.dist(p.tile, cap) > 90 && pt.dist(p.tile, cap) < 450);
+        c.sort((a, b) => b.tiles - a.tiles);
+        return c[0] ?? null;
+      });
+      check(peace, 'no far nation at peace');
+      const ll = await tileLL(peace.tile);
+      await lookAt(ll.lat, ll.lon, 2500);
+      const n0 = await countEvents('nukeLaunched', 'e.owner === 1');
+      const t0 = await countEvents('toast');
+      await hoverTile(peace.tile);
+      await page.keyboard.press('z');
+      await sleep(400);
+      await clickTile(peace.tile);
+      await sleep(1500);
+      const toast = await lastEvent('toast', null, t0, 5000);
+      const dialog = await page.evaluate(() => !!document.querySelector('.fu-nuke-confirm'));
+      await shot('07a-nuke-at-peace');
+      await page.keyboard.press('Escape');
+      check(!dialog && (await countEvents('nukeLaunched', 'e.owner === 1')) === n0, 'a nuclear weapon was aimed at a nation at peace');
+      // War with it (staged), so the bombs below have a legitimate target.
+      await page.evaluate((id) => window.__front.ctx.sim.debug({ type: 'war', a: 1, b: id, goal: 'border', mobilizeTicks: 0 }), peace.id);
+      check(await until((id) => window.__front.ctx.sim.view.pairState(1, id) === 'war', peace.id, 15000, 300), 'the staged war did not start');
+      nukeEnemy = peace.id;
+      return `refused: «${toast?.text ?? '(no toast)'}»; now at war with ${peace.id}`;
+    });
     for (const [key, weapon, name, minDist, shotName] of [['z', 'AtomBomb', 'atom bomb', 50, '07-atom'], ['x', 'HydrogenBomb', 'hydrogen bomb', 90, '08-hydrogen']]) {
       await step(`launch ${name} (${key.toUpperCase()} key)`, async () => {
         const tgt = await nukeTarget(minDist);
@@ -1106,6 +1262,14 @@ try {
         await page.keyboard.press(key);
         await sleep(400);
         await clickTile(tgt.tile);
+        // The confirmation: target, escalation, nations in the radius, the cost; nothing flies before «Lanzar».
+        await page.waitForSelector('.fu-nuke-confirm', { timeout: 15000 });
+        await sleep(800);
+        const dlg = await page.locator('.fu-nuke-confirm').innerText();
+        check(!BAD_TEXT.test(dlg.replace(/\s+/g, ' ')), `raw text in the nuclear confirmation: ${dlg.slice(0, 200)}`);
+        check((await countEvents('nukeLaunched', 'e.owner === 1')) === n0, 'launched before the confirmation');
+        await shot(`${shotName}-confirm`);
+        await page.locator('.fu-nuke-fire').click({ force: true });
         const ev = await lastEvent('nukeLaunched', 'e.owner === 1', n0);
         check(ev, 'no nukeLaunched (see sim messages in the report)');
         // Follow it down: frame the target at an oblique angle and wait for detonation or interception.
@@ -1324,6 +1488,85 @@ try {
       await sleep(6000);
       await shot('15-overview');
       return JSON.stringify(await humanStats());
+    });
+
+    // Conclude a peace (§4.15): a tribute offered through the peace dialog is accepted with its reason; the war ends
+    // in a truce.
+    await step('conclude peace: «Ofrecer tributo» in the peace dialog is accepted, the war ends in a truce', async () => {
+      await resetUi();
+      const enemy = await page.evaluate((prefer) => {
+        const v = window.__front.ctx.sim.view;
+        if (prefer > 0 && v.pairState(1, prefer) === 'war') return prefer;
+        return v.playerList.find((p) => p.alive && p.kind === 'nation' && p.id !== 1 && v.pairState(1, p.id) === 'war')?.id ?? -1;
+      }, warTarget);
+      check(enemy > 0, 'no nation at war with us');
+      await page.keyboard.press('n');
+      await page.waitForSelector('.fu-nations:not(.fu-hidden)', { timeout: 20000 });
+      await page.evaluate((id) => window.__fuNations.open(id), enemy);
+      await sleep(900);
+      await page.locator('.fu-nd-actions button:not(.fu-hidden)', { hasText: /Proponer paz|Propose peace/ }).first().click();
+      await page.waitForSelector('.fu-peace', { timeout: 15000 });
+      await page.locator('.fu-peace-opts button', { hasText: /Ofrecer tributo|Offer tribute/ }).first().click({ force: true });
+      await sleep(900);
+      await shot('20a-peace-tribute');
+      const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
+      await page.locator('.fu-modal .fu-btn--primary', { hasText: /Proponer la paz|Propose peace/ }).last().click({ force: true });
+      const sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0 && p.kind === 'peace') ?? null, p0, 10000, 200);
+      check(sent, 'the peace proposal was not sent');
+      await resetUi();
+      const ans = await until((id) => {
+        const p = window.__front.ctx.sim.view.proposals.get(id);
+        if (!p || p.status === 'considering' || p.status === 'pending') return null;
+        const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
+        return a ? { status: p.status, title: a.title, body: a.body } : null;
+      }, sent.id, 220000, 1000);
+      check(ans, 'no answer to the peace proposal');
+      check(ans.status === 'accepted', `the tribute peace was ${ans.status}: ${ans.title} — ${ans.body}`);
+      const truce = await until((id) => window.__front.ctx.sim.view.pairState(1, id) === 'truce' ? true : null, enemy, 20000, 500);
+      check(truce, `no truce with ${enemy} after the peace`);
+      return `peace with ${enemy}: «${ans.title}» ${ans.body}`;
+    });
+
+    // §12.5 step 10: a proposal from an AI arrives; the advisor points at the inbox; answered from the inbox.
+    await step('an AI proposal arrives: the advisor\'s inbox tip, accepted from Naciones › Bandeja', async () => {
+      await resetUi();
+      const from = await page.evaluate(() => {
+        const v = window.__front.ctx.sim.view;
+        const p = v.playerList.find((q) => q.alive && q.kind === 'nation' && q.id !== 1 && v.pairState(1, q.id) === 'peace' && !v.hasTreaty(1, q.id, 'trade') && !v.human.allies.includes(q.id));
+        if (!p) return -1;
+        window.__front.ctx.sim.debug({ type: 'propose', from: p.id, to: 1, kind: 'trade' });
+        if (window.__front.ctx.sim.view.speed === 0) window.__front.app.setSpeed(1);
+        return p.id;
+      });
+      check(from > 0, 'no nation at peace to propose');
+      const prop = await until((f) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === f && p.to === 1 && p.status === 'pending') ?? null, from, 30000, 300);
+      check(prop, 'the staged proposal never reached the inbox');
+      const tut = await until(() => (window.__fuTutorial?.().step === 'inbox' ? window.__fuTutorial() : null), null, 15000, 250);
+      await page.keyboard.press('n');
+      await page.waitForSelector('.fu-nations:not(.fu-hidden)', { timeout: 20000 });
+      await page.locator('.fu-nt-tab').nth(1).click({ force: true });
+      await sleep(900);
+      await shot('19-inbox');
+      const yes = page.locator('.fu-nations .fu-btn--success').first();
+      check(await yes.count(), 'no «Aceptar» in the inbox');
+      await yes.click({ force: true });
+      const done = await until((id) => { const p = window.__front.ctx.sim.view.proposals.get(id); return p && p.status !== 'pending' ? p.status : null; }, prop.id, 15000, 300);
+      await page.keyboard.press('n');
+      check(done === 'accepted', `the proposal is ${done}`);
+      check(tut, 'the advisor did not point at the inbox');
+      return `trade agreement from ${from} accepted; advisor «${tut.step}» highlighted ${tut.highlighted}`;
+    });
+
+    await step('advisor: the ten steps of §12.5 were shown, each waiting for the player', async () => {
+      const seen = await page.evaluate(() => window.__pt.tut.map((x) => x.step));
+      const prog = await page.evaluate(() => window.__front.ctx.settings.get().tutorialProgress ?? 0);
+      const need = ['spawn', 'expand', 'city', 'neighbours', 'clock', 'army', 'move', 'command', 'fronts', 'inbox'];
+      const bits = [1, 2, 3, 4, 7, 5, 6, 9, 8, 10];
+      const notSeen = need.filter((k) => !seen.includes(k));
+      const notDone = need.filter((k, i) => !(prog & (1 << bits[i])));
+      check(!notDone.length, `steps not completed: ${notDone.join(', ')} (progress ${prog.toString(2)})`);
+      check(!notSeen.length, `steps never shown (done before they could show): ${notSeen.join(', ')}; seen ${seen.join(' > ')}`);
+      return `seen ${seen.join(' > ')}`;
     });
 
     await step('end screen (victory) -> back to menu', async () => {

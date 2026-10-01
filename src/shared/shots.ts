@@ -44,14 +44,6 @@ export function registerShot(
   registry.set(name, { name, owner, description, stage, settleFrames });
 }
 
-export function getShot(name: string): ShotDef | undefined {
-  return registry.get(name);
-}
-
-export function listShots(): ShotDef[] {
-  return [...registry.values()];
-}
-
 /** The ?shot= value, or null. */
 export function shotNameFromUrl(): string | null {
   try {

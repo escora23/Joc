@@ -480,7 +480,3 @@ export class Attack implements SimAttack {
   }
 }
 
-/** The live (non-dead) unit is still in the game maps. */
-export function isAlive(u: Unit): boolean {
-  return !u.dead;
-}

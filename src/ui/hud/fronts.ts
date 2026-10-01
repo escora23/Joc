@@ -21,11 +21,10 @@ import { icon } from '../icons';
 import { tip, type TipData } from '../tooltip';
 import { tx } from '../tx';
 import { askHelp, whyNotPropose } from './diplomacy';
-import { etaText, frontName, joinOutlook, offensiveName, outlookOf, spearheadTarget, structureName, unitName, placeOf } from './forcesInfo';
+import { etaText, frontName, joinOutlook, offensiveName, spearheadTarget, structureName, unitName, placeOf } from './forcesInfo';
 import {
-  advanceText, combatDays, frontAnchor, frontFocus, frontTiles, humanFrontsByDanger, isoOf, kmhText, offensiveKmh, offensiveStatus, sidesOf,
-  troopsText, worldFronts, type FrontSides,
-} from './frontsInfo';
+  advanceText, combatDays, frontFocus, frontTiles, humanFrontsByDanger, isoOf, kmhText, offensiveKmh, offensiveStatus, sidesOf,
+  troopsText, worldFronts, type FrontSides } from './frontsInfo';
 import type { HudShared } from './shared';
 import { openPeaceDialog } from './wardialogs';
 import { openOffensiveDialog } from './offensiveDialog';
@@ -38,7 +37,7 @@ import {
 } from '../../shared/constants';
 import { tileXYToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
-import { offensiveOutlook, orderCheck, tileKm } from '../../shared/orders';
+import { orderCheck, tileKm } from '../../shared/orders';
 import { airThreat, reasonText } from './orderCtl';
 import { UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type AttackView, type FrontView, type UnitView, type WarView } from '../../shared/types';
 import { viewRules } from '../../sim/rulesView';

@@ -25,7 +25,6 @@ const BRICK = 0x8c5b45;
 const WHITE = 0xdcdad3;
 const RED = 0xb23b2f;
 const STEEL = 0x8d939a;
-const RUST = 0x8a4c2e;
 const OLIVE = 0x56603f;
 const SAND = 0xa69470;
 const EARTH = 0x75674b;

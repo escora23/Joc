@@ -25,9 +25,8 @@ import {
 } from '../shared/constants';
 import {
   ASSAULT_DEPTH_TILES, ASSAULT_FLOOR_HP, DEFEND_TILES, DIVISION_ARTILLERY_TILES, DIVISION_SHELL_PER_HOUR, RAZE_SHELL_MUL,
-  baseCapacity, bombardStation, canTransit, hostileTo, shipComponent, homeTypeOf, inferOrder, isAircraft, orderCheck, planDivision, strikeTarget, tileCx,
-  tileCy, tileKm, type StationLike,
-} from '../shared/orders';
+  baseCapacity, bombardStation, canTransit, hostileTo, shipComponent, homeTypeOf, inferOrder, orderCheck, planDivision, strikeTarget, tileCx,
+  tileCy, tileKm, type StationLike } from '../shared/orders';
 import {
   StructureType, UNIT_ORDER_KINDS, UnitMode, UnitState, UnitType, type BuildableUnit, type ProductionView,
   type UnitOrderKind,
@@ -51,7 +50,6 @@ const orderCode = (k: UnitOrderKind): number => ORDER_CODE.get(k) ?? -1;
 const KM_PER_TICK: Record<number, number> = Object.fromEntries(
   Object.values(UNIT_DEFS).map((d) => [d.type, kmhToKmPerTick(d.speedKmh)]),
 );
-const RAIL_KM_PER_TICK = kmhToKmPerTick(ARMOR_RAIL_KMH);
 /** Strike kinds stored on a sortie. */
 /** #25: an escorted bomber or drone swarm is shot down this much less often per interception pass. */
 const ESCORT_INTERCEPT_MUL = 0.3;

@@ -9,7 +9,6 @@
 import type { CountryDef, WorldData } from './types';
 
 export type Lang = 'es' | 'en';
-export const LANGS: readonly Lang[] = ['es', 'en'];
 export type Dictionary = Record<string, string>;
 
 const dicts: Record<Lang, Dictionary> = { es: {}, en: {} };
@@ -34,11 +33,6 @@ export function setLanguage(lang: Lang): void {
     /* no DOM */
   }
   for (const fn of listeners) fn(lang);
-}
-
-export function onLanguageChange(fn: (lang: Lang) => void): () => void {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
 }
 
 export function hasKey(key: string): boolean {

@@ -84,9 +84,3 @@ export function incomingPressure(ctx: AiContext, pid: number): { total: number; 
   return { total, top, topAttacker };
 }
 
-/** Troops `pid` currently has committed to attacks on players (not neutral land). */
-export function committedTroops(ctx: AiContext, pid: number): number {
-  let s = 0;
-  for (const a of ctx.g.outgoingAttacks(pid)) s += a.troops;
-  return s;
-}

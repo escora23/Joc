@@ -86,4 +86,3 @@ export class LocalFrame {
 }
 
 const TMP_LL = { lat: 0, lon: 0 };
-export const METERS_PER_DEG = M_PER_DEG;

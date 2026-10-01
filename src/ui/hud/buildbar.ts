@@ -45,6 +45,7 @@ export function createBuildBar(hs: HudShared): BuildBar {
   const ticks = h('div', { class: 'fu-ar-ticks' });
   for (const v of [25, 50, 75]) {
     const b = h('button', { class: 'fu-ar-tick fu-mono', style: `left:${v}%` }, `${v}`);
+    sharedTip(b, () => ({ title: `${v} %`, text: t('w7.ratio.tick', { v, n: formatNumber(Math.round((ctx.sim.view.human?.troops ?? 0) * v / 100)) }) }));
     b.addEventListener('click', () => {
       hs.sound('click');
       hs.setAttackRatio(v / 100);
@@ -54,7 +55,7 @@ export function createBuildBar(hs: HudShared): BuildBar {
   ratioInput.addEventListener('input', () => {
     hs.setAttackRatio(Number(ratioInput.value) / 100);
   });
-  const ratioEl = h('div', { class: 'fu-ar fu-glass fu-interactive', 'data-i18n-title': 'hud.ratio.tip', title: t('hud.ratio.tip') },
+  const ratioEl = h('div', { class: 'fu-ar fu-glass fu-interactive' },
     h('div', { class: 'fu-ar-head' },
       h('span', { class: 'fu-caps' }, tx('hud.attackRatio')),
       h('span', { class: 'fu-ar-hint' }, h('span', { class: 'fu-kbd' }, '⇧'), '+', icon('mouse')),
@@ -70,6 +71,10 @@ export function createBuildBar(hs: HudShared): BuildBar {
     const troops = ctx.sim.view.human?.troops ?? 0;
     setText(ratioTroops, formatCompact(troops * hs.attackRatio));
   };
+  sharedTip(ratioEl, () => ({
+    title: t('hud.attackRatio'), text: t('hud.ratio.tip'),
+    now: [[t('w7.ratio.send'), `${Math.round(hs.attackRatio * 100)} % · ${formatNumber(Math.round((ctx.sim.view.human?.troops ?? 0) * hs.attackRatio))}`]],
+  }));
   hs.on('ratio', paintRatio);
   paintRatio();
 
@@ -115,6 +120,8 @@ export function createBuildBar(hs: HudShared): BuildBar {
     toggleClass(buildRow, 'fu-hidden', tb !== 'build');
     toggleClass(arsenalRow, 'fu-hidden', tb !== 'arsenal');
   };
+  sharedTip(tabBuild, () => ({ title: t('hud.tab.build'), text: t('w7.tab.build.tip'), hotkey: '1 … 0' }));
+  sharedTip(tabArsenal, () => ({ title: t('hud.tab.arsenal'), text: t('w7.tab.arsenal.tip'), hotkey: 'Z X C V' }));
   tabBuild.addEventListener('click', () => { hs.sound('click'); setTab('build'); });
   tabArsenal.addEventListener('click', () => { hs.sound('click'); setTab('arsenal'); });
   setTab('build');

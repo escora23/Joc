@@ -313,7 +313,7 @@ export class CommandOverlay {
     }
     this.combat.className = `fu-cmdx-combat fu-cmd-interactive show${c.contact ? ' contact' : ''}`;
     this.combat.innerHTML = `<span class="ic"></span><div class="w"><span>${esc(c.title)}</span>${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</div>
-      <span class="d">${esc(c.dist)}</span><button ${c.go ? '' : 'hidden'}><kbd>G</kbd>${esc(c.go)}</button>`;
+      <span class="d">${esc(c.dist)}</span><button ${c.go ? '' : 'hidden'} data-tip="command.go.combat" data-tip-text="w7.cmd.go.tip"><kbd>G</kbd>${esc(c.go)}</button>`;
   }
 
   get combatText(): string {

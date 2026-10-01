@@ -68,9 +68,6 @@ export const es: Dictionary = {
   'setup.difficulty': 'Dificultad',
   'setup.aiCount': 'Naciones IA',
   'setup.aiCount.hint': 'Rivales colocados en países reales y con su nombre.',
-  'setup.tribes': 'Tribus',
-  'setup.tribes.hint': 'Pequeñas facciones que ocupan la tierra vacía.',
-  'setup.tribesShort': 'tribus',
   'setup.speed': 'Velocidad de juego',
   'setup.rules': 'Reglas',
   'setup.nukes': 'Armas nucleares',
@@ -157,7 +154,6 @@ export const es: Dictionary = {
   'keys.Wheel': 'Rueda',
   'keys.space': 'Espacio',
   'keys.click': 'Expandirse / atacar / seleccionar',
-  'keys.rightClick': 'Menú de diplomacia',
   'keys.ratio': 'Fuerza de ataque',
   'keys.build': 'Construir estructuras',
   'keys.weapons': 'Apuntar armas estratégicas',
@@ -311,7 +307,6 @@ export const es: Dictionary = {
   'personality.opportunist': 'Oportunista',
   'kind.human': 'Jugador',
   'kind.nation': 'Nación',
-  'kind.tribe': 'Tribu',
   'kind.rebel': 'Rebeldes',
   'ustate.idle': 'En espera',
   'ustate.moving': 'En marcha',
@@ -460,7 +455,6 @@ export const es: Dictionary = {
   'structure.airbase.desc': 'Produce escuadrones de cazas, bombarderos y enjambres de drones.',
   'structure.armyBase.desc': 'Produce divisiones acorazadas que refuerzan tus frentes.',
   'structure.navalYard.desc': 'Construye buques de guerra que dominan las rutas marítimas. Solo en la costa.',
-  'structure.radar.desc': 'Detecta con antelación misiles y aviones enemigos.',
 
   // ---- units
   'unit.transportShip': 'Transporte',

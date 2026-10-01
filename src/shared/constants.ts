@@ -10,11 +10,7 @@ import { StructureType, UnitType, type BuildableUnit, type WeaponType } from './
 export const MAP_W = 1600;
 export const MAP_H = 800;
 export const TILE_COUNT = MAP_W * MAP_H;
-/** Degrees per tile (both axes). */
-export const TILE_DEG = 360 / MAP_W;
 export const EARTH_RADIUS_KM = 6371;
-/** Globe radius in world units: 1.0 == EARTH_RADIUS_KM. */
-export const GLOBE_RADIUS = 1;
 /** Kilometers per tile along the equator (~25 km). */
 export const TILE_KM = (2 * Math.PI * EARTH_RADIUS_KM) / MAP_W;
 /** Visual vertical exaggeration of real relief (globe displacement, local terrain, unit placement). */
@@ -26,7 +22,6 @@ export const ICE_LATITUDE = -60;
 
 // --- Time ------------------------------------------------------------------------------------
 export const TICK_MS = 100;
-export const TICKS_PER_SECOND = 1000 / TICK_MS;
 /** The worker posts one coalesced update per this many wall-clock ms (regardless of speed). */
 export const UPDATE_INTERVAL_MS = 100;
 /**
@@ -52,7 +47,6 @@ export const STRATEGIC_RATE = 3600;
 export const kmhToTilesPerTick = (kmh: number): number => (kmh * GAME_SECONDS_PER_TICK / 3600) / TILE_KM;
 /** Kilometres covered in one tick at `kmh`. */
 export const kmhToKmPerTick = (kmh: number): number => (kmh * GAME_SECONDS_PER_TICK) / 3600;
-export const hoursToTicks = (h: number): number => Math.round(h * TICKS_PER_GAME_HOUR);
 /** Crisis time: game seconds per real second while a nuclear weapon flies, whatever the strategic speed (§2.2). */
 export const CRISIS_RATE = 60;
 /** Observation time: game seconds per real second while the camera is below ~70 km (§2.2). */
@@ -144,8 +138,6 @@ export const CAPITULATION_EXHAUSTION_MIN = 30;
 export const CAPITULATION_ODDS_SLOPE = 0.15;
 /** An army broken (home plus committed troops below this share of the cap) counts like a lost capital (§4.13). */
 export const CAPITULATION_ARMY_BROKEN = 0.1;
-/** Naval invasions (§4.11). */
-export const EMBARK_PORT_TICKS = 60;
 export const EMBARK_SHORE_TICKS = 120;
 export const EMBARK_PORT_RANGE_KM = 600;
 export const LANDING_STORM_TICKS = 20;
@@ -157,15 +149,11 @@ export const SIEGE_DEFENSE_MUL = 0.6;
 /** Difficulty index Easy..Insane for the tables above. */
 export const DIFFICULTY_INDEX = { easy: 0, normal: 1, hard: 2, insane: 3 } as const;
 
-// --- Players ---------------------------------------------------------------------------------
-export const NEUTRAL_ID = 0;
 /** The human is always player 1. AI nations follow, then tribes/rebels. */
 export const HUMAN_ID = 1;
 /** Owner ids must fit in 11 bits (protocol packing). */
 export const MAX_PLAYER_ID = 2047;
 
-// --- Win condition ---------------------------------------------------------------------------
-export const WIN_LAND_SHARE = 0.8;
 /**
  * v2 (§4.18): victory by «Duración». domination = land share that wins at once. Hegemony = a leader holding at least
  * `hegemonyLeader` of the land whose bloc (the leader and its junior allies: allies with less land than it) holds at
@@ -173,9 +161,10 @@ export const WIN_LAND_SHARE = 0.8;
  * countdown). timeLimit = the tick the largest nation wins (0 = none).
  */
 export const DURATION_RULES = {
-  short: { domination: 0.6, hegemonyLeader: 0.15, hegemony: 0.22, hegemonyRatio: 1.75, holdTicks: 1_200, timeLimit: 48_000 },
-  normal: { domination: 0.8, hegemonyLeader: 0.2, hegemony: 0.3, hegemonyRatio: 2, holdTicks: 2_400, timeLimit: 96_000 },
-  long: { domination: 0.9, hegemonyLeader: 0.3, hegemony: 0.4, hegemonyRatio: 2.5, holdTicks: 4_800, timeLimit: 0 },
+  // capitulation: scale on the §4.13 land-lost and exhaustion thresholds (W7: a short game's wars end sooner, §4.18).
+  short: { domination: 0.6, hegemonyLeader: 0.15, hegemony: 0.22, hegemonyRatio: 1.75, holdTicks: 1_200, timeLimit: 48_000, capitulation: 0.75 },
+  normal: { domination: 0.8, hegemonyLeader: 0.2, hegemony: 0.3, hegemonyRatio: 2, holdTicks: 2_400, timeLimit: 96_000, capitulation: 1 },
+  long: { domination: 0.9, hegemonyLeader: 0.3, hegemony: 0.4, hegemonyRatio: 2.5, holdTicks: 4_800, timeLimit: 0, capitulation: 1 },
 } as const;
 
 // --- Balance (sim-core tunes values) -----------------------------------------------------------

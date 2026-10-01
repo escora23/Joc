@@ -110,7 +110,7 @@ export function openPeaceDialog(hs: HudShared, enemy: number): ModalHandle | nul
     send.toggleAttribute('disabled', !!why || (opt !== 'white' && opt !== 'theyPay' && opt !== 'wePay' && tiles <= 0));
   }
   const opts = segmented<Opt>(
-    (['white', 'theyCede', 'theyPay', 'weCede', 'wePay'] as Opt[]).map((o) => ({ value: o, labelKey: `peace.opt.${o}` })),
+    (['white', 'theyCede', 'theyPay', 'weCede', 'wePay'] as Opt[]).map((o) => ({ value: o, labelKey: `peace.opt.${o}`, tip: () => ({ title: t(`peace.opt.${o}`), text: t(`w7.peace.opt.${o}.tip`, { name: hs.name(enemy) }) }) })),
     'white', (o) => {
       opt = o;
       paint();

@@ -548,7 +548,7 @@ export class Civil {
     this.setMesh('roads', rib.build());
     this.stats.roads = roadN;
     // 3. Houses of towns and villages within reach; town labels.
-    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), S = new THREE.Vector3(), C = new THREE.Color(), UP = new THREE.Vector3(0, 1, 0);
+    const Q = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
     let nh = 0;
     this.houseRecs.length = 0;
     this.fires = [];

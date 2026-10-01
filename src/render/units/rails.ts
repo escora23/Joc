@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { EARTH_RADIUS_KM, MAP_W, TILE_COUNT } from '../../shared/constants';
-import { latLonToVec3, tileToLatLon, tileX, tileY, wrapDX } from '../../shared/geo';
+import { latLonToVec3, tileX, tileY, wrapDX } from '../../shared/geo';
 import { isPlayableTerrain } from '../../shared/terrain';
 import { StructureType, type LatLon, type StructureView, type WorldData } from '../../shared/types';
 import { sharedUniforms } from './common';
@@ -291,6 +291,3 @@ function landLine(world: WorldData, ta: number, tb: number): boolean {
   return true;
 }
 
-export function stationLatLon(s: StructureView, out: LatLon): LatLon {
-  return tileToLatLon(s.tile, out);
-}

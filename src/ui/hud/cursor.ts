@@ -17,7 +17,7 @@ import { hexToCss } from '../../shared/color';
 import { tileToLatLon } from '../../shared/geo';
 import { countryName, formatCompact, formatNumber, t } from '../../shared/i18n';
 import { isPlayableTerrain, isWaterTerrain } from '../../shared/terrain';
-import { TerrainClass, TERRAIN_CLASS_MASK, UnitType } from '../../shared/types';
+import { TerrainClass, TERRAIN_CLASS_MASK } from '../../shared/types';
 
 export interface CursorLayer {
   el: HTMLElement;

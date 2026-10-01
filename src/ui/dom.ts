@@ -85,6 +85,3 @@ export function leave(el: HTMLElement, ms = 260): void {
   window.setTimeout(() => el.remove(), ms);
 }
 
-export function clearChildren(el: Element): void {
-  while (el.firstChild) el.removeChild(el.firstChild);
-}

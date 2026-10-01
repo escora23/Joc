@@ -2,6 +2,7 @@
 
 import { h, setText, toggleClass } from './dom';
 import { tx } from './tx';
+import { tip, type TipFn } from './tooltip';
 
 type Sound = (kind: 'click' | 'hover' | 'toggle' | 'slider') => void;
 
@@ -12,7 +13,7 @@ export interface Segmented<T> {
 }
 
 export function segmented<T extends string | number>(
-  options: { value: T; labelKey?: string; label?: string; title?: string }[],
+  options: { value: T; labelKey?: string; label?: string; title?: string; tip?: TipFn }[],
   value: T,
   onChange: (v: T) => void,
   sound?: Sound,
@@ -28,7 +29,8 @@ export function segmented<T extends string | number>(
     },
   };
   for (const o of options) {
-    const b = h('button', { type: 'button', title: o.title ?? null }, o.labelKey ? tx(o.labelKey) : (o.label ?? String(o.value)));
+    const b = h('button', { type: 'button', title: o.tip ? null : o.title ?? null }, o.labelKey ? tx(o.labelKey) : (o.label ?? String(o.value)));
+    if (o.tip) tip(b, o.tip);
     b.addEventListener('click', () => {
       if (api.value === o.value) return;
       sound?.('click');

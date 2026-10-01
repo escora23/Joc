@@ -23,7 +23,6 @@ export class Hurricane implements ActiveEvent {
   private startEmitted = false;
   private landTicks = 0;
   private announced = false;
-  private announcedTick = -1_000_000;
   private readonly affected = new Set<number>();
   private readonly lifetime: number;
   private readonly speed: number;
@@ -91,7 +90,6 @@ export class Hurricane implements ActiveEvent {
       const land = nearestLand(g, this.x, this.y, 45);
       if (land >= 0) {
         this.announced = true;
-        this.announcedTick = t;
         this.startEmitted = true;
         emitStage(env, this.id, this.kind, 'start', (land % 1600) + 0.5, ((land / 1600) | 0) + 0.5, this.radius, Math.round(this.category), [...this.affected]);
       }

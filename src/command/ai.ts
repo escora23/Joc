@@ -1031,6 +1031,3 @@ export class Brain {
 }
 
 const EUL = new THREE.Euler();
-export function teamSign(t: Team): number {
-  return t === 0 ? 1 : -1;
-}

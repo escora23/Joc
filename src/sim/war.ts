@@ -10,7 +10,7 @@
 // arms (§5.5), which allies (the human from its inbox) answer as proposals.
 
 import {
-  AI_MOBILIZE_TICKS, CAPITULATION_EXHAUSTION, CAPITULATION_EXHAUSTION_MIN, CAPITULATION_LAND_LOST, CAPITULATION_LAND_LOST_MIN, CAPITULATION_ODDS_SLOPE, CAPITULATION_ARMY_BROKEN, DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID,
+  AI_MOBILIZE_TICKS, DURATION_RULES, CAPITULATION_EXHAUSTION, CAPITULATION_EXHAUSTION_MIN, CAPITULATION_LAND_LOST, CAPITULATION_LAND_LOST_MIN, CAPITULATION_ODDS_SLOPE, CAPITULATION_ARMY_BROKEN, DIFFICULTY_INDEX, HUMAN_GRACE_TICKS, HUMAN_ID,
   HUMAN_MOBILIZE_TICKS, JOIN_MOBILIZE_TICKS, LOGISTICS_FLOOR, LOGISTICS_SHARE, LOGISTICS_WINDOW, REBEL_MOBILIZE_TICKS,
   TENSION_LEAD_TICKS, TICKS_PER_GAME_DAY, TRAITOR_TICKS, TRUCE_TICKS,
 } from '../shared/constants';
@@ -598,8 +598,9 @@ export class WarSystem {
         let enemyLand = 0;
         for (const o of mine) enemyLand += g.playerById[o.a === loser ? o.b : o.a]?.tiles ?? 0;
         const odds = Math.max(0, enemyLand / Math.max(1, base) - 1);
-        const landNeed = Math.max(CAPITULATION_LAND_LOST_MIN, CAPITULATION_LAND_LOST - CAPITULATION_ODDS_SLOPE * odds);
-        const exNeed = Math.max(CAPITULATION_EXHAUSTION_MIN, CAPITULATION_EXHAUSTION - 5 * odds);
+        const k = DURATION_RULES[g.config.duration ?? 'normal']?.capitulation ?? 1;
+        const landNeed = k * Math.max(CAPITULATION_LAND_LOST_MIN, CAPITULATION_LAND_LOST - CAPITULATION_ODDS_SLOPE * odds);
+        const exNeed = k * Math.max(CAPITULATION_EXHAUSTION_MIN, CAPITULATION_EXHAUSTION - 5 * odds);
         if (L.tiles > base * (1 - landNeed)) continue;
         if (this.exhaustion(loser) < exNeed) continue;
         // To the enemy that took the most of its land.

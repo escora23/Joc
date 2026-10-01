@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import {
-  COARSE_SIZE_M, FINE_SIZE_M, FastRng, GLSL_BATTLE_FRAG, GLSL_BATTLE_HEAD, GLSL_BATTLE_VERT, GLSL_ROT, GLSL_TAIL, noise1,
+  COARSE_SIZE_M, FastRng, GLSL_BATTLE_FRAG, GLSL_BATTLE_HEAD, GLSL_BATTLE_VERT, GLSL_ROT, GLSL_TAIL, noise1,
   type BattleUniforms,
 } from './common';
 import { FIELD_ROW, FieldFrame, HEDGE_SEG, colHedge, isWoodlot, rowHedge, rowShift, rowWidth } from './fields';

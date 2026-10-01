@@ -43,7 +43,7 @@ export class MapIndex {
    */
   readonly islands: { size: number; coast: number[] }[] = [];
 
-  constructor(private readonly g: SimGame) {
+  constructor(g: SimGame) {
     const counts = new Int32Array(CELLS_X * CELLS_Y + 1);
     let nCoast = 0, nPlay = 0;
     for (let t = 0; t < TILE_COUNT; t++) {

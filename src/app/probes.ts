@@ -8,10 +8,10 @@
 
 import * as THREE from 'three';
 import type { GameContext } from '../shared/api';
-import { HUMAN_ID, MAP_W, UNIT_DEFS } from '../shared/constants';
+import { HUMAN_ID, UNIT_DEFS } from '../shared/constants';
 import { UNIT_STRIDE } from '../shared/protocol';
 import { greatCircleKm, latLonToTile, tileXYToLatLon } from '../shared/geo';
-import { StructureType, UnitType, type UnitView } from '../shared/types';
+import { StructureType, UnitType } from '../shared/types';
 
 /** v1 on-screen km per real second at 1x (AUDIT-1 §2.1): every surface class must stay at or below it (T27b). */
 const V1_LIMIT: Partial<Record<UnitType, number>> = {
@@ -36,14 +36,6 @@ interface ProbeRow {
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const nextFrame = () => new Promise<number>((r) => requestAnimationFrame(r));
-
-function renderLatLon(u: UnitView, alpha: number): { lat: number; lon: number } {
-  let x = u.prevX + (u.x - u.prevX) * alpha;
-  if (x < 0) x += MAP_W;
-  else if (x >= MAP_W) x -= MAP_W;
-  const y = u.prevY + (u.y - u.prevY) * alpha;
-  return tileXYToLatLon(x, y);
-}
 
 export function installProbes(ctx: GameContext, target: Record<string, unknown>): void {
   target.clock = () => ({ ...ctx.sim.view.clock, tick: ctx.sim.view.tick, gameHours: ctx.sim.view.gameHours });

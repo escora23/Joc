@@ -5,7 +5,7 @@
 // the viewer's capital (named by its own nearest place). Every located alert and front name uses it.
 
 import { nearestPlace, placeKm } from '../data/places';
-import { HUMAN_ID, MAP_W } from '../shared/constants';
+import { HUMAN_ID } from '../shared/constants';
 import type { GameView } from '../shared/api';
 import { latLonToTile, tileToLatLon, tileXYToLatLon } from '../shared/geo';
 import { countryName, formatNumber, getLanguage, t } from '../shared/i18n';
@@ -116,8 +116,3 @@ export function describeXY(view: GameView, x: number, y: number, viewer = HUMAN_
   return describePlace(view, ll.lat, ll.lon, viewer);
 }
 
-/** Tile of continuous tile coords (wrapped). */
-export function xyTile(x: number, y: number): number {
-  const tx = ((Math.floor(x) % MAP_W) + MAP_W) % MAP_W;
-  return Math.max(0, Math.floor(y)) * MAP_W + tx;
-}

@@ -130,14 +130,18 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
   const place = describeXY(view, tx0, ty0).text;
 
   const where = h('div', { class: 'fu-offdlg-where' });
-  const shareSeg = segmented<number>(SHARES.map((s) => ({ value: s, label: `${Math.round(s * 100)} %` })), share, (v) => {
+  const shareSeg = segmented<number>(SHARES.map((s) => ({
+    value: s, label: `${Math.round(s * 100)} %`,
+    tip: () => ({ title: `${Math.round(s * 100)} %`, text: t('w7.ratio.tick', { v: Math.round(s * 100), n: formatNumber(Math.floor((ctx.sim.view.human?.troops ?? 0) * s)) }) }),
+  })), share, (v) => {
     share = v;
     paint();
   }, () => hs.sound('click'));
   const troopsOut = h('b', { class: 'fu-mono' });
-  const intOpts: { value: OffensiveIntensity; labelKey: string }[] = own
-    ? [{ value: 0, labelKey: 'off.int.0' }, { value: 1, labelKey: 'off.int.1' }, { value: 2, labelKey: 'off.int.2' }]
-    : [{ value: 1, labelKey: 'off.int.1' }, { value: 2, labelKey: 'off.int.2' }];
+  const intOpts: { value: OffensiveIntensity; labelKey: string; tip?: () => { title: string; text: string } }[] = own
+    ? [0, 1, 2].map((v) => ({ value: v as OffensiveIntensity, labelKey: `off.int.${v}` }))
+    : [1, 2].map((v) => ({ value: v as OffensiveIntensity, labelKey: `off.int.${v}` }));
+  for (const o of intOpts) (o as { tip?: () => { title: string; text: string } }).tip = () => ({ title: t(o.labelKey), text: t(`off.int.${o.value}.tip`) });
   const intSeg = segmented<OffensiveIntensity>(intOpts, intensity, (v) => {
     intensity = v;
     paint();
@@ -160,6 +164,7 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
   }
   const launch = h('button', { class: 'fu-btn fu-btn--danger fu-offdlg-go' }, icon('attack'), h('span')) as HTMLButtonElement;
   const cancel = h('button', { class: 'fu-btn fu-btn--ghost' }, tx('common.cancel')) as HTMLButtonElement;
+  tip(cancel, () => ({ title: t('common.cancel'), text: t('dialog.cancel.tip') }));
 
   const row = (k: string, v: string, cls = '') => h('div', { class: `fu-offdlg-row ${cls}` }, h('span', null, k), h('b', { class: 'fu-mono' }, v));
 
@@ -282,7 +287,3 @@ function minDistKm(f: FrontView, x: number, y: number): number {
   return Number.isFinite(d) ? d : 0;
 }
 
-/** Debug / verifiers: the open dialog, if any. */
-export function offensiveDialogOpen(): boolean {
-  return !!current;
-}
