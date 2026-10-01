@@ -135,12 +135,14 @@ void main() {
   float ndl = max(dot(N, uSunDir), 0.0);
   vec3 sunCol = mix(vec3(1.0, 0.5, 0.26), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.4, sunUp)) * 2.2;
   float upness = dot(N, vUp) * 0.5 + 0.5;
-  vec3 amb = mix(vec3(0.02, 0.026, 0.045), vec3(0.22, 0.26, 0.34), dayK) * (0.5 + 0.5 * upness);
+  // Night keeps a cool moonlight ambient (owner item 29b, W7): over the lit territory fill a near-black model reads as
+  // a black plate; with it the halls, roofs and hulls keep their shape and the window and runway lights still pop.
+  vec3 amb = mix(vec3(0.085, 0.10, 0.15), vec3(0.22, 0.26, 0.34), dayK) * (0.5 + 0.5 * upness);
   // Sky bounce from the side opposite the sun: faces turned away from the sun keep their shape and colour instead of
   // going black (models must read up close, owner clarification to FEEDBACK-1).
   vec3 sunH = uSunDir - vUp * dot(uSunDir, vUp);
   vec3 fillDir = normalize(vUp * 0.5 - sunH * 1.2 + vec3(1e-4));
-  vec3 fill = vec3(0.42, 0.48, 0.58) * max(dot(N, fillDir), 0.0) * 0.45 * dayK;
+  vec3 fill = vec3(0.42, 0.48, 0.58) * max(dot(N, fillDir), 0.0) * 0.45 * mix(0.35, 1.0, dayK);
   float lights = vMask.y;
 #ifdef CITY
   albedo = vColor * vTeam;

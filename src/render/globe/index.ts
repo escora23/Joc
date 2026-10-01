@@ -223,6 +223,9 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       planet.uFill.value = territoryFillAmount(zoomKm);
       planet.uNeutralK.value = smoothstep(600, 1000, zoomKm);
       planet.uNightFloor.value = lerp(0.1, 0.22, smoothstep(600, 1000, zoomKm));
+      // Close views at night keep the night mood (§10.4): the fill glows at half its orbit strength below ~300 km, so
+      // the lit structure models and city lights read against it instead of sitting on a bright carpet (W7).
+      planet.uNightFill.value = lerp(0.5, 1, smoothstep(300, 1000, zoomKm));
       // Border noise (tiles): ~2-6 km wander, faded in below 1,500 km (sub-pixel from higher up).
       planet.uBorderNoise.value = 0.16 * (1 - smoothstep(600, 1500, zoomKm));
       planet.uShoreK.value = smoothstep(1200, 1500, zoomKm);

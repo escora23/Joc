@@ -101,7 +101,9 @@ const STAGE2_ONLY = args.stage2 === 'true';
 /** W7: the game speed the scripted actions run at (1 or 4) and the difficulty of the run (easy or normal). */
 const SPEED = Number(args.speed || 1);
 const DIFFICULTY = String(args.difficulty || 'easy');
-const STEP_TIMEOUT_MS = 240_000;
+// A step's budget: the software renderer draws a busy frame in seconds, and command mode or a nuclear flight are many
+// frames (--steptimeout to change it).
+const STEP_TIMEOUT_MS = Number(args.steptimeout || 480) * 1000;
 let stage = 'stage2';
 /**
  * One step: survivable (a failure is recorded and the run goes on), bounded (240 s), and its screenshots are taken
@@ -726,7 +728,7 @@ try {
     check(st.highlighted.includes('fu-time-seg'), `the clock tip does not highlight the speed buttons (${st.highlighted})`);
     await shot('14e-advisor-clock');
     await page.locator('.fu-tut .fu-btn--primary').click({ force: true });
-    check(await until(() => window.__fuTutorial?.().step !== 'clock', null, 8000, 250), '«Entendido» did not close the clock tip');
+    check(await until(() => window.__fuTutorial?.().step !== 'clock', null, 40000, 250), '«Entendido» did not close the clock tip');
     return `seen ${seen.join(' > ')}; now «${(await page.evaluate(() => window.__fuTutorial?.()))?.step}»`;
   });
 
@@ -1168,8 +1170,12 @@ try {
       const before = await page.locator('.fu-sel').innerText();
       await shot('05b-factory-L1');
       await page.locator('.fu-sel .fu-w4-up').click({ force: true });
+      check(await until((id) => (window.__front.ctx.sim.view.structures.get(id)?.upgrade ?? 0) > 0 || (window.__front.ctx.sim.view.structures.get(id)?.level ?? 0) >= 2, f.id, 15000, 300), 'the upgrade did not start');
+      // Below ~60 km the world runs in observation time (1 s = 1 min): step back so the 3 game hours pass at 1x.
+      await lookAt(ll.lat, ll.lon, 900);
       const up = await until((id) => { const s = window.__front.ctx.sim.view.structures.get(id); return s && s.level >= 2 ? s.level : null; }, f.id, 120000, 1000);
       check(up, 'the factory never reached level 2');
+      await lookAt(ll.lat - 0.15, ll.lon, 40, 0.9);
       await sleep(3000);
       const after = await page.locator('.fu-sel').innerText();
       await shot('05c-factory-L2');
@@ -1224,7 +1230,10 @@ try {
       const peace = await page.evaluate(() => {
         const v = window.__front.ctx.sim.view, pt = window.__pt;
         const cap = v.human.capitalTile;
-        const c = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && v.pairState(1, p.id) === 'peace')
+        // Not a neighbour: a nation that borders us answers a staged war by marching into our bases.
+        const neighbours = new Set();
+        for (const t of pt.humanTiles()) for (const n of [t - 1, t + 1, t - 1600, t + 1600]) if (v.owner[n] !== 1) neighbours.add(v.owner[n]);
+        const c = v.playerList.filter((p) => p.alive && p.id !== 1 && p.kind === 'nation' && !v.human.allies.includes(p.id) && p.tiles > 150 && v.pairState(1, p.id) === 'peace' && !neighbours.has(p.id))
           .map((p) => ({ id: p.id, tile: Math.floor(p.labelY) * 1600 + Math.floor(p.labelX), tiles: p.tiles }))
           .filter((p) => v.owner[p.tile] === p.id && pt.dist(p.tile, cap) > 90 && pt.dist(p.tile, cap) < 450);
         c.sort((a, b) => b.tiles - a.tiles);

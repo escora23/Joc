@@ -37,6 +37,8 @@ export interface PlanetUniforms {
   uFill: { value: number };
   uNeutralK: { value: number };
   uNightFloor: { value: number };
+  /** W7: share of the night re-emission of the territory fill (1 from orbit, lower in close views: the night mood). */
+  uNightFill: { value: number };
   uBorderNoise: { value: number };
   uShoreK: { value: number };
   uCloseK: { value: number };
@@ -69,6 +71,7 @@ export function createPlanetUniforms(): PlanetUniforms {
     uFill: { value: 0.5 },
     uNeutralK: { value: 1 },
     uNightFloor: { value: 0.22 },
+    uNightFill: { value: 1 },
     uBorderNoise: { value: 0 },
     uShoreK: { value: 1 },
     uCloseK: { value: 0 },
@@ -220,6 +223,7 @@ uniform float uHistorical;
 uniform float uFill;
 uniform float uNeutralK;
 uniform float uNightFloor;
+uniform float uNightFill;
 uniform float uBorderNoise;
 uniform float uShoreK;
 uniform float uCloseK;
@@ -954,7 +958,7 @@ void main() {
   float nightK = 1.0 - smoothstep(-0.12, 0.06, muS);
   if (nightK > 0.0) {
     col += albedo * vec3(0.55, 0.72, 1.0) * uNightFloor * nightK * (0.45 + 0.55 * landK);
-    emissive += nightFill * uSunE * 0.75 * 0.42 * nightK;
+    emissive += nightFill * uSunE * 0.75 * 0.42 * uNightFill * nightK;
   }
   col += emissive;
 
