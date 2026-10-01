@@ -1,6 +1,6 @@
 // FRONT ULTRA — tile marks on the globe (DESIGN_V2 §4.15, §5.12, §8.2; owner: globe, added by W3).
 //
-// Named sets of tiles drawn as pulsing squares on the ground: the band of land a peace treaty or a demand would cede
+// Named sets of tiles drawn as a soft pulsing glow on the ground (one round splat per tile, overlapping): the band of land a peace treaty or a demand would cede
 // (previewed before sending), the region of an unrest warning, a demanded band in an ultimatum. One THREE.Points object
 // per set, sized to the tile (sizeAttenuation) with a pixel floor so a band still reads from 3,000 km. Built at init
 // with a placeholder point so the shader compiles with the others at load.
@@ -23,12 +23,14 @@ uniform vec3 uColor;
 uniform float uTime;
 uniform float uPulse;
 void main() {
-  vec2 d = abs(gl_PointCoord - 0.5) * 2.0;
-  float m = max(d.x, d.y);
-  if (m > 1.0) discard;
-  float edge = smoothstep(0.62, 0.95, m);
-  float pulse = mix(1.0, 0.55 + 0.45 * sin(uTime * 4.0), uPulse);
-  gl_FragColor = vec4(uColor, (0.38 + 0.5 * edge) * pulse);
+  // A soft round splat two tiles wide: neighbouring tiles overlap into one even, glowing area with a soft rim, so a band
+  // reads as a region on the map, never as a lattice of squares (W7; owner: «Laz zonas … no se ven del todo bien»).
+  vec2 q = (gl_PointCoord - 0.5) * 2.0;
+  float d2 = dot(q, q);
+  if (d2 > 1.0) discard;
+  float f = (1.0 - d2) * (1.0 - d2);
+  float pulse = mix(1.0, 0.7 + 0.3 * sin(uTime * 3.0), uPulse);
+  gl_FragColor = vec4(uColor, 0.5 * f * pulse);
 }`;
 
 export interface TileMarks {
@@ -102,8 +104,8 @@ export function createTileMarks(radiusAt: (lat: number, lon: number) => number):
         if (k === '__warm') continue;
         const m = p.material as THREE.ShaderMaterial;
         m.uniforms.uTime.value = timeSec;
-        m.uniforms.uScale.value = scale * 1.05;
-        m.uniforms.uMinPx.value = 2.5;
+        m.uniforms.uScale.value = scale * 2.0;
+        m.uniforms.uMinPx.value = 5;
       }
     },
     clear() {
