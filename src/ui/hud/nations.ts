@@ -22,7 +22,7 @@ import { answer, askHelp, donate, focusNation, leaveTreaty, propose, toggleEmbar
 import { bandCentre, deliberationLeft, inboxCountdown, OPEN_STATUS, previewBand, proposalWhat, reasonLine, reasonsQuoted } from './inboxText';
 import type { HudShared } from './shared';
 import { goldField, openDemandDialog, openPeaceDialog } from './wardialogs';
-import { ALLIANCE_NOTICE_TICKS, DELIBERATION_TICKS, HUMAN_ID, NAP_TICKS, opinionBand } from '../../shared/constants';
+import { ALLIANCE_NOTICE_TICKS, DELIBERATION_TICKS, HUMAN_ID, NAP_TICKS, TICKS_PER_GAME_DAY, opinionBand } from '../../shared/constants';
 import { formatCompact, formatNumber, t } from '../../shared/i18n';
 import type { PlayerView, ProposalView, TreatyKind } from '../../shared/types';
 
@@ -68,6 +68,11 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
   listBox.addEventListener('pointerenter', () => (listHover = true));
   listBox.addEventListener('pointerleave', () => (listHover = false));
   const detailBox = h('div', { class: 'fu-nt-detail fu-hidden' });
+  // Like the list: while the pointer is over the detail, the clock alone does not rebuild it (its buttons would be
+  // replaced under the cursor); a change of state (treaty, opinion, proposal, war) still does.
+  let detailHover = false;
+  detailBox.addEventListener('pointerenter', () => (detailHover = true));
+  detailBox.addEventListener('pointerleave', () => (detailHover = false));
   const inboxBox = h('div', { class: 'fu-nt-inbox fu-hidden' });
   const body = h('div', { class: 'fu-nt-body' }, listBox, detailBox, inboxBox);
   const el = h('div', { class: 'fu-nations fu-glass fu-brackets fu-interactive fu-hidden' },
@@ -466,7 +471,7 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
       const span = Math.max(1, p.decideTick - p.createdTick);
       const done = Math.min(1, (v.tick - p.createdTick) / span);
       card.append(h('div', { class: 'fu-ib-text' }, t('proposal.studying', { name: name(other) })), h('div', { class: 'fu-ib-sub' }, what + (p.gold > 0 ? ` · ${t('inbox.withGold', { gold: formatCompact(p.gold) })}` : '')));
-      card.append(h('div', { class: 'fu-ib-progress' }, h('i', { style: `transform:scaleX(${done.toFixed(3)})` })), h('div', { class: 'fu-ib-cd fu-mono' }, t('inbox.answerIn', { hours: formatNumber(deliberationLeft(hs, p)) })));
+      card.append(h('div', { class: 'fu-ib-progress' }, h('i', { style: `transform:scaleX(${done.toFixed(3)})`, 'data-sp': p.id })), h('div', { class: 'fu-ib-cd fu-mono', 'data-sc': p.id }, t('inbox.answerIn', { hours: formatNumber(deliberationLeft(hs, p)) })));
     } else {
       const sentence = p.from === HUMAN_ID ? t(`proposal.answer.${p.status}`, { name: name(other), what }) : p.status === 'expired' ? t('proposal.expired', { name: name(other), what }) : p.status === 'cancelled' ? t('proposal.cancelled', { name: name(other), what }) : t(p.status === 'accepted' ? 'proposal.youAccepted' : 'proposal.youRefused', { name: name(other), what });
       card.append(h('div', { class: 'fu-ib-text' }, sentence));
@@ -513,6 +518,7 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
   // =================================================================================================
   let acc = 0;
   let lastDetailSig = '';
+  let lastDetailDay = -1;
   function refresh(force = false): void {
     const n = pendingCount();
     toggleClass(inboxN, 'fu-hidden', n === 0);
@@ -524,13 +530,22 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
       let ps = '';
       for (const q of v.proposals.values()) if (q.from === detailId || q.to === detailId) ps += `${q.id}:${q.status},`;
       const op = v.opinions.get(detailId);
-      const sig = `${Math.floor(v.tick / 50)}|${ps}|${v.treatiesBetween(HUMAN_ID, detailId).map((x) => `${x.kind}${x.leavingTick}`).join()}|${op?.score}|${op?.reasons.length}|${v.pairState(HUMAN_ID, detailId)}|${v.human?.embargoes.length}|${v.human?.allies.length}`;
-      if (force || sig !== lastDetailSig) {
+      const day = Math.floor(v.tick / TICKS_PER_GAME_DAY);
+      const sig = `${ps}|${v.treatiesBetween(HUMAN_ID, detailId).map((x) => `${x.kind}${x.leavingTick}`).join()}|${op?.score}|${op?.reasons.length}|${v.pairState(HUMAN_ID, detailId)}|${v.human?.embargoes.length}|${v.human?.allies.length}`;
+      if (force || sig !== lastDetailSig || (day !== lastDetailDay && !detailHover)) {
         lastDetailSig = sig;
+        lastDetailDay = day;
         renderDetail();
       } else {
         refreshActions();
         for (const q of v.proposals.values()) {
+          if (q.from === HUMAN_ID && q.status === 'considering') {
+            // Our proposal being studied: its bar and «respuesta en ~N h» move with the clock, in place.
+            const bar = detailBox.querySelector(`[data-sp="${q.id}"]`) as HTMLElement | null;
+            if (bar) bar.style.transform = `scaleX(${Math.min(1, (v.tick - q.createdTick) / Math.max(1, q.decideTick - q.createdTick)).toFixed(3)})`;
+            const sc = detailBox.querySelector(`[data-sc="${q.id}"]`) as HTMLElement | null;
+            if (sc) setText(sc, t('inbox.answerIn', { hours: formatNumber(deliberationLeft(hs, q)) }));
+          }
           if (q.to !== HUMAN_ID || q.status !== 'pending') continue;
           const cd = detailBox.querySelector(`[data-cd="${q.id}"]`) as HTMLElement | null;
           if (cd) setText(cd, inboxCountdown(hs, q).text);
