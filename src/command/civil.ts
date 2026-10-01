@@ -687,9 +687,11 @@ export class Civil {
     const hmin = hs[0];
     const base = Math.max(0.5, hs[Math.floor(hs.length / 2)]);
     this.footprints.push({ x: sx, z: sz, half: size * 0.5 });
+    const rotY = Math.round(hash(s.id, 17) * 4) * (Math.PI / 2);
+    if (real && geo.userData.draped !== this.ground!.stats.built) this.drapeModel(geo, sx, sz, base, rotY);
     const m = new THREE.Mesh(geo, mat);
     m.position.set(sx, base, sz);
-    m.rotation.y = Math.round(hash(s.id, 17) * 4) * (Math.PI / 2);
+    m.rotation.y = rotY;
     if (real) m.scale.set(1, 1, 1);
     else m.scale.set(size, yScale, size);
     const tallM = real ? top : info.tallM * Math.max(0.3, standing);
@@ -707,7 +709,7 @@ export class Civil {
     m.receiveShadow = true;
     m.name = `struct-${s.id}`;
     this.structGroup.add(m);
-    if (base - hmin > 0.5) {
+    if (!real && base - hmin > 0.5) {
       const pad = new THREE.Mesh(new THREE.BoxGeometry(size * 0.96, base - hmin + 1, size * 0.96), PAD_MAT);
       pad.position.set(sx, (base + hmin) / 2 - 0.5, sz);
       pad.rotation.y = m.rotation.y;
@@ -724,6 +726,47 @@ export class Civil {
       text: np ? t('command.label.baseAt', { type: typeName, place: es ? np.nameEs : np.nameEn || np.nameEs }) : typeName,
       sub: state ? `${t('command.label.level', { n: s.level })} · ${t(`card.dmg.${DAMAGE_WORD[state]}`)}` : t('command.label.level', { n: s.level }), kind: 'base', color: css(col), owner: s.owner,
     });
+  }
+
+  /**
+   * Fix pass 3: a compound model (models/structures.ts) set on the ground it stands on, once per built geometry: each
+   * building rises from the ground under its own anchor (its footing goes down to the ground at every corner), and
+   * aprons, runways and roads drape over the relief vertex by vertex. Model y is relative to `base` (the mesh's y).
+   */
+  private drapeModel(geo: THREE.BufferGeometry, sx: number, sz: number, base: number, rotY: number): void {
+    const ranges = geo.userData.ranges as { n: number; ax: number; az: number; drape: boolean }[] | undefined;
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
+    const g = this.ground;
+    if (!ranges || !pos || !g) return;
+    // From the model's own positions every time (finer terrain streams in under it: it is set again then).
+    const orig = (geo.userData.orig as Float32Array | undefined) ?? (geo.userData.orig = Float32Array.from(pos.array as Float32Array));
+    (pos.array as Float32Array).set(orig);
+    const c = Math.cos(rotY), sn = Math.sin(rotY);
+    // Model (x, z) → scene (x, z) for the mesh's rotation about y.
+    const wx = (x: number, z: number) => sx + x * c + z * sn;
+    const wz = (x: number, z: number) => sz - x * sn + z * c;
+    let i = 0;
+    for (const r of ranges) {
+      if (r.drape) {
+        for (let k = i; k < i + r.n; k++) {
+          const x = pos.getX(k), z = pos.getZ(k);
+          pos.setY(k, pos.getY(k) + g.heightAt(wx(x, z), wz(x, z)) - base);
+        }
+      } else {
+        const off = g.heightAt(wx(r.ax, r.az), wz(r.ax, r.az)) - base;
+        for (let k = i; k < i + r.n; k++) {
+          const x = pos.getX(k), y = pos.getY(k), z = pos.getZ(k);
+          // The footing: vertices at the bottom reach down to the ground under them (no building floats on a slope).
+          const footing = y <= 0.6 ? Math.min(0, g.heightAt(wx(x, z), wz(x, z)) - base - off - 0.4) : 0;
+          pos.setY(k, y + off + footing);
+        }
+      }
+      i += r.n;
+    }
+    pos.needsUpdate = true;
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    geo.userData.draped = g.stats.built;
   }
 
   /** A house instance: standing, or a low scorched heap where it collapsed. */
@@ -898,6 +941,34 @@ export class Civil {
       const sx = p.x - f.offX, sz = p.z - f.offZ;
       this.addDebris(sx, sz, size * 0.45, 60, r.tile, 1.1);
       const y = this.ground!.heightAt(sx, sz);
+      // Fix pass 3 (#27): the compound itself in ruins — every building a blackened heap with a wall stub, chimneys
+      // broken, tanks burst — so the place still reads as what it was (a factory, a port) and plainly destroyed.
+      const gkey = `ruin:${r.type}:${r.tile}`;
+      let geo = this.structGeos.get(gkey);
+      if (!geo) {
+        const cm = buildCmdStructure(r.type, 1, 3, size, 0x4a4642, r.tile);
+        if (cm) {
+          geo = cm.geo;
+          this.structGeos.set(gkey, geo);
+          this.structTops.set(gkey, cm.top);
+        }
+      }
+      if (geo) {
+        let mat = this.structMats.get(-1);
+        if (!mat) {
+          mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+          mat.color.setRGB(0.62, 0.58, 0.55);
+          this.structMats.set(-1, mat);
+        }
+        const rotY = Math.round(hash(r.tile, 17) * 4) * (Math.PI / 2);
+        if (geo.userData.draped !== this.ground!.stats.built) this.drapeModel(geo, sx, sz, Math.max(0.5, y), rotY);
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(sx, Math.max(0.5, y), sz);
+        m.rotation.y = rotY;
+        m.castShadow = m.receiveShadow = true;
+        m.name = `ruin-${r.tile}`;
+        this.structGroup.add(m);
+      }
       if (view.tick - r.tick < 480) this.fires.push({ x: sx, y: y + 2, z: sz, heat: view.tick - r.tick < 120 ? 0.8 : 0.3, size: 3 });
       this.labels.push({
         x: sx, y: y + 30, z: sz, text: t('command.label.ruin', { type: t(`structure.${STRUCT_ID[r.type]}`) }),

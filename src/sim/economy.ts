@@ -288,7 +288,7 @@ export class EconomySystem {
       } else destroyed = true;
     }
     const state = destroyed ? 3 : damageState(s.hp);
-    if (state !== stateBefore || levelLost || destroyed || amount >= 0.1) {
+    if (state !== stateBefore || levelLost || destroyed || amount >= 0.1 || civilians >= 1 || troops >= 1) {
       g.emit({
         type: 'structureDamaged', tick: g.tick, structureId: s.id, owner, by, structure: s.type, tile: s.tile, level: s.level,
         hpBefore: Math.max(0, hpBefore), hp: Math.max(0, s.hp), state, levelLost, destroyed, civilians: Math.round(civilians), troops: Math.round(troops), cause,

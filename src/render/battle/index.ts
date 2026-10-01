@@ -1063,7 +1063,9 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const d = focusL.distanceTo(camL);
     const extent = Math.min(4200, Math.max(700, d * 2.6));
     sunL.copy(uniforms.uSunDir.value);
-    shadow.render(ctx.renderer, ctx.scene, near, focusL, sunL, extent);
+    // From high up (the view target over 7 km away) shadows would only alias (battleShadow fades them out by then).
+    if (d > 7000) uniforms.uShadowInfo.value.x = 0;
+    else shadow.render(ctx.renderer, ctx.scene, near, focusL, sunL, extent);
   }
 
   function updateFar(dt: number): void {

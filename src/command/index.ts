@@ -96,7 +96,7 @@ const TRANSIT_RATE_MAX = 3600;
  * scale: a tank's HE shell 5 %, AP 2 % (its 20 HE rounds take a level), a ship's gun 6 %, a jet's missile 12 %, a ship's missile 20 %, a bomb 30 %)
  * and from a city: each house knocked down 0.5 %, each city block collapsed (25 % of its houses down) 3 % more.
  */
-const HIT_DMG = { he: 0.05, ap: 0.02, naval: 0.06, missile: 0.12, shipMissile: 0.2, bomb: 0.3 };
+const HIT_DMG = { he: 0.08, ap: 0.02, naval: 0.06, missile: 0.12, shipMissile: 0.2, bomb: 0.3 };
 const HOUSE_DMG = 0.005;
 const BLOCK_DMG = 0.03;
 const BLOCK_DOWN_SHARE = 0.25;
@@ -815,11 +815,23 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     const blast = BLAST_M[w];
     const victims = blast > 0 ? [r, ...civil.housesNear(at.x, at.z, blast).filter((h) => h !== r && h.cityId === r.cityId)] : [r];
-    for (const h of victims) {
+    // Fix pass 3 (#27): a round that brings houses down is a heavy hit on the city — the weapon's whole damage goes to
+    // the sim (its civilian and garrison losses, level loss, diplomacy), as the confirmation dialog said, plus a little
+    // for every further house its blast flattens.
+    if (city) {
+      pend(city.id, HIT_DMG[w]);
+      const civ = cityCivilianLoss(city.level, HIT_DMG[w] + HOUSE_DMG * (victims.length - 1));
+      if (overlay && (!overlay.noticeText || overlay.noticeText === lastHitNotice)) {
+        lastHitNotice = t('command.hit.city', { city: cityName(city.id), civ: formatNumber(Math.max(10, Math.round(civ / 10) * 10)), n: victims.length });
+        overlay.showNotice(lastHitNotice, 2.5);
+      }
+      hud?.hitMarker(false);
+    }
+    for (const [i, h] of victims.entries()) {
       civil.collapseHouse(h);
       housesDown++;
       if (!city) continue;
-      pend(city.id, HOUSE_DMG);
+      if (i > 0) pend(city.id, HOUSE_DMG);
       const key = `${city.id}:${h.block}`;
       if (!reportedBlocks.has(key) && civil.blockDown(city.id, h.block).share >= BLOCK_DOWN_SHARE) {
         reportedBlocks.add(key);
@@ -846,7 +858,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!city) return;
     const name = nationName(city.owner);
     const peace = view.pairState(HUMAN_ID, city.owner) !== 'war';
-    const civ = cityCivilianLoss(city.level, 0.1);
+    // The losses of one of this vehicle's heavy rounds (the hit that brings houses down sends exactly this).
+    const civ = cityCivilianLoss(city.level, HIT_DMG[kind === 'jet' ? 'bomb' : kind === 'ship' ? 'naval' : 'he']);
     const allies = view.players[city.owner]?.allies.length ?? 0;
     const body = t('command.civil.body', {
       city: cityName(cityId), nation: name, civ: formatNumber(Math.round(civ / 100) * 100), v: Math.abs(CIVILIAN_OPINION_VICTIM),
@@ -1045,6 +1058,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       world, overlay, unitId: p.unitId, send: (cmd) => ctx.sim.send(cmd), nameOf: nationName, colorOf: colorCss,
       shipName: unitLabel(p.unitType, ctx.sim.view.units.get(p.unitId)?.serial ?? 0),
       sound: (k) => ctx.bus.emit('uiSound', { kind: k === 'radio' ? 'typewriter' : k === 'confirm' ? 'confirm' : 'error' }),
+      lookAt: (q) => (controller as unknown as { lookToward?(p: THREE.Vector3): void } | null)?.lookToward?.(q),
+      ownColor: ctx.sim.view.players[HUMAN_ID]?.color ?? 0x3f8fd8,
+      colorHex: (o) => ctx.sim.view.players[o]?.color ?? 0x888888,
     }) : null;
     frame.set(p.lat, p.lon);
     world.reset();
@@ -2706,7 +2722,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           setTimeout(() => {
             // Not over a more important notice (a border ahead): the peaceful welcome is only for the quiet case.
             const nb = player() ? nearestBorder(player()!.pos) : null;
-            if (!overlay?.noticeText && (!nb || nb.distM > 5000)) overlay?.showNotice(t('command.peace.notice'), 7, true);
+            if (!overlay?.noticeText && (!nb || nb.distM > 5000) && !intercept?.current) overlay?.showNotice(t('command.peace.notice'), 7, true);
           }, 3600);
         }
       }
@@ -3121,6 +3137,16 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       return;
     }
     if (a.severity !== 'warning') dropToTactical('command.travel.alert');
+  });
+  // Fix pass 3 (#27): what our rounds did, as the sim decided it — a level lost, or the structure in rubble — in big
+  // letters over the scene (the model is rebuilt in the same update: fewer buildings, or the ruined compound).
+  ctx.bus.on('structureDamaged', (e) => {
+    if (!active || !overlay || e.by !== HUMAN_ID || (!e.levelLost && !e.destroyed)) return;
+    const what = t(`structure.${STRUCT_KEY[e.structure] ?? 'city'}`), nation = nationName(e.owner);
+    // Held for its 5 s: the next rounds' hit notices do not replace it (they only replace their own).
+    overlay.showNotice(e.destroyed ? t('command.hit.destroyed', { what, nation }) : t('command.hit.levelLost', { what, nation, n: e.level }), 5, true);
+    lastHitNotice = '';
+    hud?.hitMarker(true);
   });
   void ENT_DEFS;
   return api;

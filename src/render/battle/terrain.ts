@@ -143,8 +143,12 @@ void main() {
   float wsum = sa.r + sa.g + sa.b + sa.a + sb.r + sb.g + sb.b + sb.a + 1e-4;
   // Woodland: the forest share of the land cover becomes woods and clearings (thresholded noise), not a tint.
   float fw = sa.b / wsum;
-  float canopyN = dB.r * 0.55 + dC.g * 0.45 + (dA.b - 0.5) * 0.12;
-  float canopy = fw < 0.02 ? 0.0 : smoothstep(0.02, 0.1, fw - (canopyN - 0.25) * 1.4);
+  // Fix pass 3: the noise that cuts woods from clearings is damped and the cut widened as a pixel covers more ground
+  // (from a few km up the fine noise only aliases: a dithered, blotchy speckle along every edge).
+  float noiseK = 1.0 - 0.8 * smoothstep(2.0, 14.0, px);
+  float edgeW = 0.12 * smoothstep(2.0, 14.0, px);
+  float canopyN = 0.25 + (dB.r * 0.55 + dC.g * 0.45 + (dA.b - 0.5) * 0.12 - 0.25) * noiseK;
+  float canopy = fw < 0.02 ? 0.0 : smoothstep(0.02 - edgeW, 0.1 + edgeW, fw - (canopyN - 0.25) * 1.4);
   float owsum = wsum - sa.b + 1e-4;
   vec3 open = (sand * sa.r + grass * sa.g + rock * sa.a + snow * sb.r + urban * sb.g + dirt * sb.b + wet * sb.a + grass * 1e-4) / owsum;
   vec4 crown = texture2D(uDetail, xz / 9.0 + 0.23);
@@ -202,8 +206,8 @@ void main() {
     hedgeAo = 1.0 - hedge * 0.25;
     // Only where the land cover is open ground (not forest, town, rock, snow or water).
     // Organic edge where the fields give way to woods, towns or rock.
-    float wild = (sa.a + sb.r + sb.g) / owsum + (dC.b - 0.5) * 0.35 + (dB.a - 0.5) * 0.15;
-    fieldK = farmK * (1.0 - smoothstep(0.35, 0.75, wild)) * (1.0 - smoothstep(0.1, 0.35, waterK)) * (1.0 - canopy);
+    float wild = (sa.a + sb.r + sb.g) / owsum + ((dC.b - 0.5) * 0.35 + (dB.a - 0.5) * 0.15) * noiseK;
+    fieldK = farmK * (1.0 - smoothstep(0.35 - edgeW, 0.75 + edgeW, wild)) * (1.0 - smoothstep(0.1, 0.35, waterK)) * (1.0 - canopy);
     alb = mix(alb, crop, fieldK);
   }
   // Regional tint normalisation: the ground color averaged over ~300 m (a coarse mip of this grid's own splat) is

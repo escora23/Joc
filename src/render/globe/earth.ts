@@ -303,7 +303,9 @@ float reliefShadow(vec2 uv, vec3 up, vec3 east, vec3 north, vec3 L, float h0, fl
     vec2 suv = uv + k * dist;
     float lod = clamp(log2(dist / 20000.0) + 1.0, 0.0, 4.0);
     float hs = textureLod(uRelief, vec2(suv.x, 1.0 - suv.y), lod).a * TOPO_MAX;
-    float margin = (h0 - hs) * SHADOW_EXAG + dist * tanE + dist * dist / (2.0 * EARTH_M);
+    // Fix pass 3: an occluder must stand some 80 m above the point. The relief grid is ~25 km a texel, bilinear: on
+    // plains its flat facets, exaggerated ×7, shadowed one another in long diagonal bands at a low sun.
+    float margin = (h0 - hs + 80.0) * SHADOW_EXAG + dist * tanE + dist * dist / (2.0 * EARTH_M);
     sh = min(sh, smoothstep(-0.02, 0.02, margin / dist));
     dist *= 1.45;
   }
@@ -753,14 +755,26 @@ void main() {
     // Contested land (front heat): narrow animated diagonal stripes, orange-red, 1.5 tiles deep (§10.1).
     float contested = smoothstep(0.1, 0.22, heat) * (1.0 - smoothstep(1.1, 1.5, distT)) * landK * terr;
     if (contested > 0.001 && Q >= 0) {
-      float k = (tp0.x + tp0.y) / 0.75 - uTime * 0.5;
-      float s = abs(fract(k) - 0.5);
-      float aa = fwidth(k) * 1.2;
-      float stripe = smoothstep(0.22 + aa, 0.22 - aa, s);
-      stripe = mix(0.45, stripe, smoothstep(4.0, 7.0, 0.75 / pxT));
+      // Fix pass 3: the stripes keep a steady size on screen (24-48 px a period): their period halves by octaves as the
+      // camera comes down (two octaves crossfaded) — a fixed 0.75-tile period grew into broad dark/light diagonal bands
+      // across the whole view below ~100 km.
+      float pp = 0.75 / max(pxT, 1e-6);
+      float oct = max(0.0, log2(pp / 28.0));
+      float o0 = floor(oct), of = oct - o0;
+      float stripe = 0.0;
+      for (int j = 0; j < 2; j++) {
+        float per = 0.75 / exp2(o0 + float(j));
+        float k = (tp0.x + tp0.y) / per - uTime * 0.5;
+        float s = abs(fract(k) - 0.5);
+        float aa = fwidth(k) * 1.2;
+        stripe += smoothstep(0.22 + aa, 0.22 - aa, s) * (j == 0 ? 1.0 - of : of);
+      }
+      stripe = mix(0.45, stripe, smoothstep(4.0, 7.0, pp));
+      // Up close the battle layer shows the fighting itself: the stripes only hint at it.
+      float closeDim = 1.0 - 0.45 * smoothstep(60.0, 400.0, pp);
       vec3 hot = vec3(0.95, 0.26, 0.07);
-      albedo = mix(albedo, hot, stripe * contested * 0.6);
-      emissive += hot * stripe * contested * 0.35;
+      albedo = mix(albedo, hot, stripe * contested * 0.6 * closeDim);
+      emissive += hot * stripe * contested * 0.35 * closeDim;
     }
 
     // Borders: constant pixel widths, 1.4 px (human 2.4 px), split between the two owners' colours; a dark core
@@ -847,7 +861,7 @@ void main() {
   float castShadow = 1.0;
 #if RELIEF_SHADOW_STEPS > 0
   if (water < 0.999 && muS > -0.04 && muS < 0.55 && rugged > 0.02) {
-    castShadow = mix(1.0, reliefShadow(uv, up, east, north, L, elevM, lat), (1.0 - water) * smoothstep(0.55, 0.3, muS));
+    castShadow = mix(1.0, reliefShadow(uv, up, east, north, L, elevM, lat), (1.0 - water) * smoothstep(0.55, 0.3, muS) * smoothstep(0.02, 0.12, rugged));
   }
 #endif
   vec3 sunLight = sunT * uSunE * geoShadow * cloudShade;

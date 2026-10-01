@@ -15,8 +15,25 @@ const tmpC = new THREE.Color();
 
 export type Pt = [number, number];
 
+/**
+ * Where each part of a merged geometry stands on the ground (structures in command mode): its vertex count, the
+ * point (model x/z) whose ground height it takes, and whether every vertex follows the ground instead (aprons, roads).
+ */
+export interface PartRange {
+  n: number;
+  ax: number;
+  az: number;
+  drape: boolean;
+}
+
 export class GeoBuilder {
   private parts: THREE.BufferGeometry[] = [];
+  /** Parts' ground anchors (in order), kept on the built geometry as userData.ranges. */
+  private ranges: PartRange[] = [];
+  /** While set, the parts added take this anchor (a building and its roof, windows and doors stand together). */
+  anchor: [number, number] | null = null;
+  /** While set, the parts added drape over the ground vertex by vertex. */
+  drape = false;
 
   /** Add a geometry transformed by position / euler rotation / scale, colored with `color` (sRGB hex) x shade. */
   add(
@@ -45,6 +62,7 @@ export class GeoBuilder {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
     this.parts.push(geo);
+    this.ranges.push({ n, ax: this.anchor ? this.anchor[0] : x, az: this.anchor ? this.anchor[1] : z, drape: this.drape });
     return this;
   }
 
@@ -147,6 +165,8 @@ export class GeoBuilder {
     const g = this.parts.length ? mergeGeometries(this.parts, false) : new THREE.BufferGeometry();
     for (const p of this.parts) p.dispose();
     this.parts = [];
+    g.userData.ranges = this.ranges;
+    this.ranges = [];
     g.computeBoundingSphere();
     g.computeBoundingBox();
     return g;

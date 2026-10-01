@@ -54,92 +54,119 @@ class Compound {
   constructor(seed: number, readonly state: number, readonly accent: number) {
     this.r = rng(seed);
   }
+  /** Everything a building adds stands on the ground under (x, z) (see GeoBuilder.anchor). */
+  private at(x: number, z: number, f: () => this): this {
+    const prev = this.g.anchor;
+    if (!prev) this.g.anchor = [x, z];
+    try {
+      return f();
+    } finally {
+      this.g.anchor = prev;
+    }
+  }
   private fate(): 0 | 1 | 2 {
     const d = this.r();
+    if (this.state >= 3) return 2;
     if (this.state >= 2) return d < 0.5 ? 2 : d < 0.8 ? 1 : 0;
     if (this.state === 1) return d < 0.12 ? 2 : d < 0.4 ? 1 : 0;
     return 0;
   }
   /** A flat-roofed building (w × h × d, centre x/z, turned ry) with a roof of `roof` colour. */
   bld(w: number, h: number, d: number, wall: number, roof: number, x: number, z: number, ry = 0): this {
-    const f = this.fate();
-    if (f === 2) return this.heap(w, h, d, wall, x, z, ry);
-    const c = f === 1 ? shade(wall, 0.55) : wall;
-    this.g.box(w, h, d, c, x, h / 2, z, 0, ry, 0);
-    this.g.box(w + 0.6, 0.8, d + 0.6, f === 1 ? CHAR : roof, x, h + 0.4, z, 0, ry, 0);
-    // A band of windows on the long sides (dark glass), so the size reads at a glance.
-    if (h > 7) {
-      const along = w >= d;
-      const ww = along ? w * 0.86 : 0.3, dd = along ? 0.3 : d * 0.86;
-      const off = along ? d / 2 + 0.05 : w / 2 + 0.05;
-      for (let k = 1; k * 4.5 < h - 2; k++) {
-        const y = k * 4.5;
-        const cs = Math.cos(ry), sn = Math.sin(ry);
-        const ox = along ? 0 : off, oz = along ? off : 0;
-        this.g.box(ww, 1.4, dd, f === 1 ? CHAR : GLASS, x + ox * cs + oz * sn, y, z - ox * sn + oz * cs, 0, ry, 0);
-        this.g.box(ww, 1.4, dd, f === 1 ? CHAR : GLASS, x - ox * cs - oz * sn, y, z + ox * sn - oz * cs, 0, ry, 0);
+    return this.at(x, z, () => {
+      const f = this.fate();
+      if (f === 2) return this.heap(w, h, d, wall, x, z, ry);
+      const c = f === 1 ? shade(wall, 0.55) : wall;
+      this.g.box(w, h, d, c, x, h / 2, z, 0, ry, 0);
+      this.g.box(w + 0.6, 0.8, d + 0.6, f === 1 ? CHAR : roof, x, h + 0.4, z, 0, ry, 0);
+      // A band of windows on the long sides (dark glass), so the size reads at a glance.
+      if (h > 7) {
+        const along = w >= d;
+        const ww = along ? w * 0.86 : 0.3, dd = along ? 0.3 : d * 0.86;
+        const off = along ? d / 2 + 0.05 : w / 2 + 0.05;
+        for (let k = 1; k * 4.5 < h - 2; k++) {
+          const y = k * 4.5;
+          const cs = Math.cos(ry), sn = Math.sin(ry);
+          const ox = along ? 0 : off, oz = along ? off : 0;
+          this.g.box(ww, 1.4, dd, f === 1 ? CHAR : GLASS, x + ox * cs + oz * sn, y, z - ox * sn + oz * cs, 0, ry, 0);
+          this.g.box(ww, 1.4, dd, f === 1 ? CHAR : GLASS, x - ox * cs - oz * sn, y, z + ox * sn - oz * cs, 0, ry, 0);
+        }
       }
-    }
-    this.top = Math.max(this.top, h + 0.8);
-    return this;
+      this.top = Math.max(this.top, h + 0.8);
+      return this;
+    });
   }
   /** A collapsed building: a low, tilted, blackened heap with a broken wall stub. */
   heap(w: number, h: number, d: number, wall: number, x: number, z: number, ry = 0): this {
-    const r = this.r;
-    const hh = Math.max(1.5, h * (0.18 + r() * 0.12));
-    this.g.box(w * 0.95, hh, d * 0.95, shade(wall, 0.35), x, hh / 2 - 0.3, z, (r() - 0.5) * 0.12, ry, (r() - 0.5) * 0.12);
-    this.g.box(w * 0.35, h * 0.55, 0.8, shade(wall, 0.45), x + (r() - 0.5) * w * 0.5, h * 0.27, z + (r() - 0.5) * d * 0.4, 0, ry + (r() - 0.5) * 0.3, (r() - 0.5) * 0.25);
-    for (let i = 0; i < 4; i++) {
-      const s = 2 + r() * 5;
-      this.g.box(s, s * 0.5, s * 0.8, i % 2 ? CHAR : shade(wall, 0.4), x + (r() - 0.5) * w, s * 0.2, z + (r() - 0.5) * d, r(), r() * 3, r());
-    }
-    return this;
+    return this.at(x, z, () => {
+      const r = this.r;
+      const hh = Math.max(1.5, h * (0.18 + r() * 0.12));
+      this.g.box(w * 0.95, hh, d * 0.95, shade(wall, 0.35), x, hh / 2 - 0.3, z, (r() - 0.5) * 0.12, ry, (r() - 0.5) * 0.12);
+      this.g.box(w * 0.35, h * 0.55, 0.8, shade(wall, 0.45), x + (r() - 0.5) * w * 0.5, h * 0.27, z + (r() - 0.5) * d * 0.4, 0, ry + (r() - 0.5) * 0.3, (r() - 0.5) * 0.25);
+      for (let i = 0; i < 4; i++) {
+        const s = 2 + r() * 5;
+        this.g.box(s, s * 0.5, s * 0.8, i % 2 ? CHAR : shade(wall, 0.4), x + (r() - 0.5) * w, s * 0.2, z + (r() - 0.5) * d, r(), r() * 3, r());
+      }
+      return this;
+    });
   }
   /** A sawtooth-roofed production hall, the factory's signature. */
   hall(w: number, h: number, d: number, x: number, z: number): this {
-    const f = this.fate();
-    if (f === 2) return this.heap(w, h, d, WALL, x, z);
-    const wall = f === 1 ? shade(WALL, 0.55) : WALL;
-    this.g.box(w, h, d, wall, x, h / 2, z);
-    // Teeth across the hall's width: glazed north faces (dark), sloped roof sheets.
-    const n = Math.max(3, Math.round(d / 14));
-    const step = d / n, th = Math.min(7, step * 0.55);
-    for (let i = 0; i < n; i++) {
-      if (f === 1 && i % 3 === 1) continue; // a hole in the roof
-      const z0 = z - d / 2 + i * step;
-      // Profile (forward, up), forward = −z: a slope from z0 up to the glazed vertical face at z0 + step.
-      this.g.profileX([[0, 0], [-step, 0], [-step, th], [-step + 0.6, th]], w, f === 1 ? CHAR : ROOF, x, h, z0);
-      this.g.box(w, th * 0.9, 0.4, f === 1 ? CHAR : GLASS, x, h + th * 0.45, z0 + step - 0.3);
-    }
-    // Loading doors in the owner's colour on the front.
-    for (let k = -1; k <= 1; k += 2) this.g.box(8, 7, 0.4, f === 1 ? CHAR : this.accent, x + k * w * 0.25, 3.5, z + d / 2 + 0.2);
-    this.top = Math.max(this.top, h + th);
-    return this;
+    return this.at(x, z, () => {
+      const f = this.fate();
+      if (f === 2) return this.heap(w, h, d, WALL, x, z);
+      const wall = f === 1 ? shade(WALL, 0.55) : WALL;
+      this.g.box(w, h, d, wall, x, h / 2, z);
+      // Steel frame on the facades (pilasters every 15 m) and a dark plinth: the scale reads at a glance.
+      const pil = shade(wall, 0.78);
+      for (let px = -w / 2 + 7; px < w / 2; px += 15) {
+        this.g.box(1.2, h, 0.8, pil, x + px, h / 2, z - d / 2 - 0.3).box(1.2, h, 0.8, pil, x + px, h / 2, z + d / 2 + 0.3);
+      }
+      this.g.box(w + 0.4, 1.4, d + 0.4, shade(wall, 0.55), x, 0.7, z);
+      // Teeth across the hall's width: glazed north faces (dark), sloped roof sheets.
+      const n = Math.max(3, Math.round(d / 14));
+      const step = d / n, th = Math.min(7, step * 0.55);
+      for (let i = 0; i < n; i++) {
+        if (f === 1 && i % 3 === 1) continue; // a hole in the roof
+        const z0 = z - d / 2 + i * step;
+        // Profile (forward, up), forward = −z: a slope from z0 up to the glazed vertical face at z0 + step.
+        this.g.profileX([[0, 0], [-step, 0], [-step, th], [-step + 0.6, th]], w, f === 1 ? CHAR : ROOF, x, h, z0);
+        this.g.box(w, th * 0.9, 0.4, f === 1 ? CHAR : GLASS, x, h + th * 0.45, z0 + step - 0.3);
+      }
+      // Loading doors in the owner's colour on the front.
+      for (let k = -1; k <= 1; k += 2) this.g.box(8, 7, 0.4, f === 1 ? CHAR : this.accent, x + k * w * 0.25, 3.5, z + d / 2 + 0.2);
+      this.top = Math.max(this.top, h + th);
+      return this;
+    });
   }
   /** A chimney with the red and white bands near its top; broken off in a heavily damaged compound. */
   chimney(r0: number, h: number, x: number, z: number): this {
-    const broken = this.state >= 2 ? this.r() < 0.7 : this.state === 1 ? this.r() < 0.3 : false;
-    const hh = broken ? h * (0.25 + this.r() * 0.25) : h;
-    this.g.cyl(r0 * 0.7, r0, hh, 14, broken ? shade(BRICK, 0.5) : BRICK, x, hh / 2, z);
-    if (!broken) {
-      this.g.cyl(r0 * 0.72, r0 * 0.74, h * 0.05, 14, RED, x, h * 0.9, z);
-      this.g.cyl(r0 * 0.71, r0 * 0.72, h * 0.04, 14, WHITE, x, h * 0.85, z);
-      this.g.cyl(r0 * 0.74, r0 * 0.75, h * 0.05, 14, RED, x, h * 0.8, z);
-      this.g.cyl(r0 * 0.74, r0 * 0.74, 1, 14, CHAR, x, h + 0.2, z);
-    }
-    this.top = Math.max(this.top, hh);
-    return this;
+    return this.at(x, z, () => {
+      const broken = this.state >= 3 ? true : this.state >= 2 ? this.r() < 0.7 : this.state === 1 ? this.r() < 0.3 : false;
+      const hh = broken ? h * (0.25 + this.r() * 0.25) : h;
+      this.g.cyl(r0 * 0.7, r0, hh, 14, broken ? shade(BRICK, 0.5) : BRICK, x, hh / 2, z);
+      if (!broken) {
+        this.g.cyl(r0 * 0.72, r0 * 0.74, h * 0.05, 14, RED, x, h * 0.9, z);
+        this.g.cyl(r0 * 0.71, r0 * 0.72, h * 0.04, 14, WHITE, x, h * 0.85, z);
+        this.g.cyl(r0 * 0.74, r0 * 0.75, h * 0.05, 14, RED, x, h * 0.8, z);
+        this.g.cyl(r0 * 0.74, r0 * 0.74, 1, 14, CHAR, x, h + 0.2, z);
+      }
+      this.top = Math.max(this.top, hh);
+      return this;
+    });
   }
   /** A storage tank (domed); a heavily damaged compound has some burst and black. */
   tank(r0: number, h: number, x: number, z: number, color = WHITE): this {
-    const f = this.fate();
-    const hh = f === 2 ? h * 0.35 : h;
-    const c = f >= 1 ? CHAR : color;
-    this.g.cyl(r0, r0, hh, 18, c, x, hh / 2, z);
-    if (f !== 2) this.g.sphere(r0, 16, 6, c, x, hh, z, 1, 0.25, 1);
-    this.g.cyl(r0 + 0.4, r0 + 0.4, 0.6, 18, STEEL, x, hh * 0.5, z);
-    this.top = Math.max(this.top, hh + r0 * 0.25);
-    return this;
+    return this.at(x, z, () => {
+      const f = this.fate();
+      const hh = f === 2 ? h * 0.35 : h;
+      const c = f >= 1 ? CHAR : color;
+      this.g.cyl(r0, r0, hh, 18, c, x, hh / 2, z);
+      if (f !== 2) this.g.sphere(r0, 16, 6, c, x, hh, z, 1, 0.25, 1);
+      this.g.cyl(r0 + 0.4, r0 + 0.4, 0.6, 18, STEEL, x, hh * 0.5, z);
+      this.top = Math.max(this.top, hh + r0 * 0.25);
+      return this;
+    });
   }
   /** A fence line (posts and a mesh band) from (x0, z0) to (x1, z1). */
   fence(x0: number, z0: number, x1: number, z1: number): this {
@@ -164,47 +191,58 @@ class Compound {
   }
   /** A flat paved area (concrete, asphalt), a little above the ground. */
   pave(w: number, d: number, color: number, x = 0, z = 0, y = 0.25): this {
-    this.g.box(w, 0.5, d, color, x, y, z);
+    // A grid that drapes over the ground vertex by vertex (civil.ts conforms it), so a 1 km apron never floats.
+    const nx = Math.max(1, Math.min(24, Math.round(w / 40))), nz = Math.max(1, Math.min(24, Math.round(d / 40)));
+    const plane = new THREE.PlaneGeometry(w, d, nx, nz).rotateX(-Math.PI / 2);
+    this.g.drape = true;
+    this.g.add(plane, color, x, y + 0.25, z);
+    this.g.drape = false;
     return this;
   }
   /** A flag mast with the owner's colour. */
   flag(x: number, z: number, h = 18): this {
-    this.g.cyl(0.25, 0.3, h, 6, STEEL, x, h / 2, z);
-    this.g.box(6, 4, 0.2, this.accent, x + 3.2, h - 2.2, z);
-    this.top = Math.max(this.top, h);
-    return this;
+    return this.at(x, z, () => {
+      this.g.cyl(0.25, 0.3, h, 6, STEEL, x, h / 2, z);
+      this.g.box(6, 4, 0.2, this.accent, x + 3.2, h - 2.2, z);
+      this.top = Math.max(this.top, h);
+      return this;
+    });
   }
   /** A lattice tower (four legs and braces) of side `s`, height `h`. */
   lattice(s: number, h: number, x: number, z: number, color = STEEL): this {
-    for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) this.g.box(0.7, h, 0.7, color, x + a * s / 2, h / 2, z + b * s / 2, -b * 0.03, 0, a * 0.03);
-    for (let y = 6; y < h; y += 8) {
-      this.g.box(s, 0.4, 0.4, color, x, y, z - s / 2).box(s, 0.4, 0.4, color, x, y, z + s / 2);
-      this.g.box(0.4, 0.4, s, color, x - s / 2, y, z).box(0.4, 0.4, s, color, x + s / 2, y, z);
-    }
-    this.top = Math.max(this.top, h);
-    return this;
+    return this.at(x, z, () => {
+      for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) this.g.box(0.7, h, 0.7, color, x + a * s / 2, h / 2, z + b * s / 2, -b * 0.03, 0, a * 0.03);
+      for (let y = 6; y < h; y += 8) {
+        this.g.box(s, 0.4, 0.4, color, x, y, z - s / 2).box(s, 0.4, 0.4, color, x, y, z + s / 2);
+        this.g.box(0.4, 0.4, s, color, x - s / 2, y, z).box(0.4, 0.4, s, color, x + s / 2, y, z);
+      }
+      this.top = Math.max(this.top, h);
+      return this;
+    });
   }
   /** A gantry crane: two legs, a boom across, a cab. */
   crane(span: number, h: number, x: number, z: number, ry = 0, color = YELLOW): this {
-    const f = this.fate();
-    const cs = Math.cos(ry), sn = Math.sin(ry);
-    const at = (u: number, v: number): [number, number] => [x + u * cs + v * sn, z - u * sn + v * cs];
-    if (f === 2) {
-      const [ax, az] = at(0, 0);
-      this.g.box(span * 1.4, 3, 3, shade(color, 0.4), ax, 2, az, 0.05, ry + 0.4, 0.2);
+    return this.at(x, z, () => {
+      const f = this.fate();
+      const cs = Math.cos(ry), sn = Math.sin(ry);
+      const at = (u: number, v: number): [number, number] => [x + u * cs + v * sn, z - u * sn + v * cs];
+      if (f === 2) {
+        const [ax, az] = at(0, 0);
+        this.g.box(span * 1.4, 3, 3, shade(color, 0.4), ax, 2, az, 0.05, ry + 0.4, 0.2);
+        return this;
+      }
+      for (const u of [-span / 2, span / 2]) for (const v of [-6, 6]) {
+        const [px, pz] = at(u, v);
+        this.g.box(1.6, h, 1.6, color, px, h / 2, pz, 0, ry, 0);
+      }
+      const [bx, bz] = at(0, 0);
+      this.g.box(span + 4, 2.6, 14, color, bx, h, bz, 0, ry, 0);
+      const [ox, oz] = at(0, -span * 0.9);
+      this.g.box(span * 0.4, 2, 3, color, (bx + ox) / 2, h + 1, (bz + oz) / 2, 0, ry + Math.PI / 2, 0);
+      this.g.box(5, 4, 5, WHITE, bx, h - 3, bz, 0, ry, 0);
+      this.top = Math.max(this.top, h + 2);
       return this;
-    }
-    for (const u of [-span / 2, span / 2]) for (const v of [-6, 6]) {
-      const [px, pz] = at(u, v);
-      this.g.box(1.6, h, 1.6, color, px, h / 2, pz, 0, ry, 0);
-    }
-    const [bx, bz] = at(0, 0);
-    this.g.box(span + 4, 2.6, 14, color, bx, h, bz, 0, ry, 0);
-    const [ox, oz] = at(0, -span * 0.9);
-    this.g.box(span * 0.4, 2, 3, color, (bx + ox) / 2, h + 1, (bz + oz) / 2, 0, ry + Math.PI / 2, 0);
-    this.g.box(5, 4, 5, WHITE, bx, h - 3, bz, 0, ry, 0);
-    this.top = Math.max(this.top, h + 2);
-    return this;
+    });
   }
   build(): THREE.BufferGeometry {
     return this.g.build();
@@ -219,11 +257,12 @@ export interface CmdStructModel {
 
 /**
  * Build the command-mode model of a structure. `size`: the footprint side (m) the sim gives it at this level; `state`:
- * shared/damage damageState (0 intact, 1 damaged, 2 heavily damaged); `accent`: the owner's colour.
+ * shared/damage damageState (0 intact, 1 damaged, 2 heavily damaged, 3 rubble: every building down, the chimneys
+ * broken); `accent`: the owner's colour.
  */
 export function buildCmdStructure(type: StructureType, level: number, state: number, size: number, accent: number, seed: number): CmdStructModel | null {
   const L = Math.max(1, Math.min(3, level | 0));
-  const c = new Compound(seed * 31 + L * 7 + state, Math.min(2, state), accent);
+  const c = new Compound(seed * 31 + L * 7 + state, Math.min(3, state), accent);
   const r = c.r;
   const h = size / 2;
   switch (type) {
@@ -283,14 +322,16 @@ export function buildCmdStructure(type: StructureType, level: number, state: num
       // Runway with threshold bars, centre line, numbers' stand-in.
       const rl = size * 0.86;
       c.pave(rl, 45, ASPHALT, 0, -h * 0.05, 0.55);
+      c.g.drape = true;
       for (let k = -rl / 2 + 60; k < rl / 2 - 60; k += 50) c.g.box(30, 0.1, 1, WHITE, k, 0.85, -h * 0.05);
       for (const s of [-1, 1]) for (let j = -3; j <= 3; j++) c.g.box(30, 0.1, 1.8, WHITE, s * (rl / 2 - 22), 0.85, -h * 0.05 + j * 5.5);
+      c.g.drape = false;
       c.pave(rl * 0.8, 20, ASPHALT, 0, h * 0.06, 0.5);
       c.pave(size * 0.3, size * 0.1, 0x6a6c68, -h * 0.35, h * 0.2, 0.45);
       // Hangars: half cylinders.
       for (let i = 0; i < 2 + L; i++) {
         const x = -h * 0.6 + i * 90, z = h * 0.28;
-        const f = state >= 2 && r() < 0.5;
+        const f = (state >= 3 || (state >= 2 && r() < 0.5));
         if (f) c.heap(60, 18, 50, STEEL, x, z);
         else {
           c.g.add(new THREE.CylinderGeometry(22, 22, 50, 18, 1, false, 0, Math.PI), state ? shade(STEEL, 0.7) : STEEL, x, 0, z, Math.PI / 2, 0, Math.PI / 2);
@@ -328,7 +369,7 @@ export function buildCmdStructure(type: StructureType, level: number, state: num
       }
       for (let i = 0; i < L + 1; i++) {
         const ang = (i / (L + 1)) * Math.PI * 2 + 0.4, x = Math.cos(ang) * h * 0.4, z = Math.sin(ang) * h * 0.4;
-        const f = state >= 2 && r() < 0.6;
+        const f = (state >= 3 || (state >= 2 && r() < 0.6));
         if (f) c.heap(14, 4, 12, CONCRETE, x, z);
         else {
           c.g.prism([[-6, -7], [-6, 7], [6, 7], [6, -7]], [[-4, -5], [-4, 5], [4, 5], [4, -5]], 0, 4.5, state ? shade(CONCRETE, 0.6) : CONCRETE, x, 0, z);
@@ -350,7 +391,7 @@ export function buildCmdStructure(type: StructureType, level: number, state: num
       for (let i = 0; i < n; i++) {
         const ang = (i / n) * Math.PI * 2, x = Math.cos(ang) * h * 0.55, z = Math.sin(ang) * h * 0.55;
         for (let a = 0; a < 3; a++) c.g.box(18, 3, 4, EARTH, x + Math.cos(ang + 1.6 + a) * 12, 1.3, z + Math.sin(ang + 1.6 + a) * 12, 0, -(ang + 1.6 + a) + Math.PI / 2, 0);
-        if (state >= 2 && r() < 0.5) {
+        if ((state >= 3 || (state >= 2 && r() < 0.5))) {
           c.heap(10, 3, 4, OLIVE, x, z);
           continue;
         }

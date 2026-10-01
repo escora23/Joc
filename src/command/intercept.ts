@@ -5,7 +5,8 @@
 // the navalIntercept command (the sim validates distance and escorts and applies the consequences):
 //   E  Dar el alto              ≤ 8 km   the radio call; it heaves to for inspection (it stops in the scene too)
 //   R  Disparo de advertencia   ≤ 6 km   a real shell into the water ahead of its bow; it heaves to (at peace: −3 opinion)
-//   F  Abordar                  ≤ 700 m, own speed ≤ 12 kn, the ship stopped: the boarding party's 8 s; a merchant
+//   F  Abordar                  ≤ 700 m, own speed ≤ 12 kn, the ship stopped: the boarding party's 8 s (our boat
+//                               crosses, the team climbs aboard, their flag comes down and ours goes up); a merchant
 //                               becomes ours and sails to our nearest port with its cargo; a convoy turns back
 //   X  Hundir                   ≤ 8 km   it goes down (at peace the game asks first: piracy, opinion, casus belli)
 // Shelling it with the gun until it sinks is the same «Hundir» (index.ts onKill sends it). An escorted ship cannot be
@@ -65,6 +66,12 @@ export interface InterceptDeps {
   /** Our warship's display name («1.er Buque de guerra»). */
   shipName: string;
   sound(kind: 'radio' | 'confirm' | 'error'): void;
+  /** Fix pass 3: swing the view toward a ship (the one the panel names), unless the player is steering the view. */
+  lookAt?(p: THREE.Vector3): void;
+  /** Our nation's colour (hex): the flag the boarding party raises. */
+  ownColor: number;
+  /** A nation's colour (hex): the flag the ship flies until it is taken. */
+  colorHex(owner: number): number;
 }
 
 interface Boarding {
@@ -72,10 +79,122 @@ interface Boarding {
   t: number;
 }
 
+const BOAT_HULL = new THREE.BoxGeometry(3.2, 1.2, 9).translate(0, 0.6, 0);
+const BOAT_TUBE = new THREE.CylinderGeometry(0.55, 0.55, 9, 8).rotateX(Math.PI / 2);
+const MAN = new THREE.BoxGeometry(0.6, 1.7, 0.45).translate(0, 0.85, 0);
+const POLE = new THREE.CylinderGeometry(0.15, 0.18, 9, 6).translate(0, 4.5, 0);
+const FLAG = new THREE.PlaneGeometry(4.2, 2.6).translate(2.1, 0, 0);
+const WAKE = new THREE.PlaneGeometry(4, 22).rotateX(-Math.PI / 2).translate(0, 0.15, 13);
+
+/**
+ * The boarding party, as the owner asked («abordar (secuencia corta)»): our ship's boat goes across with its team, the
+ * team climbs the hull, the ship's flag comes down and ours goes up. Then the flag stays on the prize.
+ * 0-4.5 s the boat crosses (wake behind), 4.5-6.5 s the team climbs to the deck, 6.5-8 s flags change.
+ */
+class BoardingFx {
+  readonly root = new THREE.Group();
+  private readonly boat = new THREE.Group();
+  private readonly men: THREE.Mesh[] = [];
+  private readonly pole: THREE.Mesh;
+  private readonly flag: THREE.Mesh;
+  private readonly theirMat: THREE.MeshStandardMaterial;
+  private readonly ourMat: THREE.MeshStandardMaterial;
+  private readonly from = new THREE.Vector3();
+  private readonly side = new THREE.Vector3();
+  private readonly tmp = new THREE.Vector3();
+  /** The prize keeps our flag after the sequence (followed while its ship is in the scene). */
+  done = false;
+  constructor(parent: THREE.Object3D, private ship: Ent, start: THREE.Vector3, theirs: number, ours: number) {
+    const grey = new THREE.MeshStandardMaterial({ color: 0x3d4247, roughness: 0.7 });
+    const orange = new THREE.MeshStandardMaterial({ color: 0xe0612a, roughness: 0.6 });
+    const crew = new THREE.MeshStandardMaterial({ color: 0x2b2f2a, roughness: 0.9 });
+    const foam = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false });
+    this.boat.add(new THREE.Mesh(BOAT_HULL, grey));
+    for (const k of [-1, 1]) {
+      const tube = new THREE.Mesh(BOAT_TUBE, orange);
+      tube.position.set(k * 1.7, 0.9, 0);
+      this.boat.add(tube);
+    }
+    this.boat.add(new THREE.Mesh(WAKE, foam));
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.Mesh(MAN, crew);
+      this.men.push(m);
+      this.root.add(m);
+    }
+    this.theirMat = new THREE.MeshStandardMaterial({ color: theirs, side: THREE.DoubleSide, roughness: 0.8 });
+    this.ourMat = new THREE.MeshStandardMaterial({ color: ours, side: THREE.DoubleSide, roughness: 0.8, emissive: ours, emissiveIntensity: 0.25 });
+    this.pole = new THREE.Mesh(POLE, grey);
+    this.flag = new THREE.Mesh(FLAG, this.theirMat);
+    this.root.add(this.boat, this.pole, this.flag);
+    this.from.copy(start);
+    this.root.name = 'boarding-fx';
+    parent.add(this.root);
+  }
+  /** Where on the target the team goes up: its side facing the boat, amidships. */
+  private board(out: THREE.Vector3): THREE.Vector3 {
+    const e = this.ship;
+    this.side.set(Math.cos(e.yaw), 0, -Math.sin(e.yaw));
+    const s = Math.sign(this.side.dot(this.tmp.copy(this.from).sub(e.pos))) || 1;
+    return out.copy(e.pos).addScaledVector(this.side, s * (e.radius * 0.28 + 3));
+  }
+  update(t: number, total: number, ship: Ent | null): void {
+    if (ship) this.ship = ship;
+    const e = this.ship;
+    const deckY = e.pos.y + e.height * 0.55;
+    // The flag at the stern.
+    const back = this.tmp.set(Math.sin(e.yaw), 0, Math.cos(e.yaw));
+    this.pole.position.copy(e.pos).addScaledVector(back, e.radius * 0.8);
+    this.pole.position.y = deckY;
+    const flip = this.done || t >= total * 0.85;
+    const lower = !this.done && t >= total * 0.8 && t < total * 0.92 ? 1 - Math.abs((t - total * 0.86) / (total * 0.06)) : 0;
+    this.flag.material = flip ? this.ourMat : this.theirMat;
+    this.flag.position.copy(this.pole.position);
+    this.flag.position.y += 7.6 - Math.max(0, lower) * 6;
+    this.flag.rotation.set(0, e.yaw + Math.PI / 2 + Math.sin(performance.now() / 300) * 0.12, 0);
+    if (this.done) {
+      this.boat.visible = false;
+      for (const m of this.men) m.visible = false;
+      return;
+    }
+    const to = this.board(new THREE.Vector3());
+    const cross = Math.min(1, t / (total * 0.56));
+    const ease = cross * cross * (3 - 2 * cross);
+    this.boat.position.lerpVectors(this.from, to, ease);
+    this.boat.position.y = 0;
+    this.boat.rotation.y = Math.atan2(-(to.x - this.from.x), -(to.z - this.from.z));
+    (this.boat.children[3] as THREE.Mesh).visible = cross < 1;
+    const climb = Math.max(0, Math.min(1, (t - total * 0.56) / (total * 0.25)));
+    this.men.forEach((m, i) => {
+      if (climb <= 0) {
+        // Seated in the boat.
+        m.position.copy(this.boat.position);
+        m.position.x += Math.cos(this.boat.rotation.y) * (i % 2 ? 0.7 : -0.7);
+        m.position.z += (i - 1.5) * 1.6 * Math.cos(this.boat.rotation.y);
+        m.position.y = 0.8;
+        m.scale.setScalar(1);
+      } else {
+        // Up the hull one after the other, then along the deck to the stern.
+        const k = Math.max(0, Math.min(1, climb * 1.6 - i * 0.2));
+        m.position.copy(to);
+        m.position.y = 1 + k * (deckY - 1);
+        if (k >= 1) m.position.lerp(this.pole.position, Math.min(1, (climb - 0.6) * 1.2) * (0.5 + i * 0.1)).setY(deckY);
+      }
+    });
+  }
+  dispose(): void {
+    this.root.removeFromParent();
+  }
+}
+
 export class ShipIntercept {
   private readonly panel: HTMLDivElement;
   private target: Ent | null = null;
   private boarding: Boarding | null = null;
+  private boardFx: BoardingFx | null = null;
+  /** Prizes taken in this session keep our flag (ship unit id → its flag). */
+  private readonly prizes = new Map<number, BoardingFx>();
+  /** The ship the panel named last (the view turns to a new one once). */
+  private shownId = 0;
   private radio = '';
   private radioT = 0;
   private asking = false;
@@ -99,6 +218,10 @@ export class ShipIntercept {
 
   dispose(): void {
     this.panel.remove();
+    this.boardFx?.dispose();
+    for (const f of this.prizes.values()) f.dispose();
+    this.prizes.clear();
+    this.d.overlay.shipMarker = null;
   }
 
   get text(): string {
@@ -139,20 +262,43 @@ export class ShipIntercept {
       const dist = b.ent.pos.distanceTo(player.pos);
       if (!b.ent.alive || dist > BOARD_M * 1.35) {
         this.boarding = null;
+        this.boardFx?.dispose();
+        this.boardFx = null;
         this.d.overlay.showNotice(t('naval.cmd.boardAbort'), 3);
         this.d.sound('error');
-      } else if (b.t >= BOARD_S) {
-        this.boarding = null;
-        this.act('board', b.ent);
-        this.d.overlay.showNotice(t(b.ent.kind === 'transport' ? 'naval.cmd.boardedConvoy' : 'naval.cmd.boarded'), 4, true);
-        this.d.sound('confirm');
+      } else {
+        this.boardFx?.update(b.t, BOARD_S, b.ent);
+        if (b.t >= 3.2 && b.t - dt < 3.2) this.say(t('naval.cmd.boardAlong'));
+        if (b.t >= BOARD_S * 0.62 && b.t - dt < BOARD_S * 0.62) this.say(t('naval.cmd.boardDeck'));
+        if (b.t >= BOARD_S) {
+          this.boarding = null;
+          this.act('board', b.ent);
+          if (this.boardFx && b.ent.src) {
+            this.boardFx.done = true;
+            this.prizes.get(b.ent.src.id)?.dispose();
+            this.prizes.set(b.ent.src.id, this.boardFx);
+          } else this.boardFx?.dispose();
+          this.boardFx = null;
+          this.d.overlay.showNotice(t(b.ent.kind === 'transport' ? 'naval.cmd.boardedConvoy' : 'naval.cmd.boarded'), 4, true);
+          this.d.sound('confirm');
+        }
       }
     }
+    // The prizes fly our flag while their ship is in the scene (the same sim ship, whatever entity draws it now).
+    for (const [id, fx] of this.prizes) {
+      const ship = this.d.world.ents.find((x) => x.alive && x.src?.id === id) ?? null;
+      fx.root.visible = !!ship;
+      if (ship) fx.update(BOARD_S, BOARD_S, ship);
+    }
     if (!best) {
+      this.d.overlay.shipMarker = null;
+      this.shownId = 0;
       this.paint('');
       return;
     }
     const e = best;
+    // «Aquí no hay combates… conduce libremente» does not hold beside a ship to stop: it goes.
+    this.d.overlay.hideNotice(t('command.peace.notice'));
     const u = this.simUnit(view, e);
     const owner = e.nation;
     const war = this.atWar(view, owner);
@@ -196,7 +342,15 @@ export class ShipIntercept {
       ${this.radioT > 0 ? `<div class="radio">${esc(this.radio)}</div>` : ''}`;
     this.panel.style.setProperty('--c', this.d.colorOf(owner));
     this.paint(html);
+    // Fix pass 3: the ship the panel speaks of is marked in the world (brackets on it, or an arrow at the screen's
+    // edge), and the view turns to it once when the panel first names it.
+    this.d.overlay.shipMarker = { pos: this.markerPos.copy(e.pos).setY(e.pos.y + e.height + 8), text: `${what} · ${km}`, color: this.d.colorOf(owner), radius: e.radius };
+    if (sid !== this.shownId) {
+      this.shownId = sid;
+      this.d.lookAt?.(e.pos);
+    }
   }
+  private readonly markerPos = new THREE.Vector3();
 
   private paint(html: string): void {
     if (html === this.lastHtml) return;
@@ -229,6 +383,7 @@ export class ShipIntercept {
       this.d.overlay.showNotice(t(`naval.cmd.cannot.${act}`), 2.5);
       return;
     }
+    if (act !== 'board') this.d.lookAt?.(e.pos);
     switch (act) {
       case 'hail':
         this.say(t('naval.cmd.hailText', { ship: this.d.shipName }));
@@ -240,11 +395,16 @@ export class ShipIntercept {
         this.act('warn', e);
         this.say(t('naval.cmd.warnText'));
         return;
-      case 'board':
+      case 'board': {
         this.boarding = { ent: e, t: 0 };
+        this.d.lookAt?.(e.pos);
+        const me = this.d.world.ents.find((x) => x.player);
+        this.boardFx?.dispose();
+        this.boardFx = me ? new BoardingFx(this.d.world.group, e, me.pos.clone(), this.d.colorHex(e.nation), this.d.ownColor) : null;
         this.d.overlay.showNotice(t('naval.cmd.boardStart'), 3, true);
         this.d.sound('radio');
         return;
+      }
       case 'sink':
         if (war) {
           this.sink(e);

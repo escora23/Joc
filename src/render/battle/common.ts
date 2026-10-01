@@ -332,8 +332,11 @@ float battleShadow(vec3 P, vec3 N, float biasK) {
   sum += step(s.z - bias, texture2D(uShadowMap, s.xy + vec2(0.6, -1.3) * t).r);
   sum += step(s.z - bias, texture2D(uShadowMap, s.xy + vec2(1.3, 0.6) * t).r);
   sum += step(s.z - bias, texture2D(uShadowMap, s.xy + vec2(-0.6, 1.3) * t).r);
-  // Radial fade toward the edge of the map (no visible square boundary).
-  return mix(sum / 5.0, 1.0, smoothstep(0.6, 0.98, edge));
+  // Radial fade toward the edge of the map (no visible square boundary), and out with the distance from the camera:
+  // seen from high up a shadow texel is far below a pixel, and the depth test's fine acne aliases into broad dark
+  // diagonal bands across the ground (fix pass 3) — up there the relief shading carries the shape instead.
+  float farFade = smoothstep(2500.0, 6000.0, length(P - uCamL));
+  return mix(sum / 5.0, 1.0, max(smoothstep(0.6, 0.98, edge), farFade));
 }
 vec3 battleLights(vec3 P, vec3 N) {
   vec3 acc = vec3(0.0);

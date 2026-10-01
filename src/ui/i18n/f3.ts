@@ -110,6 +110,8 @@ export const esF3: Record<string, string> = {
   'war.reason.structureAttacked': 'Abriste fuego contra nuestras instalaciones',
   // ---- ruins -------------------------------------------------------------------------------------------------------
   'ruin.title': 'Escombros de {s}',
+  'ruin.textNow': 'Destruida por {name} hace un momento. Si construyes aquí la misma estructura cuesta la mitad.',
+  'card.ruin.state': 'Destruida · en escombros (era de nivel {n}) · integridad 0 % · no produce nada',
   'ruin.text': 'Destruida por {name} hace {when}. Si construyes aquí la misma estructura cuesta la mitad.',
   // ---- after-action reports (29d) ---------------------------------------------------------------------------------
   'aar.kicker': 'Informe',
@@ -306,6 +308,8 @@ export const enF3: Record<string, string> = {
   'war.reason.structureAttacked': 'You opened fire on our installations',
   // ---- ruins -------------------------------------------------------------------------------------------------------
   'ruin.title': 'Rubble of {s}',
+  'ruin.textNow': 'Destroyed by {name} a moment ago. Building the same structure here costs half.',
+  'card.ruin.state': 'Destroyed · in rubble (it was level {n}) · integrity 0 % · produces nothing',
   'ruin.text': 'Destroyed by {name} {when} ago. Building the same structure here costs half.',
   // ---- after-action reports (29d) ---------------------------------------------------------------------------------
   'aar.kicker': 'Report',

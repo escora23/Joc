@@ -47,6 +47,12 @@ export class ShipController implements Controller {
     ent.speed = SPEEDS[this.telegraph + 1];
   }
 
+  /** Owner item 30 (fix pass 3): the view swings toward a ship the stop panel names, unless the mouse takes over. */
+  private lookYaw: number | null = null;
+  lookToward(p: THREE.Vector3): void {
+    this.lookYaw = Math.atan2(-(p.x - this.ent.pos.x), -(p.z - this.ent.pos.z));
+  }
+
   aimAt(p: THREE.Vector3): void {
     this.auto = p.clone();
     const dx = p.x - this.ent.pos.x, dz = p.z - this.ent.pos.z;
@@ -74,6 +80,7 @@ export class ShipController implements Controller {
     if (allowInput) {
       inp.takeMouse(MOUSE);
       const k = 0.0022 * c.sens();
+      if (Math.abs(MOUSE.x) > 2) this.lookYaw = null;
       this.aimYaw -= MOUSE.x * k;
       this.aimPitch -= MOUSE.y * k * (c.invertY() ? -1 : 1);
       this.aimPitch = Math.max(-0.45, Math.min(0.2, this.aimPitch));
@@ -84,6 +91,12 @@ export class ShipController implements Controller {
       const rIn = (inp.down('KeyA') || inp.down('ArrowLeft') ? 1 : 0) - (inp.down('KeyD') || inp.down('ArrowRight') ? 1 : 0);
       if (rIn) this.rudder = Math.max(-1, Math.min(1, this.rudder + rIn * dt * 0.9));
       else this.rudder += -this.rudder * Math.min(1, dt * 0.5);
+    }
+    if (this.lookYaw !== null) {
+      const d = angleDelta(this.aimYaw, this.lookYaw);
+      this.aimYaw += d * Math.min(1, dt * 2.5);
+      this.aimPitch += (-0.06 - this.aimPitch) * Math.min(1, dt * 2.5);
+      if (Math.abs(d) < 0.01) this.lookYaw = null;
     }
     // --- Hull ------------------------------------------------------------------------------------
     const target = Math.max(-c.speedCap, Math.min(c.speedCap, SPEEDS[this.telegraph + 1]));

@@ -60,10 +60,13 @@ void main() {
   vec3 col = battleShade(alb, N, vPos, 1.0 - core * 0.4, 1.0);
   // Fresh craters glow for a moment.
   float age = uTime - vBirth;
-  col += vec3(3.0, 0.9, 0.2) * core * exp(-age * 1.6) * 1.5;
+  // Fix pass 3: only up close — from a few km a field of glowing dots reads as an orange rash over the ground (and a
+  // paused clock would keep them lit); far away a crater is a soft scar, not a hard disc.
+  float camD = length(vPos - uCamL);
+  col += vec3(3.0, 0.9, 0.2) * core * exp(-age * 1.6) * 1.5 * (1.0 - smoothstep(500.0, 1600.0, camD)) * step(age, 4.0);
   col = battleAir(col, vPos);
   float fadeIn = smoothstep(0.0, 0.15, age);
-  a *= fadeIn * uFade * 0.8;
+  a *= fadeIn * uFade * 0.8 * (1.0 - 0.55 * smoothstep(1200.0, 4500.0, camD));
   gl_FragColor = vec4(col * a, a);
   ${GLSL_TAIL}
 }`;

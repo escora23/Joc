@@ -146,7 +146,7 @@ export function wireAfterAction(hs: HudShared, alerts: AlertCenter): void {
     const ours = e.owner === HUMAN_ID, byUs = e.by === HUMAN_ID;
     if (!ours && !byUs) return;
     const changed = e.levelLost || e.destroyed || e.state !== damageState(e.hpBefore);
-    if (!changed && !(ours && e.civilians > 0 && e.cause !== 'naval')) return;
+    if (!changed && !((ours || byUs) && e.civilians > 0 && e.cause !== 'naval')) return;
     const x = (e.tile % MAP_W) + 0.5, y = Math.floor(e.tile / MAP_W) + 0.5;
     const ll = tileXYToLatLon(x, y);
     const st = view().structures.get(e.structureId);

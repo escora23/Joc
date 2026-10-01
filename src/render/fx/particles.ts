@@ -41,6 +41,7 @@ varying float vSeed;
 varying float vDay;
 varying float vFade;
 varying vec2 vSun2;
+varying float vFar;
 
 void main() {
   float age = uFxTime - aT.x;
@@ -60,6 +61,10 @@ void main() {
   vec4 mv = viewMatrix * vec4(p, 1.0);
   float dist = max(-mv.z, 1e-6);
   size = max(size, 1.5 * uPixelK * dist);
+  // Fix pass 3 (clear map): from the strategic zoom (camera beyond ~150 km) a puff, flash or fireball is never more
+  // than ~40 px across and never HDR-bright (no bloom disc): the front, its units and its line stay readable under it.
+  vFar = smoothstep(0.02, 0.05, dist);
+  size = mix(size, min(size, 20.0 * uPixelK * dist), vFar);
   vec2 c = position.xy;
   vec2 off;
   if (kind > 1.5 && kind < 2.5) {
@@ -101,6 +106,7 @@ varying float vSeed;
 varying float vDay;
 varying float vFade;
 varying vec2 vSun2;
+varying float vFar;
 
 vec4 cell(float i, vec2 uv) {
   vec2 o = vec2(mod(i, 2.0), floor(i / 2.0)) * 0.5;
@@ -155,6 +161,8 @@ void main() {
     a = g.a * (1.0 - t) * (1.0 - t);
   }
   a *= vFade;
+  col = mix(col, min(col, vec3(1.25)), vFar);
+  a *= 1.0 - 0.35 * vFar;
   if (a < 0.003) discard;
   gl_FragColor = vec4(col, a);
   #include <tonemapping_fragment>

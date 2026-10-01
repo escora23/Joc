@@ -235,6 +235,8 @@ export class CommandOverlay {
   onGo: (() => void) | null = null;
   /** The world marker of the nearest action (scene position) and its text; null = none. */
   combatMarker: { pos: THREE.Vector3; text: string; contact: boolean } | null = null;
+  /** Owner item 30 (fix pass 3): the ship the stop panel speaks of — brackets on it, or an arrow at the screen's edge. */
+  shipMarker: { pos: THREE.Vector3; text: string; color: string; radius: number } | null = null;
   private lastRadio = '';
   private noticeT = 0;
   private titleT = 0;
@@ -345,6 +347,7 @@ export class CommandOverlay {
     this.setTransit(null);
     this.setVision('', '');
     this.combatMarker = null;
+    this.shipMarker = null;
     this.root.classList.add('fu-cmd-hidden');
     document.body.classList.remove('fu-cmd-on');
     this.closeDialog(-1);
@@ -384,6 +387,13 @@ export class CommandOverlay {
     this.notice.classList.toggle('info', info);
     this.notice.classList.add('show');
     this.noticeT = this.time + seconds;
+  }
+
+  /** Take a notice down now (when it no longer holds: the peaceful welcome once a ship is to be stopped). */
+  hideNotice(text?: string): void {
+    if (text !== undefined && this.noticeText !== text) return;
+    this.notice.classList.remove('show');
+    this.noticeT = 0;
   }
 
   get noticeText(): string {
@@ -686,6 +696,67 @@ export class CommandOverlay {
         g.fillText(cm.text, x, y - r - 10);
       }
       this.drawnLabels.push(`combat: ${cm.text}`);
+    }
+    // The ship the stop panel names (hail, warn, board, sink): always findable.
+    const sm = this.shipMarker;
+    if (sm) {
+      P.copy(sm.pos).project(camera);
+      const on = P.z < 1 && P.z > -1;
+      let x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
+      g.textAlign = 'center';
+      g.font = '700 12px "Barlow Condensed", sans-serif';
+      const col = sm.color;
+      if (!on || x < 40 || x > W - 40 || y < 90 || y > H - 60) {
+        const dx = on ? x - W / 2 : -(x - W / 2), dy = on ? y - H / 2 : -(y - H / 2);
+        const a = Math.atan2(dy, dx);
+        const hw = W / 2 - 70, top = 160, bot = H - 160;
+        const cx = Math.cos(a), cy = Math.sin(a);
+        const kx = Math.abs(cx) > 1e-6 ? hw / Math.abs(cx) : Infinity;
+        const ky = cy < 0 ? (H / 2 - top) / -cy : cy > 0 ? (bot - H / 2) / cy : Infinity;
+        const k = Math.min(kx, ky);
+        x = W / 2 + cx * k;
+        y = H / 2 + cy * k;
+        g.save();
+        g.translate(x, y);
+        g.rotate(a);
+        g.fillStyle = col;
+        g.strokeStyle = 'rgba(0,0,0,0.7)';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(20, 0);
+        g.lineTo(-8, -13);
+        g.lineTo(-2, 0);
+        g.lineTo(-8, 13);
+        g.closePath();
+        g.stroke();
+        g.fill();
+        g.restore();
+        g.fillStyle = 'rgba(0,0,0,0.65)';
+        g.fillText(sm.text, x + 1, y + 31);
+        g.fillStyle = '#fff';
+        g.fillText(sm.text, x, y + 30);
+      } else {
+        // Brackets sized to the hull at its distance.
+        const d = Math.max(1, camera.position.distanceTo(sm.pos));
+        const r = Math.max(18, Math.min(120, (sm.radius / d) * (H / (2 * Math.tan((camera.fov * Math.PI) / 360)))));
+        const yb = y + r * 0.35;
+        g.strokeStyle = col;
+        g.lineWidth = 2.5;
+        const c = r * 0.35;
+        g.beginPath();
+        for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          const bx = x + sx * r, by = yb + sy * r * 0.5;
+          g.moveTo(bx, by - sy * c * 0.6);
+          g.lineTo(bx, by);
+          g.lineTo(bx - sx * c, by);
+        }
+        g.stroke();
+        g.fillStyle = 'rgba(0,0,0,0.65)';
+        g.fillText(sm.text, x + 1, yb - r * 0.5 - 9);
+        g.fillStyle = '#fff';
+        g.fillText(sm.text, x, yb - r * 0.5 - 10);
+      }
+      this.drawnLabels.push(`ship: ${sm.text}`);
     }
     // Where the force under the cursor comes from.
     if (hover) {

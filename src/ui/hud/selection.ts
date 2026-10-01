@@ -31,7 +31,7 @@ import { hexToCss } from '../../shared/color';
 import { tileXYToLatLon } from '../../shared/geo';
 import { formatCompact, formatNumber, t } from '../../shared/i18n';
 import {
-  StructureType, UnitMode, UnitState, UnitType, type AttackView, type BuildableUnit, type StructureView, type UnitOrderKind, type UnitView, type WeaponType,
+  StructureType, UnitMode, UnitState, UnitType, type AttackView, type BuildableUnit, type RuinView, type StructureView, type UnitOrderKind, type UnitView, type WeaponType,
 } from '../../shared/types';
 
 export interface SelectionPanel {
@@ -72,6 +72,17 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
   let builtFor = '';
   let live: Record<string, HTMLElement> = {};
   const sigs: Record<string, string> = {};
+
+  // Fix pass 3 (#27): a structure destroyed while its card is open (or selected after it fell) keeps a card: its
+  // rubble, who destroyed it, when, and the half-price rebuild. The sim's destroyed event gives its tile.
+  const fallenTile = new Map<number, number>();
+  ctx.bus.on('structureDamaged', (e) => {
+    if (e.destroyed) fallenTile.set(e.structureId, e.tile);
+  });
+  const ruinOf = (id: number) => {
+    const tile = fallenTile.get(id);
+    return tile === undefined ? undefined : view().ruins.find((r) => r.tile === tile);
+  };
 
   const close = () => {
     hs.sound('close');
@@ -354,6 +365,18 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       }
     }
     return out;
+  }
+
+  function buildRuin(r: RuinView): void {
+    const p = view().players[r.owner];
+    const type = t(`structure.${STRUCTURE_DEFS[r.type].id}`);
+    const h0 = Math.max(0, (view().tick - r.tick) / 10);
+    const when = h0 >= 24 ? t('aar.days', { n: formatNumber(h0 / 24, 1) }) : t('aar.hours', { n: formatNumber(h0, h0 < 10 ? 1 : 0) });
+    el.replaceChildren(
+      header(icon(STRUCTURE_ICON[r.type]), t('ruin.title', { s: type }), `${type} · ${p ? hs.name(r.owner) : '—'}`, 0x5a5048),
+      h('div', { class: 'fu-w4-dmg is-destroyed' }, `${t('card.ruin.state', { n: r.level })}`),
+      h('p', { class: 'fu-sel-desc' }, h0 < 1 ? t('ruin.textNow', { name: r.by > 0 ? hs.name(r.by) : '—' }) : t('ruin.text', { name: r.by > 0 ? hs.name(r.by) : '—', when })),
+    );
   }
 
   function buildStructure(s: StructureView): void {
@@ -758,6 +781,7 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       }
       key = `g${ids.join(',')}`;
     } else if (sel.kind === 'structure' && v.structures.has(sel.id)) key = `s${sel.id}:${v.structures.get(sel.id)!.owner}`;
+    else if (sel.kind === 'structure' && ruinOf(sel.id)) key = `r${sel.id}`;
     else if (sel.kind === 'nation' && v.players[sel.id]?.alive) key = `n${sel.id}:${nationRelation(hs, sel.id)}`;
     if (key === 'none' && sel.kind !== 'none') {
       hs.select({ kind: 'none' });
@@ -777,9 +801,11 @@ export function createSelectionPanel(hs: HudShared): SelectionPanel {
       el.classList.add('is-in');
       if (sel.kind === 'unit') buildUnit(v.units.get(sel.id)!);
       else if (sel.kind === 'units') buildGroup(sel.ids);
+      else if (sel.kind === 'structure' && key.startsWith('r')) buildRuin(ruinOf(sel.id)!);
       else if (sel.kind === 'structure') buildStructure(v.structures.get(sel.id)!);
       else if (sel.kind === 'nation') buildNation(sel.id);
     }
+    if (key.startsWith('r')) return;
     if (key === 'none') return;
     if (sel.kind === 'unit') refreshUnit(v.units.get(sel.id)!);
     else if (sel.kind === 'units') refreshGroup(sel.ids);
