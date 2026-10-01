@@ -336,6 +336,8 @@ export class Civil {
   keepOut = (x: number, z: number): boolean => {
     const f = this.frame;
     if (!f) return false;
+    // Inside a compound's fence: no trees, bushes or rocks on its aprons, runways and yards.
+    if (this.structureAt(x, z)) return true;
     const ax = x + f.offX, az = z + f.offZ;
     for (let i = 0; i < this.clearDiscs.length; i += 3) {
       const dx = ax - this.clearDiscs[i], dz = az - this.clearDiscs[i + 1];

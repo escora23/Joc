@@ -201,10 +201,26 @@ class Compound {
   /** A flat paved area (concrete, asphalt), a little above the ground. */
   pave(w: number, d: number, color: number, x = 0, z = 0, y = 0.25): this {
     // A grid that drapes over the ground vertex by vertex (civil.ts conforms it), so a 1 km apron never floats.
-    const nx = Math.max(1, Math.min(24, Math.round(w / 40))), nz = Math.max(1, Math.min(24, Math.round(d / 40)));
+    // ~20 m cells (up to 48 a side) and 0.6 m of lift: coarser cells let the relief between their corners poke
+    // through a 1 km apron as patches of bare ground.
+    const nx = Math.max(1, Math.min(48, Math.round(w / 20))), nz = Math.max(1, Math.min(48, Math.round(d / 20)));
     const plane = new THREE.PlaneGeometry(w, d, nx, nz).rotateX(-Math.PI / 2);
     this.g.drape = true;
-    this.g.add(plane, color, x, y + 0.25, z);
+    this.g.add(plane, color, x, y + 0.6, z);
+    this.g.drape = false;
+    return this;
+  }
+  /** A road or track `w` wide from (x0, z0) to (x1, z1), in draped 20 m segments (any direction, follows the relief). */
+  track(x0: number, z0: number, x1: number, z1: number, w: number, color = ASPHALT): this {
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    if (len < 1) return this;
+    const ry = Math.atan2(-(z1 - z0), x1 - x0);
+    const segs = Math.max(1, Math.ceil(len / 20));
+    this.g.drape = true;
+    for (let i = 0; i < segs; i++) {
+      const t = (i + 0.5) / segs;
+      this.g.box(len / segs + 0.2, 0.3, w, color, x0 + (x1 - x0) * t, 0.75, z0 + (z1 - z0) * t, 0, ry, 0);
+    }
     this.g.drape = false;
     return this;
   }
@@ -358,13 +374,21 @@ export function buildCmdStructure(type: StructureType, level: number, state: num
       break;
     }
     case StructureType.ArmyBase: {
-      c.pave(size * 0.9, size * 0.9, 0x86826f);
+      // Roads and yards where the buildings are; the rest of the ground inside the fence stays natural (a 1 km apron
+      // with a few barracks on it read as an empty car park).
       c.perimeter(h * 0.9);
+      const bx = -h * 0.5 + 90, bz = -h * 0.55 + 40;
+      c.pave(320, 150, 0x86826f, bx, bz);
+      c.track(0, h * 0.9, 0, -h * 0.35, 14).track(-h * 0.5, -h * 0.35, h * 0.55, -h * 0.35, 12);
+      c.track(bx, bz + 75, bx, -h * 0.35, 10).track(h * 0.15, h * 0.3 - 40, 0, h * 0.3 - 40, 12);
+      c.pave(80, 60, 0x86826f, h * 0.45, -h * 0.5 + 25);
       for (let i = 0; i < 2 + L * 2; i++) c.bld(70, 9, 16, 0xa39c84, ROOF_DARK, -h * 0.5 + (i % 3) * 90, -h * 0.55 + Math.floor(i / 3) * 40);
       c.bld(40, 14, 26, BRICK, ROOF_DARK, h * 0.45, -h * 0.5).flag(h * 0.45, -h * 0.2, 22);
       c.pave(120, 80, ASPHALT, h * 0.15, h * 0.3, 0.4);
       // Vehicle park: rows of olive vehicles under the sheds.
       for (let row = 0; row < 2 + L; row++) for (let k = 0; k < 8; k++) c.g.box(3.5, 2.6, 8, OLIVE, h * 0.15 - 50 + k * 12, 1.6, h * 0.3 - 30 + row * 14);
+      c.pave(110, 30 + 34 * L, 0x86826f, -h * 0.4, h * 0.25 + (L - 1) * 17);
+      c.track(-h * 0.4 + 55, h * 0.25, 0, h * 0.25, 10);
       for (let i = 0; i < L; i++) c.bld(80, 7, 22, 0x7a7466, 0x666158, -h * 0.4, h * 0.25 + i * 34);
       break;
     }
@@ -393,12 +417,13 @@ export function buildCmdStructure(type: StructureType, level: number, state: num
       break;
     }
     case StructureType.SamSite: {
-      c.pave(size * 0.8, size * 0.8, 0x7e7a68);
       c.perimeter(h * 0.82);
-      // Launchers in earth revetments around a radar and a command cabin.
+      // Launchers in earth revetments around a radar and a command cabin, each on its pad at the end of a track.
+      c.pave(50, 50, 0x7e7a68).track(0, h * 0.82, 0, 25, 10);
       const n = 2 + L * 2;
       for (let i = 0; i < n; i++) {
         const ang = (i / n) * Math.PI * 2, x = Math.cos(ang) * h * 0.55, z = Math.sin(ang) * h * 0.55;
+        c.pave(30, 30, 0x7e7a68, x, z).track(Math.cos(ang) * 25, Math.sin(ang) * 25, x - Math.cos(ang) * 15, z - Math.sin(ang) * 15, 6, 0x6d6758);
         for (let a = 0; a < 3; a++) c.g.box(18, 3, 4, EARTH, x + Math.cos(ang + 1.6 + a) * 12, 1.3, z + Math.sin(ang + 1.6 + a) * 12, 0, -(ang + 1.6 + a) + Math.PI / 2, 0);
         if ((state >= 3 || (state >= 2 && r() < 0.5))) {
           c.heap(10, 3, 4, OLIVE, x, z);
@@ -409,27 +434,32 @@ export function buildCmdStructure(type: StructureType, level: number, state: num
       }
       c.lattice(3, 10, 0, 0);
       c.g.box(9, 1, 2, STEEL, 0, 11, 0).box(7, 5, 0.5, 0xc8c8c0, 0, 13.5, 0, 0.3, 0, 0);
-      c.bld(14, 4, 8, OLIVE, 0x4b5436, h * 0.2, -h * 0.25);
+      c.pave(30, 22, 0x7e7a68, h * 0.2, -h * 0.25).bld(14, 4, 8, OLIVE, 0x4b5436, h * 0.2, -h * 0.25);
       c.top = Math.max(c.top, 16);
       break;
     }
     case StructureType.MissileSilo: {
-      c.pave(size * 0.85, size * 0.85, 0xa29d8e);
       c.perimeter(h * 0.86);
+      // Each silo on its concrete pad along one service road; the erector gantry and the buildings on theirs.
+      c.track(0, h * 0.86, 0, -h * 0.1, 12).track(-h * 0.45, -h * 0.1, h * 0.45, -h * 0.1, 10);
       for (let i = 0; i < 3; i++) {
         const x = -h * 0.45 + i * h * 0.45, z = -h * 0.1;
+        c.pave(46, 46, 0xa29d8e, x, z);
         c.g.cyl(14, 14, 0.8, 24, YELLOW, x, 0.7, z);
         for (let k = 0; k < 12; k++) c.g.box(2.8, 0.2, 1.2, CHAR, x + Math.cos(k / 12 * Math.PI * 2) * 13, 1.15, z + Math.sin(k / 12 * Math.PI * 2) * 13, 0, -(k / 12) * Math.PI * 2, 0);
         const open = state >= 2;
         c.g.box(18, 1.4, 18, open ? CHAR : 0x7c7d78, x + (open ? 12 : 0), 1.6, z, 0, 0, open ? 0.25 : 0);
       }
-      c.lattice(10, 26 + L * 4, h * 0.45, h * 0.3, RED);
+      c.pave(30, 30, 0xa29d8e, h * 0.45, h * 0.3).lattice(10, 26 + L * 4, h * 0.45, h * 0.3, RED);
+      c.pave(40 * L + 10, 30, 0xa29d8e, -h * 0.4 + (L - 1) * 20, h * 0.5).track(-h * 0.4 + (L - 1) * 40 + 20, h * 0.5, 0, h * 0.5, 8);
       for (let i = 0; i < L; i++) c.bld(30, 6, 14, 0xa39c84, ROOF_DARK, -h * 0.4 + i * 40, h * 0.5);
       break;
     }
     case StructureType.Radar: {
-      c.pave(size * 0.8, size * 0.8, 0x8f8b80);
       c.perimeter(h * 0.84);
+      c.pave(46, 46, 0x8f8b80).track(0, h * 0.84, 0, 23, 10);
+      c.pave(22 * L + 10, 24, 0x8f8b80, -h * 0.45 + (L - 1) * 11, h * 0.4).track(-h * 0.45 + 22 * L, h * 0.4, 0, h * 0.4, 6, 0x6d6758);
+      c.pave(16, 16, 0x8f8b80, h * 0.45, -h * 0.3);
       const th = 20 + L * 4;
       c.lattice(8, th, 0, 0);
       c.g.box(10, 2, 10, STEEL, 0, th, 0);
