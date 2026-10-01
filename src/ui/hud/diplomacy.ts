@@ -114,7 +114,7 @@ export function attackNation(hs: HudShared, target: number, tile = -1, quick = f
     return true;
   }
   if (hs.borders(target)) {
-    if (target !== 0 && !quick && aim >= 0) return !!openOffensiveDialog(hs, target, aim);
+    if (target !== 0 && !quick && aim >= 0) return !!openOffensiveDialog(hs, target, aim, { sendTroops: true });
     ctx.sim.send({ type: 'attack', target, ratio: hs.attackRatio, tile: aim });
     hs.sound('confirm');
     return true;

@@ -1256,3 +1256,28 @@ the map, nothing in command mode. A blockading warship that chased a ship never 
 * Verifiers updated to the current design where they had gone stale: w3 V7t (9 auto-pause kinds, incursion on), w4 V5
   (orders the units the chip says can comply, slower acks), w5 X1 (29e exit camera at 900 km tilted), endgame audit
   (breaks the countdown for any duration's ratio), regrowth audit (stages 5,000 tiles).
+
+### Headless targets on the integrated build (W7)
+`pace-audit` speeds, conquest (mult 1/2/4/10), depth, corridor, regrowth (200 and 5,000 tiles), survival, empire,
+attached division, invariants, nuke, occupation, port economy, save/restore (T42 identical over 600 ticks, 852 events)
+and `harness.mjs`: **all pass**. Full games:
+
+| Game | End | T14 window | Result |
+|---|---|---|---|
+| Normal seed 11 | hegemony at 62,750 | 36,000–72,000 | pass (15/16 rows; only T33 fails) |
+| Normal seed 12 | hegemony at 89,530 | 36,000–72,000 | late (also T19: 9 windows, worst 29.1 %) |
+| Normal seed 13 | hegemony at 49,280 | 36,000–72,000 | pass |
+| Corta seed 11 | hegemony at 41,900 | 18,000–42,000 | pass |
+| Larga seed 11 | hegemony at 77,120 | 60,000–120,000 | pass |
+
+So T14 holds on seed 11 and on 2 of 3 Normal seeds before the time limit (acceptance 7).
+
+**T33 is not met** (first AI war on the autopilot human: 13,984 / 15,914 / 19,189 against 6,000–12,000). Traced on
+seed 11 (scratch probe with a hook in `thinkDeclarations`): the autopilot human becomes the strongest nation of its
+region (1.1 M troops at tick 9,000, two wars of its own at 8,556 and 10,941). Its neighbours are opportunists at
+opinion −16…−19 that do see it «bleeding» in those wars, but the §4.6 launch odds against the garrison it keeps on
+their border need 2.7–2.9× their whole army (MAX_COMMIT is far below), so they rationally stand down and sign pacts;
+the first tension comes from a conqueror that only reaches its border at ~13,000. Forcing T33 would mean AIs declaring
+wars they cannot fight or loosening the §4.16 protections, which the brief forbids; a real (weaker) player meets the
+first AI war earlier (day ~51, tick ~12,100 in the Easy playtest). Left open as a measurement of the autopilot, not a
+defect of play.

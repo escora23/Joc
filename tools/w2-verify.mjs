@@ -278,7 +278,9 @@ async function checkIslands() {
     await page.screenshot({ path: path.join(out, `${shot}.png`) });
     // Hover the first marker: the tooltip must name the owner (or «libre»).
     let tip = null;
-    const m = r.details.markers.find((x) => x.x > 40 && x.y > 120 && x.x < 1200 && x.y < 700);
+    // A marker the pointer can reach: the canvas must be under it (not the alert feed or another panel).
+    const reach = await page.evaluate((ms) => ms.map((x) => document.elementFromPoint(x.x, x.y)?.tagName === 'CANVAS'), r.details.markers);
+    const m = r.details.markers.find((x, i) => reach[i] && x.x > 40 && x.y > 120 && x.x < 1200 && x.y < 700);
     if (m) {
       await page.evaluate(() => window.__front.ctx.app.goto?.('playing'));
       for (let k = 0; k < 3 && !tip; k++) {

@@ -434,6 +434,7 @@ export const esW3: Record<string, string> = {
   'msg.divisionWornOut': 'Una división agotada se ha disuelto',
   'msg.productionLost': 'Se ha perdido la producción de una estructura',
   'msg.siloLevel': 'Tus silos no tienen nivel suficiente para esa arma',
+  'msg.siloLevelNeed': '{weapon}: necesita un silo de nivel {n}. Mejora uno desde su ficha.',
   'msg.upgrading': 'La estructura se está mejorando',
   'tension.demandRefused': '{name} rechaza tu exigencia y lo toma como una afrenta.',
 
@@ -1213,6 +1214,7 @@ export const enW3: Record<string, string> = {
   'msg.divisionWornOut': 'A worn-out division has disbanded',
   'msg.productionLost': 'A structure\'s production was lost',
   'msg.siloLevel': 'Your silos are not advanced enough for that weapon',
+  'msg.siloLevelNeed': '{weapon}: needs a level {n} silo. Upgrade one from its card.',
   'msg.upgrading': 'The structure is being upgraded',
   'tension.demandRefused': '{name} refuses your demand and takes it as an affront.',
 

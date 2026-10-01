@@ -113,7 +113,7 @@ export function previewOffensive(hs: HudShared, enemy: number, tile: number, tro
  * Open the offensive dialog toward `tile` (enemy land) against `enemy`. With an offensive of ours already on that
  * front it becomes the reinforcement dialog (add troops, move the axis here, change intensity).
  */
-export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number): ModalHandle | null {
+export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number, opts: { sendTroops?: boolean } = {}): ModalHandle | null {
   const ctx = hs.ctx;
   const view = ctx.sim.view;
   const me = view.human;
@@ -151,11 +151,12 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number):
   const verdict = h('div', { class: 'fu-offdlg-verdict' });
   const persist = h('p', { class: 'fu-offdlg-note' }, t(own ? 'off.persist.reinforce' : 'off.persist'));
   const addToggle = h('label', { class: 'fu-offdlg-add' });
-  // Reinforcing: troops are optional (only the intensity may change).
-  let addTroops = !own;
+  // Reinforcing: troops are optional (only the intensity may change). A click on the enemy's land with the attack
+  // force set is an attack gesture: it opens with «Enviar más tropas» ticked; «Gestionar…» opens without.
+  let addTroops = !own || !!opts.sendTroops;
   if (own) {
     const cb = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    cb.checked = false;
+    cb.checked = addTroops;
     cb.addEventListener('change', () => {
       addTroops = cb.checked;
       paint();

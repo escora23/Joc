@@ -11,10 +11,31 @@ import { describeTile } from '../places';
 import { tip } from '../tooltip';
 import { tx } from '../tx';
 import type { HudShared } from './shared';
-import { HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, TILE_KM, UNIT_DEFS } from '../../shared/constants';
+import { HUMAN_ID, MAP_H, MAP_W, NUKE_DEFS, STRUCTURE_DEFS, TILE_KM, UNIT_DEFS, structureLevel } from '../../shared/constants';
 import { MIRV_SPREAD } from '../../sim/balance';
 import { formatNumber, t } from '../../shared/i18n';
-import { UnitType, type WeaponType } from '../../shared/types';
+import { StructureType, UnitType, type WeaponType } from '../../shared/types';
+
+/**
+ * Whether one of the human's finished silos can carry `weapon` (its level lists it): null when one can, else the reason
+ * with the level a silo needs, so the arsenal slot and the aim say it before any confirmation (the sim would refuse).
+ */
+export function siloError(hs: HudShared, weapon: WeaponType): { key: string; params?: Record<string, string | number> } | null {
+  const v = hs.ctx.sim.view;
+  let any = false;
+  for (const s of v.structures.values()) {
+    if (s.owner !== HUMAN_ID || s.type !== StructureType.MissileSilo || s.built < 1) continue;
+    any = true;
+    if ((structureLevel(s.type, s.level).weapons ?? []).includes(weapon)) return null;
+  }
+  if (!any) return { key: 'msg.noSilo' };
+  for (let L = 1; L <= STRUCTURE_DEFS[StructureType.MissileSilo].maxLevel; L++) {
+    if ((structureLevel(StructureType.MissileSilo, L).weapons ?? []).includes(weapon)) {
+      return { key: 'msg.siloLevelNeed', params: { weapon: t(`unit.${UNIT_DEFS[weapon].id}`), n: L } };
+    }
+  }
+  return { key: 'msg.siloLevel' };
+}
 
 /** Why the human may not aim this nuclear weapon at `tile` (null = it may), as an i18n key. */
 export function nukeAimError(hs: HudShared, tile: number): string | null {

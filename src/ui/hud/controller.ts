@@ -9,7 +9,7 @@ import { needsDeclaration, openDeclareWar } from './declare';
 import type { HudShared } from './shared';
 import { isListedForce } from './forcesInfo';
 import { issueOrders, openCivilianConfirm, previewOrders, selectedUnitIds } from './orderCtl';
-import { nukeAimError, openNukeConfirm } from './nukeConfirm';
+import { nukeAimError, openNukeConfirm, siloError } from './nukeConfirm';
 import { HUMAN_ID, STRUCTURE_DEFS } from '../../shared/constants';
 import { tileToLatLon } from '../../shared/geo';
 import { t } from '../../shared/i18n';
@@ -176,10 +176,11 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       // that lists who is in the radius and what it costs.
       if (m.weapon !== UnitType.CruiseMissile) {
         const why = nukeAimError(hs, e.tile);
-        if (why) {
+        const silo = why ? null : siloError(hs, m.weapon);
+        if (why || silo) {
           hs.sound('error');
           hooks.ripple(e.clientX, e.clientY, 'bad');
-          bus.emit('toast', { text: t(why), kind: 'warning', durationMs: 2600 });
+          bus.emit('toast', { text: why ? t(why) : t(silo!.key, silo!.params), kind: 'warning', durationMs: 3200 });
           return;
         }
         const weapon = m.weapon;
@@ -319,9 +320,10 @@ export function wireController(hs: HudShared, hooks: ControllerHooks): void {
       const why = cfg && !cfg.nukes && weapon !== UnitType.CruiseMissile ? 'msg.nukesDisabled'
         : hs.ownStructures(StructureType.MissileSilo) === 0 ? 'msg.noSilo'
           : !atWar ? (weapon === UnitType.CruiseMissile ? 'msg.notAtWar' : 'msg.nukeNotAtWar') : null;
-      if (why) {
+      const silo = why ? null : siloError(hs, weapon);
+      if (why || (silo && silo.key === 'msg.siloLevelNeed')) {
         hs.sound('error');
-        bus.emit('toast', { text: t(why), kind: 'warning', durationMs: 2600 });
+        bus.emit('toast', { text: why ? t(why) : t(silo!.key, silo!.params), kind: 'warning', durationMs: 3000 });
         return;
       }
       hooks.setBuildTab('arsenal');

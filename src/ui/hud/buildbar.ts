@@ -8,6 +8,7 @@ import { tx } from '../tx';
 import { tip as sharedTip, type TipData } from '../tooltip';
 import { etaText, levelEffects, reachLine, speedLine, structurePurpose } from './forcesInfo';
 import type { HudShared } from './shared';
+import { siloError } from './nukeConfirm';
 import { BUILDABLE_UNITS, HUMAN_ID, NUKE_DEFS, STRUCTURE_DEFS, UNIT_DEFS, WEAPONS } from '../../shared/constants';
 import { formatCompact, formatNumber, hasKey, inSentence, t } from '../../shared/i18n';
 import { STRUCTURE_TYPES, StructureType, UnitType, type BuildableUnit, type WeaponType } from '../../shared/types';
@@ -145,6 +146,8 @@ export function createBuildBar(hs: HudShared): BuildBar {
       if (hs.ownStructures(StructureType.MissileSilo) === 0) return 'msg.noSilo';
       // Missiles and bombs follow wars (owner item 13): with no war, no target.
       if (!view.wars.some((w) => w.aggressor === HUMAN_ID || w.target === HUMAN_ID)) return slot.type === UnitType.CruiseMissile ? 'msg.notAtWar' : 'msg.nukeNotAtWar';
+      // A silo whose level does not carry this weapon (the hydrogen bomb and the MIRV need upgraded silos).
+      if (siloError(hs, slot.type as WeaponType)?.key === 'msg.siloLevelNeed') return 'msg.siloLevelNeed';
       if (me.gold < view.unitCost(slot.type as WeaponType)) return 'msg.notEnoughGold';
       return null;
     }
@@ -158,6 +161,9 @@ export function createBuildBar(hs: HudShared): BuildBar {
     const why = reason(slot);
     if (why && why !== 'msg.notEnoughGold') {
       hs.sound('error');
+      // Say why at the click too (the tooltip says it on hover): «necesitas una base aérea», «solo en guerra»…
+      const whyNot = slotTip(slot).whyNot;
+      if (whyNot) ctx.bus.emit('toast', { text: whyNot, kind: 'warning', durationMs: 3000 });
       return;
     }
     if (slot.kind === 'structure') {
@@ -194,6 +200,9 @@ export function createBuildBar(hs: HudShared): BuildBar {
     } else if (why === 'msg.notEnoughGold') {
       const cost = slot.kind === 'structure' ? view.structureCost(slot.type as StructureType) : view.unitCost(slot.type as BuildableUnit);
       whyNot = t('card.missingGold', { n: formatNumber(Math.ceil(cost - (view.human?.gold ?? 0))) });
+    } else if (why === 'msg.siloLevelNeed') {
+      const se = siloError(hs, slot.type as WeaponType);
+      whyNot = se ? t(se.key, se.params) : t('msg.siloLevel');
     } else if (why) whyNot = t(why);
     if (slot.kind === 'structure') {
       const st = slot.type as StructureType;

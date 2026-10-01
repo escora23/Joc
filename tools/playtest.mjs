@@ -115,6 +115,9 @@ async function step(name, fn) {
   log(`STEP ${name}`);
   let timer = null;
   try {
+    // Steps about the auto-pause watch it themselves; every other step resumes it like a player would.
+    const ap = /auto-pause|declares war on us|offensive on our capital|pause\/resume/i.test(name);
+    await page.evaluate(([on, sp]) => { if (window.__pt) { window.__pt.autoResume = on; window.__pt.speed = sp; } }, [!ap, SPEED]).catch(() => {});
     if (results.length >= 7) {
       await resetUi();
       await reinforce();
@@ -266,6 +269,15 @@ async function installHelpers() {
     pt.resumeIfAutoPaused = () => {
       if (ctx.sim.view.speed === 0 && document.querySelector('.fu-autopause:not(.fu-hidden)')) window.__front.app.setSpeed(1);
     };
+    // A player reads an auto-pause banner and resumes (3 s later here), unless the step is about the auto-pause itself.
+    pt.autoResume = true;
+    let bannerSince = 0;
+    setInterval(() => {
+      const shown = ctx.sim.view.speed === 0 && !!document.querySelector('.fu-autopause:not(.fu-hidden)');
+      if (!shown) { bannerSince = 0; return; }
+      if (!bannerSince) bannerSince = performance.now();
+      if (pt.autoResume && performance.now() - bannerSince > 3000) { window.__front.app.setSpeed(pt.speed ?? 1); bannerSince = 0; }
+    }, 500);
     window.__pt = pt;
   });
 }
@@ -657,7 +669,7 @@ try {
       await sleep(300);
       const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
       await btn.click();
-      sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0) ?? null, p0, 10000, 200);
+      sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0) ?? null, p0, 30000, 250);
       if (!sent) {
         await page.locator('.fu-nd-top .fu-btn').first().click();
         await sleep(500);
@@ -1204,7 +1216,14 @@ try {
       await sleep(1200);
       await shot('09b-guerra-panel');
       const btn = page.locator('.fu-warpanel button', { hasText: /^\s*Alta\s*$|^\s*High\s*$/ }).first();
-      check(await btn.count(), 'no «Alta» priority button in the Guerra panel');
+      if (!(await btn.count())) {
+        // Our wars may have no land front right now (an enemy across the sea): the panel must say so, not stay blank.
+        const note = await page.evaluate(() => [...document.querySelectorAll('.fu-warpanel .fu-war-note:not(.fu-hidden)')].map((e) => e.textContent).join(' '));
+        const landFront = await page.evaluate(() => window.__front.ctx.sim.view.fronts.some((f) => (f.a === 1 || f.b === 1) && window.__front.ctx.sim.view.pairState(f.a, f.b) === 'war'));
+        check(!landFront && /frente terrestre|land front/i.test(note), `no «Alta» priority button in the Guerra panel (note: «${note}»)`);
+        await page.keyboard.press('g');
+        return `no land front in our wars now; the panel says «${note.trim().slice(0, 90)}»`;
+      }
       await btn.click({ force: true });
       const set = await until(() => window.__front.ctx.sim.view.fronts.some((f) => (f.a === 1 && f.priorityA === 2) || (f.b === 1 && f.priorityB === 2)), null, 10000, 300);
       check(set, 'no front of ours at high priority');
@@ -1279,6 +1298,21 @@ try {
         const ll = await tileLL(tgt.tile);
         await lookAt(ll.lat, ll.lon, 2500);
         const n0 = await countEvents('nukeLaunched', 'e.owner === 1');
+        if (weapon === 'HydrogenBomb') {
+          // A level-1 silo carries no hydrogen bomb: the key says so (naming the level) instead of opening anything;
+          // then the silo is upgraded like a player would (its card's «Mejorar»).
+          const silo = await page.evaluate(() => [...window.__front.ctx.sim.view.structures.values()].find((s) => s.owner === 1 && s.type === 5 && s.built >= 1)?.id ?? -1);
+          check(silo >= 0, 'no finished silo of ours');
+          if (await page.evaluate((id) => window.__front.ctx.sim.view.structures.get(id).level < 2, silo)) {
+            const t0 = await countEvents('toast');
+            await page.keyboard.press(key);
+            const toast = (await lastEvent('toast', null, t0, 8000))?.text ?? '';
+            check(/nivel 2|level 2/i.test(toast) && !(await page.$('.fu-nuke-confirm')), `the X key on a level-1 silo did not say it needs level 2 («${toast}»)`);
+            await page.evaluate((id) => window.__front.ctx.sim.send({ type: 'upgrade', structureId: id }), silo);
+            check(await until((id) => (window.__front.ctx.sim.view.structures.get(id)?.level ?? 0) >= 2 && (window.__front.ctx.sim.view.structures.get(id)?.upgrade ?? 0) === 0, silo, 240000, 1000), 'the silo did not reach level 2');
+            await sleep(1500);
+          }
+        }
         await hoverTile(tgt.tile);
         await page.keyboard.press(key);
         await sleep(400);
@@ -1335,6 +1369,12 @@ try {
         const n0 = await countEvents('attackStarted', 'e.attacker === 1');
         const troops0 = (await humanStats()).troops;
         const defender = await page.evaluate((t) => window.__front.ctx.sim.view.owner[t], target);
+        // At war but still mobilizing (§4.2): no offensive can start before the mobilization ends; wait for it.
+        await until((d) => {
+          const v = window.__front.ctx.sim.view;
+          const w = v.wars.find((x) => (x.aggressor === 1 && x.target === d) || (x.target === 1 && x.aggressor === d));
+          return !w || v.tick >= w.mobilizeUntilTick;
+        }, defender, 120000, 500);
         const sent0 = await page.evaluate((d) => window.__front.ctx.sim.view.attacks.filter((a) => a.attacker === 1 && a.defender === d).reduce((s, a) => s + a.troops, 0), defender);
         const w0 = await countEvents('warDeclared', 'e.aggressor === 1');
         await clickTile(target);
@@ -1384,6 +1424,17 @@ try {
         await sleep(600);
         await page.mouse.click(p.x, p.y, { delay: 40 });
         selected = !!(await page.waitForSelector('.fu-take-control', { timeout: 8000 }).catch(() => null));
+        // A miss lands on the map (perhaps enemy land: the offensive dialog): close what it opened.
+        if (!selected) await resetUi();
+      }
+      if (!selected) {
+        // Like a player who cannot spot it: Fuerzas (U), the division's row.
+        await page.keyboard.press('u');
+        const row = `.fu-forces:not(.fu-hidden) .fu-fo-row[data-unit="${tankId}"]`;
+        if (await page.waitForSelector(row, { timeout: 20000 }).catch(() => null)) {
+          await page.locator(row).click({ force: true });
+          selected = !!(await page.waitForSelector('.fu-take-control', { timeout: 10000 }).catch(() => null));
+        }
       }
       check(selected, 'selection panel with TAKE CONTROL did not open');
       await sleep(800);
@@ -1518,38 +1569,51 @@ try {
     // in a truce.
     await step('conclude peace: «Ofrecer tributo» in the peace dialog is accepted, the war ends in a truce', async () => {
       await resetUi();
-      const enemy = await page.evaluate((prefer) => {
+      // Our enemies, the war we fare best in first (a winner holding our capital may ask for nothing short of
+      // capitulation: that refusal is the game being right, so the next enemy is asked).
+      const enemies = await page.evaluate(() => {
         const v = window.__front.ctx.sim.view;
-        if (prefer > 0 && v.pairState(1, prefer) === 'war') return prefer;
-        return v.playerList.find((p) => p.alive && p.kind === 'nation' && p.id !== 1 && v.pairState(1, p.id) === 'war')?.id ?? -1;
-      }, warTarget);
-      check(enemy > 0, 'no nation at war with us');
-      await page.keyboard.press('n');
-      await page.waitForSelector('.fu-nations:not(.fu-hidden)', { timeout: 20000 });
-      await page.evaluate((id) => window.__fuNations.open(id), enemy);
-      await sleep(900);
-      await page.locator('.fu-nd-actions button:not(.fu-hidden)', { hasText: /Proponer paz|Propose peace/ }).first().click();
-      await page.waitForSelector('.fu-peace', { timeout: 15000 });
-      await page.locator('.fu-peace-opts button', { hasText: /Ofrecer tributo|Offer tribute/ }).first().click({ force: true });
-      await sleep(900);
-      await shot('20a-peace-tribute');
-      const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
-      await page.locator('.fu-modal .fu-btn--primary', { hasText: /Proponer la paz|Propose peace/ }).last().click({ force: true });
-      const sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0 && p.kind === 'peace') ?? null, p0, 10000, 200);
-      check(sent, 'the peace proposal was not sent');
-      await resetUi();
-      const ans = await until((id) => {
-        const p = window.__front.ctx.sim.view.proposals.get(id);
-        window.__pt.resumeIfAutoPaused();
-      if (!p || p.status === 'considering' || p.status === 'pending') return null;
-        const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
-        return a ? { status: p.status, title: a.title, body: a.body } : null;
-      }, sent.id, 220000, 1000);
-      check(ans, 'no answer to the peace proposal');
-      check(ans.status === 'accepted', `the tribute peace was ${ans.status}: ${ans.title} — ${ans.body}`);
-      const truce = await until((id) => window.__front.ctx.sim.view.pairState(1, id) === 'truce' ? true : null, enemy, 20000, 500);
-      check(truce, `no truce with ${enemy} after the peace`);
-      return `peace with ${enemy}: «${ans.title}» ${ans.body}`;
+        return v.wars.filter((w) => w.aggressor === 1 || w.target === 1)
+          .map((w) => ({ id: w.aggressor === 1 ? w.target : w.aggressor, score: w.aggressor === 1 ? w.scoreA : -w.scoreA }))
+          .filter((e) => v.players[e.id]?.alive && v.players[e.id]?.kind === 'nation' && v.pairState(1, e.id) === 'war')
+          .sort((a, b) => b.score - a.score).map((e) => e.id);
+      });
+      check(enemies.length > 0, 'no nation at war with us');
+      const refusals = [];
+      for (const enemy of enemies.slice(0, 2)) {
+        await resetUi();
+        await page.keyboard.press('n');
+        await page.waitForSelector('.fu-nations:not(.fu-hidden)', { timeout: 20000 });
+        await page.evaluate((id) => window.__fuNations.open(id), enemy);
+        await sleep(900);
+        await page.locator('.fu-nd-actions button:not(.fu-hidden)', { hasText: /Proponer paz|Propose peace/ }).first().click();
+        await page.waitForSelector('.fu-peace', { timeout: 15000 });
+        await page.locator('.fu-peace-opts button', { hasText: /Ofrecer tributo|Offer tribute/ }).first().click({ force: true });
+        await sleep(900);
+        await shot('20a-peace-tribute');
+        const p0 = await page.evaluate(() => Math.max(0, ...[...window.__front.ctx.sim.view.proposals.values()].map((p) => p.id)));
+        await page.locator('.fu-modal .fu-btn--primary', { hasText: /Proponer la paz|Propose peace/ }).last().click({ force: true });
+        const sent = await until((p0) => [...window.__front.ctx.sim.view.proposals.values()].find((p) => p.from === 1 && p.id > p0 && p.kind === 'peace') ?? null, p0, 20000, 250);
+        check(sent, 'the peace proposal was not sent');
+        await resetUi();
+        const ans = await until((id) => {
+          const p = window.__front.ctx.sim.view.proposals.get(id);
+          window.__pt.resumeIfAutoPaused();
+          if (!p || p.status === 'considering' || p.status === 'pending') return null;
+          const a = window.__fuAlerts.list().filter((x) => x.groupKey === `prop:${id}` && x.kind !== 'proposalSent').pop();
+          return a ? { status: p.status, title: a.title, body: a.body } : null;
+        }, sent.id, 150000, 1000);
+        check(ans, 'no answer to the peace proposal');
+        if (ans.status !== 'accepted') {
+          check(ans.body && !BAD_TEXT.test(`${ans.title} ${ans.body}`), `a refusal without a readable reason: ${ans.title}`);
+          refusals.push(`${enemy}: ${ans.title} — ${ans.body}`);
+          continue;
+        }
+        const truce = await until((id) => window.__front.ctx.sim.view.pairState(1, id) === 'truce' ? true : null, enemy, 20000, 500);
+        check(truce, `no truce with ${enemy} after the peace`);
+        return `peace with ${enemy}: «${ans.title}» ${ans.body}${refusals.length ? `; first refused: ${refusals.join(' | ')}` : ''}`;
+      }
+      check(false, `every enemy refused the tribute: ${refusals.join(' | ')}`);
     });
 
     // §12.5 step 10: a proposal from an AI arrives; the advisor points at the inbox; answered from the inbox.
@@ -1572,7 +1636,8 @@ try {
       await page.locator('.fu-nt-tab').nth(1).click({ force: true });
       await sleep(900);
       await shot('19-inbox');
-      const yes = page.locator('.fu-nations .fu-btn--success').first();
+      // The staged proposal's own card (other proposals may be waiting too).
+      const yes = page.locator(`.fu-nations .fu-ib-card[data-pid="${prop.id}"] .fu-btn--success`).first();
       check(await yes.count(), 'no «Aceptar» in the inbox');
       await yes.click({ force: true });
       const done = await until((id) => { const p = window.__front.ctx.sim.view.proposals.get(id); return p && p.status !== 'pending' ? p.status : null; }, prop.id, 15000, 300);

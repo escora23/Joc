@@ -1658,3 +1658,10 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   `geo.ts` tileToVec3/neighbors8/…, `feed.ts` createToasts/createNukeAlarm, `dialogs.ts` openHowTo/openShortcuts,
   `tooltip.ts untipped`, …), unused imports and locals (`tsc --noUnusedLocals` is clean), i18n keys shadowed by a later
   dictionary, v1 tutorial strings, and 31 scratch probe scripts in `tools/_*.mjs`.
+* **Integration fixes (W7, second pass):** command-mode fences (`command/models/structures.ts Compound.fence`) are
+  draped 20 m segments (a single 1 km box anchored at its middle stood as a wall over valleys); the HUD layout
+  (`css/hud.css .fu-hud`, z 5) stacks above the map-anchored front badges, battle strip and alert markers (z 2-4);
+  the Naciones drawer (`hud/nations.ts dock`) starts under the clock like Fuerzas and freezes its row order while the
+  pointer is over the list; mobilization alerts have «now» bodies (`alert.warByUs.bodyNow`,
+  `alert.mobilization.bodyNow`). `tools/playtest.mjs` resumes auto-pause banners like a player (except in the steps
+  that test them), waits out mobilizations and confirms the command-mode exit dialog with Enter.
