@@ -272,3 +272,49 @@ Verbatim (Spanish):
       - Choose Declarar la guerra: war is declared.
       - A tank firing at a patrol of a nation at peace behaves the same way.
       - "Bloquear esta zona" from the warship works.
+
+## Owner feedback #5 (after playing artifact version 7) — MANDATORY, item 32
+
+Verbatim (Spanish):
+
+> Lo he probado, los muñequitos son raros, lo de dispararles es dificil aunque vayas con un tanque, el tema de saber donde están las ofensivas es raro y cuando llegas resulta que solo hay dos muñecos, etc.. no se si se está mejorando pero te aviso. Sobretodo el tema de llegar a las ofensivas o defensas y que cuando porfin llegas hay dos personas xd. Y tambien que si disparas con metralleta a las ciudades o fabricas no les haces daño y que con el tanque o otros vehiculos si atropellas no haces daño ni nada de eso, hazlo más realista
+
+32. **Command-mode combat must feel like a real battle: armies at scale, readable, physical.**
+    - **Battles at real scale (TOP PRIORITY).**
+      - Arriving at an offensive or a defended front, the player must find a battle whose size matches the numbers
+        shown on the map: a long, active line with hundreds of soldiers visible around the player (instanced crowds),
+        vehicles, artillery fire, smoke and tracers. Never "two little guys".
+      - Represent the troop numbers by density with a believable cap. Spawn the action where the player is, along the
+        real contact line, and keep it alive while the player drives along it.
+      - Defenders in trenches and positions; attackers advancing in waves.
+    - **Finding the action.**
+      - From the map, offensives and defences are obvious: a clear marker for every active battle, with "Tomar el control
+        aquí" on it.
+      - "Ir al combate" brings the player to the hottest point of the line (where shots are being fired now), not to an
+        empty sector.
+      - In command mode, an always-visible indicator shows where the fighting is: direction, distance and intensity.
+    - **Soldier models.** The "muñequitos" look odd. Make proper soldier models: proportions, uniforms in nation
+      colours, helmets, weapons, readable silhouettes. Give them animations (run, crouch, fire, go prone, fall when hit)
+      and LOD that holds up at tank distances.
+    - **Shooting must be satisfying and fair.**
+      - Clear target highlighting and hit markers, plus a lead/range indicator for the cannon.
+      - High-explosive rounds that really kill infantry in a radius, and a coaxial machine gun that cuts down infantry.
+      - Sensible hitboxes and readable hit feedback: blood-free stagger or fall, dust, sparks on vehicles.
+      - Hitting soldiers with a tank must be easy and rewarding, never frustrating.
+    - **Damage that makes physical sense.**
+      - Machine-gun fire against cities and factories does small but real damage: visible impacts, broken windows,
+        chipped facades, and small cumulative sim damage. The HUD says it is ineffective against buildings and suggests
+        the cannon or bombers.
+      - Heavier weapons do proportionally more.
+    - **Collisions and ramming.**
+      - A tank or vehicle running over infantry, light vehicles, fences, walls, trees and small houses causes damage
+        and kills by mass and speed, with crushing, debris and sound.
+      - Ramming damages your own vehicle realistically too.
+      - Against a nation at peace it is an incident, under the same rules as item 31.
+    - **Verify in real play.**
+      - Enter at an offensive of ~100k+ troops and count the soldiers and vehicles visible around the player: hundreds,
+        not two.
+      - Kill infantry with the cannon and the machine gun.
+      - Machine-gun a factory and watch its hp go down a little.
+      - Run over a fence, a light vehicle and infantry.
+      - Look at shots of the new soldier models at 20, 50 and 150 m.
