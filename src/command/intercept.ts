@@ -68,6 +68,8 @@ export interface InterceptDeps {
   sound(kind: 'radio' | 'confirm' | 'error'): void;
   /** Fix pass 3: swing the view toward a ship (the one the panel names), unless the player is steering the view. */
   lookAt?(p: THREE.Vector3): void;
+  /** A camera cut-in on the boarding (null: back to the ship's own camera). */
+  cutIn?(pos: THREE.Vector3 | null, look?: THREE.Vector3): void;
   /** Our nation's colour (hex): the flag the boarding party raises. */
   ownColor: number;
   /** A nation's colour (hex): the flag the ship flies until it is taken. */
@@ -137,6 +139,8 @@ class BoardingFx {
     const s = Math.sign(this.side.dot(this.tmp.copy(this.from).sub(e.pos))) || 1;
     return out.copy(e.pos).addScaledVector(this.side, s * (e.radius * 0.28 + 3));
   }
+  /** Where the camera of the cut-in looks (the boat, then the team on the hull, then the flag). */
+  readonly focus = new THREE.Vector3();
   update(t: number, total: number, ship: Ent | null): void {
     if (ship) this.ship = ship;
     const e = this.ship;
@@ -164,6 +168,9 @@ class BoardingFx {
     this.boat.rotation.y = Math.atan2(-(to.x - this.from.x), -(to.z - this.from.z));
     (this.boat.children[3] as THREE.Mesh).visible = cross < 1;
     const climb = Math.max(0, Math.min(1, (t - total * 0.56) / (total * 0.25)));
+    if (t < total * 0.56) this.focus.copy(this.boat.position).setY(2);
+    else if (t < total * 0.8) this.focus.copy(to).setY(deckY * 0.6);
+    else this.focus.copy(this.pole.position).setY(deckY + 6);
     this.men.forEach((m, i) => {
       if (climb <= 0) {
         // Seated in the boat.
@@ -225,6 +232,7 @@ export class ShipIntercept {
     for (const f of this.prizes.values()) f.dispose();
     this.prizes.clear();
     this.d.overlay.shipMarker = null;
+    this.d.cutIn?.(null);
   }
 
   get text(): string {
@@ -281,14 +289,25 @@ export class ShipIntercept {
         this.boarding = null;
         this.boardFx?.dispose();
         this.boardFx = null;
+        this.d.cutIn?.(null);
         this.d.overlay.showNotice(t('naval.cmd.boardAbort'), 3);
         this.d.sound('error');
       } else {
         this.boardFx?.update(b.t, BOARD_S, b.ent);
+        // The cut-in: from abeam of the target, low over the water, on the boat, the climb, the flags.
+        if (this.boardFx && this.d.cutIn) {
+          const fx = this.boardFx.focus;
+          const side = this.cutPos.copy(player.pos).sub(b.ent.pos).setY(0).normalize();
+          const across = this.cutTmp.set(-side.z, 0, side.x);
+          this.cutPos.copy(b.ent.pos).addScaledVector(side, b.ent.radius * 0.6 + 140).addScaledVector(across, 90);
+          this.cutPos.y = 26;
+          this.d.cutIn(this.cutPos, fx);
+        }
         if (b.t >= 3.2 && b.t - dt < 3.2) this.say(t('naval.cmd.boardAlong'));
         if (b.t >= BOARD_S * 0.62 && b.t - dt < BOARD_S * 0.62) this.say(t('naval.cmd.boardDeck'));
         if (b.t >= BOARD_S) {
           this.boarding = null;
+          this.d.cutIn?.(null);
           this.act('board', b.ent);
           if (this.boardFx && b.ent.src) {
             this.boardFx.done = true;
@@ -369,6 +388,8 @@ export class ShipIntercept {
     }
   }
   private readonly markerPos = new THREE.Vector3();
+  private readonly cutPos = new THREE.Vector3();
+  private readonly cutTmp = new THREE.Vector3();
 
   private paint(html: string): void {
     if (html === this.lastHtml) return;

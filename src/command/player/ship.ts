@@ -305,9 +305,22 @@ export class ShipController implements Controller {
     }
   }
 
+  /** Owner item 30 (fix pass 3): a short cut-in (the boarding party) — the camera at `pos` looking at `look`. */
+  cutIn: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+
   updateCamera(dt: number): void {
     const e = this.ent;
     const cam = this.c.camera;
+    if (this.cutIn) {
+      cam.position.lerp(this.cutIn.pos, dt > 0 ? Math.min(1, dt * 3) : 1);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(this.cutIn.look);
+      cam.fov += (40 - cam.fov) * Math.min(1, dt * 4 + (dt === 0 ? 1 : 0));
+      cam.updateProjectionMatrix();
+      cam.updateMatrixWorld();
+      this.projectMarkers();
+      return;
+    }
     const cp = Math.cos(this.aimPitch);
     DIR.set(-Math.sin(this.aimYaw) * cp, Math.sin(this.aimPitch), -Math.cos(this.aimYaw) * cp);
     T1.copy(e.pos);

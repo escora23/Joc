@@ -93,9 +93,17 @@ async function stats(file, kind) {
         for (let j = k; j < k + 40 && j < W + H; j++) { a += sums[j]; n += ns[j]; }
         if (n > 200) prof.push(a / n);
       }
-      let swing = 0;
-      for (let i = 2; i < prof.length - 2; i++) swing = Math.max(swing, Math.abs(prof[i] - (prof[i - 2] + prof[i + 2]) / 2));
-      return { bandSwing: +swing.toFixed(1) };
+      // Stripes are periodic: count alternating light/dark extremes of the detrended profile (a broad natural shade
+      // gives one or two, a band pattern many).
+      const det = [];
+      for (let i = 3; i < prof.length - 3; i++) det.push(prof[i] - (prof[i - 3] + prof[i - 2] + prof[i - 1] + prof[i + 1] + prof[i + 2] + prof[i + 3]) / 6);
+      let alt = 0, last = 0, swing = 0;
+      for (const v of det) {
+        swing = Math.max(swing, Math.abs(v));
+        const sg = v > 4 ? 1 : v < -4 ? -1 : 0;
+        if (sg && sg !== last) { alt++; last = sg; }
+      }
+      return { bandSwing: +swing.toFixed(1), alternations: alt };
     }
     // 'orange': share of strongly orange pixels (glow dots) in the middle of the frame.
     let o = 0, n = 0;
@@ -113,10 +121,10 @@ const s1 = await stats(f1, 'glare');
 row('M1', '1,200 km over the front with the war running: no glare disc over it', `${JSON.stringify(s1)} (fail if > 60 px)`, s1.blobDiamPx <= 60);
 const f2 = await frame('m2-60km', 60, 0.9, 8000);
 const s2 = await stats(f2, 'bands');
-row('M2', '60 km: no broad diagonal bands across the ground', JSON.stringify(s2), s2.bandSwing < 9);
+row('M2', '60 km: no broad diagonal bands across the ground', JSON.stringify(s2) + ' (fail if ≥ 6 alternations over 8)', !(s2.alternations >= 6 && s2.bandSwing > 8));
 const f3 = await frame('m3-25km', 25, 1.0, 8000);
 const s3 = await stats(f3, 'bands');
-row('M3', '25 km: no broad diagonal bands across the ground', JSON.stringify(s3), s3.bandSwing < 9);
+row('M3', '25 km: no broad diagonal bands across the ground', JSON.stringify(s3) + ' (fail if ≥ 6 alternations over 8)', !(s3.alternations >= 6 && s3.bandSwing > 8));
 const f4 = await frame('m4-3km', 3, 1.12, 15000);
 const s4 = await stats(f4, 'orange');
 row('M4', '3 km, the ground battle: no orange glow speckle over the ground', JSON.stringify(s4), s4.orangeShare < 0.3);

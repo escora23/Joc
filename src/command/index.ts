@@ -1059,6 +1059,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       shipName: unitLabel(p.unitType, ctx.sim.view.units.get(p.unitId)?.serial ?? 0),
       sound: (k) => ctx.bus.emit('uiSound', { kind: k === 'radio' ? 'typewriter' : k === 'confirm' ? 'confirm' : 'error' }),
       lookAt: (q) => (controller as unknown as { lookToward?(p: THREE.Vector3): void } | null)?.lookToward?.(q),
+      cutIn: (pos, look) => {
+        const c = controller as unknown as { cutIn?: { pos: THREE.Vector3; look: THREE.Vector3 } | null } | null;
+        if (c && 'cutIn' in c) c.cutIn = pos && look ? { pos: pos.clone(), look: look.clone() } : null;
+      },
       ownColor: ctx.sim.view.players[HUMAN_ID]?.color ?? 0x3f8fd8,
       colorHex: (o) => ctx.sim.view.players[o]?.color ?? 0x888888,
     }) : null;
@@ -2840,7 +2844,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           night.lightsOn = !night.lightsOn;
           overlay.showNotice(t(night.lightsOn ? 'command.lights.on' : 'command.lights.off'), 2.5, true);
         }
-        if (input.hit('Tab') && kind !== 'ship') {
+        if (kind !== 'ship' && input.hit('Tab')) {
           // Next vehicle of the formation (alive), in slot order.
           const alive = formation.filter((m) => m.alive);
           if (alive.length > 1) {
