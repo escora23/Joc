@@ -341,9 +341,12 @@ async function resetUi() {
       chip: !!document.querySelector('.fu-chip:not(.fu-hidden)'),
       radial: !!document.querySelector('.fu-radial:not(.fu-hidden)'),
       nations: !!document.querySelector('.fu-nations:not(.fu-hidden)'),
+      war: !!document.querySelector('.fu-warpanel:not(.fu-hidden)'),
     }));
     if (st.modal) await page.locator('.fu-modal .fu-close').last().click().catch(() => {});
     else if (st.nations) await page.locator('.fu-nations .fu-close').click().catch(() => {});
+    // A step that failed with the Guerra panel open must not leave it over the map for the next ones.
+    else if (st.war) await page.keyboard.press('g');
     else if (st.chip || st.radial) await page.keyboard.press('Escape');
     else return;
     await sleep(400);
@@ -438,7 +441,9 @@ try {
         const id = r.p.id;
         if (v.owner[t - 1] !== id || v.owner[t + 1] !== id || v.owner[t - 1600] !== id || v.owner[t + 1600] !== id) continue;
         const d = Math.hypot((t % 1600) - r.p.labelX, Math.floor(t / 1600) - r.p.labelY);
-        if (d >= 3 && d < r.bd) { r.bd = d; r.best = t; }
+        // Clear of the label and capital icon (≥ 5 tiles when the land allows it, as a player clicks open land).
+        const score = d >= 5 ? d : d >= 3 ? d + 1000 : Infinity;
+        if (score < r.bd) { r.bd = score; r.best = t; }
       }
       for (const p of list) {
         const r = byOwner.get(p.id);
@@ -448,7 +453,7 @@ try {
     });
     check(ai, 'no AI land to click');
     const ll = await tileLL(ai.tile);
-    await lookAt(ll.lat, ll.lon, 5000);
+    await lookAt(ll.lat, ll.lon, 2500);
     await sleep(1500);
     const n0 = await countEvents('toast');
     await clickTile(ai.tile);
@@ -1026,6 +1031,13 @@ try {
       return { tick: v.tick, tiles: v.human.tiles, treaties: v.treaties?.length ?? 0, proposals: v.proposals.size, opinions: v.opinions.size, wars: v.wars.length };
     });
     await shot('17c-continued');
+    // A loaded game waits paused («Pulsa Espacio para continuar»): resume it like a player, or every later build and
+    // purchase would wait forever under construction.
+    if (await page.evaluate(() => window.__front.ctx.sim.view.speed === 0)) {
+      await page.keyboard.press('Space');
+      if (!(await until(() => window.__front.ctx.sim.view.speed > 0, null, 8000, 200))) await page.evaluate((sp) => window.__front.app.setSpeed(sp), SPEED);
+    }
+    check(await until(() => window.__front.ctx.sim.view.speed > 0, null, 8000, 200), 'the continued game stays paused');
     check(after.tick >= before.tick && after.tick < before.tick + 400, `tick ${before.tick} -> ${after.tick}`);
     check(Math.abs(after.tiles - before.tiles) <= Math.max(30, before.tiles * 0.1), `tiles ${before.tiles} -> ${after.tiles}`);
     check(after.wars === before.wars && after.treaties === before.treaties, `wars/treaties ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
@@ -1045,9 +1057,13 @@ try {
       if (!a) return null;
       // A foothold of the enemy on our land 14 tiles from the capital (the first playable direction).
       let foot = -1;
-      for (const [dx, dy] of [[14, 0], [-14, 0], [0, 14], [0, -14], [10, 10], [-10, -10], [10, -10], [-10, 10]]) {
-        const t = cap + dy * 1600 + dx;
-        if (v.owner[t] === 1 && pt.playable(t)) { foot = t; break; }
+      // A small coastal nation may not reach 14 tiles in the 8 main directions: try 16 bearings, nearer rings after.
+      search: for (const r of [14, 12, 10, 8, 6]) {
+        for (let k = 0; k < 16; k += 1) {
+          const ang = (k / 16) * Math.PI * 2;
+          const t = cap + Math.round(Math.sin(ang) * r) * 1600 + Math.round(Math.cos(ang) * r);
+          if (v.owner[t] === 1 && pt.playable(t)) { foot = t; break search; }
+        }
       }
       if (foot < 0) return null;
       s.debug({ type: 'conquer', playerId: a, centerTile: foot, radius: 3 });
@@ -1221,6 +1237,25 @@ try {
     // §12.5 step 8 / §11.3: the Guerra y frentes panel (G), a front at «alta» priority.
     await step('Guerra panel (G): raise a front\'s priority', async () => {
       await resetUi();
+      // The earlier wars may have ended in peace by now: a land neighbour declares on us again (staged, like the
+      // declaration step), so the panel has a front to prioritise.
+      const atWar = () => window.__front.ctx.sim.view.fronts.some((f) => (f.a === 1 || f.b === 1) && window.__front.ctx.sim.view.pairState(f.a, f.b) === 'war');
+      if (!(await page.evaluate(atWar))) {
+        const nb = await page.evaluate(() => {
+          const v = window.__front.ctx.sim.view, pt = window.__pt, count = new Map();
+          for (const t of pt.humanTiles()) for (const n of [t - 1, t + 1, t - 1600, t + 1600]) {
+            const o = v.owner[n];
+            if (o && o !== 1 && v.players[o]?.kind === 'nation' && v.players[o]?.alive && !v.human.allies.includes(o)) count.set(o, (count.get(o) ?? 0) + 1);
+          }
+          return [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0;
+        });
+        if (nb) {
+          await page.evaluate((a) => window.__front.ctx.sim.debug({ type: 'war', a, b: 1, goal: 'border', mobilizeTicks: 240, reasonKey: 'war.reason.border' }), nb);
+          await until(atWar, null, 30000, 300);
+          await page.evaluate(() => document.querySelector('.fu-autopause:not(.fu-hidden) .fu-btn--primary')?.click());
+          await resetUi();
+        }
+      }
       await page.keyboard.press('g');
       await page.waitForSelector('.fu-warpanel:not(.fu-hidden)', { timeout: 20000 });
       await sleep(1200);

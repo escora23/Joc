@@ -1281,3 +1281,49 @@ the first tension comes from a conqueror that only reaches its border at ~13,000
 wars they cannot fight or loosening the §4.16 protections, which the brief forbids; a real (weaker) player meets the
 first AI war earlier (day ~51, tick ~12,100 in the Easy playtest). Left open as a measurement of the autopilot, not a
 defect of play.
+
+### W7 finish pass (2026-10-02) — build, one real 1x playtest, what is still open
+`npx tsc --noEmit` and `npm run build` pass on HEAD. Work done by W7 before the container restarts, from `git log --grep W7`
+(15 commits): encyclopedia and the ten-step tutorial; tooltip sweep over every control; dead-code removal; nuclear
+weapons only at war, behind a confirmation, with the silo level checked first; defensive alliances against an
+expansionist neighbour; Corta/endgame tuning; night readability on the strategic map; offensive-report wording; the
+advisor's «Funda tu capital» stall; the Naciones drawer docked under the clock; nation detail rebuilt on state
+changes; land bands drawn as soft splats; command-mode compounds (fences draped in 20 m segments, no trees inside a
+fence, aprons on a 20 m grid, roads and pads around bases, SAM, silo and radar).
+
+**Playtest at 1x** (`node tools/playtest.mjs`, Easy, no-HMR server `tools/vite.nowatch.config.mjs`, real UI):
+**0 console errors** (1 warning: SwiftShader has no `KHR_parallel_shader_compile`). No game regression found. The failed
+steps came from the test script, fixed in `tools/playtest.mjs`:
+* After «Continuar» a loaded game waits paused («Pulsa Espacio para continuar», by design). The script never resumed,
+  so every later build stayed under construction (no armored division, no level-1 factory to upgrade). It now presses
+  Space like a player.
+* The staged foothold for the capital-threat step searched only 8 bearings at 14 tiles, which a small coastal nation
+  does not reach. It now tries 16 bearings and nearer rings.
+* The Guerra-panel step failed when every war had already ended in peace. The panel correctly said «Estás en paz». A
+  land neighbour now declares on us first, as the declaration step does. Its failure path also left the panel open over
+  the map, so the 75 % attack and «Tomar el control» clicks hit the panel. `resetUi` now closes the Guerra panel. The
+  command and inbox advisor steps failed only because of that cascade, since the advisor is sequential.
+* The spawn-refusal click could land on a small nation's label and capital icon at 5,000 km. It now picks open land
+  ≥ 5 tiles from the label, at 2,500 km. The game side was correct: the hover card read «Territorio de China».
+Run 2 (before these fixes): stage 2 20/21, extended 25/30, 0 console errors, 3,265 s. For run 3 (with the fixes), see the
+line below.
+
+**Open, known:**
+* **T33** (first AI war on the autopilot human 13,984-19,189 against 6,000-12,000). See the analysis above. It is a
+  property of the autopilot, not of play.
+* **T14 on Normal seed 12**: hegemony at 89,530, late, and T19 (9 windows, worst 29.1 %). Seeds 11 and 13 pass.
+* **W2 verifier leftovers** (last `tools/w2-verify.mjs` run in `shots/w7/w2/verdicts.json`, 14/20; the rest were not
+  re-run in this pass):
+  - *Island hover tip*: **fixed**. w2-verify now hovers a marker the pointer can reach, and both the Caribbean and
+    Aegean «hover names the owner» checks pass.
+  - *Route pixel coverage*: owner-colour coverage along the line is 0.946 at 1,800 km and 0.914 at 1,000 km with
+    clouds on, against a target of 0.95. With clouds hidden it is 0.963-1.0. Clouds still dim the line in places.
+  - *Route hold*: the convoy line starts fading at ~16 s and is 0.49 at 17.6 s, against ≥ 15 s at full opacity. That
+    is ~1 s early, so it is a timing nit.
+  - *Border flash edge*: the hue matches (dE 1.0 / 3.3). At 1,500 km the strongest step is 1.64 against the ≤ 1/3-peak
+    limit, so the conquest flash still shows a 1-2 px hard edge at strategic zoom. At 300 km it passes (0.74).
+  - *Icon click at 6,000 km*: 19/20, one isolated icon missed.
+  - *Zoom crash*: the `models` section (close-ups down to 30 m) killed the headless Chromium («Target page, context
+    or browser has been closed»), and `historical` then failed on the dead browser. This looks like SwiftShader
+    running out of memory on the 30 m close-up. It is not reproduced in the game, but it is not proven harmless on a
+    real GPU either. Re-run them on their own: `node tools/w2-verify.mjs --checks models` and `--checks historical`.
