@@ -15,6 +15,7 @@ import { createNations } from './nations';
 import { createForces } from './forces';
 import { createFrontBadges } from './frontBadges';
 import { createBlockadeBadges } from './blockadeBadges';
+import { openBlockadeDialog } from './blockade';
 import { createBattleStrip } from './battleStrip';
 import { createFrontsPanel } from './fronts';
 import { createLeaderboard } from './leaderboard';
@@ -113,6 +114,8 @@ export function createHud(ctx: GameContext, sound: (k: UiSoundKind) => void): Hu
     forces.close();
     frontsPanel.open();
   };
+  // Owner item 31: «Bloquear esta zona» from a warship in command mode opens the same blockade dialog as the map.
+  ctx.bus.on('commandBlockade', (e) => openBlockadeDialog(hs, [e.unitId], e.tile));
   ctx.bus.on('frontSelected', (e) => {
     if (nations.isOpen) nations.close();
     forces.close();

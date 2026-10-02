@@ -11,7 +11,8 @@
 //           P2); the «Mar» tab lists it against us with «Romper el bloqueo» (P3).
 // command   a warship in command mode with a foreign merchant alongside: the stop panel (C1); E hails it and it heaves
 //           to in the sim (C2); F boards it: it flies our flag and sails to our port (C3); R fires a warning shot at the
-//           convoy: it heaves to and the nation's opinion falls (C4); X at peace asks first, then sinks it (C5).
+//           convoy: it heaves to and the nation's opinion falls (C4); X at peace asks first, Enter cancels (C5a), X on the
+//           question sinks it (C5).
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -267,10 +268,17 @@ async function command() {
   await sleep(4000);
   const op1 = await page.evaluate((f) => __front.ctx.sim.view.opinions.get(f)?.score ?? null, foe);
   row('C4', 'R: warning shot across the convoy\'s bow (at peace: piracy)', convoy ? `convoy at ${convoy.distM} m, warned ${!!warned}, piracy ${warned?.piracy}, opinion ${op0} → ${op1}` : 'no convoy in reach', !!warned && warned.piracy);
-  // C5: X at peace asks first; Enter confirms; the convoy goes down in the sim.
+  // C5: X at peace asks first; Enter is the safe answer (owner item 31: it cancels); X, the key on «Hundirlo», confirms
+  // and the convoy goes down in the sim.
+  await page.keyboard.press('KeyX');
+  const asked0 = await until(page, () => document.querySelector('.fu-cmdx-dialog.show')?.textContent ?? null, null, 20000, 500);
+  await page.keyboard.press('Enter');
+  await sleep(5000);
+  const kept = await page.evaluate((id) => !window.__nv.stops.some((e) => e.unitId === id && e.action === 'sunk') && !document.querySelector('.fu-cmdx-dialog.show'), convoy?.unitId ?? 0);
+  row('C5a', 'X then Enter: Enter is «Cancelar» (safe default), nothing is sunk', `asked «${(asked0 ?? '').slice(0, 60)}», still afloat and dialog closed ${kept}`, !!asked0 && kept);
   await page.keyboard.press('KeyX');
   const asked = await until(page, () => document.querySelector('.fu-cmdx-dialog.show')?.textContent ?? null, null, 20000, 500);
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('KeyX');
   const sunk = await until(page, (id) => window.__nv.stops.find((e) => e.unitId === id && e.action === 'sunk'), convoy?.unitId ?? 0, 60000, 1000);
   row('C5', 'X: «Hundir» at peace asks first, then the convoy is sunk in the sim', `asked «${(asked ?? '').slice(0, 80)}», sunk ${!!sunk} (troops ${sunk?.troops ?? 0}, piracy ${sunk?.piracy})`, !!asked && !!sunk);
   await shot(page, 'c5-sunk');

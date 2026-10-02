@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { angleDelta } from '../../shared/math';
 import { ballisticPitch, ENT_DEFS, forwardOf, type Ent, type Proj } from '../world';
-import { newHudState, project, raycast, type Controller, type ControllerCtx, type HudState, type RayHit } from './common';
+import { newHudState, project, raycast, type Controller, type ControllerCtx, type HudState, type RayHit, type ShotCheck } from './common';
 
 const SHELL = 820;
 const RELOAD = 2.4;
@@ -19,6 +19,8 @@ const T3 = new THREE.Vector3();
 const DIR = new THREE.Vector3();
 const EUL = new THREE.Euler();
 const MOUSE = { x: 0, y: 0 };
+const G1 = new THREE.Vector3();
+const G2 = new THREE.Vector3();
 
 export class ShipController implements Controller {
   readonly hud: HudState = newHudState('ship');
@@ -148,15 +150,28 @@ export class ShipController implements Controller {
     this.ssmCd -= dt;
     this.updateLock(dt);
     if (allowInput) {
-      const trigger = inp.lmbHit() || inp.lmb;
-      if (trigger && this.reloadT <= 0 && this.shells > 0 && Math.abs(want) < 2.55) this.shoot();
-      if (inp.rmbHit() && this.ssm > 0 && this.ssmCd <= 0) this.launch();
+      const fresh = inp.lmbHit();
+      const trigger = fresh || inp.lmb;
+      if (trigger && this.reloadT <= 0 && this.shells > 0 && Math.abs(want) < 2.55 && this.clear('main', fresh)) this.shoot();
+      if (inp.rmbHit() && this.ssm > 0 && this.ssmCd <= 0 && this.clear('ssm', true)) this.launch();
     }
     this.ciws(dt);
     let warn = false;
     for (const p of c.world.projs) if (p.alive && p.kind === 'missile' && p.team === 1 && p.target === e) warn = true;
     this.hud.missileWarning = warn;
     this.fillHud();
+  }
+
+  /** Owner item 31: what this shot would hit is checked before it goes (command mode asks about a nation at peace). */
+  private clear(weapon: 'main' | 'ssm', fresh: boolean): boolean {
+    const c = this.c;
+    if (!c.clearToFire) return true;
+    const e = this.ent;
+    const chk: ShotCheck = weapon === 'main'
+      ? { weapon, from: G1, dir: G2, speed: SHELL, gravity: 9.81, range: 22000, aimPoint: this.aimPoint, aimEnt: this.aim.ent, target: null, fresh }
+      : { weapon, from: G1.copy(e.pos).setY(e.pos.y + 9), dir: forwardOf(e.yaw, G2), speed: 300, gravity: 0, range: 18000, aimPoint: null, aimEnt: null, target: this.lockP >= 1 ? this.lockT : null, fresh };
+    if (weapon === 'main') c.world.muzzleOf(e, G1, G2);
+    return c.clearToFire(chk);
   }
 
   private updateAim(): void {
@@ -269,7 +284,7 @@ export class ShipController implements Controller {
       }
       if (!tp) {
         for (const o of c.world.ents) {
-          if (!o.alive || o.team === 0 || o.kind !== 'jet') continue;
+          if (!o.alive || o.team === 0 || o.neutral || o.kind !== 'jet') continue;
           const d = o.pos.distanceTo(T1);
           if (d < best) {
             best = d;

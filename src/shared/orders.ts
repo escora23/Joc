@@ -243,7 +243,8 @@ export function orderError(r: RulesView, unitId: number, order: UnitOrderKind, t
 export function orderCheck(r: RulesView, unitId: number, order: UnitOrderKind, tile: number, targetId: number, opts: OrderOpts = {}): OrderIssue | null {
   const u = r.unit(unitId);
   if (!u) return { key: 'order.err.noUnit' };
-  if (u.state === UnitState.Controlled) return { key: 'order.err.controlled' };
+  // Owner item 31: the warship you drive in command mode can be given a blockade there («Bloquear esta zona»).
+  if (u.state === UnitState.Controlled && !(order === 'blockade' && u.type === UnitType.Warship)) return { key: 'order.err.controlled' };
   if (u.state === UnitState.Destroyed) return { key: 'order.err.noUnit' };
   if (tile < 0 || tile >= TILE_COUNT) {
     if (order !== 'hold' && order !== 'return' && order !== 'join' && order !== 'assault' && order !== 'raze') return { key: 'order.err.noTarget' };

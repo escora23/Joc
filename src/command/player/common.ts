@@ -73,6 +73,29 @@ export function newHudState(kind: CommandKind): HudState {
   };
 }
 
+/**
+ * Owner item 31: one pull of a trigger, described before any round leaves the barrel, so command mode can check what it
+ * would hit (a nation at peace, a city) and ask first. Nothing fires unless clearToFire says yes.
+ */
+export interface ShotCheck {
+  weapon: 'main' | 'mg' | 'gun' | 'missile' | 'ssm' | 'bomb';
+  /** Muzzle (or release point) and initial direction (unit vector). */
+  from: THREE.Vector3;
+  dir: THREE.Vector3;
+  /** Muzzle speed (m/s) and gravity (m/s²; 0 for a straight-flying missile) for the predicted path. */
+  speed: number;
+  gravity: number;
+  /** How far the round can go (m). */
+  range: number;
+  /** The point under the reticle and the entity there (tank / ship: the camera ray), when known. */
+  aimPoint: THREE.Vector3 | null;
+  aimEnt: Ent | null;
+  /** A guided missile's lock. */
+  target: Ent | null;
+  /** A new press of the trigger (not a held one firing again). */
+  fresh: boolean;
+}
+
 export interface ControllerCtx {
   world: World;
   ground: Ground;
@@ -90,6 +113,11 @@ export interface ControllerCtx {
    * time (§9.3: division 40 km/h «marcha en columna», squadron 450 km/h, warship 55 km/h).
    */
   speedCap: number;
+  /**
+   * Owner item 31: may this shot go? False holds it completely (no flash, sound, round or ammo spent); command mode
+   * then asks the player when the shot would hit a nation at peace or a city. Absent: always yes.
+   */
+  clearToFire?(s: ShotCheck): boolean;
   /** Viewport size in CSS px (for projecting HUD points). */
   viewW: number;
   viewH: number;

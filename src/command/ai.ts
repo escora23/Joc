@@ -35,7 +35,9 @@ export class Brain {
       // Crowd soldiers (far, dormant) stand where the battle had them until the player comes near (world.updateCrowd).
       if (!e.alive || e.player || e.dormant) continue;
       this.shooterTeam = e.team;
-      if (e.neutral) {
+      // Owner item 31: a merchant or convoy at peace is neutral (never hit by accident) but still sails its route and
+      // heaves to when hailed.
+      if (e.neutral && e.kind !== 'merchant' && e.kind !== 'transport') {
         this.neutral(e, dt);
         continue;
       }

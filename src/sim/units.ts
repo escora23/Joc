@@ -440,7 +440,14 @@ export class UnitSystem {
         }
         continue;
       }
+      const wasControlled = u.state === UnitState.Controlled;
       if (this.apply(p, u, order, tile, targetId)) {
+        // Owner item 31: a blockade given to the warship the player drives: the player keeps the helm; the ship holds
+        // the blockade while on station and keeps it when command mode ends (holdAfterControl).
+        if (wasControlled && u.state !== UnitState.Controlled) {
+          u.savedState = u.state;
+          u.state = UnitState.Controlled;
+        }
         accepted.push(id);
         if (confirm && order === 'strike') strategicConfirmed = true;
       }
@@ -1363,6 +1370,16 @@ export class UnitSystem {
       u.frontKey = 0;
       u.order = orderCode('hold');
     } else if (u.type === UnitType.Warship) {
+      // Owner item 31: a blockade ordered from command mode stands: the ship sails (back) to its station.
+      if (u.mode === Mode.Blockade && g.naval.of(u)) {
+        u.state = UnitState.Moving;
+        u.order = orderCode('blockade');
+        u.originX = u.x;
+        u.originY = u.y;
+        this.planPath(u, this.nearestWater(u), u.anchorTile, false);
+        u.heading = heading;
+        return;
+      }
       u.enemy = 0;
       u.stationX = u.x;
       u.stationY = u.y;

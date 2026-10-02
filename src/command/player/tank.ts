@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { angleDelta } from '../../shared/math';
 import { ballisticPitch, forwardOf, segSphere, type Ent } from '../world';
-import { newHudState, project, raycast, type Controller, type ControllerCtx, type HudState, type RayHit } from './common';
+import { newHudState, project, raycast, type Controller, type ControllerCtx, type HudState, type RayHit, type ShotCheck } from './common';
 
 const AP_SPEED = 950;
 const HE_SPEED = 620;
@@ -23,6 +23,8 @@ const T3 = new THREE.Vector3();
 const DIR = new THREE.Vector3();
 const N = new THREE.Vector3();
 const MOUSE = { x: 0, y: 0 };
+const G1 = new THREE.Vector3();
+const G2 = new THREE.Vector3();
 
 export class TankController implements Controller {
   readonly hud: HudState = newHudState('tank');
@@ -209,14 +211,26 @@ export class TankController implements Controller {
     if (allowInput) {
       if (inp.hit('Digit1') && this.loaded !== 0) this.switchAmmo(0);
       if (inp.hit('Digit2') && this.loaded !== 1) this.switchAmmo(1);
-      const trigger = inp.lmbHit() || inp.lmb;
-      if (trigger && this.reloadT <= 0) this.shoot();
-      if (inp.down('Space') && this.mgCd <= 0 && this.mgAmmo > 0) this.mg();
+      const fresh = inp.lmbHit();
+      const trigger = fresh || inp.lmb;
+      if (trigger && this.reloadT <= 0 && (this.ammo[this.loaded] <= 0 || this.clear('main', fresh))) this.shoot();
+      const mgFresh = inp.hit('Space');
+      if (inp.down('Space') && this.mgCd <= 0 && this.mgAmmo > 0 && this.clear('mg', mgFresh)) this.mg();
       if (inp.hit('KeyC') && this.smoke > 0 && this.smokeCd <= 0) this.popSmoke();
     }
     this.recoil = Math.max(0, this.recoil - dt * 2.2);
     if (e.rig?.gun) e.rig.gun.position.z = this.gunBaseZ + Math.pow(this.recoil, 2) * 0.9;
     this.fillHud();
+  }
+
+  /** Owner item 31: what this shot would hit is checked before it goes (command mode asks about a nation at peace). */
+  private clear(weapon: 'main' | 'mg', fresh: boolean): boolean {
+    const c = this.c;
+    if (!c.clearToFire) return true;
+    c.world.muzzleOf(this.ent, G1, G2);
+    const speed = weapon === 'mg' ? 850 : this.loaded === 0 ? AP_SPEED : HE_SPEED;
+    const chk: ShotCheck = { weapon, from: G1, dir: G2, speed, gravity: weapon === 'mg' ? 3 : 9.81, range: weapon === 'mg' ? 1900 : 5000, aimPoint: this.aimPoint, aimEnt: this.aim.ent, target: null, fresh };
+    return c.clearToFire(chk);
   }
 
   private updateAim(): void {

@@ -160,7 +160,8 @@ export class CommandInput {
 
   private onDown = (e: MouseEvent): void => {
     const tgt = e.target as HTMLElement | null;
-    if (tgt && tgt.closest && tgt.closest('.fu-cmd-interactive')) return;
+    // Owner item 31: a strategic dialog over command mode (the blockade order) keeps its own clicks.
+    if (tgt && tgt.closest && tgt.closest('.fu-cmd-interactive, .fu-modal-scrim')) return;
     if (!this.locked) this.requestLock();
     if (e.button === 0) {
       this.lmb = true;
@@ -178,6 +179,8 @@ export class CommandInput {
   };
 
   private onWheel = (e: WheelEvent): void => {
+    const tgt = e.target as HTMLElement | null;
+    if (tgt && tgt.closest && tgt.closest('.fu-modal-scrim')) return;
     this.wheel += Math.sign(e.deltaY);
     e.preventDefault();
     e.stopPropagation();

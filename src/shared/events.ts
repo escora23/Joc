@@ -155,6 +155,8 @@ export interface AppEvents {
   commandEnter: { params: CommandEnterParams };
   /** Command mode -> app: the player wants out (Esc) or the unit died. App performs the exit. */
   commandExitRequested: { reason: 'player' | 'killed' | 'objective' };
+  /** Command mode -> UI (owner item 31): open the blockade dialog for the controlled warship and the area it is in. */
+  commandBlockade: { unitId: number; tile: number };
   /** App: command mode finished; result already sent to the sim. */
   commandExit: { result: CommandResult };
 

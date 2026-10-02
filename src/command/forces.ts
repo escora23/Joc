@@ -126,7 +126,15 @@ export class Forces {
   /** Scrambled fighters: the direction they come from and when the sim has them on your wing. */
   private readonly qrfAir = new WeakMap<Ent, { dx: number; dz: number; arriveSec: number }>();
   private hostile(rel: LocalRelation, owner: number): boolean {
-    return rel === 'war' || this.engaged.has(owner);
+    return rel === 'war' || this.engaged.has(owner) || (this.declared.get(owner) ?? 0) > performance.now();
+  }
+
+  /** Owner item 31: nations the player has just declared war on from command mode (owner → until, wall ms). */
+  private readonly declared = new Map<number, number>();
+  /** Their forces turn hostile at once (not one refresh later, when the sim's view has the war too). */
+  markHostile(owner: number, ms = 10_000): void {
+    this.declared.set(owner, performance.now() + ms);
+    for (const g of this.groups.values()) for (const e of g.ents) if (e.alive && e.nation === owner && e.team === 1 && !e.formation) e.neutral = false;
   }
 
   private team(rel: LocalRelation): 0 | 1 {
@@ -584,7 +592,9 @@ export class Forces {
   /**
    * Owner item 30: a merchant (container ship) or a troop convoy (transport) of the sim, sailing on its route: the ship
    * steams toward the sim's position a little ahead of it; hove to (hailed / warned) it stops. A prize (it changed flag)
-   * is re-spawned in its new colours. Never neutral: the player's shells hit it (sinking it is sent to the sim).
+   * is re-spawned in its new colours. At peace it is neutral like any force of that nation (owner item 31): a round in
+   * the air never hits it by accident, and firing on it is asked first (warning shot, board, sink, war or hold fire);
+   * at war the player's shells hit it (sinking it is sent to the sim).
    */
   private reconcileMerchant(g: Group, id: number, type: UnitType, owner: number, rel: LocalRelation, lat: number, lon: number, heading: number, mode: UnitMode, player: Ent): void {
     const c = this.sceneOfLL(lat, lon, new THREE.Vector3());
@@ -596,7 +606,6 @@ export class Forces {
         this.world.despawn(e);
         g.ents.splice(g.ents.indexOf(e), 1);
         const n = this.mk(kind, this.team(rel), x, z, yaw, owner, rel, { kind: 'merchant', id, owner, share: 0 });
-        n.neutral = false;
         n.speed = speed;
         n.order = 'goto';
         g.ents.push(n);
@@ -617,7 +626,6 @@ export class Forces {
       }
       if (this.ground.heightAt(c.x, c.z) > -3) return;
       const e = this.mk(kind, this.team(rel), c.x, c.z, -heading, owner, rel, { kind: 'merchant', id, owner, share: 0 });
-      e.neutral = false;
       e.order = 'goto';
       e.speed = mode === UnitMode.HoveTo ? 0 : 7;
       g.ents.push(e);

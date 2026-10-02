@@ -327,21 +327,37 @@ async function city() {
     window.__asks = [];
     ov.ask = (title, body, extra, buttons) => { window.__asks.push(`${title} | ${body} | ${extra}`); return ask(title, body, extra, buttons); };
   });
-  // Rounds one at a time until one reaches a house (a crest or a short round takes some): the first hit asks.
-  let dlg = null, fired = 0;
-  const asked = async () => page.__logs.find((l) => /civilian target: asking/.test(l)) ?? (await page.evaluate(() => window.__asks?.[0] ?? null).catch(() => null));
-  for (let r = 0; r < 8 && !dlg; r++) {
-    await fireAt(page, 1);
-    fired++;
-    for (let i = 0; i < 150 && !dlg; i++) {
-      dlg = await asked();
-      if (!dlg) await sleep(400);
+  // Owner item 31: the civilian-target question comes BEFORE the shot. Aim at the nearest house of the city the gun
+  // can see and pull the trigger (a real click): the dialog opens and no round leaves the barrel.
+  await until(page, () => window.__cmd.controller.hud.reload >= 0.999, null, 180000, 500);
+  await page.evaluate(() => {
+    const I = window.__cmd, c = I.controller, p = c.ent.pos, V = I.camera.position.constructor;
+    const eye = p.clone().setY(p.y + 3);
+    const seen = (x, y, z) => { for (let k = 1; k < 40; k++) { const f = k / 40; if (I.ground.heightAt(eye.x + (x - eye.x) * f, eye.z + (z - eye.z) * f) > eye.y + (y - eye.y) * f - 0.5) return false; } return true; };
+    let best = null, bd = Infinity;
+    for (const h of I.civil.houseRecs) {
+      if (h.down || h.cityId !== window.__strikeTarget) continue;
+      const d = Math.hypot(h.x - p.x, h.z - p.z);
+      if (d < bd && seen(h.x, h.y + h.h * 0.6, h.z)) { bd = d; best = h; }
     }
+    if (best) { c.aimAt(new V(best.x, best.y + best.h * 0.5, best.z)); c.snapTurret?.(); }
+  });
+  await sleep(1500);
+  const shotsBefore = await page.evaluate(() => window.__cmd.world.stats.shots);
+  await page.mouse.move(800, 450);
+  await page.mouse.down();
+  await sleep(900);
+  await page.mouse.up();
+  let dlg = null;
+  for (let i = 0; i < 100 && !dlg; i++) {
+    dlg = await asked();
+    if (!dlg) await sleep(400);
   }
-  if (dlg) dlg = `after ${fired} round(s): ${dlg}`;
-  row('C1', 'the first shot at a city asks first, with the consequences in numbers', dlg ?? 'no dialog', !!dlg && /civil/i.test(dlg));
+  const shotsAfter = await page.evaluate(() => window.__cmd.world.stats.shots);
+  row('C1', 'the first shot at a city asks BEFORE firing, with the consequences in numbers (no round fired)', `${dlg ?? 'no dialog'}; rounds fired while asking ${shotsAfter - shotsBefore}`, !!dlg && /civil/i.test(dlg) && shotsAfter === shotsBefore);
   await shot(page, 'city-0-confirm');
-  await page.keyboard.press('Enter');
+  // Enter would hold fire (the safe default); the key shown on «Atacar la ciudad» confirms.
+  await page.keyboard.press('KeyG');
   await sleep(1500);
   await fireAt(page, 19);
   await sleep(5000);

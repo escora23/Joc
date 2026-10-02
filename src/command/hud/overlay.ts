@@ -25,6 +25,21 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: 
   return e;
 }
 
+/** One choice of a command-mode dialog (overlay.ask). */
+export interface DialogButton {
+  label: string;
+  cls?: string;
+  /** The key shown on the button. */
+  key?: string;
+  /** KeyboardEvent.code that picks it (besides a click). */
+  code?: string;
+  /** Enter and Escape pick this one (the harmless choice). */
+  safe?: boolean;
+  disabled?: boolean;
+  /** Why it is disabled, or what it costs (small text on the button). */
+  note?: string;
+}
+
 export function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
@@ -90,6 +105,11 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
 .fu-cmdx-dialog button.pri { background: rgba(63,208,255,0.18); border-color: var(--fu-accent, #3fd0ff); }
 .fu-cmdx-dialog button.danger { background: rgba(255,70,50,0.2); border-color: #ff6a4a; color: #ffd0c8; }
 .fu-cmdx-dialog button kbd { font: 700 0.62rem/1 var(--fu-font-mono, monospace); margin-left: 0.45rem; opacity: 0.7; }
+.fu-cmdx-dialog .card .btns.col { flex-direction: column; align-items: stretch; }
+.fu-cmdx-dialog .card .btns.col button { display: flex; align-items: baseline; gap: 0.5rem; text-align: left; }
+.fu-cmdx-dialog .card .btns.col button kbd { order: -1; margin: 0; min-width: 2.6rem; text-align: center; }
+.fu-cmdx-dialog button small { margin-left: auto; font: 600 0.68rem/1.2 var(--fu-font, sans-serif); letter-spacing: 0.02em; text-transform: none; opacity: 0.8; }
+.fu-cmdx-dialog button.off { opacity: 0.42; cursor: not-allowed; }
 .fu-cmdx-title { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); text-align: center; opacity: 0; transition: opacity 0.8s; }
 .fu-cmdx-title.show { opacity: 1; }
 .fu-cmdx-title .u { font: 700 1.9rem/1.15 var(--fu-font-display, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; text-shadow: 0 2px 18px rgba(0,0,0,0.8); }
@@ -251,7 +271,7 @@ export class CommandOverlay {
   private h = 1;
   /** Open dialog: its resolver (the choice index). */
   private dialogResolve: ((i: number) => void) | null = null;
-  private dialogKeys: string[] = [];
+  private dialogButtons: DialogButton[] = [];
 
   constructor(parent: HTMLElement) {
     if (!cssDone) {
@@ -366,6 +386,12 @@ export class CommandOverlay {
     this.loading.classList.toggle('show', on);
   }
 
+  /** Bring the controls bar back for a while (a first-time tip points at it). */
+  showHelp(): void {
+    this.helpOn = true;
+    this.helpT = 0;
+  }
+
   toggleHelp(): void {
     this.helpOn = !this.helpOn;
     this.helpT = 0;
@@ -435,19 +461,27 @@ export class CommandOverlay {
     return this.alertList.map((a) => ({ text: a.el.textContent ?? '', n: a.n }));
   }
 
-  /** A modal choice. Resolves with the button index (keys: Enter = first, Escape = last). */
-  ask(title: string, body: string, extra: string, buttons: { label: string; cls?: string; key?: string }[]): Promise<number> {
+  /**
+   * A modal choice. Resolves with the button index. Keys: a button marked `safe` takes both Enter and Escape (owner
+   * item 31: firing on a nation at peace defaults to «No disparar»); without one, Enter picks the first button and
+   * Escape the last. A button with a `code` (KeyboardEvent.code, shown as its `key`) is picked by that key. A
+   * `disabled` button shows why (`note`) and cannot be picked.
+   */
+  ask(title: string, body: string, extra: string, buttons: DialogButton[]): Promise<number> {
     this.closeDialog(-1);
-    const btns = buttons.map((b, i) => `<button data-i="${i}" class="${b.cls ?? ''}">${esc(b.label)}${b.key ? `<kbd>${esc(b.key)}</kbd>` : ''}</button>`).join('');
-    this.dialog.innerHTML = `<div class="card fu-cmd-panel"><div class="h">${esc(title)}</div><div class="b">${esc(body)}</div>${extra ? `<div class="b2">${esc(extra)}</div>` : ''}<div class="btns">${btns}</div></div>`;
+    const btns = buttons.map((b, i) => `<button data-i="${i}" class="${b.cls ?? ''}${b.disabled ? ' off' : ''}"${b.disabled ? ' disabled' : ''}${b.code ? ` data-code="${esc(b.code)}"` : ''}>${esc(b.label)}${b.key ? `<kbd>${esc(b.key)}</kbd>` : ''}${b.note ? `<small>${esc(b.note)}</small>` : ''}</button>`).join('');
+    const col = buttons.length > 2 ? ' col' : '';
+    this.dialog.innerHTML = `<div class="card fu-cmd-panel"><div class="h">${esc(title)}</div><div class="b">${esc(body)}</div>${extra ? `<div class="b2">${esc(extra)}</div>` : ''}<div class="btns${col}">${btns}</div></div>`;
     this.dialog.classList.add('show');
-    this.dialogKeys = buttons.map((b) => b.key ?? '');
+    this.dialogButtons = buttons;
     return new Promise((resolve) => {
       this.dialogResolve = resolve;
       this.dialog.querySelectorAll('button').forEach((b) => {
         b.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          this.closeDialog(Number((b as HTMLElement).dataset.i));
+          const i = Number((b as HTMLElement).dataset.i);
+          if (this.dialogButtons[i]?.disabled) return;
+          this.closeDialog(i);
         });
       });
     });
@@ -457,12 +491,28 @@ export class CommandOverlay {
     return !!this.dialogResolve;
   }
 
-  /** Keyboard answer for the open dialog: Enter picks the first button, Escape the last. */
+  /** Key codes (besides Enter / Escape) that pick a button of the open dialog. */
+  get dialogCodes(): string[] {
+    return this.dialogResolve ? this.dialogButtons.filter((b) => b.code && !b.disabled).map((b) => b.code!) : [];
+  }
+
+  /** The open dialog's title and buttons (tools). */
+  get dialogText(): string {
+    return this.dialogResolve ? (this.dialog.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
+  }
+
+  /** Keyboard answer for the open dialog (see ask). */
   dialogKey(code: string): boolean {
     if (!this.dialogResolve) return false;
-    if (code === 'Enter' || code === 'NumpadEnter') this.closeDialog(0);
-    else if (code === 'Escape') this.closeDialog(this.dialogKeys.length - 1);
-    else return false;
+    const n = this.dialogButtons.length;
+    const safe = this.dialogButtons.findIndex((b) => b.safe);
+    if (code === 'Enter' || code === 'NumpadEnter') this.closeDialog(safe >= 0 ? safe : 0);
+    else if (code === 'Escape') this.closeDialog(safe >= 0 ? safe : n - 1);
+    else {
+      const i = this.dialogButtons.findIndex((b) => b.code === code && !b.disabled);
+      if (i < 0) return false;
+      this.closeDialog(i);
+    }
     return true;
   }
 

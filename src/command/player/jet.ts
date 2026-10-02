@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { ENT_DEFS, type Ent } from '../world';
-import { newHudState, project, type Controller, type ControllerCtx, type HudState } from './common';
+import { newHudState, project, type Controller, type ControllerCtx, type HudState, type ShotCheck } from './common';
 
 const T1 = new THREE.Vector3();
 const T2 = new THREE.Vector3();
@@ -20,6 +20,8 @@ const QI = new THREE.Quaternion();
 const QD = new THREE.Quaternion();
 const EUL = new THREE.Euler();
 const MOUSE = { x: 0, y: 0 };
+const G1 = new THREE.Vector3();
+const G2 = new THREE.Vector3();
 const BULLET = 1050;
 
 export class JetController implements Controller {
@@ -188,14 +190,15 @@ export class JetController implements Controller {
     this.flareCd -= dt;
     this.updateLock(dt);
     if (allowInput) {
-      const trigger = inp.lmbHit() || inp.lmb;
-      if (trigger && this.gunCd <= 0 && this.gunAmmo > 0) this.gun();
-      if (inp.rmbHit() && this.msCd <= 0 && this.missiles > 0) this.launch();
+      const fresh = inp.lmbHit();
+      const trigger = fresh || inp.lmb;
+      if (trigger && this.gunCd <= 0 && this.gunAmmo > 0 && this.clear('gun', fresh)) this.gun();
+      if (inp.rmbHit() && this.msCd <= 0 && this.missiles > 0 && this.clear('missile', true)) this.launch();
       if (inp.hit('KeyF') && this.flareCd <= 0) {
         this.flareCd = 0.7;
         c.world.releaseFlares(e);
       }
-      if (inp.hit('KeyB')) this.bomb();
+      if (inp.hit('KeyB') && this.bombs > 0 && this.c.world.time >= this.bombCd && this.clear('bomb', true)) this.bomb();
     }
     // Missile warning
     let warn = false;
@@ -217,6 +220,27 @@ export class JetController implements Controller {
     const p = c.world.dropBomb(e, 0, T2, e.vel, 400, 38);
     if (p) p.player = true;
     c.fx.hooks.sound('missileLaunch', 0.4);
+  }
+
+  /** Owner item 31: what this shot would hit is checked before it goes (command mode asks about a nation at peace). */
+  private clear(weapon: 'gun' | 'missile' | 'bomb', fresh: boolean): boolean {
+    const c = this.c;
+    if (!c.clearToFire) return true;
+    const e = this.ent;
+    let chk: ShotCheck;
+    if (weapon === 'bomb') {
+      G1.set(0, -1.4, 0.5).applyQuaternion(e.quat).add(e.pos);
+      const sp = Math.max(1, e.vel.length());
+      chk = { weapon, from: G1, dir: G2.copy(e.vel).divideScalar(sp), speed: sp, gravity: 9.81, range: 40000, aimPoint: null, aimEnt: null, target: null, fresh };
+    } else {
+      G2.set(0, 0, -1).applyQuaternion(e.quat);
+      if (weapon === 'gun' && e.rig?.gunPort) e.rig.gunPort.getWorldPosition(G1);
+      else G1.copy(e.pos);
+      chk = weapon === 'gun'
+        ? { weapon, from: G1, dir: G2, speed: BULLET, gravity: 3, range: BULLET * 2.2, aimPoint: null, aimEnt: null, target: null, fresh }
+        : { weapon, from: G1, dir: G2, speed: 720, gravity: 0, range: 6000, aimPoint: null, aimEnt: null, target: this.lockP >= 1 ? this.lockT : null, fresh };
+    }
+    return c.clearToFire(chk);
   }
 
   private gun(): void {

@@ -182,8 +182,6 @@ export interface SmokeZone {
 }
 
 export interface WorldHooks {
-  /** The player's projectile reached a force of a nation at peace: no damage until the player confirms war (§9.7). */
-  onNeutralHit?(e: Ent): void;
   /** A player projectile hit something (hit marker). kill = the hit destroyed it. */
   onPlayerHit(e: Ent, kill: boolean, ricochet: boolean): void;
   /** Any kill (kill feed, objective). */
@@ -869,11 +867,10 @@ export class World {
   // ---------------------------------------------------------------------------------------------
   damage(e: Ent, amount: number, from: Ent | null, player: boolean, dir: THREE.Vector3 | null): void {
     if (!e.alive) return;
-    // Nobody fights a nation at peace by accident: the first hit asks the player to declare war (§9.7) instead.
-    if (e.neutral) {
-      if (player || from?.formation) this.hooks.onNeutralHit?.(e);
-      return;
-    }
+    // Nobody fights a nation at peace by accident (owner item 31): the player is asked before the trigger fires
+    // (index.ts clearToFire); a round already in the air never damages a neutral, never shows a hit on it and never
+    // asks again.
+    if (e.neutral) return;
     let dmg = amount;
     let ricochet = false;
     if (dir && (e.kind === 'tank' || e.kind === 'ifv')) {
@@ -954,7 +951,7 @@ export class World {
   private splashDamage(p: Proj, at: THREE.Vector3, direct: Ent | null): void {
     if (p.splash <= 0) return;
     for (const e of this.ents) {
-      if (!e.alive || e === direct) continue;
+      if (!e.alive || e === direct || e.neutral) continue;
       this.center(e, TMP2);
       const d = TMP2.distanceTo(at) - e.radius * 0.5;
       if (d > p.splash) continue;
@@ -1020,6 +1017,8 @@ export class World {
       let hit: Ent | null = null;
       for (const e of this.ents) {
         if (!e.alive || e.team === p.team) continue;
+        // Owner item 31: our rounds go past a force of a nation at peace (no impact, no hit, no question).
+        if (e.neutral && p.team === 0) continue;
         if (p.airOnly && !ENT_DEFS[e.kind].air) continue;
         this.center(e, TMP2);
         const rad = p.kind === 'bullet' ? e.radius * (ENT_DEFS[e.kind].air ? 1.1 : 0.9) : e.radius + (p.kind === 'missile' ? 4 : 0.3);

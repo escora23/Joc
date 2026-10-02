@@ -25,6 +25,8 @@ import { localSideText } from '../shared/localForcesText';
 import { isWaterTerrain } from '../shared/terrain';
 import { UnitType, type CommandKind } from '../shared/types';
 import { describePlace } from '../ui/places';
+import { PIRACY_OPINION } from '../shared/naval';
+import { modalOpen } from '../ui/modal';
 import { unitLabel } from '../ui/hud/news';
 import { ShipIntercept } from './intercept';
 import { registerCommandStrings } from './strings';
@@ -35,12 +37,12 @@ import { Scatter } from './env/scatter';
 import { Grass } from './env/grass';
 import { createMaterials, type CmdMaterials } from './models/materials';
 import { Effects } from './fx/effects';
-import { ENT_DEFS, forwardOf, World, type Ent } from './world';
+import { ENT_DEFS, forwardOf, segSphere, World, type Ent } from './world';
 import { Brain } from './ai';
 import { CommandInput } from './input';
 import { CommandHud } from './hud/hud';
-import { CommandOverlay, type DebriefRow, type HoverInfo } from './hud/overlay';
-import type { Controller, ControllerCtx } from './player/common';
+import { CommandOverlay, type DebriefRow, type DialogButton, type HoverInfo } from './hud/overlay';
+import type { Controller, ControllerCtx, ShotCheck } from './player/common';
 import { TankController } from './player/tank';
 import { JetController } from './player/jet';
 import { ShipController } from './player/ship';
@@ -152,6 +154,10 @@ export interface CommandInternals {
   targets(): Targets & { chosen: CombatTarget | null };
   /** Moves sent and sim-view position changes per whole local second of driving (criterion 3). */
   cadence(): { sec: number; moves: number; views: number }[];
+  /** Owner item 31: the fire checks of this session (asked before the shot, held, answers) and the open dialog. */
+  fire(): { checks: number; cleared: number; held: number; asked: number; silent: number; last: string; answers: string[]; hold: boolean; dialog: string };
+  /** Owner item 31: «Bloquear esta zona» as if B was pressed on the warship. */
+  blockadeHere(): boolean;
 }
 
 let internals: CommandInternals | null = null;
@@ -374,6 +380,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     sens: () => ctx.settings.get().mouseSensitivity ?? 1,
     invertY: () => !!ctx.settings.get().invertY,
     obstacles: [], shake: (a) => (shakeAmt = Math.min(1.5, shakeAmt + a)), speedCap: Infinity, viewW: 1600, viewH: 900,
+    clearToFire: (s) => clearToFire(s),
   };
 
   window.addEventListener('mousemove', (e) => {
@@ -780,11 +787,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let lastHitNotice = '';
   function hitStructure(r: StructRec, w: keyof typeof HIT_DMG): void {
     if (friendlyOwner(r.owner)) return;
-    if (ctx.sim.view.pairState(HUMAN_ID, r.owner) !== 'war') {
-      // At peace: nothing is damaged before the player chooses war.
-      void askFireFirst(r.owner);
-      return;
-    }
+    // At peace: nothing is damaged before the player chooses war. Owner item 31: that choice is asked before the
+    // shot (clearToFire); a stray round that reaches the building anyway does nothing and asks nothing.
+    if (!atWarWith(r.owner)) return;
     pend(r.id, HIT_DMG[w]);
     structHitN++;
     structHitIds.add(r.id);
@@ -804,14 +809,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const city = r.cityId ? view.structures.get(r.cityId) : undefined;
     const owner = city ? city.owner : r.owner;
     if (friendlyOwner(owner)) return;
-    if (city && !cityConfirmed.has(city.id)) {
-      void askCivilian(city.id);
-      return;
-    }
-    if (!city && view.pairState(HUMAN_ID, owner) !== 'war') {
-      void askFireFirst(owner);
-      return;
-    }
+    // Owner item 31: the civilian-target and peace questions are asked before the shot (clearToFire); a stray round
+    // on a city not confirmed, or on a house of a nation at peace, does no damage and asks nothing.
+    if (city && !cityConfirmed.has(city.id)) return;
+    if (!city && !atWarWith(owner)) return;
     const blast = BLAST_M[w];
     const victims = blast > 0 ? [r, ...civil.housesNear(at.x, at.z, blast).filter((h) => h !== r && h.cityId === r.cityId)] : [r];
     // Fix pass 3 (#27): a round that brings houses down is a heavy hit on the city — the weapon's whole damage goes to
@@ -866,8 +867,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     });
     console.info(`[command] civilian target: asking — ${body}`);
     const i = await decide(t('command.civil.title', { city: cityName(cityId) }), body, peace ? t('command.civil.peace', { nation: name }) : t('command.civil.note'), [
-      { label: t('command.civil.go'), cls: 'danger', key: 'Enter' },
-      { label: t('command.civil.hold'), cls: 'pri', key: 'Esc' },
+      { label: t('command.civil.go'), cls: 'danger', key: 'G', code: 'KeyG' },
+      { label: t('command.civil.hold'), cls: 'pri', key: t('command.fire.safeKeys'), safe: true },
     ]);
     if (i !== 0) return;
     cityConfirmed.add(cityId);
@@ -1180,7 +1181,6 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         nextVehicleT = more ? 3 : -1;
         if (more) overlay!.showNotice(t(kind === 'jet' ? 'command.next.jet' : 'command.next.tank', { s: 3 }), 3);
       },
-      onNeutralHit: (e) => void askFireFirst(e.nation),
       sceneryHit: (pr, a, b) => sceneryHit(pr, a, b),
       groundBlast: (pr, at) => groundBlast(pr, at),
     };
@@ -1217,6 +1217,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     unitHitN = unitHitShare = structHitN = 0;
     structPending.clear();
     cityConfirmed.clear();
+    askedAt.clear();
+    declaredAt.clear();
+    fireHold = false;
+    fireCache = null;
+    stopTipShown = false;
+    fireStats.checks = fireStats.cleared = fireStats.held = fireStats.asked = fireStats.silent = 0;
+    fireStats.answers.length = 0;
+    fireStats.last = '';
     reportedBlocks.clear();
     structHitIds.clear();
     housesDown = 0;
@@ -1243,7 +1251,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   // -----------------------------------------------------------------------------------------------
   // Decisions (§9.7, §9.12)
   // -----------------------------------------------------------------------------------------------
-  async function decide(title: string, body: string, extra: string, buttons: { label: string; cls?: string; key?: string }[]): Promise<number> {
+  async function decide(title: string, body: string, extra: string, buttons: DialogButton[]): Promise<number> {
     if (!overlay) return -1;
     decision = true;
     input.releaseLock();
@@ -1282,18 +1290,276 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
   }
 
-  async function askFireFirst(owner: number): Promise<void> {
+  // -----------------------------------------------------------------------------------------------
+  // Owner item 31: firing on a nation at peace is asked BEFORE any round leaves the barrel
+  // -----------------------------------------------------------------------------------------------
+  /** What a shot would hit that needs the player's word first. */
+  interface FireConcern {
+    what: 'unit' | 'ship' | 'merchant' | 'struct' | 'house' | 'city';
+    owner: number;
+    ent: Ent | null;
+    /** Structure / city id (struct, city). */
+    id: number;
+    /** What «the same target» means for not asking again while a trigger is held. */
+    key: string;
+  }
+  /** After a fire question the trigger stays released: nothing fires until every trigger has been let go. */
+  let fireHold = false;
+  /** When each target was last asked about (key → wall ms). */
+  const askedAt = new Map<string, number>();
+  /** Nations declared war on from command mode (owner → until, wall ms): at war before the sim's view says so. */
+  const declaredAt = new Map<number, number>();
+  /** «Bloquear esta zona»: the strategic blockade dialog is open over command mode. */
+  let blockadeOpen = false;
+  /** Tools: the fire checks of this session. */
+  const fireStats = { checks: 0, cleared: 0, held: 0, asked: 0, silent: 0, last: '', answers: [] as string[] };
+  const fp = new THREE.Vector3(), fv = new THREE.Vector3(), fn = new THREE.Vector3(), fc = new THREE.Vector3(), fh = new THREE.Vector3();
+  let fireCache: { at: number; dir: THREE.Vector3; weapon: string; verdict: FireConcern | null } | null = null;
+
+  function atWarWith(owner: number): boolean {
+    return ctx.sim.view.pairState(HUMAN_ID, owner) === 'war' || (declaredAt.get(owner) ?? 0) > performance.now();
+  }
+
+  function entConcern(e: Ent | null): FireConcern | null {
+    if (!e || !e.alive || e.player || e.formation || e.team === 0 || !e.neutral) return null;
+    if (e.src?.kind === 'merchant') return { what: 'merchant', owner: e.nation, ent: e, id: 0, key: `m:${e.src.id}` };
+    return { what: ENT_DEFS[e.kind].naval ? 'ship' : 'unit', owner: e.nation, ent: e, id: 0, key: `n:${e.nation}` };
+  }
+
+  /** A building on the path: a question, or 'clear' (ours, an ally's, at war and allowed: the round may go). */
+  function sceneryConcern(r: { house: HouseRec | null; struct: StructRec | null }): FireConcern | 'clear' {
+    if (r.struct) {
+      const o = r.struct.owner;
+      if (friendlyOwner(o) || atWarWith(o)) return 'clear';
+      return { what: 'struct', owner: o, ent: null, id: r.struct.id, key: `n:${o}` };
+    }
+    if (r.house) {
+      const city = r.house.cityId ? ctx.sim.view.structures.get(r.house.cityId) : undefined;
+      const o = city ? city.owner : r.house.owner;
+      if (friendlyOwner(o)) return 'clear';
+      if (city && !cityConfirmed.has(city.id)) return { what: 'city', owner: o, ent: null, id: city.id, key: `c:${city.id}` };
+      if (!city && !atWarWith(o)) return { what: 'house', owner: o, ent: null, id: 0, key: `n:${o}` };
+    }
+    return 'clear';
+  }
+
+  /** Around an impact point: a neutral within the tolerance, a building within the blast. */
+  function impactConcern(at: THREE.Vector3, blast: number, tol: number, neutrals: Ent[]): FireConcern | null {
+    for (const e of neutrals) {
+      world!.center(e, fc);
+      if (fc.distanceTo(at) < e.radius + tol) return entConcern(e);
+    }
+    if (!civil) return null;
+    const reach = Math.max(blast * 0.5, tol);
+    for (const st of civil.structRecs) {
+      if (Math.abs(at.x - st.x) >= st.half + reach || Math.abs(at.z - st.z) >= st.half + reach) continue;
+      const c = sceneryConcern({ struct: st, house: null });
+      if (c !== 'clear') return c;
+    }
+    for (const h of civil.housesNear(at.x, at.z, Math.max(blast * 0.6, tol))) {
+      const c = sceneryConcern({ struct: null, house: h });
+      if (c !== 'clear') return c;
+    }
+    return null;
+  }
+
+  /**
+   * What this shot would hit: the target under the reticle (or the missile's lock), the point the player aims at, and
+   * the predicted path of the round (gravity, in short segments) up to the first neutral, building or the ground,
+   * with a tolerance growing with the range.
+   */
+  function shotConcern(s: ShotCheck): FireConcern | null {
+    if (!world || !ground) return null;
+    const direct = entConcern(s.target) ?? entConcern(s.aimEnt);
+    if (direct) return direct;
+    const neutrals = world.ents.filter((e) => e.alive && e.neutral && !e.player && e.team === 1);
+    const blast = BLAST_M[s.weapon === 'bomb' ? 'bomb' : s.weapon === 'ssm' ? 'shipMissile' : s.weapon === 'missile' ? 'missile' : s.weapon === 'main' ? (kind === 'ship' ? 'naval' : 'he') : 'ap'];
+    if (s.aimPoint) {
+      const c = impactConcern(s.aimPoint, blast, 2 + s.aimPoint.distanceTo(s.from) * 0.004, neutrals);
+      if (c) return c;
+    }
+    fp.copy(s.from);
+    fv.copy(s.dir).multiplyScalar(Math.max(1, s.speed));
+    const seg = Math.max(12, Math.min(250, s.range / 80));
+    for (let dist = 0; dist < s.range; dist += seg) {
+      const dt = seg / Math.max(1, fv.length());
+      fn.copy(fp).addScaledVector(fv, dt);
+      fn.y -= 0.5 * s.gravity * dt * dt;
+      fv.y -= s.gravity * dt;
+      const tol = 1.5 + dist * 0.003;
+      for (const e of neutrals) {
+        world.center(e, fc);
+        if (segSphere(fp, fn, fc, e.radius + tol)) return entConcern(e);
+      }
+      if (civil) {
+        const r = civil.hitTest(fp, fn, fh);
+        if (r) {
+          const c = sceneryConcern(r);
+          return c === 'clear' ? null : c;
+        }
+      }
+      const gy = Math.max(0, ground.heightAt(fn.x, fn.z));
+      if (fn.y <= gy) return impactConcern(fn.setY(gy), blast, tol, neutrals);
+      fp.copy(fn);
+    }
+    return null;
+  }
+
+  /** ControllerCtx.clearToFire: false holds the shot completely (no flash, sound, round or ammo). */
+  function clearToFire(s: ShotCheck): boolean {
+    fireStats.checks++;
+    if (!world || phase !== 'play') return true;
+    if (fireHold || decision || overlay?.dialogOpen || blockadeOpen) {
+      fireStats.held++;
+      return false;
+    }
+    const now = performance.now();
+    let c: FireConcern | null;
+    if (!s.fresh && fireCache && fireCache.weapon === s.weapon && now - fireCache.at < 150 && fireCache.dir.dot(s.dir) > 0.9995) c = fireCache.verdict;
+    else {
+      c = shotConcern(s);
+      fireCache = { at: now, dir: s.dir.clone(), weapon: s.weapon, verdict: c };
+    }
+    if (!c) {
+      fireStats.cleared++;
+      return true;
+    }
+    fireHold = true;
+    // A held trigger sweeping back over what was just asked about holds fire without asking again.
+    if (!s.fresh && now - (askedAt.get(c.key) ?? -1e9) < 4000) {
+      fireStats.silent++;
+      overlay?.showNotice(t('command.fire.holding', { nation: nationName(c.owner) }), 2.5, true);
+      return false;
+    }
+    askedAt.set(c.key, now);
+    fireStats.asked++;
+    fireStats.last = `${c.what}:${c.owner}`;
+    console.info(`[command] fire question before the shot: ${s.weapon} at ${c.what} of ${c.owner}`);
+    void askBeforeFire(c);
+    return false;
+  }
+
+  async function askBeforeFire(c: FireConcern): Promise<void> {
+    if (c.what === 'city') {
+      await askCivilian(c.id);
+      fireStats.answers.push(cityConfirmed.has(c.id) ? 'city' : 'hold');
+    } else if (c.what === 'merchant' && c.ent && intercept && kind === 'ship') await askPiracy(c.ent);
+    else await askFireFirst(c);
+  }
+
+  function fireWhat(c: FireConcern): string {
+    const nation = nationName(c.owner);
+    if (c.what === 'struct') {
+      const st = ctx.sim.view.structures.get(c.id);
+      return t('command.fire.what.struct', { what: t(`structure.${STRUCT_KEY[st?.type ?? 0] ?? 'city'}`), nation });
+    }
+    return t(`command.fire.what.${c.what === 'ship' ? 'ship' : c.what === 'house' ? 'house' : 'unit'}`, { nation });
+  }
+
+  async function askFireFirst(c: FireConcern): Promise<void> {
+    const owner = c.owner;
     if (!owner || decision) return;
     const name = nationName(owner);
-    const i = await decide(t('command.fire.title', { nation: name }), t('command.fire.body', { nation: name }), '', [
-      { label: t('command.fire.declare'), cls: 'danger', key: 'Enter' },
-      { label: t('command.fire.hold'), cls: 'pri', key: 'Esc' },
+    const i = await decide(t('command.fire.title', { nation: name }), t('command.fire.body', { nation: name, what: fireWhat(c) }), t('command.fire.extra'), [
+      { label: t('command.fire.declare', { nation: name }), cls: 'danger', key: 'G', code: 'KeyG' },
+      { label: t('command.fire.hold'), cls: 'pri', key: t('command.fire.safeKeys'), safe: true },
     ]);
-    if (i !== 0) return;
+    fireStats.answers.push(i === 0 ? 'war' : 'hold');
+    if (i !== 0) {
+      overlay?.showNotice(t('command.fire.held'), 2.5, true);
+      return;
+    }
+    declareFromCommand(owner);
+  }
+
+  /** «Declarar la guerra» from a fire question: the sim declares; the forces of that nation turn hostile at once. */
+  function declareFromCommand(owner: number): void {
+    const name = nationName(owner);
     ctx.sim.send({ type: 'declareWar', target: owner });
+    declaredAt.set(owner, performance.now() + 10_000);
+    forces?.markHostile(owner);
+    fireCache = null;
+    console.info(`[command] war declared on ${owner} from a fire question`);
     overlay?.showNotice(t('command.fire.declared', { nation: name }), 4);
-    // The forces of that nation turn hostile as soon as the sim confirms the war (next refresh).
     lastForcesWall = 0;
+  }
+
+  /**
+   * A merchant or troop convoy of a nation at peace in the sights of the warship: the stop panel's choices (item 30),
+   * with the same costs and the same sim commands, plus war and «No disparar».
+   */
+  async function askPiracy(e: Ent): Promise<void> {
+    const P = player();
+    if (!intercept || !P || decision) return;
+    const view = ctx.sim.view;
+    const name = nationName(e.nation);
+    const ship = t(e.kind === 'transport' ? 'naval.cmd.convoy' : 'naval.cmd.merchant', { name });
+    const o = intercept.options(view, e, P);
+    const w = Math.abs(PIRACY_OPINION.warningShot), v = Math.abs(PIRACY_OPINION.seize);
+    const vs = Math.abs(e.kind === 'transport' ? PIRACY_OPINION.sinkTroops : PIRACY_OPINION.sink);
+    const i = await decide(t('command.piracy.title', { ship }), t('command.piracy.body', { name }),
+      t('command.piracy.costs', { name, va: Math.abs(PIRACY_OPINION.ally), vw: Math.abs(PIRACY_OPINION.world) }), [
+        { label: t('naval.cmd.warn'), key: 'R', code: 'KeyR', disabled: !o.warn.ok, note: o.warn.ok ? t('command.piracy.warnNote', { w }) : o.warn.why },
+        { label: t('naval.cmd.board'), key: 'F', code: 'KeyF', disabled: !o.board.ok, note: o.board.ok ? t(e.kind === 'transport' ? 'command.piracy.boardNoteConvoy' : 'command.piracy.boardNote', { v }) : o.board.why },
+        { label: t('naval.cmd.sink'), cls: 'danger', key: 'X', code: 'KeyX', disabled: !o.sink.ok, note: o.sink.ok ? t('command.piracy.sinkNote', { vs }) : o.sink.why },
+        { label: t('command.fire.declare', { nation: name }), cls: 'danger', key: 'G', code: 'KeyG', note: t('command.piracy.warNote') },
+        { label: t('command.fire.hold'), cls: 'pri', key: t('command.fire.safeKeys'), safe: true },
+      ]);
+    const acts = ['warn', 'board', 'sink', 'war', 'hold'] as const;
+    const act = acts[i] ?? 'hold';
+    fireStats.answers.push(act);
+    console.info(`[command] piracy question on ship ${e.src?.id ?? 0} of ${e.nation}: ${act}`);
+    const P2 = player();
+    if ((act === 'warn' || act === 'board' || act === 'sink') && P2 && intercept) intercept.perform(act, e, ctx.sim.view, P2);
+    else if (act === 'war') declareFromCommand(e.nation);
+    else overlay?.showNotice(t('command.fire.held'), 2.5, true);
+  }
+
+  /**
+   * The stop panel is easy to miss: the first time a ship shows on it in a session (in the first three sessions
+   * with a warship), a tip names its keys and the controls bar comes back.
+   */
+  let stopTipShown = false;
+  function stopPanelTip(): void {
+    stopTipShown = true;
+    let n = 0;
+    try {
+      n = Number(localStorage.getItem('fu.tip.stopPanel') ?? '0') || 0;
+      localStorage.setItem('fu.tip.stopPanel', String(n + 1));
+    } catch {
+      /* no storage: show it */
+    }
+    if (n >= 3) return;
+    overlay?.showNotice(t('command.tip.stopPanel'), 9, true);
+    overlay?.showHelp();
+  }
+
+  /** «Bloquear esta zona» (B on the warship): the item-30 blockade dialog for the area the ship is in. */
+  function blockadeHere(): boolean {
+    if (kind !== 'ship' || !params || phase !== 'play' || blockadeOpen) return false;
+    const uv = ctx.sim.view.units.get(params.unitId);
+    if (!uv) return false;
+    const tile = Math.max(0, Math.min(MAP_H - 1, Math.floor(uv.y))) * MAP_W + Math.max(0, Math.min(MAP_W - 1, Math.floor(uv.x)));
+    blockadeOpen = true;
+    decision = true;
+    input.releaseLock();
+    sendClock(performance.now(), true);
+    console.info(`[command] blockade dialog from command mode: unit ${params.unitId} tile ${tile}`);
+    ctx.bus.emit('commandBlockade', { unitId: params.unitId, tile });
+    return true;
+  }
+
+  /** The blockade dialog closed: back to the helm, and say what the order did. */
+  function blockadeClosed(): void {
+    blockadeOpen = false;
+    decision = false;
+    sendClock(performance.now(), true);
+    if (!params) return;
+    const b = ctx.sim.view.blockades.find((x) => !x.endTick && x.warships.includes(params!.unitId));
+    const uv = ctx.sim.view.units.get(params.unitId);
+    if (!b || !uv) return;
+    const km = Math.round(Math.hypot(b.x - uv.x, b.y - uv.y) * TILE_KM);
+    overlay?.showNotice(km <= 60 ? t('command.blockade.on') : t('command.blockade.station', { km }), 6, true);
   }
 
   async function requestExit(): Promise<void> {
@@ -2146,7 +2412,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       world.update(dt);
     }
     const IP = intercept && dt > 0 ? player() : null;
-    if (IP && intercept) intercept.update(dt, ctx.sim.view, IP, input, allowInput && phase === 'play');
+    if (IP && intercept) {
+      intercept.update(dt, ctx.sim.view, IP, input, allowInput && phase === 'play');
+      if (intercept.current && !stopTipShown) stopPanelTip();
+    }
     world.syncRigs(dt);
     fx.update(dt);
     world.renderProjectiles();
@@ -2559,6 +2828,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         cadence() {
           return cadence.map((c) => ({ ...c }));
         },
+        fire() {
+          return { ...fireStats, answers: [...fireStats.answers], hold: fireHold, dialog: overlay?.dialogText ?? '' };
+        },
+        blockadeHere: () => blockadeHere(),
         goCombat: () => goToCombat(),
         targets() {
           refreshTargets(true);
@@ -2816,8 +3089,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (!internals?.hold) phaseT += phase === 'intro' || phase === 'debrief' ? Math.max(realDt, wallDt) : realDt;
       const view = ctx.sim.view;
       // Keys that are not driving.
+      if (blockadeOpen && !modalOpen()) blockadeClosed();
       if (overlay.dialogOpen) {
         if (input.hit('Enter') || input.hit('NumpadEnter')) overlay.dialogKey('Enter');
+        else for (const code of overlay.dialogCodes) if (input.hit(code)) {
+          overlay.dialogKey(code);
+          break;
+        }
+      } else if (blockadeOpen) {
+        // The strategic blockade dialog has the keyboard and the mouse.
       } else if (phase === 'play') {
         if (input.hit('KeyM')) {
           tacmap!.toggle(kind);
@@ -2845,6 +3125,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         }
         // Ships: Tab names the next ship in reach on the stop panel (read here, every frame, so no press is lost).
         if (kind === 'ship' && input.hit('Tab')) intercept?.requestNext();
+        // Owner item 31: «Bloquear esta zona» without leaving command mode.
+        if (kind === 'ship' && input.hit('KeyB')) blockadeHere();
         if (kind !== 'ship' && input.hit('Tab')) {
           // Next vehicle of the formation (alive), in slot order.
           const alive = formation.filter((m) => m.alive);
@@ -2856,6 +3138,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       } else if (phase === 'dying') {
         if (input.hit('Tab') && nextVehicleT >= 0) nextVehicle();
       }
+      // Owner item 31: after a fire question the trigger stays released until every trigger is let go.
+      if (fireHold && !decision && !overlay.dialogOpen && !blockadeOpen && !input.lmb && !input.rmb && !input.down('Space')) fireHold = false;
       // Phases.
       let allowInput = false;
       if (phase === 'intro') {
@@ -3095,6 +3379,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           // Owner item 30: the ship-stopping panel, its target (sim unit id, kind, distance) and the actions sent.
           intercept: intercept ? { text: intercept.text, target: intercept.current ? { unitId: intercept.current.src?.id ?? 0, kind: intercept.current.kind, distM: Math.round(intercept.current.pos.distanceTo(P.pos)), speed: +intercept.current.speed.toFixed(1) } : null, log: intercept.log.slice(-8) } : null,
           merchants: world.ents.filter((e) => e.alive && (e.kind === 'merchant' || e.kind === 'transport')).length,
+          fire: { ...fireStats, answers: fireStats.answers.slice(-6), hold: fireHold, blockadeOpen },
           combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })), builds: builds.map((x) => ({ ...x })), entryTimes: { ...entryTimes },
           nearestHostileM: Math.round(forces.nearestHostile(P.pos).dist),
           night: +atmos.night.toFixed(2), vision: night.vision, lights: night.lightsOn, flares: night.flaresFired, fires: civil.fires.length,

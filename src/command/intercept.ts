@@ -368,17 +368,7 @@ export class ShipIntercept {
     const u = this.simUnit(view, e);
     const owner = e.nation;
     const war = this.atWar(view, owner);
-    const hove = u?.mode === UnitMode.HoveTo;
-    const dist = e.pos.distanceTo(player.pos);
-    const slow = Math.abs(player.speed) <= BOARD_SPEED;
-    const stopped = hove || e.speed < 1.2;
-    const escorted = this.escorted(view, e);
-    const can = {
-      hail: dist <= HAIL_M && !hove,
-      warn: dist <= WARN_M,
-      board: dist <= BOARD_M && slow && stopped && !escorted && !this.boarding,
-      sink: dist <= SINK_M,
-    };
+    const { hove, dist, slow, stopped, escorted, can } = this.state(view, e, player);
     // Radio reply once it heaves to after our call.
     const sid = e.src?.id ?? 0;
     if (hove && this.hailed.has(sid) && (this.hailed.get(sid) ?? 0) > 1.5) {
@@ -402,7 +392,8 @@ export class ShipIntercept {
       <ul>${li('E', 'naval.cmd.hail', can.hail, hove ? t('naval.cmd.why.hove') : dist > HAIL_M ? t('naval.cmd.why.range', { km: 8 }) : '')}
       ${li('R', 'naval.cmd.warn', can.warn, dist > WARN_M ? t('naval.cmd.why.range', { km: 6 }) : '')}
       ${li('F', 'naval.cmd.board', can.board, whyBoard)}
-      ${li('X', 'naval.cmd.sink', can.sink, dist > SINK_M ? t('naval.cmd.why.range', { km: 8 }) : '')}</ul>
+      ${li('X', 'naval.cmd.sink', can.sink, dist > SINK_M ? t('naval.cmd.why.range', { km: 8 }) : '')}
+      ${li('B', 'command.blockade.key', true, t('command.blockade.keyNote'))}</ul>
       ${war ? `<div class="w" style="color:#b3c4d6">${esc(t('naval.cmd.warNote'))}</div>` : `<div class="w">${esc(t('naval.cmd.peaceNote', { name: this.d.nameOf(owner), v: Math.abs(PIRACY_OPINION.seize), vs: Math.abs(PIRACY_OPINION.sink) }))}</div>`}
       ${this.boarding ? `<div class="radio">${esc(t('naval.cmd.boarding', { s: Math.max(0, Math.ceil(BOARD_S - this.boarding.t)) }))}</div><div class="bar"><i style="width:${Math.min(100, (this.boarding.t / BOARD_S) * 100).toFixed(0)}%"></i></div>` : ''}
       ${this.radioT > 0 ? `<div class="radio">${esc(this.radio)}</div>` : ''}
@@ -417,6 +408,54 @@ export class ShipIntercept {
       this.d.lookAt?.(e.pos);
     }
   }
+  /** What the warship can do to ship `e` now (the panel's rows; owner item 31's fire question uses the same). */
+  private state(view: GameView, e: Ent, player: Ent) {
+    const u = this.simUnit(view, e);
+    const hove = u?.mode === UnitMode.HoveTo;
+    const dist = e.pos.distanceTo(player.pos);
+    const slow = Math.abs(player.speed) <= BOARD_SPEED;
+    const stopped = hove || e.speed < 1.2;
+    const escorted = this.escorted(view, e);
+    const can = {
+      hail: dist <= HAIL_M && !hove,
+      warn: dist <= WARN_M,
+      board: dist <= BOARD_M && slow && stopped && !escorted && !this.boarding,
+      sink: dist <= SINK_M,
+    };
+    return { hove, dist, slow, stopped, escorted, can };
+  }
+
+  /**
+   * Owner item 31: firing on a merchant or convoy at peace asks first, with the stop panel's own choices. For each:
+   * whether it can be done now and, when not, why (the same reasons the panel shows).
+   */
+  options(view: GameView, e: Ent, player: Ent): Record<'warn' | 'board' | 'sink', { ok: boolean; why: string }> {
+    const { dist, slow, stopped, escorted, can } = this.state(view, e, player);
+    const whyBoard = escorted ? t('naval.cmd.why.escorted') : dist > BOARD_M ? t('naval.cmd.why.alongside') : !slow ? t('naval.cmd.why.slow') : !stopped ? t('naval.cmd.why.stop') : this.boarding ? t('naval.cmd.why.busy') : '';
+    return {
+      warn: { ok: can.warn, why: can.warn ? '' : t('naval.cmd.why.range', { km: WARN_M / 1000 }) },
+      board: { ok: can.board, why: whyBoard },
+      sink: { ok: can.sink, why: can.sink ? '' : t('naval.cmd.why.range', { km: SINK_M / 1000 }) },
+    };
+  }
+
+  /**
+   * Owner item 31: carry out a choice of the fire question exactly as the panel would (the same sim command, so the
+   * same costs). «Hundir» was already confirmed there (its costs were on the button), so it is not asked twice.
+   */
+  perform(act: 'warn' | 'board' | 'sink', e: Ent, view: GameView, player: Ent): boolean {
+    if (!e.alive) return false;
+    const { can } = this.state(view, e, player);
+    this.picked = e;
+    if (act === 'sink' && can.sink) {
+      this.d.lookAt?.(e.pos);
+      this.sink(e);
+      return true;
+    }
+    this.tryAct(act, e, can[act], this.atWar(view, e.nation), player);
+    return can[act];
+  }
+
   private readonly markerPos = new THREE.Vector3();
   private readonly cutPos = new THREE.Vector3();
   private readonly cutLook = new THREE.Vector3();
@@ -481,7 +520,7 @@ export class ShipIntercept {
         }
         this.asking = true;
         void this.d.overlay.ask(t('naval.cmd.sinkAsk.title', { name: this.d.nameOf(e.nation) }), t('naval.cmd.sinkAsk.body', { vs: Math.abs(e.kind === 'transport' ? PIRACY_OPINION.sinkTroops : PIRACY_OPINION.sink), va: Math.abs(PIRACY_OPINION.ally), vw: Math.abs(PIRACY_OPINION.world) }), '',
-          [{ label: t('naval.cmd.sinkAsk.go'), cls: 'danger', key: 'Enter' }, { label: t('common.cancel'), key: 'Esc' }]).then((i) => {
+          [{ label: t('naval.cmd.sinkAsk.go'), cls: 'danger', key: 'X', code: 'KeyX' }, { label: t('common.cancel'), cls: 'pri', key: 'Enter · Esc', safe: true }]).then((i) => {
           this.asking = false;
           if (i === 0 && e.alive) this.sink(e);
         });
