@@ -58,6 +58,8 @@ const en: Record<string, string> = {
   'command.lead.he': 'aim here',
 };
 
+export const COMMAND_STRINGS_32 = { es, en };
+
 let registered = false;
 export function registerCommandStrings32(): void {
   if (registered) return;

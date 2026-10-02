@@ -1681,3 +1681,49 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   pointer is over the list; mobilization alerts have «now» bodies (`alert.warByUs.bodyNow`,
   `alert.mobilization.bodyNow`). `tools/playtest.mjs` resumes auto-pause banners like a player (except in the steps
   that test them), waits out mobilizations and confirms the command-mode exit dialog with Enter.
+
+## 30. Battles at real scale, soldiers, shooting, physical damage (owner item 32) — where it lives
+
+* `src/command/battle.ts` — `BattleLine` (owned by `Forces.battle`, its group under `world.group`): near a contact line
+  at war (`lf.fronts[0]` within 6 km, one side own/allied and the other hostile) it stands both sides' front and
+  offensive pools along a 3.2 km stretch of the real line centred on the player (`HALF_WINDOW_M`, re-centred after
+  `RECENTRE_M` along the line; the line is resampled every refresh from `LocalFront.lineKm`). Figures per side =
+  front pool × min(1, `CONCENTRATION_KM` / window km) + offensive pool, at least `SIDE_MIN` (60) when the side has
+  troops, capped `SIDE_CAP_HOSTILE` 900 / `SIDE_CAP_FRIENDLY` 650 (1 figure = 25 troops). Roles: a side with an
+  offensive pool attacks (squads of 8-12 in waves from `WAVE_D0..WAVE_D1` behind the line to `HALT_SHORT` before the
+  enemy trench); the other defends (forward trench `TRENCH_D`, second trench, reserves; drafts run up); a quiet front is
+  two trench lines. Line vehicles (tanks / IFVs, `src.kind 'pool'`, share = soldier-equivalents), sandbag parapets
+  (two instanced meshes, near detail within 450 m), wrecks and craters, artillery (`shell()`: real projectiles of the
+  firing team, splash 16 m), battery flashes, smoke screens, attrition (falls of dormant figures at the front's
+  intensity), the hot point (`info().hot`, 8 bins of attackers near the enemy, shells and falls of the last 15 s).
+  `info()` for the HUD chip, the arrival notice and `__cmdStats.battle`.
+* `src/command/models/soldier.ts` — soldier geometry per variant (rifleman, AT gunner, machine gunner) and level of
+  detail, with `aPart` (thighs, shins, arms+weapon, upper body) and `aTint` (fixed, uniform, nation band, helmet);
+  `makeSoldierMaterials()` patches MeshStandardMaterial / MeshDepthMaterial: poses (`POSE`: idle, walk, run, kneel,
+  prone, dead, aim, rush) animated in the vertex shader from `aAnim` (pose, gait phase, last shot → recoil, pose time →
+  the fall) and `aBand` (nation colour, seed). Lab: `tools/model-lab/soldier.html` (`?d=&az=&t=&lod=far`).
+* `src/command/world.ts` — soldier meshes per team × variant (active, full detail) and per team (crowd, light
+  detail); `uniformOf` (field colour + nation cast), `bandOf`, `setPose`, `shotFired`; `updateCrowd(camera, viewH, …)`
+  scales far figures to ~`CROWD_MIN_PX` (≤ `CROWD_MAX_SCALE`) and tints them toward the nation beyond 500 m;
+  `updatePuppets` (dormant figures: trench holders kneel / lie and fire bursts, wave members rush and drop prone, by
+  `order`, `wave`, `look`; visual-only tracers `vtrace` and AT rockets); spatial grid `buildGrid` / `forEachIn` for
+  rounds, splash and ramming; splash lethal to men (×1.8, cover 0.7); player bullets hit a man within 0.78 m; pose-aware
+  `center()`; player MG rounds stop at buildings (`sceneryHit`) with chips and glass.
+* `src/command/player/tank.ts` — HE 40 dmg / 15 m splash, coax 9 dmg; `updateFocus` (target brackets, lead point for the
+  loaded round → `HudState.focus` / `lead`, drawn by `hud.ts drawFocus`); collisions call `ctx.ram` /
+  `ctx.ramObstacle`.
+* `src/command/index.ts` — «Owner item 32» blocks: `ram` (men run over above 1 m/s, vehicles by mass × closing speed²
+  both ways, neutrals block and `askRam` asks first), `ramObstacle` (city houses at war / confirmed come down),
+  `ramScenery` (trees knocked down via `Scatter.knockTrees`, compound fences crossed → flattened section, at peace the
+  tank stops before the fence and asks), `HIT_DMG.mg` 0.00015 per round with the «ineffective» notice (`mgHits`),
+  battle chip in `updateCombat` and the arrival notice (`battleNoticed`), hottest-point `liveContact` (biggest
+  offensive on the entry front), `STOP_KM.tank` 0.6 and `CONTACT_LINE_KM` 1.0 (arrive among the own line),
+  `camOverride` for tools, `__cmdStats.battle / ram / mgHits`.
+* `src/command/goto.ts` — `CombatTarget.heat` / `attackId`: `combatTargets` scores km ÷ heat (an offensive's contact
+  1.6 + troops / 50k; a line point by intensity, quiet ×0.6).
+* `src/ui/hud/frontBadges.ts` + `src/ui/css/w6.css` — «⌖ Tomar el control aquí» button on the badge of every front of
+  the human; `is-battle` pulse when an offensive runs.
+* Strings: `src/command/strings32.ts` (`COMMAND_STRINGS_32`, also read by `tools/i18n-check.mjs`); help text
+  `help.command.body` (w3.ts).
+* Verifier: `node tools/f32-verify.mjs [--only scale,kill,ram,close,mg]` (no-HMR server:
+  `npx vite --config tools/vite.nowatch.config.mjs`), shots in `shots/owner-32-1/verify/`.

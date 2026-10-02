@@ -17,9 +17,10 @@ import { esNaval, enNaval } from '../src/ui/i18n/naval.ts';
 import { esW7, enW7 } from '../src/ui/i18n/w7.ts';
 import { SIM_STRINGS, FALLBACK_NAMES_ES, FALLBACK_NAMES_EN } from '../src/sim/strings.ts';
 import { COMMAND_STRINGS } from '../src/command/strings.ts';
+import { COMMAND_STRINGS_32 } from '../src/command/strings32.ts';
 
-const ES = { ...FALLBACK_NAMES_ES, ...SIM_STRINGS.es, ...es, ...esW1, ...esW2, ...esW3, ...esW4, ...esW6, ...esF2, ...esF3, ...esNaval, ...esW7, ...COMMAND_STRINGS.es };
-const EN = { ...FALLBACK_NAMES_EN, ...SIM_STRINGS.en, ...en, ...enW1, ...enW2, ...enW3, ...enW4, ...enW6, ...enF2, ...enF3, ...enNaval, ...enW7, ...COMMAND_STRINGS.en };
+const ES = { ...FALLBACK_NAMES_ES, ...SIM_STRINGS.es, ...es, ...esW1, ...esW2, ...esW3, ...esW4, ...esW6, ...esF2, ...esF3, ...esNaval, ...esW7, ...COMMAND_STRINGS.es, ...COMMAND_STRINGS_32.es };
+const EN = { ...FALLBACK_NAMES_EN, ...SIM_STRINGS.en, ...en, ...enW1, ...enW2, ...enW3, ...enW4, ...enW6, ...enF2, ...enF3, ...enNaval, ...enW7, ...COMMAND_STRINGS.en, ...COMMAND_STRINGS_32.en };
 const files = [];
 const walk = (d) => {
   for (const f of fs.readdirSync(d)) {

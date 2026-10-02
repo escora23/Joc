@@ -374,7 +374,7 @@ export class BattleLine {
       if (!st) {
         st = {
           owner: sd.owner, team: friendly ? 0 : 1, rel, hostile, sign: sideOf(sd.owner), role: 'hold', target: 0, troops: 0, perKm: 0,
-          members: [], vehicles: [], vehTarget: 0, vehRespawnAt: 0, arty: 1 + Math.random() * 3, waveN: 0,
+          members: [], vehicles: [], vehTarget: 0, vehRespawnAt: 0, arty: 0.3 + Math.random() * 1.2, waveN: 0,
         };
         this.sides.set(sd.owner, st);
       }
@@ -453,6 +453,15 @@ export class BattleLine {
     }
   }
 
+  /**
+   * Where along the stretch a new figure stands (u uniform 0..1): denser around its centre (the player), so the fight
+   * is thickest where the player is and thins out toward the ends of the 3.2 km.
+   */
+  private spread(u: number): number {
+    const v = u * 2 - 1;
+    return Math.sign(v) * Math.pow(Math.abs(v), 1.7) * HALF_WINDOW_M;
+  }
+
   /** Distance along the stretch's tangent at its centre. */
   private alongOf(dx: number, dz: number): number {
     const nC = { x: 0, z: 0 };
@@ -484,7 +493,7 @@ export class BattleLine {
       // Squads of 8-12 in waves.
       while (missing > 0) {
         const size = Math.min(missing, 8 + Math.floor(rng.next() * 5));
-        const s = (rng.next() * 2 - 1) * HALF_WINDOW_M;
+        const s = this.spread(rng.next());
         const startD = initial ? WAVE_D0 + rng.next() * (WAVE_D1 - WAVE_D0) : WAVE_D1 + rng.next() * 250;
         // Initial waves are caught at every stage of the assault: some already half way across.
         const start = initial && rng.next() < 0.45 ? -HALT_SHORT + rng.next() * (TRENCH_D + 120) : startD;
@@ -508,7 +517,7 @@ export class BattleLine {
     let k = 0;
     while (missing > 0) {
       const r = rng.next();
-      const s = (rng.next() * 2 - 1) * HALF_WINDOW_M;
+      const s = this.spread(rng.next());
       let d: number, order: 'hold' | 'front' = 'hold';
       const goal = new THREE.Vector3();
       if (initial ? r < 0.55 : r < 0.15) d = TRENCH_D + (rng.next() - 0.5) * 6;
@@ -688,7 +697,8 @@ export class BattleLine {
     for (const st of this.sides.values()) {
       const n = st.members.length;
       if (n === 0) continue;
-      const rate = this.heat * (0.2 + 0.8 * Math.min(1, n / 500)) * (st.role === 'hold' ? 0.35 : 1);
+      // Rounds per second on the other side's stretch: ~1 at the height of an offensive, one every ~10 s on a quiet line.
+      const rate = this.heat * (0.3 + 0.9 * Math.min(1, n / 400)) * (st.role === 'hold' ? 0.3 : 1);
       st.arty -= dt * rate;
       if (st.arty > 0) continue;
       st.arty = 0.6 + rng.next() * 1.4;

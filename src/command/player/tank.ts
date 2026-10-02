@@ -228,7 +228,11 @@ export class TankController implements Controller {
       const trigger = fresh || inp.lmb;
       if (trigger && this.reloadT <= 0 && (this.ammo[this.loaded] <= 0 || this.clear('main', fresh))) this.shoot();
       const mgFresh = inp.hit('Space');
-      if (inp.down('Space') && this.mgCd <= 0 && this.mgAmmo > 0 && this.clear('mg', mgFresh)) this.mg();
+      if (inp.down('Space') && this.mgCd <= 0 && this.mgAmmo > 0 && this.clear('mg', mgFresh)) {
+        // The coax's real rate (~700 rounds a minute) whatever the frame rate: every round due in this step goes.
+        if (this.mgCd < -0.25) this.mgCd = 0;
+        for (let k = 0; k < 6 && this.mgCd <= 0 && this.mgAmmo > 0; k++) this.mg();
+      }
       if (inp.hit('KeyC') && this.smoke > 0 && this.smokeCd <= 0) this.popSmoke();
     }
     this.recoil = Math.max(0, this.recoil - dt * 2.2);
@@ -302,7 +306,7 @@ export class TankController implements Controller {
   private mg(): void {
     const e = this.ent;
     const c = this.c;
-    this.mgCd = 0.085;
+    this.mgCd += 0.085;
     this.mgAmmo--;
     c.world.muzzleOf(e, T2, T3);
     // Coax sits right of the main gun, a few meters back.

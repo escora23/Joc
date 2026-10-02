@@ -220,8 +220,8 @@ export const SLEEP_M = 1400;
  * Far soldiers grow with distance so a figure stays about CROWD_MIN_PX tall on screen (owner item 32: readable at tank
  * distances, never giants: at most CROWD_MAX_SCALE, and nothing grows in the gunner's sight before ~2 km).
  */
-const CROWD_MAX_SCALE = 3.2;
-const CROWD_MIN_PX = 2.6;
+const CROWD_MAX_SCALE = 3.5;
+const CROWD_MIN_PX = 4;
 /** Soldier variants (rifleman, AT gunner, machine gunner). */
 const VARIANTS = 3;
 /** Visual-only tracers of the far crowd's fire (no collision): ring capacity. */
@@ -524,7 +524,7 @@ export class World {
     const v = 0.86 + ((e.seed * 997) % 1) * 0.22;
     const base = e.team === 0 ? this.friendlyTint : this.enemyTint;
     out.copy(base);
-    if (e.nation) out.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), 0.34);
+    if (e.nation) out.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), 0.2);
     return out.multiplyScalar(v);
   }
 
@@ -692,12 +692,20 @@ export class World {
         changed = true;
         if (e.dressed !== e.nation) {
           e.dressed = e.nation;
-          im.setColorAt(i, this.uniformOf(e, this.tmpColor));
-          if (im.instanceColor) im.instanceColor.needsUpdate = true;
           this.bandOf(e, this.crowdBand[t], i);
         }
         e.pos.y = this.ground.heightAt(e.pos.x, e.pos.z);
         const d = cam.distanceTo(e.pos);
+        if (full) {
+          // Readable far away: beyond ~500 m the uniform takes on more of the nation's colour (as the battle view's
+          // masses do), so a line of men a kilometre off still reads as theirs or ours against the ground.
+          this.uniformOf(e, this.tmpColor);
+          const far = Math.max(0, Math.min(1, (d - 300) / 900)) * 0.6;
+          if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
+          if (!e.alive) this.tmpColor.multiplyScalar(0.7);
+          im.setColorAt(i, this.tmpColor);
+          if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        }
         const px = (1.8 * ppm1) / Math.max(1, d);
         const sc = Math.max(1, Math.min(CROWD_MAX_SCALE, CROWD_MIN_PX / Math.max(1e-3, px)));
         this.e.set(0, e.yaw, 0, 'YXZ');
@@ -812,7 +820,7 @@ export class World {
       return;
     }
     if (dCam < 2600) fx.particles.emit(6, mx, my, mz, 0, 0, 0, 0.05, 0.22 * big, 0.3 * big, 3, 2, 0.9, 1);
-    if (this.rng.next() < (e.variant === 2 ? 0.5 : 0.3)) {
+    if (this.rng.next() < (e.variant === 2 ? 0.6 : 0.4)) {
       const spread = 6 + this.rng.next() * 18;
       const tx = e.look.x + (this.rng.next() - 0.5) * spread, tz = e.look.z + (this.rng.next() - 0.5) * spread;
       const ty = this.ground.heightAt(tx, tz) + 0.4 + this.rng.next() * 1.4;
@@ -847,8 +855,9 @@ export class World {
   setTeamTints(friendly: number, enemy: number): void {
     const f = new THREE.Color(friendly), en = new THREE.Color(enemy);
     // Uniform shades (multiplying the figures' vertex colors): olive for ours, khaki for theirs, a hint of nation color.
-    this.friendlyTint.setRGB(0.36, 0.4, 0.26).lerp(f, 0.12);
-    this.enemyTint.setRGB(0.55, 0.47, 0.32).lerp(en, 0.15);
+    // (linear values: field olive and khaki, not bleached).
+    this.friendlyTint.setRGB(0.21, 0.24, 0.14).lerp(f, 0.1);
+    this.enemyTint.setRGB(0.33, 0.28, 0.17).lerp(en, 0.12);
   }
 
   /** Remove every entity / projectile (session end). */

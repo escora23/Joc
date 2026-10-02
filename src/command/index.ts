@@ -87,14 +87,15 @@ const STRUCT_KEY: Record<number, string> = { 0: 'city', 1: 'port', 2: 'factory',
  * then within the tank's gun range; an enemy unit, twice as far. Beyond HOP_KM more, the unit marches behind a fade on
  * the real clock (the whole world runs with it, like a strategic move); closer, the local autopilot drives.
  */
-const STOP_KM: Record<CommandKind, number> = { tank: 1.2, jet: 12, ship: 8 };
+// Owner item 32: a tank arrives among its own line (its waves stand 260-700 m behind the contact), not 1.2 km short.
+const STOP_KM: Record<CommandKind, number> = { tank: 0.6, jet: 12, ship: 8 };
 const HOP_KM: Record<CommandKind, number> = { tank: 0.8, jet: 20, ship: 6 };
 /** «Ir al combate» drives this last stretch (km) with the local autopilot (time compressed) instead of a march and a new scene. */
 const NEAR_DRIVE_KM: Record<CommandKind, number> = { tank: 4, jet: 20, ship: 6 };
 /** An enemy entity this close is contact: the chip says so and there is nothing to travel to. */
 const REACH_M: Record<CommandKind, number> = { tank: 4000, jet: 15000, ship: 12000 };
 /** A tank this close (km) to a contact line at war, with enemy soldiers on it, has them within REACH_M in the scene. */
-const CONTACT_LINE_KM = 2.6;
+const CONTACT_LINE_KM = 1.0;
 /** A march to the action gives up after this many legs (each follow-on leg costs about 2.4 real s). */
 const MAX_LEGS = 8;
 /** Beyond this the chip offers «Ir al frente más cercano» (a far unit) instead of «Ir al combate». */

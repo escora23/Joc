@@ -40,8 +40,8 @@ const KNEE_Y = 0.51;
 const HIP_X = 0.1;
 const SHOULDER_Y = 1.41;
 
-const C_UNI = 0xe6e6e6; // multiplied by the instance's uniform colour
-const C_UNI_D = 0xc4c4c4;
+const C_UNI = 0xc8c8c8; // multiplied by the instance's uniform colour
+const C_UNI_D = 0xaaaaaa;
 const C_SKIN = [0xc8987a, 0x9a6a4c, 0xe0b090];
 const C_GEAR = 0x45463a;
 const C_BOOT = 0x26221e;
@@ -60,6 +60,10 @@ class SoldierBuilder {
   part = P_UPPER;
   tint = T_FIXED;
   constructor(readonly hi: boolean) {}
+
+  push2(fn: (b: GeoBuilder) => void): void {
+    this.push(fn);
+  }
 
   private push(fn: (b: GeoBuilder) => void): void {
     const b = new GeoBuilder();
@@ -179,7 +183,8 @@ export function buildSoldierGeometry(variant: 0 | 1 | 2, hi: boolean, skin = 0):
   s.sphere(0.135, C_UNI, 0, 1.645, -0.005, 1.04, 0.74, 1.12);
   if (hi) s.cyl(0.143, 0.15, 0.03, C_UNI, 0, 1.6, -0.005, 0, 0, 0);
   s.tint = T_BAND;
-  s.cyl(0.139, 0.139, 0.035, 0xffffff, 0, 1.66, -0.005);
+  // The band sits proud of the helmet's widest part (no z-fighting with the shell).
+  s.push2((b) => b.add(new THREE.CylinderGeometry(0.15, 0.152, 0.032, hi ? 14 : 8, 1, true), 0xffffff, 0, 1.635, -0.005, 0, 0, 0, 1.0, 1, 1.09));
   if (hi) {
     s.tint = T_FIXED;
     s.box(0.012, 0.09, 0.012, 0x222222, -0.09, 1.55, -0.03, 0, 0, -0.25);

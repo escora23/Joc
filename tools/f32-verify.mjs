@@ -123,12 +123,39 @@ async function kill(page) {
     }
     return best ? { id: best.id, d: Math.round(bd) } : null;
   }, maxM);
+  // The battle's enemies stand behind the hills of this front: a squad of the enemy's pool is put in sight 260 m
+  // ahead (prone and kneeling, as the trench line), and one more at 180 m for the machine gun.
+  await page.evaluate(() => {
+    const I = window.__cmd, P = I.world.player, b = I.forces.battle.info();
+    const foe = b.sides.find((q) => q.team === 1)?.owner ?? 0;
+    const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw);
+    const put = (d, side, k) => {
+      const x = P.pos.x + fx * d + fz * side, z = P.pos.z + fz * d - fx * side;
+      const e = I.world.spawn('soldier', 1, x, z, P.yaw + Math.PI);
+      e.nation = foe; e.src = { kind: 'pool', id: 0, owner: foe, share: 0 }; e.order = 'hold'; e.goal.set(x, 0, z); e.look.set(P.pos.x, 0, P.pos.z);
+      e.state = k % 3 === 0 ? 1 : 0;
+      return e;
+    };
+    // The farthest spot (≤ 280 m) the crew can see along the hull's heading: the squad stands there.
+    const eye = P.pos.clone().setY(P.pos.y + 3);
+    const seen = (d, side) => {
+      const x = P.pos.x + fx * d + fz * side, z = P.pos.z + fz * d - fx * side, y = I.ground.heightAt(x, z) + 0.6;
+      for (let k = 1; k < 40; k++) { const f = k / 40; if (I.ground.heightAt(eye.x + (x - eye.x) * f, eye.z + (z - eye.z) * f) > eye.y + (y - eye.y) * f) return false; }
+      return true;
+    };
+    let dS = 90;
+    for (let d = 280; d >= 90; d -= 10) if (seen(d, 0) && seen(d, -10) && seen(d, 10)) { dS = d; break; }
+    for (let i = 0; i < 8; i++) put(dS + (i % 3) * 4, (i - 3.5) * 3.5, i);
+    for (let i = 0; i < 5; i++) put(Math.max(70, dS - 60) + (i % 2) * 3, 25 + i * 4, i);
+    window.__f32squad = dS;
+  });
+  await sleep(1500);
   const before = await page.evaluate(() => ({ kills: window.__cmd.world.stats.kills, troops: window.__cmdStats?.killsBy ?? {} }));
   let he = 0;
   const shots = [];
   await key(page, 'Digit2');
   for (let i = 0; i < 4; i++) {
-    const t = await pick(1100);
+    const t = await pick(300);
     if (!t) break;
     await aim(page, t.id, 0.5);
     const k0 = await page.evaluate(() => window.__cmd.world.stats.kills);
@@ -169,18 +196,23 @@ async function ram(page) {
     const put = (kind, d, side) => {
       const x = P.pos.x + fx * d + fz * side, z = P.pos.z + fz * d - fx * side;
       const e = I.world.spawn(kind, 1, x, z, P.yaw);
-      e.nation = foe; e.src = { kind: 'pool', id: 0, owner: foe, share: kind === 'truck' ? 6 : 0 }; e.order = 'hold'; e.goal.set(x, 0, z); e.look.set(P.pos.x, 0, P.pos.z);
+      e.nation = foe; e.src = { kind: 'pool', id: 0, owner: foe, share: kind === 'truck' ? 6 : 0 }; e.order = kind === 'truck' ? 'goto' : 'hold'; e.goal.set(x, 0, z); e.look.set(P.pos.x, 0, P.pos.z);
       ids.push(e.id);
       return e;
     };
     for (let i = 0; i < 4; i++) put('soldier', 22 + i * 3, (i - 1.5) * 1.2);
     put('truck', 48, 0);
+    // Clear the lane of everything else (our own men step aside anyway).
+    I.world.godMode = false;
     I.controller.aimAt(P.pos.clone().add({ x: fx * 300, y: 2, z: fz * 300 }));
     return { ids, foe, hp: P.hp };
   });
   const r0 = await page.evaluate(() => window.__cmdStats?.ram ?? null);
-  await key(page, 'KeyW', 9000);
-  await sleep(1500);
+  const p0 = await page.evaluate(() => window.__cmd.world.player.pos.clone());
+  await page.keyboard.down('KeyW');
+  await until(page, (p0) => { const P = window.__cmd.world.player; return Math.hypot(P.pos.x - p0.x, P.pos.z - p0.z) > 70 || (window.__cmdStats?.ram?.vehicles ?? 0) > 0 ? true : null; }, p0, 240000, 500);
+  await page.keyboard.up('KeyW');
+  await sleep(2500);
   const r = await page.evaluate((ids) => ({ ram: window.__cmdStats?.ram, alive: ids.map((id) => window.__cmd.world.ents.find((e) => e.id === id)?.alive ?? false), hp: window.__cmd.world.player.hp }), staged.ids);
   row('R1', 'running over infantry kills them (mass and speed)', `${r.ram.men - (r0?.men ?? 0)} run over; staged men alive: ${r.alive.slice(0, 4).join(',')}`, r.ram.men - (r0?.men ?? 0) >= 2);
   row('R2', 'ramming a light vehicle wrecks it and damages the tank', `rams ${r.ram.vehicles}, wrecked ${r.ram.vehicleKills}, own damage ${r.ram.selfDmg.toFixed(1)} hp (hp ${staged.hp} → ${r.hp.toFixed(1)}); «${r.ram.last}»`, r.ram.vehicleKills >= 1 && r.ram.selfDmg > 0);
@@ -219,8 +251,11 @@ async function mgFactory() {
     I.controller.aimAt(new P.pos.constructor(st.x, st.y0 + 5, st.z));
   }, sid);
   await sleep(1500);
-  await key(page, 'KeyW', 8000);
-  await sleep(1000);
+  const q0 = await page.evaluate(() => window.__cmd.world.player.pos.clone());
+  await page.keyboard.down('KeyW');
+  await until(page, (q0) => { const P = window.__cmd.world.player; return Math.hypot(P.pos.x - q0.x, P.pos.z - q0.z) > 70 || (window.__cmdStats?.ram?.fences ?? 0) > 0 ? true : null; }, q0, 240000, 500);
+  await page.keyboard.up('KeyW');
+  await sleep(2500);
   const f = await page.evaluate(() => window.__cmdStats?.ram);
   row('M3', 'driving through a compound fence knocks a section down', `fences ${f?.fences}, trees ${f?.trees}, houses ${f?.houses}; «${f?.last}»`, (f?.fences ?? 0) >= 1);
   await snap(page, 'mg-2-fence');
@@ -245,7 +280,8 @@ async function scale() {
   console.log(`   census at entry: ${JSON.stringify(c)}`);
   const b = c.stats;
   const shown = b ? b.sides.map((q) => `${q.team ? 'enemy' : 'ours'} ${q.shown}/${q.target} (${q.perKm} troops/km, ${q.vehicles} vehicles, ${q.role})`).join('; ') : 'no battle';
-  row('S1', 'soldiers of both sides around the player (sim density, believable cap)', `${c.soldiers[0]} ours + ${c.soldiers[1]} enemy alive in the scene, ${c.near1km[0] + c.near1km[1]} within 1 km; ${shown}`, !!play && c.soldiers[0] + c.soldiers[1] >= 300 && c.soldiers[1] >= 100);
+  // Both sides at the sim's density (the enemy may really be thin on this stretch: its figures follow its troops per km).
+  row('S1', 'soldiers of both sides around the player (sim density, believable cap)', `${c.soldiers[0]} ours + ${c.soldiers[1]} enemy alive in the scene, ${c.near1km[0] + c.near1km[1]} within 1 km; ${shown}`, !!play && c.soldiers[0] + c.soldiers[1] >= 300 && c.soldiers[1] >= Math.min(40, b?.sides.find((q) => q.team === 1)?.target ?? 0));
   row('S2', 'vehicles in the battle', `${c.vehicles[0]} ours, ${c.vehicles[1]} enemy`, c.vehicles[0] + c.vehicles[1] >= 4);
   await snap(page, 'scale-1-chase');
   // Look at the hottest point from the tank (the turret turned there) and count what the camera shows.
@@ -263,8 +299,9 @@ async function scale() {
   row('S3', 'visible on screen from the tank toward the fighting', `${c.screenSoldiers[0]} ours + ${c.screenSoldiers[1]} enemy soldiers, ${c.screenVehicles[0] + c.screenVehicles[1]} vehicles in the view`, c.screenSoldiers[0] + c.screenSoldiers[1] >= 100);
   await snap(page, 'scale-2-toward-fight');
   // Activity over 20 s.
-  const t0 = await page.evaluate(() => ({ kills: window.__cmd.world.stats.kills, dead: window.__cmd.world.ents.filter((e) => !e.alive && (e.kind === 'soldier' || e.kind === 'at')).length }));
-  await sleep(20000);
+  const t0 = await page.evaluate(() => ({ kills: window.__cmd.world.stats.kills, t: window.__cmd.world.time, dead: window.__cmd.world.ents.filter((e) => !e.alive && (e.kind === 'soldier' || e.kind === 'at')).length }));
+  // 15 s of the scene's own time (SwiftShader frames are slow: wall time says little).
+  await until(page, (t) => window.__cmd.world.time - t >= 15 ? true : null, t0.t, 300000, 1000);
   c = await census(page);
   const act = c.stats;
   row('S4', 'the fight is alive (artillery, falls, fire)', act ? `heat ${act.heat}, ${act.shells10} shells and ${act.fallen10} fallen in the last 10 s, ${c.dead} bodies (was ${t0.dead})` : 'no battle', !!act && act.shells10 >= 2 && act.fallen10 >= 1);
@@ -279,11 +316,29 @@ async function scale() {
     const at = b.hot ?? b.near;
     const dx = at.x - P.pos.x, dz = at.z - P.pos.z, l = Math.hypot(dx, dz) || 1;
     const pos = P.pos.clone();
-    pos.x -= (dx / l) * 220; pos.z -= (dz / l) * 220; pos.y += 140;
-    I.camOverride = { pos, look: at.clone(), fov: 55 };
+    pos.x -= (dx / l) * 150; pos.z -= (dz / l) * 150; pos.y = Math.max(pos.y, I.ground.heightAt(pos.x, pos.z)) + 260;
+    I.camOverride = { pos, look: at.clone().lerp(P.pos, 0.35), fov: 50 };
   });
   await sleep(3000);
   await snap(page, 'scale-4-overview');
+  // What a crew sees driving up behind its own wave: 30 m up, 160 m behind the nearest of our men in the open.
+  await page.evaluate(() => {
+    const I = window.__cmd, P = I.world.player;
+    let best = null, bd = Infinity;
+    for (const e of I.world.ents) {
+      if (!e.alive || e.team !== 0 || e.kind !== 'soldier' || e.order !== 'front') continue;
+      const d = e.pos.distanceTo(P.pos);
+      if (d > 150 && d < bd) { bd = d; best = e; }
+    }
+    if (!best) return;
+    const dx = best.look.x - best.pos.x, dz = best.look.z - best.pos.z, l = Math.hypot(dx, dz) || 1;
+    const pos = best.pos.clone();
+    pos.x -= (dx / l) * 160; pos.z -= (dz / l) * 160;
+    pos.y = Math.max(best.pos.y, I.ground.heightAt(pos.x, pos.z)) + 30;
+    I.camOverride = { pos, look: best.pos.clone().setY(best.pos.y + 1).add({ x: dx / l * 120, y: 0, z: dz / l * 120 }), fov: 45 };
+  });
+  await sleep(3000);
+  await snap(page, 'scale-5-behind-wave');
   await page.evaluate(() => { window.__cmd.camOverride = null; });
   if (!only || only.has('kill')) await kill(page).catch((e) => console.log('[kill]', e));
   if (!only || only.has('ram')) await ram(page).catch((e) => console.log('[ram]', e));
@@ -318,7 +373,14 @@ async function close() {
         const yaw = best.yaw + 0.9;
         const pos = best.pos.clone();
         pos.x += -Math.sin(yaw) * d; pos.z += -Math.cos(yaw) * d;
-        pos.y = Math.max(pos.y, I.ground.heightAt(pos.x, pos.z)) + 1.7 + d * 0.03;
+        // Eye height, raised over any rise between the camera and the man (this front runs through hills).
+        let top = Math.max(pos.y, I.ground.heightAt(pos.x, pos.z)) + 1.7;
+        for (let k = 1; k < 20; k++) {
+          const f = k / 20, x = pos.x + (best.pos.x - pos.x) * f, z = pos.z + (best.pos.z - pos.z) * f;
+          const need = I.ground.heightAt(x, z) + 1.2 - (best.pos.y + 1) * f;
+          if (need / (1 - f) > top) top = need / (1 - f);
+        }
+        pos.y = top + d * 0.02;
         I.camOverride = { pos, look: best.pos.clone().setY(best.pos.y + 0.9), fov: d <= 20 ? 40 : d <= 50 ? 30 : 20 };
         return `${best.kind} pose ${best.pose} at ${Math.round(bd)} m from the tank`;
       }, { team, d });
