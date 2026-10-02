@@ -30,6 +30,8 @@ import { modalOpen } from '../ui/modal';
 import { unitLabel } from '../ui/hud/news';
 import { ShipIntercept } from './intercept';
 import { registerCommandStrings } from './strings';
+import { registerCommandStrings32 } from './strings32';
+import { GeoBuilder } from './models/builder';
 import { makeDecalAtlas, makeNoiseTexture, makeParticleAtlas } from './env/textures';
 import { computeAtmos, Sky, type Atmos } from './env/sky';
 import { Water } from './env/water';
@@ -37,7 +39,7 @@ import { Scatter } from './env/scatter';
 import { Grass } from './env/grass';
 import { createMaterials, type CmdMaterials } from './models/materials';
 import { Effects } from './fx/effects';
-import { ENT_DEFS, forwardOf, segSphere, World, type Ent } from './world';
+import { ENT_DEFS, forwardOf, segSphere, World, type Ent, type EntKind } from './world';
 import { Brain } from './ai';
 import { CommandInput } from './input';
 import { CommandHud } from './hud/hud';
@@ -58,6 +60,16 @@ import { fmtDur, wireIncursionAlerts } from './alerts';
 import { alongRoute, atWar, combatTargets, planRoute, routeProgress, tileBearing, tileKm, type CombatTarget, type Route, type Targets } from './goto';
 
 registerCommandStrings();
+registerCommandStrings32();
+/** Owner item 32: up vector for ram sparks, and a fence section flattened by a vehicle (6 m of mesh and posts lying down). */
+const UPV = new THREE.Vector3(0, 1, 0);
+const FENCE_DOWN_GEO = (() => {
+  const b = new GeoBuilder();
+  b.box(6, 0.06, 2.0, 0x6e7276, 0, 0, 0, 0, 0, 0.04);
+  b.box(0.25, 0.25, 2.6, 0x55595d, -2.6, 0.1, 0.3, 0, 0.4, 0);
+  b.box(0.25, 0.25, 2.6, 0x55595d, 2.4, 0.1, -0.2, 0, -0.3, 0);
+  return b.build();
+})();
 
 type Phase = 'idle' | 'intro' | 'play' | 'dying' | 'debrief' | 'transit';
 
@@ -98,12 +110,12 @@ const TRANSIT_RATE_MAX = 3600;
  * scale: a tank's HE shell 5 %, AP 2 % (its 20 HE rounds take a level), a ship's gun 6 %, a jet's missile 12 %, a ship's missile 20 %, a bomb 30 %)
  * and from a city: each house knocked down 0.5 %, each city block collapsed (25 % of its houses down) 3 % more.
  */
-const HIT_DMG = { he: 0.08, ap: 0.02, naval: 0.06, missile: 0.12, shipMissile: 0.2, bomb: 0.3 };
+const HIT_DMG = { he: 0.08, ap: 0.02, naval: 0.06, missile: 0.12, shipMissile: 0.2, bomb: 0.3, mg: 0.00015 };
 const HOUSE_DMG = 0.005;
 const BLOCK_DMG = 0.03;
 const BLOCK_DOWN_SHARE = 0.25;
 /** Blast radius (m) that knocks down the houses around an impact. */
-const BLAST_M = { he: 12, ap: 0, naval: 14, missile: 16, shipMissile: 24, bomb: 38 };
+const BLAST_M = { he: 12, ap: 0, naval: 14, missile: 16, shipMissile: 24, bomb: 38, mg: 0 };
 /** A border of a nation at peace closer than this drops travel to ×1 and warns (§9.7.1). */
 const BORDER_WARN_M = 2000;
 
@@ -130,6 +142,8 @@ export interface CommandInternals {
   freeze: boolean;
   /** Shots: the next entry starts frozen. */
   freezeOnEnter: boolean;
+  /** Tools (owner item 32 close-ups and overviews): a fixed camera instead of the vehicle's, or null. */
+  camOverride: { pos: THREE.Vector3; look: THREE.Vector3; fov?: number } | null;
   hold: boolean;
   readonly phase: string;
   skipIntro(): void;
@@ -223,6 +237,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let controller: Controller | null = null;
   let brain: Brain | null = null;
   let freeze = false;
+  let camOverride: CommandInternals['camOverride'] = null;
   /** Shots: enter already frozen (the sim's clock held from the first frame). */
   let freezeOnEnter = false;
   let exitRequested = false;
@@ -381,6 +396,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     invertY: () => !!ctx.settings.get().invertY,
     obstacles: [], shake: (a) => (shakeAmt = Math.min(1.5, shakeAmt + a)), speedCap: Infinity, viewW: 1600, viewH: 900,
     clearToFire: (s) => clearToFire(s),
+    ram: (a, b, c) => ram(a, b, c),
+    ramObstacle: (a, o, sp) => ramObstacle(a, o, sp),
   };
 
   window.addEventListener('mousemove', (e) => {
@@ -738,6 +755,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   const hitAt = new THREE.Vector3();
   let sceneryLog = 0;
   function weaponOf(p: Proj): keyof typeof HIT_DMG {
+    if (p.kind === 'bullet') return 'mg';
     if (p.kind === 'bomb') return 'bomb';
     if (p.kind === 'missile') return kind === 'ship' ? 'shipMissile' : 'missile';
     if (kind === 'ship') return 'naval';
@@ -785,6 +803,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   let lastHitNotice = '';
+  /** Owner item 32: machine-gun rounds on each structure (the HUD's «ineffective» line, the verifier). */
+  const mgHits = new Map<number, number>();
+  let mgNoticeWall = 0;
   function hitStructure(r: StructRec, w: keyof typeof HIT_DMG): void {
     if (friendlyOwner(r.owner)) return;
     // At peace: nothing is damaged before the player chooses war. Owner item 31: that choice is asked before the
@@ -793,8 +814,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     pend(r.id, HIT_DMG[w]);
     structHitN++;
     structHitIds.add(r.id);
-    hud?.hitMarker(false);
+    if (w === 'mg') mgHits.set(r.id, (mgHits.get(r.id) ?? 0) + 1);
+    if (w !== 'mg' || (mgHits.get(r.id) ?? 0) % 6 === 1) hud?.hitMarker(false);
     const s = ctx.sim.view.structures.get(r.id);
+    if (w === 'mg') {
+      // Owner item 32: machine-gun fire on a building does small, real damage; the HUD says it is the wrong tool.
+      if (s && overlay && (!overlay.noticeText || overlay.noticeText === lastHitNotice) && performance.now() - mgNoticeWall > 2500) {
+        mgNoticeWall = performance.now();
+        const after = Math.max(0, s.hp - (structPending.get(r.id)?.dmg ?? 0));
+        lastHitNotice = t('command.hit.mgWeak', { what: t(`structure.${STRUCT_KEY[s.type] ?? 'city'}`), pct: formatNumber(after * 100, 1) });
+        overlay.showNotice(lastHitNotice, 3);
+      }
+      return;
+    }
     // The hit notice follows every hit (a newer one replaces it; any other notice is left alone).
     if (s && overlay && (!overlay.noticeText || overlay.noticeText === lastHitNotice)) {
       const after = Math.max(0, s.hp - (structPending.get(r.id)?.dmg ?? 0));
@@ -813,6 +845,19 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // on a city not confirmed, or on a house of a nation at peace, does no damage and asks nothing.
     if (city && !cityConfirmed.has(city.id)) return;
     if (!city && !atWarWith(owner)) return;
+    if (w === 'mg') {
+      // Owner item 32: bullets chip facades and break windows (world.ts draws them); the city takes a sliver of damage.
+      if (city) {
+        pend(city.id, HIT_DMG.mg);
+        mgHits.set(city.id, (mgHits.get(city.id) ?? 0) + 1);
+        if (overlay && (!overlay.noticeText || overlay.noticeText === lastHitNotice) && performance.now() - mgNoticeWall > 2500) {
+          mgNoticeWall = performance.now();
+          lastHitNotice = t('command.hit.mgCity', { city: cityName(city.id) });
+          overlay.showNotice(lastHitNotice, 3);
+        }
+      }
+      return;
+    }
     const blast = BLAST_M[w];
     const victims = blast > 0 ? [r, ...civil.housesNear(at.x, at.z, blast).filter((h) => h !== r && h.cityId === r.cityId)] : [r];
     // Fix pass 3 (#27): a round that brings houses down is a heavy hit on the city — the weapon's whole damage goes to
@@ -875,6 +920,189 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     console.info(`[command] civilian target confirmed: city ${cityId} of ${city.owner}${peace ? ' (at peace: war)' : ''}`);
   }
 
+  // -----------------------------------------------------------------------------------------------
+  // Collisions and ramming (owner item 32): mass and speed, crushing, debris, own damage; at peace an incident
+  // under item 31's rule (nothing happens before the player decides).
+  // -----------------------------------------------------------------------------------------------
+  /** Mass (t) of what a vehicle can drive into. */
+  const MASS_T: Partial<Record<EntKind, number>> = { tank: 60, ifv: 30, aa: 32, sam: 22, truck: 11, battery: 40, soldier: 0.1, at: 0.1 };
+  /** Rammed pairs (no repeat within a second) and the ram tally for tools. */
+  const ramCd = new Map<Ent, number>();
+  const ramStats = { men: 0, vehicles: 0, vehicleKills: 0, selfDmg: 0, houses: 0, trees: 0, fences: 0, asked: 0, last: '' };
+  let ramAskWall = 0;
+  const ramTmp = new THREE.Vector3();
+
+  function ramFeed(text: string): void {
+    ramStats.last = text;
+    if (overlay && (!overlay.noticeText || overlay.noticeText === lastRamNotice)) {
+      lastRamNotice = text;
+      overlay.showNotice(text, 2.2);
+    }
+  }
+  let lastRamNotice = '';
+
+  /** Ask before running over a force or a building of a nation at peace (the same rule as firing on it). */
+  async function askRam(owner: number, what: string): Promise<void> {
+    if (decision || performance.now() - ramAskWall < 4000) return;
+    ramAskWall = performance.now();
+    ramStats.asked++;
+    const name = nationName(owner);
+    const i = await decide(t('command.ram.peaceTitle', { nation: name }), t('command.ram.peaceBody', { nation: name, what }), t('command.fire.extra'), [
+      { label: t('command.fire.declare', { nation: name }), cls: 'danger', key: 'G', code: 'KeyG' },
+      { label: t('command.ram.stop'), cls: 'pri', key: t('command.fire.safeKeys'), safe: true },
+    ]);
+    fireStats.answers.push(i === 0 ? 'ram-war' : 'ram-hold');
+    if (i === 0) declareFromCommand(owner);
+  }
+
+  function ram(self: Ent, o: Ent, closing: number): 'pass' | 'block' {
+    if (!world || !fx) return 'block';
+    const man = o.kind === 'soldier' || o.kind === 'at';
+    const speed = Math.abs(self.speed);
+    ramTmp.subVectors(o.pos, self.pos).setY(0);
+    const d = ramTmp.length() || 1;
+    ramTmp.divideScalar(d);
+    if (o.neutral) {
+      // A force of a nation at peace: the tank stops against it, and the player is asked before anything happens.
+      if (closing > 0.6 && self.player) void askRam(o.nation, t(`command.type.${o.kind}`));
+      if (man) {
+        // The man steps out of the way.
+        o.pos.addScaledVector(ramTmp, 0.6);
+        return 'pass';
+      }
+      return 'block';
+    }
+    if (man) {
+      if (!o.alive) return 'pass';
+      if (o.team === 0 || speed < 1.0) {
+        // Our men (or anyone, at a crawl) get out of the way.
+        o.pos.addScaledVector(ramTmp, Math.min(1.5, 0.25 + speed * 0.1));
+        return 'pass';
+      }
+      // Run over: dead at once, a heave of the hull, dust.
+      world.damage(o, 999, self, self.player, ramTmp);
+      fx.particles.emit(2, o.pos.x, o.pos.y + 0.4, o.pos.z, ramTmp.x * 2, 1, ramTmp.z * 2, 1.5, 0.8, 2.4, 0.45, 0.4, 0.33, 0.8);
+      fx.playAt('explosionSmall', o.pos, 0.12);
+      cctx.shake(0.12);
+      ramStats.men++;
+      ramFeed(t('command.ram.soldier'));
+      return 'pass';
+    }
+    if (!o.alive || o.team === 0 || closing < 2.2) return 'block';
+    const now = world.time;
+    if ((ramCd.get(o) ?? -1) > now) return 'block';
+    ramCd.set(o, now + 1);
+    // Kinetic damage by mass and closing speed: the lighter one takes the heavier one's share.
+    const m1 = MASS_T.tank!, m2 = MASS_T[o.kind] ?? 20;
+    const e2 = closing * closing * 0.25;
+    const toOther = e2 * (m1 / m2) * (o.maxHp / 100);
+    const toSelf = e2 * (m2 / m1) * 0.9;
+    ramStats.vehicles++;
+    ramTmp.copy(self.pos).lerp(o.pos, 0.5).setY(o.pos.y + 1.2);
+    fx.impact(ramTmp, UPV, false, true);
+    fx.particles.emit(7, ramTmp.x, ramTmp.y, ramTmp.z, 0, 3, 0, 0.5, 0.2, 0.1, 4, 3, 1.6, 1);
+    fx.playAt('explosionSmall', ramTmp, 0.5);
+    cctx.shake(Math.min(1.2, 0.2 + closing * 0.05));
+    const wasAlive = o.alive;
+    world.damage(o, toOther, self, self.player, ramTmp.subVectors(o.pos, self.pos).normalize());
+    if (wasAlive && !o.alive) ramStats.vehicleKills++;
+    if (self.player && toSelf > 0.5) {
+      world.damage(self, toSelf, o, false, ramTmp.subVectors(self.pos, o.pos).normalize());
+      ramStats.selfDmg += toSelf;
+    }
+    ramFeed(!o.alive ? t('command.ram.vehicle', { what: t(`command.type.${o.kind}`) }) : t('command.ram.hurt', { n: Math.max(1, Math.round((toSelf / self.maxHp) * 100)) }));
+    return 'block';
+  }
+
+  /** A house in the way at speed: at war (and a city confirmed) it comes down; ours or at peace it stops the tank. */
+  function ramObstacle(self: Ent, o: { x: number; z: number; r: number }, speed: number): boolean {
+    if (!civil || !fx || speed < 3) return false;
+    const rec = civil.housesNear(o.x, o.z, Math.max(1, o.r)).find((h) => !h.down && Math.abs(h.x - o.x) < 0.5 && Math.abs(h.z - o.z) < 0.5);
+    if (!rec) return false;
+    const view = ctx.sim.view;
+    const city = rec.cityId ? view.structures.get(rec.cityId) : undefined;
+    const owner = city ? city.owner : rec.owner;
+    if (friendlyOwner(owner)) return false;
+    if (!atWarWith(owner)) {
+      if (self.player) void askRam(owner, t('command.ram.house'));
+      return false;
+    }
+    if (city && !cityConfirmed.has(city.id)) {
+      if (self.player) void askCivilian(city.id);
+      return false;
+    }
+    civil.collapseHouse(rec);
+    housesDown++;
+    ramStats.houses++;
+    if (city) pend(city.id, HOUSE_DMG);
+    ramTmp.set(o.x, rec.y + 2, o.z);
+    fx.explosion(ramTmp, 0.5, 'ground');
+    for (let k = 0; k < 14; k++) fx.particles.emit(4, o.x, rec.y + 1 + Math.random() * 2, o.z, (Math.random() - 0.5) * 8, 2 + Math.random() * 4, (Math.random() - 0.5) * 8, 1.4, 0.3, 0.5, 0.55, 0.5, 0.45, 1);
+    fx.playAt('explosionLarge', ramTmp, 0.4);
+    world?.damage(self, 6, null, false, null);
+    ramFeed(t('command.ram.obstacle', { what: t('command.ram.house') }));
+    return true;
+  }
+
+  /** Trees and compound fences in the tank's path (every local step while driving). */
+  const fenceSide = new Map<number, boolean>();
+  const brokenFences = new THREE.Group();
+  brokenFences.name = 'cmd-broken-fences';
+  function ramScenery(P: Ent, dt: number): void {
+    if (!scatter || !civil || !fx || !world || kind !== 'tank' || dt <= 0) return;
+    const speed = Math.abs(P.speed);
+    if (speed > 1.5) {
+      const down = scatter.knockTrees(P.pos.x + Math.sin(-P.yaw) * 0, P.pos.z, 3.2, P.vel.x, P.vel.z);
+      for (const tr of down) {
+        ramStats.trees++;
+        const y = ground!.heightAt(tr.x, tr.z);
+        for (let k = 0; k < 10; k++) fx.particles.emit(4, tr.x, y + 1 + Math.random() * 3, tr.z, P.vel.x * 0.3 + (Math.random() - 0.5) * 3, 1 + Math.random() * 2, P.vel.z * 0.3 + (Math.random() - 0.5) * 3, 1.6, 0.15, 0.3, 0.25, 0.32, 0.18, 1);
+        fx.playAt('explosionSmall', ramTmp.set(tr.x, y, tr.z), 0.15);
+        P.speed *= 0.85;
+        ramFeed(t('command.ram.obstacle', { what: t('command.ram.tree') }));
+      }
+    }
+    // Compound fences: a square perimeter around each structure (models/structures.ts perimeter, ~0.88 × the half side).
+    for (const r of civil.structRecs) {
+      const f = r.half * 0.88;
+      const dx = P.pos.x - r.x, dz = P.pos.z - r.z;
+      if (Math.abs(dx) > f + 40 || Math.abs(dz) > f + 40) {
+        fenceSide.delete(r.id);
+        continue;
+      }
+      const inside = Math.abs(dx) < f && Math.abs(dz) < f;
+      const was = fenceSide.get(r.id);
+      // Predict the crossing a moment ahead: at peace the tank stops before the fence and the player is asked.
+      const nx = dx + P.vel.x * 0.35, nz = dz + P.vel.z * 0.35;
+      const willCross = (Math.abs(nx) < f && Math.abs(nz) < f) !== inside;
+      if (willCross && speed > 0.5 && !friendlyOwner(r.owner) && !atWarWith(r.owner)) {
+        P.speed = 0;
+        P.pos.x -= P.vel.x * dt * 2;
+        P.pos.z -= P.vel.z * dt * 2;
+        void askRam(r.owner, t('command.ram.fence'));
+        fenceSide.set(r.id, inside);
+        continue;
+      }
+      if (was !== undefined && was !== inside && speed > 1.2) {
+        // Through the fence: a section goes down flat, wire and posts fly.
+        ramStats.fences++;
+        const y = ground!.heightAt(P.pos.x, P.pos.z);
+        const along = Math.abs(Math.abs(dx) - f) < Math.abs(Math.abs(dz) - f) ? 'x' : 'z';
+        const piece = new THREE.Mesh(FENCE_DOWN_GEO, mats!.prop);
+        piece.position.set(P.pos.x, y + 0.08, P.pos.z);
+        piece.rotation.set(0, along === 'x' ? Math.PI / 2 : 0, 0);
+        brokenFences.add(piece);
+        if (brokenFences.children.length > 40) brokenFences.remove(brokenFences.children[0]);
+        for (let k = 0; k < 12; k++) fx.particles.emit(7, P.pos.x, y + 1.2, P.pos.z, (Math.random() - 0.5) * 6, 2 + Math.random() * 3, (Math.random() - 0.5) * 6, 0.5, 0.08, 0.05, 3, 3, 3, 1);
+        fx.playAt('explosionSmall', ramTmp.set(P.pos.x, y, P.pos.z), 0.25);
+        P.speed *= 0.8;
+        if (atWarWith(r.owner)) pend(r.id, 0.002);
+        ramFeed(t('command.ram.obstacle', { what: t('command.ram.fence') }));
+      }
+      fenceSide.set(r.id, inside);
+    }
+  }
+
   /** Smoke and flames of the damage in view (every frame; the nearest ten), and their light at night. */
   let fireLightWall = 0;
   const fireP = new THREE.Vector3();
@@ -904,6 +1132,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   /** A kill: credit it to the sim when your formation made it; count your own losses. */
   function onKill(victim: Ent, killer: Ent | null, byPlayer: boolean): void {
     if (!hud || !params) return;
+    if (victim.src?.kind === 'pool' && (victim.kind === 'soldier' || victim.kind === 'at')) forces?.battle.fell(victim);
     // Owner item 30: a merchant or troop convoy sunk by us (shells, missiles or «Hundir»): the sim sinks the real ship
     // (at peace: piracy, with its consequences).
     if (victim.src?.kind === 'merchant') {
@@ -927,6 +1156,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (victim.kind === 'soldier' || victim.kind === 'at') {
         c.troops += 25;
         killsBy.set(s.owner, (killsBy.get(s.owner) ?? 0) + 25);
+      } else if (s.kind === 'pool') {
+        // Owner item 32: a line vehicle of the front takes its crew and the squad it carries.
+        const troops = Math.max(1, Math.round(s.share)) * 25;
+        c.troops += troops;
+        killsBy.set(s.owner, (killsBy.get(s.owner) ?? 0) + troops);
       } else if (s.kind === 'division' || s.kind === 'squadron') {
         c.unitHits.set(s.id, (c.unitHits.get(s.id) ?? 0) + s.share);
         unitHitN++;
@@ -946,7 +1180,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         unitHitN++;
         unitHitShare += 1 - sent;
       }
-      const troops = victim.kind === 'soldier' || victim.kind === 'at' ? 25 : s.kind === 'qrf' ? Math.max(1, Math.round(s.share)) * 25 : Math.round(s.share * 100);
+      const troops = victim.kind === 'soldier' || victim.kind === 'at' ? 25 : s.kind === 'qrf' || s.kind === 'pool' ? Math.max(1, Math.round(s.share)) * 25 : Math.round(s.share * 100);
       hud.feedEntry('you', victim.kind, troops, '#ffb53d');
       if (victim.kind !== 'soldier' && victim.kind !== 'at') hud.killConfirm(victim.kind, troops);
       ctx.bus.emit('uiSound', { kind: 'notify' });
@@ -1068,6 +1302,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }) : null;
     frame.set(p.lat, p.lon);
     world.reset();
+    brokenFences.clear();
+    fenceSide.clear();
+    if (!relocating) battleNoticed.clear();
+    ramCd.clear();
     world.rng = new Rng((p.seed >>> 0) || 1);
     world.kind = kind;
     world.godMode = false;
@@ -1880,6 +2118,35 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!overlay || !P || !forces || !ground) return;
     refreshTargets();
     const h = forces.nearestHostile(P.pos);
+    // Owner item 32: in a battle at the front the chip always says where the fighting is (direction, distance,
+    // intensity) and how many stand there.
+    const bi = kind === 'tank' ? forces.battle.info() : null;
+    if (bi?.active && bi.hot) {
+      const foe = bi.sides.find((q) => q.team === 1);
+      const ours = bi.sides.filter((q) => q.team === 0).reduce((n, q) => n + q.shown, 0);
+      const theirs = bi.sides.filter((q) => q.team === 1).reduce((n, q) => n + q.shown, 0);
+      const level = t(`command.battle.level.${bi.heat >= 0.85 ? 3 : bi.heat >= 0.6 ? 2 : bi.heat >= 0.35 ? 1 : 0}`);
+      const hd = Math.hypot(bi.hot.x - P.pos.x, bi.hot.z - P.pos.z);
+      const brg = (Math.atan2(bi.hot.x - P.pos.x, -(bi.hot.z - P.pos.z)) * 180 / Math.PI + 360) % 360;
+      const dist = hd >= 1000 ? `${formatNumber(hd / 1000, 1)} km` : `${Math.round(hd / 10) * 10} m`;
+      const counts = { ours: formatNumber(ours), theirs: formatNumber(theirs), level };
+      overlay.setCombat({
+        title: t('command.battle.title', { nation: nationName(foe?.owner ?? 0) }),
+        sub: hd > 250 ? t('command.battle.hotSub', { d: dist, ...counts }) : t('command.battle.sub', counts),
+        dist: `${dist} · ${dirWord(brg)}`, contact: !!(h.ent && h.dist < REACH_M[kind]), go: '',
+      });
+      overlay.combatMarker = { pos: tmp3.set(bi.hot.x, bi.hot.y + 25, bi.hot.z), text: `${t('command.battle.level.' + (bi.heat >= 0.85 ? 3 : bi.heat >= 0.6 ? 2 : bi.heat >= 0.35 ? 1 : 0))} · ${dist}`, contact: true };
+      chipAim = { x: bi.hot.x, z: bi.hot.z, km: hd / 1000 };
+      if (entryGoal && entryGoal.km < STOP_KM[kind] * 4) entryGoal = null;
+      // The first time at this battle: what stands here and what is going on, in one line.
+      if (!battleNoticed.has(bi.frontKey) && phase === 'play' && ours + theirs > 0 && !overlay.noticeText) {
+        battleNoticed.add(bi.frontKey);
+        const own = bi.sides.find((q) => q.team === 0);
+        const role = own?.role === 'attack' ? 'attack' : own?.role === 'defend' ? 'defend' : 'hold';
+        overlay.showNotice(t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(theirs), ours: formatNumber(ours), km: formatNumber(3.2, 1), role: t(`command.battle.role.${role}`) }), 8);
+      }
+      return;
+    }
     if (h.ent && h.dist < REACH_M[kind]) {
       const e = h.ent;
       const brg = (Math.atan2(e.pos.x - P.pos.x, -(e.pos.z - P.pos.z)) * 180 / Math.PI + 360) % 360;
@@ -1913,6 +2180,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (entryGoal && km < STOP_KM[kind] + 0.6) entryGoal = null;
   }
   const tmp3 = new THREE.Vector3();
+  /** Owner item 32: battles whose one-line summary was shown this session. */
+  const battleNoticed = new Set<number>();
   /** Where the chip's objective is in the scene and its distance (the card's destination line reuses it, #29a). */
   let chipAim: { x: number; z: number; km: number } | null = null;
 
@@ -2040,11 +2309,22 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     };
     // With an offensive: its stretch of the line (the line nearest its live contact, 30 km around it) while the unit is
     // still far; near it, the line nearest the unit (the same stretch, measured from where the unit stands).
-    const off = entryAttackId ? view.attacks.find((a) => a.id === entryAttackId && a.contactX >= 0) : undefined;
+    // Owner item 32: entered at a front without an offensive named, its hottest point is the biggest offensive on it
+    // (either side's): where the shots are being fired now, not the nearest quiet stretch.
+    let off = entryAttackId ? view.attacks.find((a) => a.id === entryAttackId && a.contactX >= 0) : undefined;
+    if (!off && entryFrontKey) {
+      let bt = 0;
+      for (const a of view.attacks) {
+        if (a.frontKey !== entryFrontKey || a.contactX < 0 || a.naval) continue;
+        const foe = a.attacker === HUMAN_ID ? a.defender : a.defender === HUMAN_ID ? a.attacker : 0;
+        if (!foe || !atWar(view, foe)) continue;
+        if (a.troops > bt) (bt = a.troops, off = a);
+      }
+    }
     const near = deriveLocalForces(view, x, y, 40, HUMAN_ID);
     pick(near.fronts, x, y);
     const b1 = best as CombatTarget | null;
-    if (off && (!b1 || tileKm(x, y, off.contactX, off.contactY) > 40 || (entryFrontKey && b1.frontKey !== entryFrontKey))) {
+    if (off && (!b1 || tileKm(x, y, off.contactX, off.contactY) > 6 || (entryFrontKey && b1.frontKey !== entryFrontKey))) {
       best = null;
       pick(deriveLocalForces(view, off.contactX, off.contactY, 30, HUMAN_ID).fronts, off.contactX, off.contactY);
     }
@@ -2412,6 +2692,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       brain.update(dt);
       controller.update(dt, allowInput);
       world.update(dt);
+      forces?.battle.update(dt, world.player);
+      if (world.player?.alive && allowInput) ramScenery(world.player, dt);
     }
     const IP = intercept && dt > 0 ? player() : null;
     if (IP && intercept) {
@@ -2773,7 +3055,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       world = new World(mats, ground, fx, new Rng(1));
       forces = new Forces(world, frame, ground);
       progress(0.8);
-      scene.add(sky.mesh, ground.group, water.mesh, scatter.group, grass.mesh, civil.group, world.group, fx.group);
+      scene.add(sky.mesh, ground.group, water.mesh, scatter.group, grass.mesh, civil.group, world.group, fx.group, brokenFences);
       hud = new CommandHud(ctx.uiRoot);
       hud.onExitClick = () => void requestExit();
       overlay = new CommandOverlay(ctx.uiRoot);
@@ -2811,6 +3093,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         },
         get freezeOnEnter() {
           return freezeOnEnter;
+        },
+        get camOverride() {
+          return camOverride;
+        },
+        set camOverride(v) {
+          camOverride = v;
         },
         set freezeOnEnter(v: boolean) {
           freezeOnEnter = v;
@@ -3295,6 +3583,15 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           camera.position.copy(introFrom).lerp(introTo, k);
           camera.quaternion.copy(introQFrom).slerp(introQTo, k);
         }
+        if (camOverride) {
+          camera.position.copy(camOverride.pos);
+          camera.up.set(0, 1, 0);
+          camera.lookAt(camOverride.look);
+          if (camOverride.fov && Math.abs(camera.fov - camOverride.fov) > 0.01) {
+            camera.fov = camOverride.fov;
+            camera.updateProjectionMatrix();
+          }
+        }
       }
       // Lighter fog from high up (travel camera, jets).
       const camAgl = camera.position.y - ground.surfaceAt(camera.position.x, camera.position.z);
@@ -3309,7 +3606,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         night.update(freeze ? 0 : realDt, atmos, P && P.alive ? { pos: P.pos, yaw: P.yaw, kind } : null, cpos, fx, (x, z) => ground!.surfaceAt(x, z));
       }
       // The far crowd (soldiers handed over by a ground battle): scaled for this view, woken near the vehicle.
-      world.updateCrowd(camera.position, P && P.alive ? P.pos : null, now);
+      world.updateCrowd(camera, cctx.viewH || 900, P && P.alive ? P.pos : null, now);
       sky?.update(camera, fr.time);
       water?.update(camera, fr.time);
       fx.listener.copy(camera.position);
@@ -3384,6 +3681,17 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           fire: { ...fireStats, answers: fireStats.answers.slice(-6), hold: fireHold, blockadeOpen },
           combat: overlay.combatText, transit: overlay.transitText, transits: transits.map((x) => ({ ...x })), builds: builds.map((x) => ({ ...x })), entryTimes: { ...entryTimes },
           nearestHostileM: Math.round(forces.nearestHostile(P.pos).dist),
+          ram: { ...ramStats },
+          mgHits: Object.fromEntries(mgHits),
+          battle: (() => {
+            const b = forces.battle.info();
+            return {
+              active: b.active, frontKey: b.frontKey, heat: +b.heat.toFixed(2), shells10: b.shells10, fallen10: b.fallen10,
+              hotM: b.hot ? Math.round(Math.hypot(b.hot.x - P.pos.x, b.hot.z - P.pos.z)) : -1,
+              lineM: b.near ? Math.round(Math.hypot(b.near.x - P.pos.x, b.near.z - P.pos.z)) : -1,
+              sides: b.sides.map((q) => ({ owner: q.owner, team: q.team, role: q.role, shown: q.shown, target: q.target, perKm: Math.round(q.perKm), vehicles: q.vehicles })),
+            };
+          })(),
           night: +atmos.night.toFixed(2), vision: night.vision, lights: night.lightsOn, flares: night.flaresFired, fires: civil.fires.length,
           target: (() => {
             const c = chosenTarget();

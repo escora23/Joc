@@ -141,6 +141,12 @@ export class TankController implements Controller {
       const r = o.r + 3.2;
       const d2 = dx * dx + dz * dz;
       if (d2 < r * r && d2 > 1e-4) {
+        // Owner item 32: a small house rammed at speed comes down (at war; command mode decides).
+        if (c.ramObstacle && Math.abs(e.speed) > 3 && c.ramObstacle(e, o, Math.abs(e.speed))) {
+          e.speed *= 0.55;
+          c.shake(0.5);
+          continue;
+        }
         const d = Math.sqrt(d2);
         e.pos.x += (dx / d) * (r - d);
         e.pos.z += (dz / d) * (r - d);
@@ -148,18 +154,25 @@ export class TankController implements Controller {
         e.speed *= 0.6;
       }
     }
-    for (const o of c.world.ents) {
-      if (o === e || !o.rig || o.kind === 'jet') continue;
+    let blocked = false;
+    c.world.forEachIn(e.pos.x - 8, e.pos.z - 8, e.pos.x + 8, e.pos.z + 8, (o) => {
+      if (o === e || o.kind === 'jet' || ENT_NAVAL.has(o.kind)) return;
+      const man = !o.rig;
       const dx = e.pos.x - o.pos.x, dz = e.pos.z - o.pos.z;
-      const r = o.radius + e.radius;
+      const r = man ? e.radius * 0.85 + 0.35 : o.radius + e.radius;
       const d2 = dx * dx + dz * dz;
-      if (d2 < r * r && d2 > 1e-4) {
-        const d = Math.sqrt(d2);
-        e.pos.x += (dx / d) * (r - d);
-        e.pos.z += (dz / d) * (r - d);
-        e.speed *= 0.8;
-      }
-    }
+      if (d2 >= r * r || d2 < 1e-4) return;
+      const d = Math.sqrt(d2);
+      // Closing speed along the line between the two (positive = driving into it).
+      const closing = -((e.vel.x - o.vel.x) * dx + (e.vel.z - o.vel.z) * dz) / d;
+      const res = c.ram ? c.ram(e, o, closing) : man ? 'pass' : 'block';
+      if (res === 'pass') return;
+      e.pos.x += (dx / d) * (r - d);
+      e.pos.z += (dz / d) * (r - d);
+      e.speed *= man ? 0 : 0.8;
+      blocked = true;
+    });
+    void blocked;
     this.hud.boundary = false;
     e.vel.copy(DIR).multiplyScalar(e.speed);
     e.pos.y = c.ground.heightAt(e.pos.x, e.pos.z);
@@ -272,7 +285,8 @@ export class TankController implements Controller {
     this.ammo[this.loaded]--;
     c.world.muzzleOf(e, T2, T3);
     const ap = this.loaded === 0;
-    c.world.fireShell(e, 0, T2, T3, ap ? AP_SPEED : HE_SPEED, ap ? 60 : 34, ap ? 2.5 : 9, ap, true, 1.2);
+    // Owner item 32: HE is a fragmentation round (lethal to men in the open over ~12 m, world.splashDamage).
+    c.world.fireShell(e, 0, T2, T3, ap ? AP_SPEED : HE_SPEED, ap ? 60 : 40, ap ? 2.5 : 15, ap, true, 1.2);
     c.fx.muzzle(T2, T3, 1.25, true);
     c.fx.hooks.sound('tankCannon', 1);
     c.shake(0.55);
@@ -300,7 +314,7 @@ export class TankController implements Controller {
     T3.x += (c.fx.rand() - 0.5) * 0.006;
     T3.y += (c.fx.rand() - 0.5) * 0.006;
     T3.normalize();
-    c.world.fireBullet(e, 0, T2, T3, 850, 7, this.mgAmmo % 3 === 0, true, 0xffc070, 0.22, 2.2);
+    c.world.fireBullet(e, 0, T2, T3, 850, 9, this.mgAmmo % 3 === 0, true, 0xffc070, 0.22, 2.2);
     c.fx.gunFlash(T2, T3, 0.7);
     if (this.mgAmmo % 4 === 0) c.fx.hooks.sound('gunfire', 0.35);
   }
@@ -411,7 +425,63 @@ export class TankController implements Controller {
       }
     }
     project(c.camera, T2, c.viewW, c.viewH, h.gun);
+    this.updateFocus();
+  }
+
+  private focusEnt: Ent | null = null;
+  private focusN = 0;
+
+  /**
+   * Owner item 32: the target under the reticle (or the nearest hostile within ~70 px of it) is bracketed, with its
+   * kind and range; a moving one gets the lead point for the loaded round (where to aim so the shell meets it).
+   */
+  private updateFocus(): void {
+    const c = this.c;
+    const h = this.hud;
+    const cam = c.camera;
+    const W = c.viewW, H = c.viewH;
+    if (this.focusN++ % 3 === 0) {
+      const a = this.aim.ent;
+      let best: Ent | null = a && a.alive && a.team === 1 && !a.neutral ? a : null;
+      if (!best) {
+        let bd = 70 * 70;
+        const cx = W / 2, cy = H / 2;
+        for (const o of c.world.ents) {
+          if (!o.alive || o.team !== 1 || o.neutral || o.player) continue;
+          const d = o.pos.distanceTo(cam.position);
+          if (d > 2600) continue;
+          c.world.center(o, N);
+          N.project(cam);
+          if (N.z > 1 || N.z < -1) continue;
+          const dx = (N.x * 0.5 + 0.5) * W - cx, dy = (-N.y * 0.5 + 0.5) * H - cy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bd) {
+            bd = d2;
+            best = o;
+          }
+        }
+      }
+      this.focusEnt = best;
+    }
+    const f = this.focusEnt;
+    h.focus.visible = false;
+    h.lead.visible = false;
+    if (!f || !f.alive) return;
+    c.world.center(f, T1);
+    const dist = T1.distanceTo(this.ent.pos);
+    project(cam, T1, W, H, h.focus);
+    const ppm = H / (2 * Math.tan((cam.fov * Math.PI) / 360) * Math.max(1, T1.distanceTo(cam.position)));
+    h.focus.r = Math.max(9, Math.min(80, (f.radius + 0.4) * ppm * 1.2));
+    h.focus.kind = f.kind;
+    h.focus.distM = dist;
+    if (f.speed > 0.8 || f.vel.lengthSq() > 0.64) {
+      const tof = dist / (this.loaded === 0 ? AP_SPEED : HE_SPEED);
+      T2.copy(T1).addScaledVector(f.vel, tof);
+      project(cam, T2, W, H, h.lead);
+      if (Math.hypot(h.lead.x - h.focus.x, h.lead.y - h.focus.y) < 3) h.lead.visible = false;
+    }
   }
 }
 
 const QT = new THREE.Quaternion();
+const ENT_NAVAL = new Set(['ship', 'boat', 'merchant', 'transport']);

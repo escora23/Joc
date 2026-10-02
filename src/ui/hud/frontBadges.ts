@@ -117,12 +117,21 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     const sky = h('span', { class: 'fu-fb-sky' });
     const divs = h('div', { class: 'fu-fb-divs' }, divA, sky, divB);
     const lead = h('i', { class: 'fu-fb-lead' });
+    // Owner item 32: every battle of the human's carries «Tomar el control aquí» on its marker (one click).
+    const take = h('button', { class: 'fu-fb-take', type: 'button' }) as HTMLButtonElement;
     const e = h('div', { class: 'fu-fb fu-interactive' }, lead,
       h('div', { class: 'fu-fb-row' }, chipA, dir, chipB),
       h('div', { class: 'fu-fb-bar' }, barA, barB),
       adv,
       divs,
+      take,
     );
+    take.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      hs.sound('click');
+      takeControlAtFront(hs, key);
+    });
+    tip(take, () => ({ title: t('hud.takeHere'), text: t('hud.takeHere.tip'), hotkey: 'T' }));
     e.dataset.key = String(key);
     e.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -206,6 +215,10 @@ export function createFrontBadges(hs: HudShared): FrontBadges {
     toggleClass(b.divs, 'fu-hidden', !b.divA.textContent && !b.divB.textContent && !b.sky.textContent);
     toggleClass(b.el, 'is-quiet', s.quiet);
     toggleClass(b.el, 'is-human', f.a === HUMAN_ID || f.b === HUMAN_ID);
+    // A battle being fought now (an offensive on the front): the marker pulses.
+    toggleClass(b.el, 'is-battle', !s.quiet);
+    const takeBtn = b.el.querySelector('.fu-fb-take') as HTMLElement | null;
+    if (takeBtn) setText(takeBtn, `⌖ ${t('hud.takeHere')}`);
     toggleClass(b.el, 'is-losing', s.def === HUMAN_ID && s.gaining > 0);
     b.el.dataset.att = String(s.att);
     b.el.dataset.def = String(s.def);

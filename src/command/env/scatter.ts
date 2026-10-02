@@ -243,6 +243,37 @@ export class Scatter {
     return false;
   }
 
+  /**
+   * Owner item 32: a vehicle drives through the trees within r of (x, z), moving along (dx, dz): they go down in the
+   * direction of travel (the instance tips over about its base). Returns the positions knocked down now.
+   */
+  knockTrees(x: number, z: number, r: number, dx: number, dz: number): { x: number; z: number }[] {
+    const out: { x: number; z: number }[] = [];
+    const dl = Math.hypot(dx, dz) || 1;
+    const ax = dz / dl, az = -dx / dl;
+    for (const im of [this.conifers, this.broadleaf]) {
+      const a = im.instanceMatrix.array as Float32Array;
+      let any = false;
+      for (let i = 0; i < im.count; i++) {
+        const o = i * 16;
+        const tx = a[o + 12], tz = a[o + 14];
+        const ex = tx - x, ez = tz - z;
+        if (ex * ex + ez * ez > r * r) continue;
+        // Already down: its up axis lies near the ground.
+        const upY = a[o + 5] / Math.max(1e-6, Math.hypot(a[o + 4], a[o + 5], a[o + 6]));
+        if (upY < 0.5) continue;
+        this.m.fromArray(a, o);
+        this.q.setFromAxisAngle(this.n.set(ax, 0, az), 1.35);
+        this.m.premultiply(new THREE.Matrix4().makeTranslation(-tx, -a[o + 13], -tz)).premultiply(new THREE.Matrix4().makeRotationFromQuaternion(this.q)).premultiply(new THREE.Matrix4().makeTranslation(tx, a[o + 13] + 0.3, tz));
+        this.m.toArray(a, o);
+        any = true;
+        out.push({ x: tx, z: tz });
+      }
+      if (any) im.instanceMatrix.needsUpdate = true;
+    }
+    return out;
+  }
+
   /** Sandbag positions (field fortifications) along a front line. */
   placeBags(ground: Ground, list: { x: number; z: number; yaw: number }[]): void {
     let n = 0;

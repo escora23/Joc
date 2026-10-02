@@ -26,6 +26,14 @@
 /* Keep each side's division count under its own chip even when the other side has none. */
 .fu-fb-divs > span:empty { visibility: hidden; }
 .fu-fb-sky { font-weight: 600; }
+/* Owner item 32: «Tomar el control aquí» on the human's battles; a battle being fought pulses. */
+.fu-fb-take { display: none; width: 100%; margin-top: 0.26rem; padding: 0.12rem 0.3rem; border: 1px solid rgba(255, 181, 61, 0.75); border-radius: 2px;
+  background: rgba(255, 181, 61, 0.16); color: #ffcf7a; font: 700 0.64rem var(--fu-font-cond); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; white-space: nowrap; }
+.fu-fb-take:hover { background: rgba(255, 181, 61, 0.34); color: #fff; }
+.fu-fb.is-human .fu-fb-take { display: block; }
+.fu-fb.is-battle::after { content: ''; position: absolute; right: -0.28rem; top: -0.28rem; width: 0.56rem; height: 0.56rem; border-radius: 50%;
+  background: #ff6a3a; box-shadow: 0 0 0.5rem #ff6a3a; animation: fu-fb-pulse 1.2s ease-in-out infinite; pointer-events: none; }
+@keyframes fu-fb-pulse { 0%, 100% { opacity: 0.45; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.25); } }
 
 /* ---------------------------------------------------------------------------------------------
    Guerra y frentes panel (G)

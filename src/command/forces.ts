@@ -27,6 +27,7 @@ import { StructureType, UnitMode, UnitType, type CommandKind } from '../shared/t
 import type { LocalFrame } from './frame';
 import type { Ground } from './stream';
 import { ENT_DEFS, WAKE_M, type Ent, type EntKind, type EntSource, type World } from './world';
+import { BattleLine } from './battle';
 
 /** Radius of the derivation per vehicle (km): the whole area that can reach you. */
 export const FORCES_RADIUS_KM: Record<CommandKind, number> = { tank: 30, jet: 150, ship: 40 };
@@ -83,7 +84,17 @@ export class Forces {
    */
   handoff: { counts: Map<number, number>; soldiers: number[]; spawned: boolean } | null = null;
 
-  constructor(private readonly world: World, private readonly frame: LocalFrame, private readonly ground: Ground) {}
+  /** Owner item 32: the battle at the front's real scale around the player (battle.ts). */
+  readonly battle: BattleLine;
+
+  constructor(private readonly world: World, private readonly frame: LocalFrame, private readonly ground: Ground) {
+    this.battle = new BattleLine({
+      world, frame, ground,
+      relationOf: (o) => (this.lastView ? this.relationOf(this.lastView, o) : 'war'),
+      hostile: (r, o) => this.hostile(r, o),
+    });
+    world.group.add(this.battle.group);
+  }
 
   reset(kind: CommandKind, controlledId: number): void {
     this.groups.clear();
@@ -96,6 +107,7 @@ export class Forces {
     this.controlledId = controlledId;
     this.handoff = null;
     this.battleFacing.clear();
+    this.battle.reset();
   }
 
   /** Take over a battle view's hand-off (before the first refresh). */
@@ -173,6 +185,10 @@ export class Forces {
     const front = lf.fronts[0];
     const frontKm = front ? front.nearest.distKm : -1;
     let enemyShown = 0;
+    // Owner item 32: a line at war within reach is a battle at the front's real scale (battle.ts): its two sides'
+    // front and offensive pools stand there (trenches, waves, vehicles, artillery), not a token squad.
+    if (this.kind === 'tank') this.battle.reconcile(lf, player, initial, this.handoff ? new Set(this.handoff.counts.keys()) : undefined);
+    const inBattle = this.kind === 'tank' ? this.battle.owners() : new Set<number>();
     for (const side of lf.sides) {
       const rel = side.relation;
       const hostile = rel === 'war';
@@ -186,6 +202,11 @@ export class Forces {
       // The battle's own sides are handled from its hand-off below (all of their soldiers, where they stood).
       if (this.handoff?.counts.has(side.owner)) {
         entry.shownInfantry = this.handoff.counts.get(side.owner)!;
+        if (hostile) enemyShown += entry.shownInfantry;
+        continue;
+      }
+      if (inBattle.has(side.owner)) {
+        entry.shownInfantry = this.battle.info().sides.find((q) => q.owner === side.owner)?.shown ?? 0;
         if (hostile) enemyShown += entry.shownInfantry;
         continue;
       }
@@ -388,6 +409,7 @@ export class Forces {
       const e = this.mkSoldier(n % 8 === 0 ? 'at' : 'soldier', this.team(rel), x, z, Math.atan2(-f.x, -f.z), owner, rel, far);
       e.order = 'hold';
       e.goal.set(x, 0, z);
+      e.look.set(x + f.x * 350, 0, z + f.z * 350);
       want(`battle:${owner}`).ents.push(e);
     }
     void lf;
@@ -410,6 +432,7 @@ export class Forces {
       const e = this.mkSoldier(k % 8 === 0 ? 'at' : 'soldier', this.team(rel), x, z, Math.atan2(-f.x, -f.z), owner, rel, far);
       e.order = 'hold';
       e.goal.set(m.pos.x + (rng.next() - 0.5) * 30, 0, m.pos.z + (rng.next() - 0.5) * 30);
+      e.look.set(x + f.x * 700, 0, z + f.z * 700);
       g.ents.push(e);
     }
     void lf;

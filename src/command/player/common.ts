@@ -49,6 +49,11 @@ export interface HudState {
   gun: ScreenPoint;
   /** Lead / impact prediction for the nearest target (screen px). */
   lead: ScreenPoint;
+  /**
+   * Owner item 32: the target under (or nearest to) the reticle, highlighted with brackets: screen point, bracket
+   * half-size (px), its kind (i18n key suffix) and range (m).
+   */
+  focus: ScreenPoint & { r: number; kind: string; distM: number };
   /** Missile lock: 0 none, 1 locking, 2 locked. */
   lockState: number;
   lockProgress: number;
@@ -68,7 +73,7 @@ export function newHudState(kind: CommandKind): HudState {
   const sp = (): ScreenPoint => ({ x: 0, y: 0, visible: false });
   return {
     kind, hp: 1, maxHp: 1, heading: 0, hullHeading: 0, turretRel: 0, speedKmh: 0, altM: 0, throttle: 0, afterburner: false,
-    telegraph: 0, rudder: 0, weapons: [], reload: 1, rangeM: 0, zoom: false, gun: sp(), lead: sp(), lockState: 0, lockProgress: 0,
+    telegraph: 0, rudder: 0, weapons: [], reload: 1, rangeM: 0, zoom: false, gun: sp(), lead: sp(), focus: { ...sp(), r: 0, kind: '', distM: 0 }, lockState: 0, lockProgress: 0,
     lock: sp(), missileWarning: false, pullUp: false, stall: false, boundary: false, boundaryDir: 0, pitch: 0, roll: 0, gLoad: 1,
   };
 }
@@ -118,6 +123,14 @@ export interface ControllerCtx {
    * then asks the player when the shot would hit a nation at peace or a city. Absent: always yes.
    */
   clearToFire?(s: ShotCheck): boolean;
+  /**
+   * Owner item 32: the vehicle drove into another entity with this closing speed (m/s): command mode applies the
+   * physics (men run over, vehicles rammed by mass and speed, own damage) and says whether it still blocks the way.
+   * A force of a nation at peace always blocks (and asks first, item 31's rule).
+   */
+  ram?(self: Ent, other: Ent, closing: number): 'pass' | 'block';
+  /** The vehicle drove into an obstacle (a house) at this speed: true = flattened (no longer blocks). */
+  ramObstacle?(self: Ent, o: { x: number; z: number; r: number }, speed: number): boolean;
   /** Viewport size in CSS px (for projecting HUD points). */
   viewW: number;
   viewH: number;

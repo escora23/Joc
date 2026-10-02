@@ -14,7 +14,7 @@ import { buildAa, buildBattery, buildSam, buildTruck } from './models/vehicles';
 import { buildArmorIfv, buildArmorTank } from './models/armor';
 import { buildBombGeometry, buildJet, buildMissileGeometry } from './models/aircraft';
 import { buildDestroyer, buildMerchant, buildPatrolBoat, buildTroopShip } from './models/ships';
-import { soldierGeometry } from './models/props';
+import { addSoldierInstancing, buildSoldierGeometry, makeSoldierMaterials, POSE, type SoldierMaterials } from './models/soldier';
 
 export type EntKind = 'tank' | 'ifv' | 'aa' | 'sam' | 'truck' | 'soldier' | 'at' | 'jet' | 'ship' | 'boat' | 'battery'
   // Owner item 30: merchant shipping (a container ship, a troop transport).
@@ -26,8 +26,8 @@ export const ENT_DEFS: Record<EntKind, { hp: number; radius: number; height: num
   aa: { hp: 60, radius: 3.4, height: 3.2, troops: 500, air: false, naval: false, vehicle: true },
   sam: { hp: 45, radius: 4.2, height: 3.4, troops: 700, air: false, naval: false, vehicle: true },
   truck: { hp: 30, radius: 3.5, height: 3.0, troops: 150, air: false, naval: false, vehicle: true },
-  soldier: { hp: 18, radius: 0.6, height: 1.8, troops: 40, air: false, naval: false, vehicle: false },
-  at: { hp: 18, radius: 0.6, height: 1.8, troops: 60, air: false, naval: false, vehicle: false },
+  soldier: { hp: 12, radius: 0.6, height: 1.8, troops: 40, air: false, naval: false, vehicle: false },
+  at: { hp: 12, radius: 0.6, height: 1.8, troops: 60, air: false, naval: false, vehicle: false },
   jet: { hp: 60, radius: 8, height: 0, troops: 900, air: true, naval: false, vehicle: true },
   ship: { hp: 320, radius: 55, height: 10, troops: 2500, air: false, naval: true, vehicle: true },
   boat: { hp: 90, radius: 18, height: 5, troops: 500, air: false, naval: true, vehicle: true },
@@ -69,7 +69,18 @@ export interface Ent {
   rig: Rig | null;
   /** Soldier instance slot. */
   inst: number;
-  variant: 0 | 1;
+  /** Soldier figure: 0 rifleman, 1 anti-tank gunner, 2 machine gunner. */
+  variant: 0 | 1 | 2;
+  /** Owner item 32: animation pose of a soldier (models/soldier.ts POSE), when it took it and its last shot (world s). */
+  pose: number;
+  poseT: number;
+  fireT: number;
+  /** Where a soldier of a battle line looks and fires: the other side's line (battle.ts). */
+  look: THREE.Vector3;
+  /** Its assault wave (rushes in step with its squad); -1 = none. */
+  wave: number;
+  /** Nation its figure was dressed for (uniform and band colours), -1 = not yet. */
+  dressed: number;
   turretYaw: number;
   gunPitch: number;
   // AI
@@ -205,8 +216,16 @@ const CROWD_CAP = 6000;
 /** Crowd soldiers within WAKE_M of the player wake up (AI); active ones beyond SLEEP_M go back to the crowd. */
 export const WAKE_M = 1000;
 export const SLEEP_M = 1400;
-/** Far soldiers grow up to this factor with distance (≥ 1 px at the view distance, like the battle view's masses). */
-const CROWD_MAX_SCALE = 7;
+/**
+ * Far soldiers grow with distance so a figure stays about CROWD_MIN_PX tall on screen (owner item 32: readable at tank
+ * distances, never giants: at most CROWD_MAX_SCALE, and nothing grows in the gunner's sight before ~2 km).
+ */
+const CROWD_MAX_SCALE = 3.2;
+const CROWD_MIN_PX = 2.6;
+/** Soldier variants (rifleman, AT gunner, machine gunner). */
+const VARIANTS = 3;
+/** Visual-only tracers of the far crowd's fire (no collision): ring capacity. */
+const VTRACE_CAP = 900;
 
 const TMP = new THREE.Vector3();
 const TMP2 = new THREE.Vector3();
@@ -249,12 +268,24 @@ export class World {
   };
   readonly stats = { shots: 0, hits: 0, kills: 0, troops: 0, killsByKind: new Map<EntKind, number>(), strategicKilled: [] as number[] };
   private readonly templates = new Map<string, THREE.Group>();
+  /** Close soldiers (AI, full level of detail): one instanced mesh per team and variant. */
   private readonly soldierMeshes: THREE.InstancedMesh[] = [];
-  private readonly soldierSlots: (Ent | null)[][] = [[], [], [], []];
-  /** The far crowd (dormant soldiers), one instanced mesh per side. */
+  private readonly soldierAnim: THREE.InstancedBufferAttribute[] = [];
+  private readonly soldierBand: THREE.InstancedBufferAttribute[] = [];
+  private readonly soldierSlots: (Ent | null)[][] = [[], [], [], [], [], []];
+  /** The far crowd (dormant soldiers), one instanced mesh per side (crowd level of detail). */
   private readonly crowdMeshes: THREE.InstancedMesh[] = [];
+  private readonly crowdAnim: THREE.InstancedBufferAttribute[] = [];
+  private readonly crowdBand: THREE.InstancedBufferAttribute[] = [];
   private readonly crowdSlots: (Ent | null)[][] = [[], []];
   private readonly crowdFree: number[][] = [[], []];
+  /** Owner item 32: the animated soldier material (shared clock = world time). */
+  readonly soldierMats: SoldierMaterials;
+  /** Visual tracers of the far crowd: x, y, z, vx, vy, vz, life, width per slot. */
+  private readonly vtr = new Float32Array(VTRACE_CAP * 8);
+  private vtrHead = 0;
+  /** How hot the battle around the player is (0..1, battle.ts): the crowd fires and falls at this pace. */
+  battleHeat = 0;
   private readonly missileGeo: THREE.BufferGeometry;
   private readonly bombGeo: THREE.BufferGeometry;
   private readonly ordPool: THREE.Mesh[] = [];
@@ -286,10 +317,15 @@ export class World {
     this.templates.set('boat', buildPatrolBoat());
     this.templates.set('merchant', buildMerchant());
     this.templates.set('transport', buildTroopShip());
-    const sg = [soldierGeometry(0), soldierGeometry(1)];
+    // Owner item 32: proper soldiers (proportions, helmets, weapons, uniforms in the nation's colours), animated in the
+    // vertex shader (run, kneel, prone, fire, fall): full detail near, a lighter figure for the far crowd.
+    this.soldierMats = makeSoldierMaterials();
     for (let t = 0; t < 2; t++) {
-      for (let v = 0; v < 2; v++) {
-        const im = new THREE.InstancedMesh(sg[v], mats.soldier, 160);
+      for (let v = 0; v < VARIANTS; v++) {
+        const g = buildSoldierGeometry(v as 0 | 1 | 2, true, (t + v) % 3);
+        const at = addSoldierInstancing(g, SOLDIER_SLOTS);
+        const im = new THREE.InstancedMesh(g, this.soldierMats.standard, SOLDIER_SLOTS);
+        im.customDepthMaterial = this.soldierMats.depth;
         im.count = 0;
         im.castShadow = true;
         im.receiveShadow = true;
@@ -298,11 +334,16 @@ export class World {
         im.name = `soldiers-${t}-${v}`;
         im.setColorAt(0, new THREE.Color(1, 1, 1));
         this.soldierMeshes.push(im);
+        this.soldierAnim.push(at.anim);
+        this.soldierBand.push(at.band);
         this.group.add(im);
       }
     }
     for (let t = 0; t < 2; t++) {
-      const im = new THREE.InstancedMesh(sg[0], mats.soldier, CROWD_CAP);
+      const g = buildSoldierGeometry(0, false, t);
+      const at = addSoldierInstancing(g, CROWD_CAP);
+      const im = new THREE.InstancedMesh(g, this.soldierMats.standard, CROWD_CAP);
+      im.customDepthMaterial = this.soldierMats.depth;
       im.count = 0;
       im.castShadow = false;
       im.receiveShadow = false;
@@ -311,6 +352,8 @@ export class World {
       im.name = `crowd-${t}`;
       im.setColorAt(0, new THREE.Color(1, 1, 1));
       this.crowdMeshes.push(im);
+      this.crowdAnim.push(at.anim);
+      this.crowdBand.push(at.band);
       this.group.add(im);
     }
     this.missileGeo = buildMissileGeometry(1);
@@ -409,12 +452,13 @@ export class World {
   // ---------------------------------------------------------------------------------------------
   // Spawning
   // ---------------------------------------------------------------------------------------------
-  spawn(kind: EntKind, team: Team, x: number, z: number, yaw: number, y?: number, dormant = false): Ent {
+  spawn(kind: EntKind, team: Team, x: number, z: number, yaw: number, y?: number, dormant = false, mg = false): Ent {
     const d = ENT_DEFS[kind];
     const e: Ent = {
       id: this.nextId++, kind, team, alive: true, player: false, hp: d.hp, maxHp: d.hp,
       pos: new THREE.Vector3(x, 0, z), vel: new THREE.Vector3(), yaw, speed: 0, quat: new THREE.Quaternion(),
-      radius: d.radius, height: d.height, rig: null, inst: -1, variant: kind === 'at' ? 1 : 0, turretYaw: 0, gunPitch: 0,
+      radius: d.radius, height: d.height, rig: null, inst: -1, variant: kind === 'at' ? 1 : mg && kind === 'soldier' ? 2 : 0, turretYaw: 0, gunPitch: 0,
+      pose: POSE.idle, poseT: this.time, fireT: -100, look: new THREE.Vector3(), wave: -1, dressed: -1,
       target: null, retarget: this.rng.next() * 1.5, fireCd: 3.5 + this.rng.next() * 6, fireCd2: 7 + this.rng.next() * 9, burst: 0,
       moveT: new THREE.Vector3(x, 0, z), state: 0, stateT: 0, seed: this.rng.next(),
       pitchV: 0, rollV: 0, tiltP: 0, tiltR: 0,
@@ -454,7 +498,7 @@ export class World {
 
   /** An active soldier instance slot (≤ SOLDIER_SLOTS per team and model). */
   private takeSoldierSlot(e: Ent): boolean {
-    const slot = e.team * 2 + e.variant;
+    const slot = e.team * VARIANTS + e.variant;
     const list = this.soldierSlots[slot];
     let idx = list.indexOf(null);
     if (idx < 0) {
@@ -466,16 +510,34 @@ export class World {
     e.inst = idx;
     e.dormant = false;
     const im = this.soldierMeshes[slot];
-    const v = 0.85 + ((e.seed * 997) % 1) * 0.25;
-    const tc = e.team === 0 ? this.friendlyTint : this.enemyTint;
-    im.setColorAt(idx, this.tmpColor.copy(tc).multiplyScalar(v));
+    im.setColorAt(idx, this.uniformOf(e, this.tmpColor));
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    this.bandOf(e, this.soldierBand[slot], idx);
     return true;
+  }
+
+  /**
+   * Owner item 32: the uniform of a soldier's nation (field colours with a clear cast of the nation's colour, so the two
+   * sides read apart) with a little variety per man.
+   */
+  private uniformOf(e: Ent, out: THREE.Color): THREE.Color {
+    const v = 0.86 + ((e.seed * 997) % 1) * 0.22;
+    const base = e.team === 0 ? this.friendlyTint : this.enemyTint;
+    out.copy(base);
+    if (e.nation) out.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), 0.34);
+    return out.multiplyScalar(v);
+  }
+
+  /** The nation's band (helmet and sleeve) and the man's seed. */
+  private bandOf(e: Ent, attr: THREE.InstancedBufferAttribute, idx: number): void {
+    const c = this.tmpColor2.setHex(e.nation ? this.nationColor(e.nation) : e.team === 0 ? 0x3f8fd8 : 0xd84a3a);
+    attr.setXYZW(idx, c.r, c.g, c.b, e.seed);
+    attr.needsUpdate = true;
   }
 
   private freeSoldierSlot(e: Ent): void {
     if (e.inst < 0) return;
-    const list = this.soldierSlots[e.team * 2 + e.variant];
+    const list = this.soldierSlots[e.team * VARIANTS + e.variant];
     if (list[e.inst] === e) list[e.inst] = null;
     while (list.length && list[list.length - 1] === null) list.pop();
     e.inst = -1;
@@ -496,6 +558,10 @@ export class World {
     e.target = null;
     e.vel.set(0, 0, 0);
     this.crowdDirty = true;
+    const im = this.crowdMeshes[e.team];
+    im.setColorAt(idx, this.uniformOf(e, this.tmpColor));
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    this.bandOf(e, this.crowdBand[e.team], idx);
     return true;
   }
 
@@ -553,13 +619,30 @@ export class World {
   private readonly crowdCam = new THREE.Vector3(1e9, 0, 0);
   private crowdDirty = true;
 
+  /** Set a soldier's pose (the shader animates it; the time it changed drives transitions such as a fall). */
+  setPose(e: Ent, pose: number): void {
+    if (e.pose === pose) return;
+    e.pose = pose;
+    e.poseT = this.time;
+    if (e.dormant) this.crowdDirty = true;
+  }
+
+  /** A soldier fired: the recoil kick of its animation. */
+  shotFired(e: Ent): void {
+    e.fireT = this.time;
+  }
+
+  private crowdFov = 0;
+  private crowdViewH = 900;
+
   /**
-   * The crowd (§9.6 hand-off): far soldiers drawn in one instanced mesh per side, standing (or lying) where they are,
-   * scaled up with distance so a battle kilometres away still reads as two masses of men (as the battle view shows
-   * them), tinted toward their nation's colour far away. Every second, soldiers within WAKE_M of the player wake up
-   * (full instance, AI) and active ones beyond SLEEP_M go back to the crowd.
+   * The crowd (§9.6 hand-off, owner item 32): far soldiers drawn in one instanced mesh per side, animated by the
+   * battle (puppets below: trenches, waves, fire, falls), scaled up with distance only as much as keeps a figure about
+   * CROWD_MIN_PX tall on screen. Every second, soldiers within WAKE_M of the player wake up (full instance, AI) and
+   * active ones beyond SLEEP_M go back to the crowd.
    */
-  updateCrowd(cam: THREE.Vector3, player: THREE.Vector3 | null, nowMs: number): void {
+  updateCrowd(camera: THREE.PerspectiveCamera, viewH: number, player: THREE.Vector3 | null, nowMs: number): void {
+    const cam = camera.position;
     // Wall-clock pacing (a slow frame must not delay the wake-up of the soldiers in front of you).
     const realDt = this.crowdWall > 0 ? Math.max(0, (nowMs - this.crowdWall) / 1000) : 1;
     this.crowdWall = nowMs;
@@ -577,41 +660,183 @@ export class World {
       for (const e of wake) this.setDormant(e, false);
     }
     this.crowdAcc += realDt;
+    // Pixels per metre at 1 m (the scale keeps a far figure readable in this view, chase or gunner's sight).
+    const ppm1 = viewH / (2 * Math.tan((camera.fov * Math.PI) / 360));
+    const lens = Math.abs(camera.fov - this.crowdFov) > 0.5 || Math.abs(viewH - this.crowdViewH) > 1;
     const moved = cam.distanceToSquared(this.crowdCam) > 30 * 30;
-    if (!this.crowdDirty && !moved && this.crowdAcc < 0.5) return;
-    if (!this.crowdDirty && !moved && this.crowdAcc < 2) return;
-    this.crowdAcc = 0;
-    this.crowdDirty = false;
-    this.crowdCam.copy(cam);
+    // The puppets move every frame (rushes, falls): matrices and poses are rewritten each frame for the moving ones;
+    // all of them when the camera moved or zoomed (the distance scale).
+    const full = this.crowdDirty || moved || lens || this.crowdAcc >= 0.5;
+    if (full) {
+      this.crowdAcc = 0;
+      this.crowdDirty = false;
+      this.crowdCam.copy(cam);
+      this.crowdFov = camera.fov;
+      this.crowdViewH = viewH;
+    }
     for (let t = 0; t < 2; t++) {
       const list = this.crowdSlots[t];
       const im = this.crowdMeshes[t];
+      const anim = this.crowdAnim[t];
       let last = -1;
+      let changed = false;
       for (let i = 0; i < list.length; i++) {
         const e = list[i];
         if (!e) {
-          im.setMatrixAt(i, this.m4.makeScale(0, 0, 0));
+          if (full) im.setMatrixAt(i, this.m4.makeScale(0, 0, 0));
           continue;
         }
         last = i;
+        if (!full && !e.alive && e.deadT > 1) continue;
+        if (!full && e.alive && e.speed < 0.05 && e.fireT < this.time - 0.5 && this.time - e.poseT > 0.1) continue;
+        changed = true;
+        if (e.dressed !== e.nation) {
+          e.dressed = e.nation;
+          im.setColorAt(i, this.uniformOf(e, this.tmpColor));
+          if (im.instanceColor) im.instanceColor.needsUpdate = true;
+          this.bandOf(e, this.crowdBand[t], i);
+        }
         e.pos.y = this.ground.heightAt(e.pos.x, e.pos.z);
         const d = cam.distanceTo(e.pos);
-        const s = Math.max(1, Math.min(CROWD_MAX_SCALE, d / 450));
-        const k = e.alive ? 0 : Math.min(1, e.deadT * 3);
-        this.e.set(-k * 1.45, e.yaw, 0, 'YXZ');
+        const px = (1.8 * ppm1) / Math.max(1, d);
+        const sc = Math.max(1, Math.min(CROWD_MAX_SCALE, CROWD_MIN_PX / Math.max(1e-3, px)));
+        this.e.set(0, e.yaw, 0, 'YXZ');
         this.q.setFromEuler(this.e);
-        this.sc.set(s, s, s);
-        im.setMatrixAt(i, this.m4.compose(TMP.set(e.pos.x, e.pos.y + 0.12 * k, e.pos.z), this.q, this.sc));
-        const far = Math.max(0, Math.min(1, (d - 600) / 3400)) * 0.55;
-        const tc = t === 0 ? this.friendlyTint : this.enemyTint;
-        this.tmpColor.copy(tc).lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
-        if (!e.alive) this.tmpColor.multiplyScalar(0.6);
-        im.setColorAt(i, this.tmpColor);
+        this.sc.set(sc, sc, sc);
+        im.setMatrixAt(i, this.m4.compose(TMP.set(e.pos.x, e.pos.y, e.pos.z), this.q, this.sc));
+        anim.setXYZW(i, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);
       }
-      im.count = last + 1;
-      im.instanceMatrix.needsUpdate = true;
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      if (changed || full) {
+        im.count = last + 1;
+        im.instanceMatrix.needsUpdate = true;
+        anim.needsUpdate = true;
+      }
     }
+  }
+
+  /**
+   * Owner item 32: the far crowd fights. Cheap scripted behaviour for dormant soldiers, by their order:
+   *   'hold'   a position or trench: kneel or lie behind cover, fire bursts toward `look` (the other side's line);
+   *   'front'  an assault wave: rush toward `goal` bent low with its squad (`wave` keeps them in step), drop prone and
+   *            fire, rush again, until it reaches the halt line short of the enemy trench, then fight from there;
+   *   other    stand.
+   * Their fire is visual (tracers and flashes without collision); casualties come from real rounds (artillery, the
+   * player) and from the battle's attrition (battle.ts), all at the pace of `battleHeat`.
+   */
+  updatePuppets(dt: number): void {
+    if (dt <= 0) return;
+    const heat = this.battleHeat;
+    const t = this.time;
+    for (let side = 0; side < 2; side++) {
+      for (const e of this.crowdSlots[side]) {
+        if (!e || !e.alive) continue;
+        // A nation at peace never fires (posts and patrols stand guard).
+        if (e.neutral) {
+          this.setPose(e, POSE.idle);
+          continue;
+        }
+        if (e.order === 'front' && e.wave >= 0) {
+          const dx = e.goal.x - e.pos.x, dz = e.goal.z - e.pos.z;
+          const dist = Math.hypot(dx, dz);
+          const cycle = 8 + (e.wave % 5);
+          const ph = ((t + e.wave * 2.3) / cycle) % 1;
+          const rush = dist > 5 && ph < 0.42;
+          if (rush) {
+            this.setPose(e, e.seed < 0.25 ? POSE.run : POSE.rush);
+            const sp = e.pose === POSE.run ? 3.6 : 2.8;
+            e.yaw = Math.atan2(-dx, -dz);
+            e.speed = sp;
+            e.vel.set(dx / dist, 0, dz / dist).multiplyScalar(sp);
+            const k = Math.min(1, (sp * dt) / dist);
+            e.pos.x += dx * k;
+            e.pos.z += dz * k;
+            continue;
+          }
+          e.speed = 0;
+          e.vel.set(0, 0, 0);
+          this.setPose(e, e.variant === 1 || e.seed > 0.7 ? POSE.kneel : POSE.prone);
+        } else if (e.order === 'hold') {
+          e.speed = 0;
+          this.setPose(e, e.variant === 2 || e.seed < 0.3 ? POSE.prone : POSE.kneel);
+        } else {
+          continue;
+        }
+        // Face the enemy and fire in bursts (machine gunners longer and more often).
+        const lx = e.look.x - e.pos.x, lz = e.look.z - e.pos.z;
+        if (lx * lx + lz * lz > 1) e.yaw = Math.atan2(-lx, -lz);
+        if (heat <= 0.01) continue;
+        e.fireCd -= dt * (0.35 + heat);
+        if (e.fireCd > 0) continue;
+        if (e.burst <= 0) e.burst = e.variant === 2 ? 6 + Math.floor(this.rng.next() * 8) : 2 + Math.floor(this.rng.next() * 3);
+        e.burst--;
+        e.fireCd = e.burst > 0 ? (e.variant === 2 ? 0.09 : 0.16) : 1.6 + this.rng.next() * (e.variant === 2 ? 3 : 6);
+        e.fireT = t;
+        if (e.variant === 1) {
+          if (e.burst > 0) e.burst = 0;
+          e.fireCd = 18 + this.rng.next() * 20;
+        }
+        this.puppetShot(e);
+      }
+    }
+    // Move the visual tracers.
+    const V = this.vtr;
+    for (let i = 0; i < VTRACE_CAP; i++) {
+      const o = i * 8;
+      if (V[o + 6] <= 0) continue;
+      V[o + 6] -= dt;
+      if (V[o + 6] <= 0 && Math.hypot(V[o + 3], V[o + 4], V[o + 5]) < 300) {
+        // An anti-tank rocket of the crowd bursts at its end.
+        this.fx.explosion(TMP.set(V[o], V[o + 1], V[o + 2]), 0.6, 'ground');
+      }
+      V[o] += V[o + 3] * dt;
+      V[o + 1] += V[o + 4] * dt;
+      V[o + 2] += V[o + 5] * dt;
+    }
+  }
+
+  /** One round of a crowd soldier: muzzle flash and (one in three) a tracer flying toward its target line. */
+  private puppetShot(e: Ent): void {
+    const fx = this.fx;
+    const yawF = forwardOf(e.yaw, TMP);
+    const hgt = e.pose === POSE.prone ? 0.32 : e.pose === POSE.kneel ? 0.95 : 1.35;
+    const mx = e.pos.x + yawF.x * 0.9, my = e.pos.y + hgt, mz = e.pos.z + yawF.z * 0.9;
+    const cam = this.crowdCam;
+    const dCam = Math.hypot(mx - cam.x, mz - cam.z);
+    const big = Math.max(1, dCam / 250);
+    if (e.variant === 1) {
+      // An anti-tank rocket: a smoky streak and a blast at its line.
+      TMP2.set(mx, my, mz);
+      TMP3.set(yawF.x, 0.02, yawF.z);
+      fx.muzzle(TMP2, TMP3, 0.5 * Math.min(3, big), true);
+      this.vtrace(mx, my, mz, e.look.x, e.look.y + 1, e.look.z, 160, 0.35 * big);
+      return;
+    }
+    if (dCam < 2600) fx.particles.emit(6, mx, my, mz, 0, 0, 0, 0.05, 0.22 * big, 0.3 * big, 3, 2, 0.9, 1);
+    if (this.rng.next() < (e.variant === 2 ? 0.5 : 0.3)) {
+      const spread = 6 + this.rng.next() * 18;
+      const tx = e.look.x + (this.rng.next() - 0.5) * spread, tz = e.look.z + (this.rng.next() - 0.5) * spread;
+      const ty = this.ground.heightAt(tx, tz) + 0.4 + this.rng.next() * 1.4;
+      this.vtrace(mx, my, mz, tx, ty, tz, 780, (e.variant === 2 ? 0.14 : 0.1) * Math.min(4, big));
+    }
+    if (dCam < 450 && this.rng.next() < 0.06) fx.playAt('gunfire', TMP2.set(mx, my, mz), 0.18);
+  }
+
+  /** A visual tracer from a to b at `speed` m/s (no collision: the far crowd's fire). */
+  vtrace(ax: number, ay: number, az: number, bx: number, by: number, bz: number, speed: number, width: number): void {
+    const dx = bx - ax, dy = by - ay, dz = bz - az;
+    const L = Math.hypot(dx, dy, dz);
+    if (L < 1) return;
+    const o = this.vtrHead * 8;
+    this.vtrHead = (this.vtrHead + 1) % VTRACE_CAP;
+    const V = this.vtr;
+    V[o] = ax;
+    V[o + 1] = ay;
+    V[o + 2] = az;
+    V[o + 3] = (dx / L) * speed;
+    V[o + 4] = (dy / L) * speed;
+    V[o + 5] = (dz / L) * speed;
+    V[o + 6] = L / speed;
+    V[o + 7] = width;
   }
 
   private readonly tmpColor2 = new THREE.Color();
@@ -632,6 +857,8 @@ export class World {
     this.ents.length = 0;
     for (const s of this.soldierSlots) s.length = 0;
     for (const im of this.soldierMeshes) im.count = 0;
+    this.vtr.fill(0);
+    this.battleHeat = 0;
     for (let t = 0; t < 2; t++) {
       this.crowdSlots[t].length = 0;
       this.crowdFree[t].length = 0;
@@ -697,7 +924,10 @@ export class World {
   // ---------------------------------------------------------------------------------------------
   center(e: Ent, out: THREE.Vector3): THREE.Vector3 {
     out.copy(e.pos);
-    if (!ENT_DEFS[e.kind].air) out.y += e.height * 0.5;
+    if (e.kind === 'soldier' || e.kind === 'at') {
+      // The body's middle in its pose (a man lying down is hit low, a kneeling one at half height).
+      out.y += e.pose === POSE.prone || e.pose === POSE.dead ? 0.28 : e.pose === POSE.kneel || e.pose === POSE.rush ? 0.62 : 0.9;
+    } else if (!ENT_DEFS[e.kind].air) out.y += e.height * 0.5;
     return out;
   }
 
@@ -720,6 +950,65 @@ export class World {
     let n = 0;
     for (const e of this.ents) if (e.alive && e.team !== team) n++;
     return n;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Spatial grid (owner item 32: hundreds of soldiers; rounds and blasts only test what is near them)
+  // ---------------------------------------------------------------------------------------------
+  private readonly grid = new Map<number, Ent[]>();
+  private readonly gridPool: Ent[][] = [];
+  /** Entities too big for a cell (ships, merchants): always tested. */
+  private readonly bigEnts: Ent[] = [];
+  private static readonly CELL = 48;
+
+  private cellKey(cx: number, cz: number): number {
+    return ((cx + 32768) & 0xffff) * 65536 + ((cz + 32768) & 0xffff);
+  }
+
+  /** Rebuild the grid of living entities (every local step). */
+  private buildGrid(): void {
+    for (const a of this.grid.values()) {
+      a.length = 0;
+      this.gridPool.push(a);
+    }
+    this.grid.clear();
+    this.bigEnts.length = 0;
+    const C = World.CELL;
+    for (const e of this.ents) {
+      if (!e.alive) continue;
+      if (e.radius > 12 || ENT_DEFS[e.kind].air) {
+        this.bigEnts.push(e);
+        continue;
+      }
+      const k = this.cellKey(Math.floor(e.pos.x / C), Math.floor(e.pos.z / C));
+      let a = this.grid.get(k);
+      if (!a) {
+        a = this.gridPool.pop() ?? [];
+        this.grid.set(k, a);
+      }
+      a.push(e);
+    }
+  }
+
+  /** Every living entity whose cell overlaps the box [x0, x1] × [z0, z1] (plus the big ones). Return true to stop. */
+  forEachIn(x0: number, z0: number, x1: number, z1: number, fn: (e: Ent) => boolean | void): void {
+    for (const e of this.bigEnts) if (e.alive && fn(e)) return;
+    const C = World.CELL;
+    // Members stand up to their radius (≤ 12 m) outside their cell.
+    const cx0 = Math.floor((Math.min(x0, x1) - 12) / C), cx1 = Math.floor((Math.max(x0, x1) + 12) / C);
+    const cz0 = Math.floor((Math.min(z0, z1) - 12) / C), cz1 = Math.floor((Math.max(z0, z1) + 12) / C);
+    if ((cx1 - cx0 + 1) * (cz1 - cz0 + 1) > 400) {
+      // A long segment (a shell's step at high speed is ~30 m; this is a fallback): test everything.
+      for (const e of this.ents) if (e.alive && e.radius <= 12 && !ENT_DEFS[e.kind].air && fn(e)) return;
+      return;
+    }
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cz = cz0; cz <= cz1; cz++) {
+        const a = this.grid.get(this.cellKey(cx, cz));
+        if (!a) continue;
+        for (const e of a) if (e.alive && fn(e)) return;
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -912,8 +1201,12 @@ export class World {
     const d = ENT_DEFS[e.kind];
     this.center(e, TMP);
     if (e.kind === 'soldier' || e.kind === 'at') {
+      // Owner item 32: the man falls (the shader's fall, from now), a puff of dust where he drops; no blood.
+      e.pose = -1;
+      this.setPose(e, POSE.dead);
+      e.speed = 0;
       if (e.dormant) this.crowdDirty = true;
-      this.fx.particles.emit(4, TMP.x, TMP.y, TMP.z, 0, 2, 0, 0.6, 0.2, 0.2, 0.1, 0.08, 0.06, 1);
+      this.fx.particles.emit(2, TMP.x, TMP.y - 0.5, TMP.z, 0, 0.6, 0, 1.2, 0.5, 1.6, 0.42, 0.38, 0.32, 0.6);
     } else if (d.air) {
       this.fx.explosion(TMP, 2.4, 'air');
       e.burnT = 20;
@@ -950,15 +1243,22 @@ export class World {
 
   private splashDamage(p: Proj, at: THREE.Vector3, direct: Ent | null): void {
     if (p.splash <= 0) return;
-    for (const e of this.ents) {
-      if (!e.alive || e === direct || e.neutral) continue;
+    const hits: Ent[] = [];
+    this.forEachIn(at.x - p.splash, at.z - p.splash, at.x + p.splash, at.z + p.splash, (e) => {
+      if (e === direct || e.neutral || e.team === p.team) return;
+      hits.push(e);
+    });
+    for (const e of hits) {
+      if (!e.alive) continue;
       this.center(e, TMP2);
       const d = TMP2.distanceTo(at) - e.radius * 0.5;
       if (d > p.splash) continue;
-      const soft = e.kind === 'soldier' || e.kind === 'at' || e.kind === 'truck';
-      const k = (1 - Math.max(0, d) / p.splash) * (soft ? 1.4 : 0.45) * (p.ap ? 0.35 : 1);
-      if (e.team === p.team && !e.player) continue;
-      if (e.team === p.team && e.player) continue;
+      // Owner item 32: high explosive is lethal to men in the open (fragments), much less to armour.
+      const man = e.kind === 'soldier' || e.kind === 'at';
+      const soft = man || e.kind === 'truck';
+      // Prone men and men in a trench take less of a near miss.
+      const cover = man && (e.pose === POSE.prone || (e.order === 'hold' && e.pose === POSE.kneel)) ? 0.7 : 1;
+      const k = (1 - Math.max(0, d) / p.splash) * (man ? 1.8 * cover : soft ? 1.4 : 0.45) * (p.ap ? 0.35 : 1);
       this.damage(e, p.dmg * k, p.owner, p.player, null);
     }
   }
@@ -968,6 +1268,9 @@ export class World {
   // ---------------------------------------------------------------------------------------------
   update(dt: number): void {
     this.time += dt;
+    this.soldierMats.time.value = this.time;
+    this.buildGrid();
+    this.updatePuppets(dt);
     this.updateProjectiles(dt);
     this.updateDead(dt);
     this.updateSoldierInstances();
@@ -1013,31 +1316,48 @@ export class World {
         continue;
       }
 
-      // Collisions: entities (segment vs sphere)
+      // Collisions: entities near the segment (segment vs sphere)
       let hit: Ent | null = null;
-      for (const e of this.ents) {
-        if (!e.alive || e.team === p.team) continue;
+      const pv = p;
+      const reachK = p.vel.length() * dt + 2;
+      this.forEachIn(p.prev.x, p.prev.z, p.pos.x, p.pos.z, (e) => {
+        if (e.team === pv.team) return;
         // Owner item 31: our rounds go past a force of a nation at peace (no impact, no hit, no question).
-        if (e.neutral && p.team === 0) continue;
-        if (p.airOnly && !ENT_DEFS[e.kind].air) continue;
+        if (e.neutral && pv.team === 0) return;
+        if (pv.airOnly && !ENT_DEFS[e.kind].air) return;
         this.center(e, TMP2);
-        const rad = p.kind === 'bullet' ? e.radius * (ENT_DEFS[e.kind].air ? 1.1 : 0.9) : e.radius + (p.kind === 'missile' ? 4 : 0.3);
+        const man = e.kind === 'soldier' || e.kind === 'at';
+        // Owner item 32: a man is hit within ~0.75 m of his middle by the player's guns (fair at tank ranges).
+        const rad = pv.kind === 'bullet' ? (man ? (pv.player ? 0.78 : 0.55) : e.radius * (ENT_DEFS[e.kind].air ? 1.1 : 0.9)) : e.radius + (pv.kind === 'missile' ? 4 : 0.3);
         // Quick reject
-        const dx = TMP2.x - p.pos.x, dy = TMP2.y - p.pos.y, dz = TMP2.z - p.pos.z;
-        const reach = rad + p.vel.length() * dt + 2;
-        if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
-        if (segSphere(p.prev, p.pos, TMP2, rad)) {
+        const dx = TMP2.x - pv.pos.x, dy = TMP2.y - pv.pos.y, dz = TMP2.z - pv.pos.z;
+        const reach = rad + reachK;
+        if (dx * dx + dy * dy + dz * dz > reach * reach) return;
+        if (segSphere(pv.prev, pv.pos, TMP2, rad)) {
           hit = e;
-          break;
+          return true;
         }
-      }
+      });
       if (hit) {
         this.onHit(p, hit);
         continue;
       }
       // Buildings and structures stop shells, bombs and missiles (and take the damage: the hook's owner decides).
-      if ((p.kind === 'shell' || p.kind === 'bomb' || p.kind === 'missile') && this.hooks.sceneryHit) {
+      // Owner item 32: the player's machine-gun rounds too (small but real damage, chips and broken glass).
+      if ((p.kind === 'shell' || p.kind === 'bomb' || p.kind === 'missile' || (p.kind === 'bullet' && p.player)) && this.hooks.sceneryHit) {
         const at = this.hooks.sceneryHit(p, p.prev, p.pos);
+        if (at && p.kind === 'bullet') {
+          p.pos.copy(at);
+          TMP.copy(p.vel).normalize().negate();
+          fx.impact(p.pos, TMP, false, false);
+          // Chips of masonry and, now and then, the glitter of a window going.
+          fx.particles.emit(4, p.pos.x, p.pos.y, p.pos.z, TMP.x * 3, 2, TMP.z * 3, 0.9, 0.12, 0.2, 0.55, 0.52, 0.48, 1);
+          if (this.rng.next() < 0.3) {
+            for (let k = 0; k < 4; k++) fx.particles.emit(7, p.pos.x, p.pos.y, p.pos.z, TMP.x * 4 + (this.rng.next() - 0.5) * 4, 1 + this.rng.next() * 2, TMP.z * 4 + (this.rng.next() - 0.5) * 4, 0.6, 0.06, 0.04, 2.2, 2.6, 3, 1);
+          }
+          this.retire(p);
+          continue;
+        }
         if (at) {
           p.pos.copy(at);
           const big = p.kind === 'bomb' ? 3.2 : p.kind === 'missile' ? 1.4 : p.splash > 10 ? 1.8 : p.ap ? 1.0 : 1.3;
@@ -1075,6 +1395,23 @@ export class World {
   /** One-frame sprites for live projectiles (tracers, shell glows, rocket flames, flares): every frame, even frozen. */
   renderProjectiles(): void {
     const P = this.fx.particles;
+    // The far crowd's tracers.
+    const V = this.vtr;
+    for (let i = 0; i < VTRACE_CAP; i++) {
+      const o = i * 8;
+      if (V[o + 6] <= 0) continue;
+      const sp = Math.hypot(V[o + 3], V[o + 4], V[o + 5]);
+      const len = Math.min(24, sp * 0.024) / sp;
+      const w = V[o + 7];
+      const rocket = sp < 300;
+      if (rocket) {
+        P.glow(V[o], V[o + 1], V[o + 2], w * 6, 6, 3.4, 1.4, 1);
+        if (this.rng.next() < 0.5) P.emit(1, V[o], V[o + 1], V[o + 2], 0, 0.4, 0, 1.4, w * 2, w * 6, 0.6, 0.58, 0.55, 0.5);
+      } else {
+        P.streak(V[o], V[o + 1], V[o + 2], V[o + 3] * len, V[o + 4] * len, V[o + 5] * len, w, 6.4, 3.6, 1.4, 1);
+        P.glow(V[o], V[o + 1], V[o + 2], w * 3, 3.2, 1.8, 0.7, 0.9);
+      }
+    }
     for (const p of this.projs) {
       if (!p.alive) continue;
       if (p.kind === 'shell') {
@@ -1262,10 +1599,11 @@ export class World {
   }
 
   private updateSoldierInstances(): void {
-    const counts = [0, 0, 0, 0];
-    for (let s = 0; s < 4; s++) {
-      const list = this.soldierSlots[s];
-      const im = this.soldierMeshes[s];
+    for (let sl = 0; sl < this.soldierSlots.length; sl++) {
+      const list = this.soldierSlots[sl];
+      const im = this.soldierMeshes[sl];
+      const anim = this.soldierAnim[sl];
+      let count = 0;
       for (let i = 0; i < list.length; i++) {
         const e = list[i];
         if (!e) {
@@ -1273,26 +1611,35 @@ export class World {
           im.setMatrixAt(i, this.m4);
           continue;
         }
-        if (e.alive) {
-          const bob = e.speed > 0.3 ? Math.abs(Math.sin(this.time * 9 + e.seed * 20)) * 0.06 : 0;
-          this.e.set(e.speed > 0.3 ? -0.1 : 0, e.yaw, 0, 'YXZ');
-          this.q.setFromEuler(this.e);
-          this.sc.set(1, 1, 1);
-          this.m4.compose(TMP.set(e.pos.x, e.pos.y + bob, e.pos.z), this.q, this.sc);
-        } else {
-          // Fallen
-          const k = Math.min(1, e.deadT * 3);
-          this.e.set(-k * 1.45, e.yaw, 0, 'YXZ');
-          this.q.setFromEuler(this.e);
-          this.sc.set(1, 1, 1);
-          this.m4.compose(TMP.set(e.pos.x, e.pos.y + 0.12 * k, e.pos.z), this.q, this.sc);
-          e.deadT += 0; // advanced in updateDead
+        if (e.dressed !== e.nation) {
+          e.dressed = e.nation;
+          im.setColorAt(i, this.uniformOf(e, this.tmpColor));
+          if (im.instanceColor) im.instanceColor.needsUpdate = true;
+          this.bandOf(e, this.soldierBand[sl], i);
         }
+        if (e.alive) {
+          // The AI's state picks the pose: running or walking, kneeling or standing to fire, prone in a position.
+          const fighting = e.state === 1 || this.time - e.fireT < 1.5;
+          const pose = e.neutral ? (e.speed > 0.3 ? POSE.walk : POSE.idle)
+            : e.speed > 2.2 ? (e.seed < 0.5 ? POSE.rush : POSE.run)
+              : e.speed > 0.3 ? POSE.walk
+                : fighting ? (e.variant === 2 || (e.order === 'hold' && e.seed < 0.3) ? POSE.prone : e.seed < 0.65 ? POSE.kneel : POSE.aim)
+                  : e.order === 'hold' ? (e.seed < 0.3 ? POSE.prone : POSE.kneel) : POSE.idle;
+          this.setPose(e, pose);
+        }
+        this.e.set(0, e.yaw, 0, 'YXZ');
+        this.q.setFromEuler(this.e);
+        this.sc.set(1, 1, 1);
+        this.m4.compose(TMP.set(e.pos.x, e.pos.y, e.pos.z), this.q, this.sc);
         im.setMatrixAt(i, this.m4);
-        counts[s] = i + 1;
+        anim.setXYZW(i, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);
+        count = i + 1;
       }
-      im.count = counts[s];
-      if (counts[s] > 0) im.instanceMatrix.needsUpdate = true;
+      im.count = count;
+      if (count > 0) {
+        im.instanceMatrix.needsUpdate = true;
+        anim.needsUpdate = true;
+      }
     }
   }
 

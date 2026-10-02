@@ -377,7 +377,10 @@ export class CommandHud {
     const cx = W / 2, cy = H / 2;
     this.drawMarkers(g, camera, world, W, H, s);
     this.drawCompass(g, s, cx);
-    if (s.kind === 'tank') this.drawTank(g, s, cx, cy);
+    if (s.kind === 'tank') {
+      this.drawTank(g, s, cx, cy);
+      this.drawFocus(g, s);
+    }
     else if (s.kind === 'jet') this.drawJet(g, s, camera, cx, cy);
     else this.drawShip(g, s, cx, cy);
     // Hit markers
@@ -704,6 +707,55 @@ export class CommandHud {
       g.stroke();
       g.shadowBlur = 0;
     }
+  }
+
+  /** Owner item 32: the target under the reticle in brackets (kind, range) and the cannon's lead point when it moves. */
+  private drawFocus(g: CanvasRenderingContext2D, s: HudState): void {
+    const f = s.focus;
+    if (!f.visible) return;
+    const r = f.r;
+    const c = 'rgba(255,196,64,0.95)';
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,0.8)';
+    g.shadowBlur = 3;
+    g.strokeStyle = c;
+    g.lineWidth = 2;
+    const k = Math.max(4, r * 0.45);
+    g.beginPath();
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const x = f.x + sx * r, y = f.y + sy * r;
+      g.moveTo(x, y - sy * k);
+      g.lineTo(x, y);
+      g.lineTo(x - sx * k, y);
+    }
+    g.stroke();
+    g.font = '700 11px "Barlow Condensed", "Rajdhani", sans-serif';
+    g.textAlign = 'center';
+    g.fillStyle = c;
+    const d = f.distM >= 1000 ? `${(f.distM / 1000).toFixed(1)} km` : `${Math.round(f.distM / 10) * 10} m`;
+    g.fillText(`${t('command.target.lock')} · ${t(`command.type.${f.kind}`)} · ${d}`, f.x, f.y - r - 6);
+    if (s.lead.visible) {
+      // Where to put the gun indicator so the shell meets it.
+      const x = s.lead.x, y = s.lead.y;
+      g.strokeStyle = 'rgba(255,196,64,0.75)';
+      g.setLineDash([3, 3]);
+      g.beginPath();
+      g.moveTo(f.x, f.y);
+      g.lineTo(x, y);
+      g.stroke();
+      g.setLineDash([]);
+      g.strokeStyle = c;
+      g.beginPath();
+      g.moveTo(x, y - 7);
+      g.lineTo(x + 7, y);
+      g.lineTo(x, y + 7);
+      g.lineTo(x - 7, y);
+      g.closePath();
+      g.stroke();
+      g.font = '600 10px "Barlow Condensed", sans-serif';
+      g.fillText(t('command.lead.he'), x, y + 18);
+    }
+    g.restore();
   }
 
   private drawJet(g: CanvasRenderingContext2D, s: HudState, camera: THREE.PerspectiveCamera, cx: number, cy: number): void {

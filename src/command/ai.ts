@@ -145,7 +145,8 @@ export class Brain {
       }
       case 'hold':
       case 'patrol': {
-        const R = e.order === 'hold' ? (e.rig ? 45 : 22) : 300;
+        // A soldier holding a position or a trench stays in it (owner item 32).
+        const R = e.order === 'hold' ? (e.rig ? 45 : 4) : 300;
         e.moveT.set(e.goal.x + (r.next() - 0.5) * 2 * R, 0, e.goal.z + (r.next() - 0.5) * 2 * R);
         return;
       }
@@ -156,6 +157,11 @@ export class Brain {
     T1.subVectors(e.goal, e.pos);
     T1.y = 0;
     const dist = T1.length();
+    if (!e.rig && e.wave >= 0 && dist < 14) {
+      // A wave's man at its halt line fights from there.
+      e.moveT.set(e.goal.x + (r.next() - 0.5) * 6, 0, e.goal.z + (r.next() - 0.5) * 6);
+      return;
+    }
     if (dist < 1) T1.set(0, 0, -1);
     T1.normalize();
     const s2 = Math.min(stride, dist * 0.6 + 20);
@@ -666,6 +672,7 @@ export class Brain {
       T4.y += 0.05;
       T4.normalize();
       w.fireMissile(e, e.team, T3, T4, t, { speed: 190, turn: 1.1, dmg: 34, splash: 3, heat: false, life: 6, player: false, scale: 0.7 });
+      w.shotFired(e);
       // Back blast
       w.fx.muzzle(T3.addScaledVector(T4, -1), T4.negate(), 0.5, true);
       return;
@@ -685,6 +692,7 @@ export class Brain {
       T4.z += (w.rng.next() - 0.5) * spread * 2;
       T4.normalize();
       w.fireBullet(e, e.team, T3, T4, 800, 4.5, w.rng.next() < 0.35, false, 0xffc080, 0.08, 1.2);
+      w.shotFired(e);
       w.fx.gunFlash(T3.addScaledVector(T4, 0.9), T4, 0.5);
       if (w.rng.next() < 0.15) w.fx.playAt('gunfire', T3, 0.25);
     }

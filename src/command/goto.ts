@@ -56,6 +56,10 @@ export interface CombatTarget {
   structureId?: number;
   /** For a front: its key. */
   frontKey?: number;
+  /** For an offensive's contact: its attack id. */
+  attackId?: number;
+  /** Owner item 32: how hot the place is (the score divides the distance by it; 1 = an ordinary line point). */
+  heat?: number;
 }
 
 export interface Targets {
@@ -74,9 +78,11 @@ export function atWar(view: GameView, o: number): boolean {
  */
 export function combatTargets(view: GameView, ux: number, uy: number, kind: CommandKind, unit: UnitView | null): Targets {
   let best: CombatTarget | null = null;
+  // Owner item 32: «Ir al combate» goes to the hottest point, where shots are being fired now. An offensive's live
+  // contact weighs by its troops (a big offensive wins over a quiet line point several times nearer); a line point by
+  // the front's intensity (a quiet front counts as farther).
+  const score = (x: CombatTarget) => x.km / Math.max(0.2, x.heat ?? 1);
   const offer = (c: CombatTarget) => {
-    // An offensive's live contact is where the fighting is: it wins over a plain line point up to 25 % farther.
-    const score = (x: CombatTarget) => x.km * (x.kind === 'battle' ? 0.8 : 1);
     if (!best || score(c) < score(best)) best = c;
   };
   // Offensives touching the human (either side): their live contact.
@@ -85,7 +91,7 @@ export function combatTargets(view: GameView, ux: number, uy: number, kind: Comm
     const foe = a.attacker === HUMAN_ID ? a.defender : a.defender === HUMAN_ID ? a.attacker : 0;
     if (!foe || !atWar(view, foe)) continue;
     if (kind === 'ship') continue;
-    offer({ kind: 'battle', tx: a.contactX, ty: a.contactY, km: tileKm(ux, uy, a.contactX, a.contactY), owner: foe, frontKey: a.frontKey });
+    offer({ kind: 'battle', tx: a.contactX, ty: a.contactY, km: tileKm(ux, uy, a.contactX, a.contactY), owner: foe, frontKey: a.frontKey, attackId: a.id, heat: 1.6 + Math.min(3, a.troops / 50_000) });
   }
   // Fronts at war: the nearest point of the contact line.
   if (kind !== 'ship') {
@@ -97,7 +103,7 @@ export function combatTargets(view: GameView, ux: number, uy: number, kind: Comm
       for (let i = 0; i + 1 < s.length; i += 2) {
         const cx = s[i] + f.dirX * 0.5, cy = s[i + 1] + f.dirY * 0.5;
         const km = tileKm(ux, uy, cx, cy);
-        if (!best || km < (best as CombatTarget).km) offer({ kind: 'front', tx: cx, ty: cy, km, owner: foe, frontKey: f.key });
+        offer({ kind: 'front', tx: cx, ty: cy, km, owner: foe, frontKey: f.key, heat: f.quiet ? 0.6 + f.intensity : 1 + f.intensity });
       }
     }
   }
