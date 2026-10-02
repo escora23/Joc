@@ -82,6 +82,7 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
   font: 700 0.92rem/1.3 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #ffe0a0;
   background: rgba(10,8,4,0.7); border: 1px solid rgba(255,181,61,0.35); border-radius: 3px; opacity: 0; transition: opacity 0.4s; max-width: 46rem; }
 .fu-cmdx-notice.show { opacity: 1; }
+.fu-cmdx-dlgopen .fu-cmdx-notice { visibility: hidden; }
 .fu-cmdx-notice.info { color: #bfeaff; border-color: rgba(63,208,255,0.35); background: rgba(4,10,16,0.7); }
 .fu-cmdx-form { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); padding: 0.45rem 0.8rem; display: flex; gap: 0.7rem; align-items: center;
   font: 700 0.72rem/1 var(--fu-font-cond, sans-serif); letter-spacing: 0.16em; text-transform: uppercase; }
@@ -473,6 +474,7 @@ export class CommandOverlay {
     const col = buttons.length > 2 ? ' col' : '';
     this.dialog.innerHTML = `<div class="card fu-cmd-panel"><div class="h">${esc(title)}</div><div class="b">${esc(body)}</div>${extra ? `<div class="b2">${esc(extra)}</div>` : ''}<div class="btns${col}">${btns}</div></div>`;
     this.dialog.classList.add('show');
+    this.root.classList.add('fu-cmdx-dlgopen');
     this.dialogButtons = buttons;
     return new Promise((resolve) => {
       this.dialogResolve = resolve;
@@ -520,6 +522,7 @@ export class CommandOverlay {
     const r = this.dialogResolve;
     this.dialogResolve = null;
     this.dialog.classList.remove('show');
+    this.root.classList.remove('fu-cmdx-dlgopen');
     this.dialog.innerHTML = '';
     r?.(i);
   }

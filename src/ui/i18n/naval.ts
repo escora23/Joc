@@ -193,7 +193,7 @@ export const esNaval: Record<string, string> = {
   // ---- command mode (a warship) ----------------------------------------------------------------------------------
   'command.type.merchant': 'MERCANTE',
   'command.type.transport': 'TRANSPORTE DE TROPAS',
-  'command.help.ship': 'W/S telégrafo · A/D timón · Ratón apuntar · Clic cañón · Clic der. misil antibuque · Ante un mercante: E dar el alto · R disparo de advertencia · F abordar · X hundir',
+  'command.help.ship': 'W/S telégrafo · A/D timón · Ratón apuntar · Clic cañón · Clic der. misil antibuque · Ante un mercante: E dar el alto · R disparo de advertencia · F abordar · X hundir · Tab siguiente buque · B bloquear esta zona',
   'naval.cmd.kicker': 'Buque a la vista',
   'naval.cmd.next': 'otro buque a la vista ({n} más)',
   'naval.cmd.merchant': 'Mercante de {name}',
@@ -435,7 +435,7 @@ export const enNaval: Record<string, string> = {
   'naval.alert.prize': 'A merchant seized from {name} reaches port: +{gold} gold ({place})',
   'command.type.merchant': 'MERCHANT',
   'command.type.transport': 'TROOP TRANSPORT',
-  'command.help.ship': 'W/S telegraph · A/D rudder · Mouse aim · Click gun · Right-click anti-ship missile · At a merchant: E hail · R warning shot · F board · X sink',
+  'command.help.ship': 'W/S telegraph · A/D rudder · Mouse aim · Click gun · Right-click anti-ship missile · At a merchant: E hail · R warning shot · F board · X sink · Tab next ship · B blockade this area',
   'naval.cmd.kicker': 'Ship in sight',
   'naval.cmd.next': 'another ship in sight ({n} more)',
   'naval.cmd.merchant': '{name} merchant',

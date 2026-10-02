@@ -83,7 +83,6 @@ const es: Record<string, string> = {
   // --- v2 (W5): command mode inside the real world (DESIGN_V2 §9) ---
   'command.help.tank': 'W/S acelerar y frenar · A/D girar · Ratón torreta · Clic cañón · Clic der. mira · 1/2 munición · Espacio ametralladora · C humo · Tab siguiente carro',
   'command.help.jet': 'Ratón dirigir · W/S potencia (Mayús poscombustión) · A/D alabeo · Q/E guiñada · Clic cañón · Clic der. misil · F bengalas · B bomba · Tab siguiente caza',
-  'command.help.ship': 'W/S telégrafo · A/D timón · Ratón apuntar · Clic cañón · Clic der. misil antibuque · E/R/F/X detener buques (panel derecho) · Tab siguiente buque · B bloquear esta zona',
   'command.help.common': 'G ir al combate · N visión nocturna · L luces · M mapa y destino · + / − tiempo · H ocultar ayuda · Esc volver al mapa',
   'command.help.travel': 'En viaje: A/D girar · W avanzar · S detener · + / − tiempo',
   'command.land.own': 'Territorio propio · en paz',
@@ -160,7 +159,7 @@ const es: Record<string, string> = {
   'command.blockade.key': 'Bloquear esta zona',
   'command.blockade.keyNote': 'estrecho, puerto o ruta',
   'command.blockade.on': 'Bloqueo en vigor: tu buque mantiene la zona mientras siga aquí, y la seguirá bloqueando al salir del modo mando.',
-  'command.blockade.station': 'Bloqueo ordenado: su estación está a {km} km. Navega hasta allí, o sal del modo mando y el buque irá solo.',
+  'command.blockade.station': 'Bloqueo ordenado: la estación está a {km} km. Ve allí, o sal del modo mando y el buque irá solo.',
   'command.tip.stopPanel': 'Consejo: los mercantes y convoyes cercanos aparecen en el panel de la derecha. E dar el alto · R advertir · F abordar · X hundir · Tab siguiente buque · B bloquear esta zona.',
   'command.exit.title': '¿Volver al mapa estratégico?',
   'command.exit.body': 'La unidad se queda donde la dejas. Todo lo que ha pasado aquí ya está aplicado en la simulación.',
@@ -455,7 +454,6 @@ const en: Record<string, string> = {
   // --- v2 (W5): command mode inside the real world (DESIGN_V2 §9) ---
   'command.help.tank': 'W/S throttle and brake · A/D steer · Mouse turret · Click cannon · Right-click sight · 1/2 ammo · Space MG · C smoke · Tab next tank',
   'command.help.jet': 'Mouse steer · W/S throttle (Shift afterburner) · A/D roll · Q/E yaw · Click cannon · Right-click missile · F flares · B bomb · Tab next fighter',
-  'command.help.ship': 'W/S telegraph · A/D rudder · Mouse aim · Click gun · Right-click anti-ship missile · E/R/F/X stop ships (right panel) · Tab next ship · B blockade this area',
   'command.help.common': 'G go to the fight · N night vision · L lights · M map and waypoint · + / − time · H hide help · Esc back to the map',
   'command.help.travel': 'Travelling: A/D turn · W go · S stop · + / − time',
   'command.land.own': 'Own territory · at peace',
@@ -532,7 +530,7 @@ const en: Record<string, string> = {
   'command.blockade.key': 'Blockade this area',
   'command.blockade.keyNote': 'strait, port or lane',
   'command.blockade.on': 'Blockade in force: your ship holds the area while it stays here, and keeps blockading after you leave command mode.',
-  'command.blockade.station': 'Blockade ordered: its station is {km} km away. Sail there, or leave command mode and the ship goes on its own.',
+  'command.blockade.station': 'Blockade ordered: the station is {km} km away. Go there, or leave command mode and the ship goes on its own.',
   'command.tip.stopPanel': 'Tip: merchants and convoys nearby show on the panel on the right. E hail · R warn · F board · X sink · Tab next ship · B blockade this area.',
   'command.exit.title': 'Return to the strategic map?',
   'command.exit.body': 'The unit stays where you leave it. Everything that happened here is already applied to the simulation.',

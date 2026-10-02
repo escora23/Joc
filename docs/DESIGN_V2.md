@@ -1576,7 +1576,20 @@ If every pool is empty, the scene is peaceful. There is no fallback "strongest n
    or one that hates the intruder (opinion ≤ −40), declares war; the others open fire on the intruding unit only
    (`engage`: its forces and SAM sites fire at it; firing back is self-defence). An armed incident that lasts 30 game
    minutes ends in war. A capital is never ignored. Every step is an `incursionResponse` alert (§8.2).
-   Firing first on a nation at peace asks for confirmation and is a declaration of war by you.
+   Firing first on a nation at peace asks for confirmation and is a declaration of war by you. **Owner item 31:** the
+   question comes **before any round leaves the barrel**: every trigger pull (tank cannon and coaxial MG, jet cannon,
+   missiles and bombs, ship gun and anti-ship missiles) is checked against the target under the reticle (or the
+   missile's lock), the point aimed at and the predicted ballistic path (with a tolerance growing with range) for units,
+   ships, structures and houses of a nation at peace, and for houses of a city not yet confirmed (the civilian-target
+   question, §item 27). «No disparar» cancels the shot completely (no flash, sound, round, ammo or impact); the trigger
+   stays released until every trigger is let go (no automatic re-fire) and a held trigger never re-asks about the same
+   target within 4 s; a round already in the air passes through a neutral without hitting it and never asks. Enter and
+   Esc mean «No disparar»; war (G) or piracy (R / F / X) only by an explicit click or the key shown on its button.
+   A merchant or troop convoy at peace in the warship's sights gets the item-30 choices with their costs —
+   «Disparo de advertencia», «Abordar» (when alongside), «Hundir», «Declarar la guerra a X», «No disparar» — sent as the
+   same `navalIntercept` commands as the stop panel. On the warship, **B «Bloquear esta zona»** opens the item-30
+   blockade dialog for the area the ship is in; the order is accepted for the controlled ship, which keeps the helm,
+   holds the blockade while on station and keeps it after command mode ends.
 5b. **Release** (owner feedback #18). Exiting command mode never sends the unit back: it holds exactly where it was left
    (a division on its war front goes back on the line there; a warship keeps station; a jet flies a combat air patrol
    over the spot until given another order). Inside foreign land the incursion goes on with the same timings on the
@@ -1628,7 +1641,9 @@ Existing bindings are kept; new keys are marked **new**.
 | C | smoke | | | | |
 | **M** | tactical map, set autopilot waypoint | **M** | tactical map, waypoint | **M** | tactical map, waypoint |
 | **+ / −** | time compression (§9.3) | **+ / −** | time compression | **+ / −** | time compression |
-| **Tab** | next vehicle of the formation | **Tab** | next jet | | |
+| **Tab** | next vehicle of the formation | **Tab** | next jet | **Tab** | next ship on the stop panel |
+| | | B | bomb | **E / R / F / X** | hail / warning shot / board / sink (stop panel, item 30) |
+| | | | | **B** | «Bloquear esta zona» (item 31) |
 | Esc | leave command mode | Esc | leave | Esc | leave |
 
 The **tactical map** (`M`) is a 2D overlay of 60 km (tank), 300 km (jet) or 150 km (ship) around the vehicle: relief

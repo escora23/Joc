@@ -1521,6 +1521,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
    */
   let stopTipShown = false;
   function stopPanelTip(): void {
+    // A notice on screen (the blockade just ordered, a hit) goes first; the tip waits for it to clear.
+    if (overlay?.noticeText && overlay.noticeText !== t('command.peace.notice')) return;
     stopTipShown = true;
     let n = 0;
     try {

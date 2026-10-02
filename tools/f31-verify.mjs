@@ -10,7 +10,7 @@
 //        M1  trigger on the merchant: the piracy question opens and nothing fired (no shell, flash, sound, splash,
 //            ammo spent)
 //        M2  Enter = «No disparar»: still nothing fired, no damage, the dialog closed
-//        M3  trigger held down after that: no automatic re-fire and no repeated question; released and idle: no dialog
+//        M3  trigger kept down through the answer: no automatic re-fire and no repeated question; released and idle: no dialog
 //        M4  a round already in the air through the merchant: no hit, no damage, no question
 //        M5  a new click on purpose asks again; Esc = «No disparar» too
 //        M6  «Disparo de advertencia» (R): the sim's warned event (piracy) — the same command as the stop panel
@@ -166,31 +166,30 @@ async function ship() {
   const foe = m.nation;
   const op = () => page.evaluate((f) => __front.ctx.sim.view.opinions.get(f)?.score ?? null, foe);
 
-  // M1: the trigger on the merchant.
+  // M1: the trigger on the merchant, pressed and kept down (as a player holding the trigger would).
   await aim(page, m.id);
   const s0 = await snap(page, m.id);
-  await trigger(page);
+  await page.mouse.move(800, 450);
+  await page.mouse.down();
   const asked = await until(page, () => window.__cmd.overlay.dialogOpen ? window.__cmd.fire().dialog : null, null, 30000, 300);
   const s1 = await snap(page, m.id);
   row('M1', 'trigger on a merchant at peace: the piracy question opens before the shot, nothing fired', `«${(asked ?? 'no dialog').slice(0, 260)}»; before ${brief(s0)}; now ${brief(s1)}`,
     !!asked && /pirater/i.test(asked) && /advertencia/i.test(asked) && /Abordar/i.test(asked) && /Hundir/i.test(asked) && /Declarar la guerra/i.test(asked) && /No disparar/i.test(asked) && same(s0, s1));
   await shot(page, 'm1-piracy-question');
 
-  // M2: Enter = «No disparar».
+  // M2: Enter = «No disparar» (the trigger still held down).
   await key(page, 'Enter');
-  await sleep(4000);
+  await sleep(3000);
   const s2 = await snap(page, m.id);
   row('M2', 'Enter is «No disparar»: nothing fired, no splash, no ammo spent, no damage, dialog closed', brief(s2), same(s0, s2) && !s2.dialog && s2.fire.answers.at(-1) === 'hold');
 
-  // M3: the trigger held after that: no re-fire, no repeated question; then idle.
-  await page.mouse.move(800, 450);
-  await page.mouse.down();
+  // M3: the trigger kept down after that: no automatic re-fire, no repeated question; released and idle: nothing.
   await sleep(6000);
   const s3a = await snap(page, m.id);
   await page.mouse.up();
   await sleep(6000);
   const s3 = await snap(page, m.id);
-  row('M3', 'trigger held down after «No»: no automatic re-fire, no repeated dialog; released and idle: still nothing', `held 6 s: ${brief(s3a)}, dialog ${s3a.dialog}; idle 6 s: dialog ${s3.dialog}, asked ${s1.fire.asked} → ${s3.fire.asked}`,
+  row('M3', 'trigger kept down after «No»: no automatic re-fire, no repeated dialog; released and idle: still nothing', `held 9 s more: ${brief(s3a)}, dialog ${s3a.dialog}; idle 6 s: dialog ${s3.dialog}, asked ${s1.fire.asked} → ${s3.fire.asked}`,
     same(s0, s3a) && same(s0, s3) && !s3a.dialog && !s3.dialog && s3.fire.asked === s1.fire.asked);
 
   // M4: a round already in the air (fired before) that the merchant is in the way of: no hit, no damage, no question.
@@ -291,14 +290,14 @@ async function tank() {
   }
   await aim(page, q.id, 1.5);
   const s0 = await snap(page, q.id);
-  await trigger(page);
+  await page.mouse.move(800, 450);
+  await page.mouse.down();
   const asked = await until(page, () => window.__cmd.overlay.dialogOpen ? window.__cmd.fire().dialog : null, null, 30000, 300);
   const s1 = await snap(page, q.id);
   row('T1', `tank trigger on the neighbour's patrol (${q.kind} at ${q.dist} m, at peace): asked before the shot, nothing fired`, `«${(asked ?? 'no dialog').slice(0, 220)}»; ${brief(s1)}`,
     !!asked && /Declarar la guerra/i.test(asked) && /No disparar/i.test(asked) && same(s0, s1));
   await shot(page, 't1-question');
   await key(page, 'Enter');
-  await page.mouse.down();
   await sleep(5000);
   await page.mouse.up();
   await sleep(5000);

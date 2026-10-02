@@ -1589,6 +1589,22 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
   beyond 7 km; `battle/effects.ts` crater glow only within ~1.5 km; `battle/terrain.ts` noise thresholds widened with
   the pixel footprint (`noiseK`, `edgeW`). Verifier: `node tools/f3-clearmap-verify.mjs` (M1-M4).
 
+## 28b. Asked before the shot (owner item 31) — where it lives
+
+* `command/player/common.ts ShotCheck` + `ControllerCtx.clearToFire`: every controller (`tank.ts`, `jet.ts`, `ship.ts`)
+  describes a trigger pull (muzzle, direction, speed, gravity, range, reticle point/entity, missile lock, fresh press)
+  and fires only when it returns true. Staged `fire()` calls bypass it.
+* `command/index.ts` «Owner item 31» block: `shotConcern` (reticle, aim point, predicted path in segments against
+  neutral ents, `civil.hitTest`, impact blast), `clearToFire` (fireHold until every trigger is released, 4 s no-repeat
+  for held triggers, 150 ms cache), `askFireFirst` / `askPiracy` / `askCivilian`, `declareFromCommand`
+  (`forces.markHostile`), `blockadeHere` → bus `commandBlockade` → `ui/hud/index.ts` `openBlockadeDialog`.
+* `command/world.ts`: rounds of team 0 pass through neutrals; `damage()` and splash ignore neutrals (no hook).
+* `command/hud/overlay.ts ask()`: `DialogButton {code, safe, disabled, note}`; Enter/Esc pick the `safe` button.
+* `command/intercept.ts`: `options()` / `perform()` (the stop panel's actions for the fire question), «B» row.
+* Sim: `shared/orders.ts` accepts `blockade` for a controlled warship; `sim/units.ts order()` keeps it Controlled,
+  `holdAfterControl` resumes a standing blockade.
+* Verifier: `tools/f31-verify.mjs` (ship: B1, M1-M9; tank: T1-T3).
+
 ## 28. War at sea (owner item 30) — where it lives
 
 Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` (headless, N1-N11), `tools/naval-verify.mjs`
