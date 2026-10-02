@@ -1333,3 +1333,92 @@ Run 2 failed them only through the open Guerra panel. For a full confirmation, r
     or browser has been closed»), and `historical` then failed on the dead browser. This looks like SwiftShader
     running out of memory on the 30 m close-up. It is not reproduced in the game, but it is not proven harmless on a
     real GPU either. Re-run them on their own: `node tools/w2-verify.mjs --checks models` and `--checks historical`.
+
+## Owner item 31 (2026-10-02) — command mode asks BEFORE the shot; «No disparar» means no shot; piracy and blockade from the warship
+
+### What changed
+
+* **Asked before any round leaves the barrel.** Every trigger pull (tank cannon and coaxial MG, jet cannon, missiles
+  and bombs, ship gun and anti-ship missiles) is described to `clearToFire` (`command/player/common.ts ShotCheck`)
+  before anything happens. Command mode checks the target under the reticle (or the missile's lock), the point aimed at
+  and the predicted ballistic path (gravity, short segments, tolerance growing with range) against units, ships,
+  structures and houses of a nation at peace, and against houses of a city not yet confirmed (the civilian-target
+  question now also comes before the shot). With anything there, nothing fires and the question opens.
+* **«No disparar» cancels the shot completely:** no flash, sound, round, ammo or impact. The trigger stays released
+  until every trigger is let go (no automatic re-fire); a held trigger sweeping back over the same target within 4 s
+  holds fire with a notice instead of asking again; a new click on purpose asks again.
+* **Rounds already in the air** pass through a force of a nation at peace (no impact, no hit marker, no damage, no
+  question); splash never touches neutrals; a stray round on a building at peace or on an unconfirmed city does nothing
+  and asks nothing. The old after-the-hit `onNeutralHit` path is gone.
+* **Safe defaults:** command dialogs have a `safe` button: Enter and Esc both mean «No disparar» / «Alto el fuego» /
+  «Cancelar». War (G), «Atacar la ciudad» (G), the piracy choices (R / F / X) and the stop panel's «Hundirlo» (X) need
+  an explicit click or the key printed on their button.
+* **Merchants and troop convoys at peace** are neutral like any force of that nation (they keep sailing and heaving to:
+  the AI routes them to their own behaviour). Firing on one from the warship opens the item-30 choice with its costs:
+  «Disparo de advertencia» (R, ≤ 6 km, no damage, −3), «Abordar» (F, greyed out with the stop panel's reason when not
+  alongside / slow / stopped), «Hundir» (X, −20 or −25 for a convoy), «Declarar la guerra a X» (G), «No disparar»
+  (Enter · Esc), with the casus belli and the allies' / world's costs written above. Each choice runs the stop panel's
+  own action (`intercept.perform` → the same `navalIntercept` sim command).
+* **Same rule for tank, jet and ship**; declaring war from the question turns that nation's forces hostile at once
+  (`forces.markHostile`, until the sim's view agrees).
+* **Blockade from command mode:** on the warship, **B «Bloquear esta zona»** opens the item-30 blockade dialog for the
+  strait / port / lane the ship is in, over command mode with the clock held. The sim now accepts a `blockade` order for
+  the controlled warship (`shared/orders.ts`), keeps it under the player's command (`sim/units.ts order()`), counts it
+  on station while the player keeps it there, and `holdAfterControl` sails it (back) to its station when command mode
+  ends. The notice says where the station is («la estación está a 112 km…»).
+* **Discoverable stop panel:** the panel itself lists «B Bloquear esta zona»; the controls bar for the ship reads «…
+  Ante un mercante: E dar el alto · R disparo de advertencia · F abordar · X hundir · Tab siguiente buque · B bloquear
+  esta zona» (the shadowing `ui/i18n/naval.ts` entry was the one shown); the first time a ship shows on the panel (first
+  three sessions) a tip names its keys and the controls bar comes back. Tab is now described per vehicle (next tank /
+  fighter / ship).
+* Notices are hidden while a command dialog is open (a long notice used to show half-covered behind it). The CIWS no
+  longer fires at aircraft of a nation at peace.
+
+### Verified in real play (Chromium + SwiftShader, no-HMR dev server, real controls)
+
+`node tools/f31-verify.mjs` (new; mouse trigger, keys; effects counted by wrapping the muzzle / flash / explosion / gun
+sound calls, rounds by `world.stats.shots` and live projectiles, ammo by the HUD, damage by the entity's hp):
+
+| Check | Result |
+|---|---|
+| B1 B on the warship → blockade dialog (clock held: «DECISIÓN · tiempo detenido»), «Establecer bloqueo» | **PASS**: «Estrecho de Gibraltar»; blockade created with our controlled ship, the player keeps the helm (phase play, unit still under command), notice «Bloqueo ordenado: la estación está a 112 km…» |
+| M1 trigger held on a Swiss merchant at peace | **PASS**: «¿Disparar contra el Mercante de Suiza?» with R / F (greyed: «reduce a 12 nudos») / X / G / Enter·Esc; 0 rounds, 0 flashes, 0 gun sounds, 0 explosions, ammo 180, hp 220 |
+| M2 Enter | **PASS**: «No disparar»; still 0 / 0 / 0 / 0, ammo 180, hp 220, dialog closed |
+| M3 trigger kept down 9 s more, then released, 6 s idle | **PASS**: no re-fire, no repeated dialog (asked stays 1) |
+| M4 a round already in the air straight through the merchant | **PASS**: hits 0 → 0, hp 220 → 220, no dialog, no question |
+| M5 a new click on purpose, then Esc | **PASS**: asked again (1 → 2), Esc = hold, nothing fired |
+| M6 «Disparo de advertencia» (R) from the question | **PASS**: sim `shipStopped warned`, piracy true, merchant hp unchanged; opinion reason «piracy» −3 |
+| M7 «Hundir» (X) from the question | **PASS**: sim `shipStopped sunk`, piracy true; the piracy reason goes −3 → −23 (−20, the stop panel's figure) |
+| M8 convoy, «Declarar la guerra» (G) | **PASS**: war with Switzerland, nothing fired on the way |
+| M9 trigger on the convoy at war | **PASS**: fires at once (rounds +1), no question |
+| T1 tank trigger on the neighbour's patrol IFV at 60 m (incursion ignored, at peace) | **PASS**: «¿Abrir fuego contra Suiza? En tu punto de mira: tropas o vehículos de Suiza…»; 0 rounds, ammo 34, hp 70 |
+| T2 Enter, trigger held 5 s, idle 5 s | **PASS**: nothing fired, no damage, no repeat |
+| T3 new click, G | **PASS**: war declared; the next trigger fires (rounds 0 → 1) without a question |
+
+Shots: `shots/owner-31/verify/` (`b1-blockade-dialog.png`, `m1-piracy-question.png`, `t1-question.png`, …), looked at:
+the blockade dialog sits over the sea view with the stop panel (now listing «B Bloquear esta zona») beside it; the
+piracy question shows its five choices with keys and costs; the tank question names the target and the safe keys.
+
+Final runs on the final code: `f31-verify` ship 10/10 (and the tank section 3/3 in the full run), 0 page errors. One
+full run had M5 fail because M4's round, slowed by SwiftShader, landed during M5's window (a verifier timing issue; M4
+now waits for the round to come down); an earlier run failed M3 because it pressed the trigger again after «No», which
+counts as a new, deliberate shot, and the question correctly came back (M3 now keeps the trigger down through the answer).
+
+**Regression of the command-mode verifiers touched:**
+* `tools/naval-verify.mjs --only command`: **9/9** (C5 updated: X then Enter now cancels — new C5a — and X, the key
+  on «Hundirlo», confirms).
+* `tools/f3c-verify.mjs --only strike,city`: strike **4/4**; city **3/3**, with C1 now a real click on a house: the
+  civilian question comes before the shot (rounds fired while asking: 0), G confirms, houses fall, hp 1 → 0.755,
+  opinion −70 → −90.
+* `tools/w5-verify.mjs --only border,front,ship`: **21/21** (border crossing confirmation, escort neutral until told,
+  engage, front kills, losses).
+* `npx tsc --noEmit` and `npm run build` clean.
+
+### Still open / notes
+
+* A jet bomb or missile whose predicted path is clear but whose guided missile later retargets onto a neutral cannot
+  hurt it (rounds pass through neutrals), so it is safe, but no question is asked for that case.
+* Ramming a neutral (owner item 32, «against a nation at peace it is an incident, under the same rules as item 31»)
+  belongs to the item-32 work: `World.damage()` simply ignores neutrals now; collisions can call the same question.
+* The jet cannon and the anti-ship missile at peace were exercised through the shared gate (same `clearToFire`), not
+  with a dedicated jet scenario in the verifier.

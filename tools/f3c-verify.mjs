@@ -327,6 +327,7 @@ async function city() {
     window.__asks = [];
     ov.ask = (title, body, extra, buttons) => { window.__asks.push(`${title} | ${body} | ${extra}`); return ask(title, body, extra, buttons); };
   });
+  const asked = async () => page.__logs.find((l) => /civilian target: asking/.test(l)) ?? (await page.evaluate(() => window.__asks?.[0] ?? null).catch(() => null));
   // Owner item 31: the civilian-target question comes BEFORE the shot. Aim at the nearest house of the city the gun
   // can see and pull the trigger (a real click): the dialog opens and no round leaves the barrel.
   await until(page, () => window.__cmd.controller.hud.reload >= 0.999, null, 180000, 500);

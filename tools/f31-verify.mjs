@@ -200,7 +200,10 @@ async function ship() {
     const dir = to.sub(from).normalize();
     I.world.fireShell(P, 0, from, dir, 820, 55, 11, false, true, 1.8);
   }, m.id);
-  await sleep(8000);
+  await sleep(4000);
+  // Until the round has come down (SwiftShader frames are slow), so it does not count in the next check.
+  await until(page, () => window.__cmd.world.projs.filter((p) => p.alive && p.team === 0).length === 0, null, 60000, 500);
+  await sleep(1500);
   const s4 = await snap(page, m.id);
   row('M4', 'a round already in the air through the merchant: no hit, no damage, no question', `hits ${s4a.hits} → ${s4.hits}, hp ${s4a.hp} → ${s4.hp}, alive ${s4.alive}, dialog ${s4.dialog}, asked ${s4a.fire.asked} → ${s4.fire.asked}`,
     s4.hits === s4a.hits && s4.hp === s4a.hp && s4.alive && !s4.dialog && s4.fire.asked === s4a.fire.asked);
