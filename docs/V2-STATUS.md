@@ -1305,8 +1305,14 @@ steps came from the test script, fixed in `tools/playtest.mjs`:
   command and inbox advisor steps failed only because of that cascade, since the advisor is sequential.
 * The spawn-refusal click could land on a small nation's label and capital icon at 5,000 km. It now picks open land
   ≥ 5 tiles from the label, at 2,500 km. The game side was correct: the hover card read «Territorio de China».
-Run 2 (before these fixes): stage 2 20/21, extended 25/30, 0 console errors, 3,265 s. For run 3 (with the fixes), see the
-line below.
+Run 2 (before these fixes): stage 2 20/21, extended 25/30, 0 console errors, 3,265 s. Run 3 (with the fixes):
+**stage 2 21/21**, and every extended step through the Guerra panel passed: all ten structures, the armored division,
+its move through Fuerzas, the factory upgrade, and a front raised to «alta». At 1,690 s the dev server reached its
+2-hour background limit and was stopped, and the page reloaded to the menu, so the rest of that run is void. The steps
+after that point (nukes, 50 % attack, invasion, radial proposal, tributary peace, inbox, end screen) passed in run 2.
+**Not re-run after the fixes:** the 75 % attack, «Tomar el control» / exit command mode, and the full advisor check.
+Run 2 failed them only through the open Guerra panel. For a full confirmation, run
+`node tools/playtest.mjs --url <no-HMR server>` once more on a fresh server.
 
 **Open, known:**
 * **T33** (first AI war on the autopilot human 13,984-19,189 against 6,000-12,000). See the analysis above. It is a
