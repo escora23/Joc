@@ -16,7 +16,8 @@
 
 import * as THREE from 'three';
 import { HUMAN_ID, MAP_H, MAP_W } from '../shared/constants';
-import { formatNumber, t } from '../shared/i18n';
+import { formatNumber, getLanguage, t } from '../shared/i18n';
+import { nearestPlace } from '../data/places';
 import type { GameView } from '../shared/api';
 import { getLocalHeightfield } from '../data/index';
 import type { LocalHeightfield } from '../data/types';
@@ -308,14 +309,13 @@ export class TacMap {
       const [x, y] = toPx(tw.ax - frame.offX, tw.az - frame.offZ);
       if (!inMap(x, y)) continue;
       st.towns++;
-      const r = tw.level < 0 ? 1.7 : Math.max(3, Math.min(9, (tw.r / (2 * half)) * S * 0.9));
-      g.fillStyle = tw.level < 0 ? 'rgba(84,64,44,0.8)' : '#fff3d8';
+      // Villages read as small light blocks with a dark rim (a dark dot vanished on the brown relief).
+      const r = tw.level < 0 ? 2.4 : Math.max(3, Math.min(9, (tw.r / (2 * half)) * S * 0.9));
+      g.fillStyle = tw.level < 0 ? 'rgba(236,226,206,0.92)' : '#fff3d8';
       g.fillRect(x - r, y - r, r * 2, r * 2);
-      if (tw.level >= 0) {
-        g.strokeStyle = 'rgba(40,30,20,0.9)';
-        g.lineWidth = 1;
-        g.strokeRect(x - r, y - r, r * 2, r * 2);
-      }
+      g.strokeStyle = tw.level < 0 ? 'rgba(40,30,20,0.75)' : 'rgba(40,30,20,0.9)';
+      g.lineWidth = 1;
+      g.strokeRect(x - r, y - r, r * 2, r * 2);
     }
     for (const tw of towns) {
       if (!tw.name) continue;
@@ -330,6 +330,38 @@ export class TacMap {
       taken.push({ x, y: ly - 4, w, h: 15 });
       this.halo(tw.name, x, ly, '#fff6e0');
       st.named++;
+    }
+    // No named town on the sheet (open country): point to the nearest real place at the edge, with its distance, so the
+    // map still says where it is.
+    if (st.named === 0) {
+      const ll = frame.latLonOfAbs(ax, az, { lat: 0, lon: 0 });
+      const np = nearestPlace(ll.lat, ll.lon, 250);
+      if (np) {
+        const pp = frame.sceneOf(np.lat, np.lon, { x: 0, z: 0 });
+        const [qx, qy] = toPx(pp.x, pp.z);
+        const dx = qx - px, dy = qy - py, dl = Math.hypot(dx, dy) || 1;
+        // Where the ray from the unit leaves the sheet (a margin inside it).
+        const m = 40, kx = dx > 0 ? (S - m - px) / dx : dx < 0 ? (m - px) / dx : Infinity, ky = dy > 0 ? (S - m - py) / dy : dy < 0 ? (m - py) / dy : Infinity;
+        const k = Math.min(kx, ky);
+        const ex = px + dx * k, ey = py + dy * k;
+        g.save();
+        g.translate(ex, ey);
+        g.rotate(Math.atan2(dy, dx));
+        g.fillStyle = '#fff6e0';
+        g.strokeStyle = 'rgba(20,16,10,0.85)';
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(12, 0);
+        g.lineTo(-4, -7);
+        g.lineTo(-4, 7);
+        g.closePath();
+        g.stroke();
+        g.fill();
+        g.restore();
+        const name = getLanguage() === 'es' ? np.nameEs : np.nameEn || np.nameEs;
+        g.font = '600 11.5px "Barlow", sans-serif';
+        this.halo(t('command.map.placeOff', { place: name, km: formatNumber(np.km, 0) }), ex - (dx / dl) * 26, ey - (dy / dl) * 18 + 4, '#fff6e0');
+      }
     }
     // Structures and units: the strategic NATO symbols, framed by relation, filled with the owner's colour.
     const rel = (o: number): Rel => (o === HUMAN_ID ? 'own' : view.hasTreaty(HUMAN_ID, o, 'alliance') || view.human?.allies.includes(o) ? 'ally' : view.pairState(HUMAN_ID, o) === 'war' ? 'war' : 'other');
