@@ -311,20 +311,16 @@ export class BattleLine {
     const c = this.centre!;
     const s0 = this.alongOf(at.x - c.x, at.z - c.z);
     const lo = this.sMin + 260, hi = this.sMin + (this.nPts - 1) * STEP_M - 260;
-    // 1. The flattest stretch within ±1.5 km.
-    let sF = Math.max(lo, Math.min(hi, s0)), bestR = Infinity;
+    // 1. The flattest stretches within ±1.5 km, flattest first (the steepest Pyrenean valleys can leave the flattest
+    // one without a single spot a tank stands on: the next flattest is tried, up to four).
+    const stretches: { s: number; r: number }[] = [];
     for (let k = -15; k <= 15; k++) {
       const s = s0 + k * 100;
       if (s < lo || s > hi) continue;
-      const r = this.relief(s, own.sign) + Math.abs(k) * 0.9;
-      if (r < bestR) {
-        bestR = r;
-        sF = s;
-      }
+      stretches.push({ s, r: this.relief(s, own.sign) + Math.abs(k) * 0.9 });
     }
-    // 2. The spot: the enemy's forward trench 250-350 m ahead, in sight, on standable ground.
-    const ft = this.foeTrench(own, sF);
-    const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
+    if (!stretches.length) stretches.push({ s: Math.max(lo, Math.min(hi, s0)), r: 0 });
+    stretches.sort((p, q) => p.r - q.r);
     const sees = (x: number, y0: number, z: number, tx: number, ty: number, tz: number): boolean => {
       const dx = tx - x, dz = tz - z;
       const k = Math.max(6, Math.min(30, Math.round(Math.hypot(dx, dz) / 20)));
@@ -339,35 +335,64 @@ export class BattleLine {
       o.y = g.heightAt(o.x, o.z) + 1;
       return o;
     };
-    // No man's land's mean height (a spot a little above it sees over it).
-    let mean = 0;
-    for (let j = -2; j <= 2; j++) mean += g.heightAt(this.at(sF + j * 100, 0, V1).x, V1.z) / 5;
-    const n = new THREE.Vector3(), cand = new THREE.Vector3(), m = new THREE.Vector3();
-    let best = -Infinity, bestSide: 1 | -1 = 1;
+    const n = new THREE.Vector3(), cand = new THREE.Vector3(), m = new THREE.Vector3(), lk = new THREE.Vector3();
+    let best = -Infinity, bestSide: 1 | -1 = 1, bestR = Infinity;
     let found = false;
-    for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
-      for (const dd of [D, D - 40, D + 40, D + 90]) {
-        const s = sF + ds;
-        this.at(s, own.sign * dd, cand);
-        const h = g.heightAt(cand.x, cand.z);
-        const ny = g.normalAt(cand.x, cand.z, n, 10).y;
-        if (h < 0.8 || ny < 0.93) continue;
-        const y0 = h + 3;
-        // The trench on each side of the spot (oblique views), and straight ahead.
-        let left = 0, right = 0, ahead = 0;
-        for (const off of [60, 130, 200, 270, 340]) {
-          if (sees(cand.x, y0, cand.z, ...mark(s + off, m).toArray() as [number, number, number])) right++;
-          if (sees(cand.x, y0, cand.z, ...mark(s - off, m).toArray() as [number, number, number])) left++;
-        }
-        if (sees(cand.x, y0, cand.z, ...mark(s, m).toArray() as [number, number, number])) ahead++;
-        const dist = Math.hypot(m.x - cand.x, m.z - cand.z);
-        const score = Math.max(left, right) * 3 + Math.min(left, right) + ahead * 4 + (ny - 0.93) * 60
-          + Math.max(0, Math.min(12, h - mean)) * 0.4 - Math.abs(ds) * 0.02 - Math.max(0, Math.abs(dist - 300) - 50) * 0.08;
-        if (score > best) {
-          best = score;
-          bestSide = right >= left ? 1 : -1;
-          out.copy(cand).setY(h);
-          found = true;
+    // 2. The spot: the enemy's forward trench 250-350 m ahead, in sight, on standable ground. Scored by what the crew
+    // sees from the commander's eye (3 m up) and — gauntlet round 1 — by what the player sees from the default chase
+    // camera, 14 m behind the tank and 5 m up, clamped over the ground: a tank on a reverse slope sees the fight from
+    // its hatch while the camera behind it looks into the grass.
+    for (let si = 0; si < Math.min(4, stretches.length) && !(found && si >= 2); si++) {
+      const sF = stretches[si].s, rF = stretches[si].r;
+      const ft = this.foeTrench(own, sF);
+      const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
+      // No man's land's mean height (a spot a little above it sees over it).
+      let mean = 0;
+      for (let j = -2; j <= 2; j++) mean += g.heightAt(this.at(sF + j * 100, 0, V1).x, V1.z) / 5;
+      for (const minNy of [0.93, 0.9]) {
+        if (found && minNy < 0.93) break;
+        for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
+          for (const dd of [D, D - 40, D + 40, D + 90]) {
+            const s = sF + ds;
+            this.at(s, own.sign * dd, cand);
+            const h = g.heightAt(cand.x, cand.z);
+            const ny = g.normalAt(cand.x, cand.z, n, 10).y;
+            if (h < 0.8 || ny < minNy) continue;
+            const y0 = h + 3;
+            // The trench on each side of the spot (oblique views), and straight ahead.
+            let left = 0, right = 0, ahead = 0;
+            for (const off of [60, 130, 200, 270, 340]) {
+              if (sees(cand.x, y0, cand.z, ...mark(s + off, m).toArray() as [number, number, number])) right++;
+              if (sees(cand.x, y0, cand.z, ...mark(s - off, m).toArray() as [number, number, number])) left++;
+            }
+            if (sees(cand.x, y0, cand.z, ...mark(s, m).toArray() as [number, number, number])) ahead++;
+            const dist = Math.hypot(m.x - cand.x, m.z - cand.z);
+            // The chase camera, for the view along each side: the trench points it sees.
+            const camSees = (side: 1 | -1): number => {
+              mark(s + side * 0.7 * (dd + this.foeTrench(own, s)), lk);
+              const lx = lk.x - cand.x, lz = lk.z - cand.z, ll = Math.hypot(lx, lz) || 1;
+              const cx = cand.x - (lx / ll) * 14, cz = cand.z - (lz / ll) * 14;
+              const cy = Math.max(g.heightAt(cx, cz) + 1.4, h + 5);
+              let k = 0;
+              for (const off of [0, 80, 160, 240, 320, 400, 480]) {
+                if (sees(cx, cy, cz, ...mark(s + side * off, m).toArray() as [number, number, number])) k++;
+              }
+              return k;
+            };
+            const camR = camSees(1), camL = camSees(-1);
+            const side: 1 | -1 = camR * 2 + right > camL * 2 + left ? 1 : -1;
+            const cam = side > 0 ? camR : camL;
+            const score = Math.max(left, right) * 3 + Math.min(left, right) + ahead * 4 + cam * 4 + (ny - 0.93) * 60
+              + Math.max(0, Math.min(12, h - mean)) * 0.4 - Math.abs(ds) * 0.02 - Math.max(0, Math.abs(dist - 300) - 50) * 0.08
+              - rF * 0.6 - (minNy < 0.93 ? 6 : 0);
+            if (score > best) {
+              best = score;
+              bestSide = side;
+              bestR = rF;
+              out.copy(cand).setY(h);
+              found = true;
+            }
+          }
         }
       }
     }
