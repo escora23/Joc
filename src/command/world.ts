@@ -1320,7 +1320,6 @@ export class World {
     this.updatePuppets(dt);
     this.updateProjectiles(dt);
     this.updateDead(dt);
-    this.updateSoldierInstances();
     for (let i = this.smokes.length - 1; i >= 0; i--) if (this.smokes[i].until < this.time) this.smokes.splice(i, 1);
   }
 
@@ -1441,6 +1440,8 @@ export class World {
 
   /** One-frame sprites for live projectiles (tracers, shell glows, rocket flames, flares): every frame, even frozen. */
   renderProjectiles(): void {
+    // The active soldiers (packed by size on screen for this view; also while the scene is frozen).
+    this.updateSoldierInstances();
     const P = this.fx.particles;
     // The far crowd's tracers.
     const V = this.vtr;

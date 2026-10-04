@@ -3459,15 +3459,15 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   450 m along it. Beyond it, the front is drawn by the map and the far views, not here.
 * **How many.** 1 figure = 25 troops (§9.6). Per side: front pool × min(1, 16 km ÷ front km in the window) + the
   offensive's pool; at least 60 when the side has troops there; at most 900 hostile / 650 friendly (instanced crowd).
-  Figures thicken toward the player (|u|^1.7 along the stretch: ~45 % within ±300 m). Line vehicles: one per 90
+  Figures thicken toward the player (|u|^2 along the stretch: half within ±300 m). Line vehicles: one per 90
   (hostile) / 110 (friendly) figures, at most 5 / 4; each stands for its crew and squad (10 / 8 figures).
 * **Who does what.** A side with an offensive attacks in waves (squads of 8-12; 50 % of a 8-12 s cycle rushing, the
-  rest down firing, half prone and half kneeling) from 260-700 m behind the line to 75 m short of the enemy trench;
+  rest down firing, half prone and half kneeling) from 180-520 m behind the line to 75 m short of the enemy trench;
   the other side holds a forward trench 115 m behind the line (55 %), a second at 330 m (25 %) and reserves at
   520-720 m that run up as men fall. A quiet front is two trench lines trading fire.
 * **Fire and losses.** Artillery: real rounds with a 16 m splash on the other side's positions, about one a second per
-  side at the height of an offensive (×0.3 holding). The far figures' falls between the two sides (0.45 % of exposed
-  attackers a second × heat, 0.18 % defenders, 0.07 % on a quiet line) are the picture of the sim's attrition and
+  side at the height of an offensive (×0.3 holding). The far figures' falls between the two sides (0.15 % of exposed
+  attackers a second × heat, 0.07 % defenders, 0.03 % on a quiet line) are the picture of the sim's attrition and
   are replaced while the sim has the troops; every man or vehicle the player kills goes to the sim.
 * **Readable.** Within 1 km the figures are full entities (AI, real rounds); beyond, an animated instanced crowd.
   Every figure keeps ≥ 5 px on screen (drawn up to 3.5× life size; never in the gunner's sight), the player's rounds
@@ -3479,8 +3479,11 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
 * «Ir al combate» / take control at a front marches to the hottest point (the biggest offensive's live contact; a
   line point's score is km ÷ heat) and stops **in** the battle: 0.35 km from the target, or as soon as a contact line
   at war with enemy soldiers on it is within 0.5 km. Arriving from such an entry or march, the tank then drives itself
-  (tactical speed, any driving key takes over) to 220 m behind the line at the battle's hottest stretch. Inside a
-  battle, G does the same whenever that point is more than 150 m away.
+  (tactical speed, any driving key takes over) to about 220 m behind the line at the battle's hottest stretch: of the
+  points ±150 m along the line and 150-300 m deep, the one on ground a tank stands on (slope ≤ ~26°) from where the
+  most of the battle's figures are in sight; on arrival the view turns to the fighting. Inside a battle, G does the
+  same whenever the stretch is more than 150 m away. The drive's goal follows the stretch as the line moves (up to 4
+  times); it gives up after 10 s without headway.
 * In command mode the chip at the top always names the battle: «Batalla en la línea contra X · Lo más duro, a 1,2 km
   · intensidad alta · N nuestros y M enemigos en este tramo» with a compass direction and a world marker on the hot
   point; while it is more than 450 m away the chip carries «Ir al combate».

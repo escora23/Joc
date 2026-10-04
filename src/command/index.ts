@@ -88,7 +88,7 @@ const STRUCT_KEY: Record<number, string> = { 0: 'city', 1: 'port', 2: 'factory',
  * then within the tank's gun range; an enemy unit, twice as far. Beyond HOP_KM more, the unit marches behind a fade on
  * the real clock (the whole world runs with it, like a strategic move); closer, the local autopilot drives.
  */
-// Owner item 32: a tank arrives in the battle, among its own line (its waves stand 260-700 m behind the contact, the
+// Owner item 32: a tank arrives in the battle, among its own line (its waves stand 180-520 m behind the contact, the
 // forward trench 115 m), with the enemy's line in front within the coax's reach: not 1.2 km short behind a ridge.
 const STOP_KM: Record<CommandKind, number> = { tank: 0.35, jet: 12, ship: 8 };
 const HOP_KM: Record<CommandKind, number> = { tank: 0.8, jet: 20, ship: 6 };

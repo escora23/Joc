@@ -1489,8 +1489,10 @@ specks the colour of the ground. That is the owner's "two guys" again, so this p
 * **Arrive in the battle, at its hottest stretch.** The march stops 0.35 km from the target, or as soon as a contact
   line at war with enemy soldiers on it is within 0.5 km (was 0.6 / 1.0). Then, taken there from an entry with a goal
   or a march, the tank **drives itself** at tactical speed to 220 m behind the line at the battle's hottest stretch
-  (`BattleLine.standOff`, `TankController.driveTo`; it steers, slows in turns, any driving key takes over, the goal
-  follows the stretch as the line moves). The arrival line says so: «… Tu carro avanza solo hasta lo más duro, a 510 m
+  (`BattleLine.bestStandOff`, `TankController.driveTo`; it steers, slows in turns, any driving key takes over, the
+  goal follows the stretch as the line moves, and it stops on ground a tank can stand on with the most of the battle
+  in sight — the first try parked the tank across a 50° Pyrenean slope; on arrival the view turns to the fighting).
+  The arrival line says so: «… Tu carro avanza solo hasta lo más duro, a 510 m
   (cualquier tecla de marcha toma el mando).»
 * **«Ir al combate» inside a battle** used to answer «Ya estás en contacto» (anything hostile within 4 km counted). Now
   G (and the chip's button, shown while the hot stretch is > 450 m away) drives to the hottest stretch; under 150 m it
@@ -1514,6 +1516,10 @@ specks the colour of the ground. That is the owner's "two guys" again, so this p
   vertices, shadow pass included). They are now packed every frame into the full figure only while ≥ 13 px tall on
   screen (~110 m in the chase view, ~900 m in the gunner's sight) and the light one (1.1k, no shadow) beyond; under
   SwiftShader the scene's pace doubled (0.05 → 0.1× real time) with the same battle.
+* **A denser fight where the player is.** Waves start 180-520 m behind the line (was 260-700), figures thicken toward
+  the player as |u|² (half within ±300 m; was |u|^1.7), and the far falls between the two sides are a third of what
+  they were (0.15 % of exposed attackers a second at full heat: 274 bodies piled up in 100 s of scene time before, a
+  picture far beyond the sim's own losses).
 * The chip says «N nuestros y M enemigos en este tramo» (they are the stretch's figures, not all «a la vista»).
 * The ramming debug log is gone. Verifier: counts soldiers in the camera's line of sight (in this view and all around),
   the arrival drive (S7), G inside a battle (G1), the plain battle near Zaragoza seen from the tank and through the

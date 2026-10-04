@@ -6,7 +6,7 @@
 // trenches, artillery, smoke and tracers. The stretch follows the player along the line.
 //
 //   Defenders hold trenches (a forward trench, a second trench, reserves) behind sandbag parapets, with machine
-//   gunners; attackers advance in waves (squads rush, drop prone, fire, rush again) from 250-700 m behind the line to a
+//   gunners; attackers advance in waves (squads rush, drop prone, fire, rush again) from 180-520 m behind the line to a
 //   halt line short of the enemy trench, under the defenders' fire and both sides' artillery. A quiet front (no
 //   offensive) is two trench lines trading fire.
 //   Numbers: 1 figure = 25 troops (TROOPS_PER_SOLDIER). Every figure the player kills goes back to the sim through
@@ -42,8 +42,8 @@ const TRENCH2_D = 330;
 const RESERVE_D0 = 520;
 const RESERVE_D1 = 720;
 /** Assault waves start this far behind the line and stop this far short of the enemy trench (m). */
-const WAVE_D0 = 260;
-const WAVE_D1 = 700;
+const WAVE_D0 = 180;
+const WAVE_D1 = 520;
 const HALT_SHORT = 75;
 /** Line vehicles: one per this many figures, at most these many per side. */
 const FIGS_PER_VEHICLE_HOSTILE = 90;
@@ -531,7 +531,7 @@ export class BattleLine {
    */
   private spread(u: number): number {
     const v = u * 2 - 1;
-    return Math.sign(v) * Math.pow(Math.abs(v), 1.7) * HALF_WINDOW_M;
+    return Math.sign(v) * Math.pow(Math.abs(v), 2) * HALF_WINDOW_M;
   }
 
   /** Distance along the stretch's tangent at its centre. */
@@ -814,7 +814,9 @@ export class BattleLine {
       for (const st of this.sides.values()) {
         const exposed = st.members.filter((m) => m.e.alive && m.e.dormant);
         if (!exposed.length) continue;
-        const per = (st.role === 'attack' ? 0.0045 : st.role === 'defend' ? 0.0018 : 0.0007) * this.heat;
+        // (About one exposed attacker in 700 a second at the height of an offensive: a few falls in view every minute,
+        // the field filling with bodies over minutes, not seconds.)
+        const per = (st.role === 'attack' ? 0.0015 : st.role === 'defend' ? 0.0007 : 0.0003) * this.heat;
         let k = exposed.length * per * step;
         while (k > 0) {
           if (rng.next() >= Math.min(1, k)) break;
@@ -943,8 +945,10 @@ function trenchAt(depth: number, s: number): number {
 function parapetGeometry(detail: boolean): THREE.BufferGeometry {
   const b = new GeoBuilder();
   const L = SEG_M + 0.3;
-  // The dark trench floor behind the parapet, then the spoil berm in front of it (a low trapezoid, toward -Z).
-  b.planY([[0.25, -L / 2], [0.25, L / 2], [-1.05, L / 2], [-1.05, -L / 2]], 0.04, 0x2b241c, 0, 0.0, 0);
+  // Near: the trench floor behind the parapet, trodden earth a little below the ground (on a slope a floating slab
+  // read as a black plank); far: only the berm and its sandbags.
+  if (detail) b.planY([[0.25, -L / 2], [0.25, L / 2], [-1.05, L / 2], [-1.05, -L / 2]], 0.04, 0x3d3226, 0, -0.06, 0);
+  // The spoil berm in front of it (a low trapezoid, toward -Z).
   b.profileX([[0.2, 0], [0.55, 0.42], [1.15, 0.38], [1.9, 0]], L, 0x6e5d44, 0, -0.02, 0);
   if (detail) {
     // Two courses of sandbags on the crest, each bag a little turned.

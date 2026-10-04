@@ -272,6 +272,37 @@ async function ram(page) {
   row('R1', 'running over infantry kills them (mass and speed)', `${r.ram.men - (r0?.men ?? 0)} run over; staged men alive: ${r.alive.slice(0, 4).join(',')}`, r.ram.men - (r0?.men ?? 0) >= 2);
   row('R2', 'ramming a light vehicle wrecks it and damages the tank', `rams ${r.ram.vehicles}, wrecked ${r.ram.vehicleKills}, own damage ${r.ram.selfDmg.toFixed(1)} hp (hp ${staged.hp} → ${r.hp.toFixed(1)}); «${r.ram.last}»`, r.ram.vehicleKills >= 1 && r.ram.selfDmg > 0);
   await snap(page, 'ram-1');
+  // At peace it is an incident (item 31's rule): a truck of a nation at peace with us parked 30 m ahead; the tank stops
+  // against it and the question opens; Enter (the safe default) = «Frenar»: no war, the truck unharmed.
+  const pz = await page.evaluate(() => {
+    const I = window.__cmd, P = I.world.player, v = __front.ctx.sim.view;
+    const atWar = (o) => v.wars.some((w) => (w.aggressor === 1 && w.target === o) || (w.target === 1 && w.aggressor === o));
+    let nation = 0;
+    for (let o = 2; o < v.players.length; o++) if (v.players[o] && !atWar(o) && v.pairState(1, o) !== 'war') { nation = o; break; }
+    if (!nation) return null;
+    P.speed = 0;
+    const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw);
+    const x = P.pos.x + fx * 30, z = P.pos.z + fz * 30;
+    const e = I.world.spawn('truck', 1, x, z, P.yaw);
+    e.nation = nation; e.neutral = true; e.src = { kind: 'pool', id: 0, owner: nation, share: 0 }; e.order = 'hold'; e.goal.set(x, 0, z); e.dormant = true;
+    return { id: e.id, nation, hp: e.hp, asked: window.__cmdStats?.ram?.asked ?? 0 };
+  });
+  if (pz) {
+    await sleep(1500);
+    await page.keyboard.down('KeyW');
+    const asked = await until(page, () => (window.__cmd.overlay.dialogOpen ? window.__cmd.fire().dialog : null), null, 240000, 500);
+    await page.keyboard.up('KeyW');
+    await snap(page, 'ram-2-peace-question');
+    await page.keyboard.down('Enter');
+    await sleep(1500);
+    await page.keyboard.up('Enter');
+    await sleep(3000);
+    const after = await page.evaluate((pz) => {
+      const I = window.__cmd, e = I.world.ents.find((x) => x.id === pz.id);
+      return { war: __front.ctx.sim.view.pairState(1, pz.nation) === 'war', alive: !!e?.alive, hp: e?.hp ?? 0, dialog: I.overlay.dialogOpen, asked: window.__cmdStats?.ram?.asked ?? 0 };
+    }, pz);
+    row('R3', 'running into a vehicle of a nation at peace: the tank stops and asks first (item 31); Enter = «Frenar»', `«${(asked ?? 'no dialog').slice(0, 200)}»; after Enter: war ${after.war}, truck alive ${after.alive} hp ${pz.hp} → ${after.hp}, asked ${pz.asked} → ${after.asked}`, !!asked && /Frenar/.test(asked) && !after.war && after.alive && after.hp >= pz.hp && !after.dialog);
+  } else row('R3', 'a nation at peace for the ramming incident', 'none', false);
 }
 
 /** Machine gun on an enemy factory (war): its hp in the sim goes down a little; the HUD says it is ineffective. Then the fence. */
@@ -489,6 +520,8 @@ async function close() {
           if (dd < bd) { bd = dd; best = e; }
         }
         if (!best) return false;
+        // Seen from close, a man is awake (full AI, the figure a player meets there), however far from the tank.
+        I.world.setDormant(best, false);
         I.freeze = true;
         const yaw = best.yaw + 0.9;
         const pos = best.pos.clone();
