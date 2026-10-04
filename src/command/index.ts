@@ -2235,6 +2235,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const bi = forces.battle.info();
     return bi.active && bi.hot ? forces.battle.standOff(bi.hot, 220, new THREE.Vector3()) : null;
   }
+  /** Where the drive goes: near the stand-off, on ground a tank stands on, with the most of the battle in sight. */
+  function hotSpot(): THREE.Vector3 | null {
+    if (kind !== 'tank' || !forces) return null;
+    const bi = forces.battle.info();
+    return bi.active && bi.hot ? forces.battle.bestStandOff(bi.hot, 220, new THREE.Vector3()) : null;
+  }
 
   /**
    * Owner item 32: in a battle at the front, «Ir al combate» drives the tank (at tactical speed, steering by itself) to
@@ -2244,10 +2250,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
    */
   function driveToHot(): number {
     const P = player();
-    const dest = hotStandOff();
-    if (!P || !dest || !(controller instanceof TankController)) return -1;
+    const so = hotStandOff();
+    if (!P || !so || !(controller instanceof TankController)) return -1;
+    // Already at the hot stretch: nowhere to go.
+    if (Math.hypot(so.x - P.pos.x, so.z - P.pos.z) < 150) return Math.hypot(so.x - P.pos.x, so.z - P.pos.z);
+    const dest = hotSpot() ?? so;
     const d = Math.hypot(dest.x - P.pos.x, dest.z - P.pos.z);
-    if (d < 150) return d;
+    if (d < 60) return d;
     const tc = controller;
     tc.driveTo = dest;
     const wp = new THREE.Vector3(dest.x, dest.y + 20, dest.z);
@@ -2258,7 +2267,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       hotDrive = false;
       lastDrive = why;
       if (waypoint === wp) waypoint = null;
-      if (why === 'arrived') overlay?.showNotice(t('command.go.inBattle'), 3.5);
+      if (why === 'arrived') {
+        overlay?.showNotice(t('command.go.inBattle'), 3.5);
+        // The view turns to the fighting (the mouse takes it from there).
+        const hb = forces?.battle.info().hot;
+        if (hb && controller instanceof TankController) controller.lookAt(hb.clone().setY(hb.y + 2));
+      }
     };
     return d;
   }
@@ -2270,10 +2284,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   function followHot(): void {
     if (!hotDrive || hotRetargets >= 4 || !(controller instanceof TankController) || !controller.driveTo) return;
     const so = hotStandOff();
-    if (!so || Math.hypot(so.x - controller.driveTo.x, so.z - controller.driveTo.z) < 120) return;
+    if (!so || Math.hypot(so.x - controller.driveTo.x, so.z - controller.driveTo.z) < 260) return;
     hotRetargets++;
-    controller.retarget(so);
-    waypoint?.set(so.x, so.y + 20, so.z);
+    const spot = hotSpot() ?? so;
+    controller.retarget(spot);
+    waypoint?.set(spot.x, spot.y + 20, spot.z);
   }
   /** Taken to an action (an entry with a goal, a march): on reaching the battle, drive on to its hottest stretch. */
   let seekHot = false;

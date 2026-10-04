@@ -225,6 +225,54 @@ export class BattleLine {
     return out;
   }
 
+  /**
+   * Where a tank should stand to fight at the hot stretch (`at`): around `depth` m behind the line on the friendly side,
+   * on ground a tank can stand on (slope ≤ ~26°, dry), from where the most of the battle's figures within 1.2 km are in
+   * sight (not behind a crest): candidates ±150 m along the line and 150-300 m deep, the nearer to the ideal the better.
+   */
+  bestStandOff(at: THREE.Vector3, depth: number, out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.standOff(at, depth, out)) return null;
+    const own = [...this.sides.values()].find((q) => q.team === 0)!;
+    const g = this.host.ground;
+    const c = this.centre!;
+    const s0 = this.alongOf(at.x - c.x, at.z - c.z);
+    const figs: Ent[] = [];
+    for (const st of this.sides.values()) for (let i = 0; i < st.members.length; i += 3) if (st.members[i].e.alive) figs.push(st.members[i].e);
+    const n = new THREE.Vector3();
+    let best = -Infinity;
+    const cand = new THREE.Vector3();
+    for (const ds of [0, -75, 75, -150, 150]) {
+      for (const dd of [depth, depth - 70, depth + 80]) {
+        const s = Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds));
+        this.at(s, own.sign * dd, cand);
+        const h = g.heightAt(cand.x, cand.z);
+        if (h < 0.8 || g.normalAt(cand.x, cand.z, n, 6).y < 0.9) continue;
+        cand.y = h;
+        // Figures in sight from the commander's eye (3 m up), sampled every ~30 m along the ray.
+        let seen = 0;
+        for (const e of figs) {
+          const dx = e.pos.x - cand.x, dz = e.pos.z - cand.z;
+          const d = Math.hypot(dx, dz);
+          if (d > 1200) continue;
+          const k = Math.max(4, Math.min(30, Math.round(d / 30)));
+          const y0 = h + 3, y1 = e.pos.y + 1;
+          let ok = true;
+          for (let j = 1; j < k && ok; j++) {
+            const f = j / k;
+            if (g.heightAt(cand.x + dx * f, cand.z + dz * f) > y0 + (y1 - y0) * f) ok = false;
+          }
+          if (ok) seen++;
+        }
+        const score = seen - (Math.abs(ds) + Math.abs(dd - depth)) * 0.04;
+        if (score > best) {
+          best = score;
+          out.copy(cand);
+        }
+      }
+    }
+    return out;
+  }
+
   /** Owners whose infantry this battle stands (forces.ts then leaves their front pools to it). */
   owners(): Set<number> {
     return new Set(this.active ? [...this.sides.keys()] : []);

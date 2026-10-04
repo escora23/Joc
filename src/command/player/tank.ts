@@ -59,6 +59,13 @@ export class TankController implements Controller {
     this.hud.maxHp = 200;
   }
 
+  /** Turn the view (and so the turret) toward a point, as the mouse would; nothing stays pinned. */
+  lookAt(p: THREE.Vector3): void {
+    const dx = p.x - this.ent.pos.x, dz = p.z - this.ent.pos.z;
+    this.aimYaw = Math.atan2(-dx, -dz);
+    this.aimPitch = Math.max(-0.32, Math.min(0.42, Math.atan2(p.y - this.ent.pos.y - 3, Math.hypot(dx, dz))));
+  }
+
   aimAt(p: THREE.Vector3): void {
     this.auto = p.clone();
     const dx = p.x - this.ent.pos.x, dz = p.z - this.ent.pos.z;
