@@ -1,6 +1,6 @@
 // Owner item 32 browser verifier: command-mode combat at the real scale of the front, readable and physical.
 // Real game in Chromium (SwiftShader) on real staged sims, entered through the real UI, measured numerically.
-//   node tools/f32-verify.mjs [--url http://127.0.0.1:5463/] [--out shots/owner-32-1/verify] [--only scale,close,kill,mg,ram]
+//   node tools/f32-verify.mjs [--url http://127.0.0.1:5463/] [--out shots/owner-32-1/verify] [--only scale,close,kill,mg,ram,entry1x]
 //
 // scale   our offensive of the staged war (?shot=f3-missions: hundreds of thousands of troops) taken from the Guerra
 //         panel's «Tomar el control aquí»: the march goes to the hottest point, and at contact the battle stands there:
@@ -11,6 +11,8 @@
 // kill    an enemy soldier killed with HE (splash) and with the coaxial machine gun (counts and sim casualties)
 // mg      machine gun on an enemy factory: its hp goes down a little in the sim; the HUD says it is ineffective
 // ram     the tank runs over infantry and a light vehicle at war: kills by mass and speed, own damage
+// entry1x the same take-control clicked with the clock RUNNING at 1x: the world waits from the click, the march reaches
+//         contact without «Pulsa G», the first view faces the fight, the tank drives to the hot stretch (S7b); map (M)
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -66,8 +68,12 @@ const census = (page) => page.evaluate(() => {
   const cam = I.camera, W = innerWidth, H = innerHeight;
   const v = cam.position.clone();
   const P = I.world.player;
-  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], around: [0, 0], near1km: [0, 0], near600: [0, 0], dead: 0 };
+  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], around: [0, 0], near1km: [0, 0], near600: [0, 0], dead: 0, big6: [0, 0], line: { pts: 0, seen: 0, nearest: -1, far: -1 }, camUp: 0 };
   const cp = cam.position;
+  // Gauntlet round 1: how tall each man is drawn (his pose's height × the readable scale), and the enemy's line in view.
+  const ppm1 = H / (2 * Math.tan((cam.fov * Math.PI) / 360));
+  const poseH = [1.8, 1.8, 1.7, 1.2, 0.6, 0.3, 1.8, 1.45];
+  c.camUp = Math.round(cp.y - I.ground.heightAt(cp.x, cp.z));
   // In the line of sight of the camera (the ground between does not hide it): what a player really sees.
   const sees = (x, y, z) => {
     const n = Math.max(8, Math.min(48, Math.round(Math.hypot(x - cp.x, z - cp.z) / 25)));
@@ -96,7 +102,20 @@ const census = (page) => page.evaluate(() => {
     v.project(cam);
     if (v.z > 1 || v.z < -1 || v.x < -1 || v.x > 1 || v.y < -1 || v.y > 1) continue;
     if (man) c.screenSoldiers[t]++; else c.screenVehicles[t]++;
-    if (sees(e.pos.x, e.pos.y + (man ? (e.pose === 4 ? 0.35 : 0.9) : 1.5), e.pos.z)) { if (man) c.seenSoldiers[t]++; else c.seenVehicles[t]++; }
+    if (sees(e.pos.x, e.pos.y + (man ? (e.pose === 4 ? 0.35 : 0.9) : 1.5), e.pos.z)) {
+      if (man) c.seenSoldiers[t]++; else c.seenVehicles[t]++;
+      if (man && ((poseH[e.pose] ?? 1.8) * (e.drawScale || 1) * ppm1) / Math.max(1, cp.distanceTo(e.pos)) >= 6) c.big6[t]++;
+    }
+  }
+  for (const q of I.forces?.battle?.foeLine?.(25) ?? []) {
+    const p = q.clone().project(cam);
+    if (p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1) continue;
+    c.line.pts++;
+    if (!sees(q.x, q.y, q.z)) continue;
+    c.line.seen++;
+    const d = P ? Math.round(Math.hypot(q.x - P.pos.x, q.z - P.pos.z)) : 0;
+    c.line.nearest = c.line.nearest < 0 ? d : Math.min(c.line.nearest, d);
+    c.line.far = Math.max(c.line.far, d);
   }
   return { ...c, stats: window.__cmdStats?.battle ?? null, combat: window.__cmdStats?.combat ?? '', phase: window.__cmdStats?.phase };
 });
@@ -397,6 +416,18 @@ async function scale() {
   c = await census(page);
   await snap(page, 'scale-1b-arrived');
   row('S3a', 'soldiers in sight around the player after arriving (any direction, ≤ 2.5 km, not behind the ground)', `${c.around[0]} ours + ${c.around[1]} enemy (in this view: ${c.seenSoldiers[0]} + ${c.seenSoldiers[1]})`, c.around[0] + c.around[1] >= 300 && c.around[1] >= 40);
+  // Gauntlet round 1 (critic acceptance): the default chase camera as the drive left it (looking along the line) shows
+  // an army, not specks: ≥ 150 figures drawn ≥ 6 px tall, and the enemy's line in sight 250-350 m off.
+  const flat = await page.evaluate(() => { const I = window.__cmd, P = I.world.player; return I.ground.normalAt(P.pos.x, P.pos.z, P.pos.clone(), 10).y.toFixed(3); });
+  row('S8', 'arrival view (default chase camera): an army at scale, the enemy line in sight', `${c.big6[0]} ours + ${c.big6[1]} enemy drawn ≥ 6 px (of ${c.seenSoldiers[0]} + ${c.seenSoldiers[1]} in sight); enemy line ${c.line.seen} of ${c.line.pts} points in the frame in sight, ${c.line.nearest}-${c.line.far} m from the tank; ground under the tank n.y ${flat}`, c.big6[0] + c.big6[1] >= 150 && c.line.seen >= 5 && c.line.nearest >= 200 && c.line.nearest <= 380);
+  // The overview key (V): the camera rises over the whole line for a few seconds.
+  await page.keyboard.press('v');
+  await sleep(4500);
+  const cv = await census(page);
+  await snap(page, 'scale-1c-overview-V');
+  row('S9', 'V: overview over the line (60-80 m up, the enemy line and the men in view)', `camera ${cv.camUp} m over the ground; ${cv.seenSoldiers[0]} ours + ${cv.seenSoldiers[1]} enemy in view, enemy line ${cv.line.seen} points in sight (${cv.line.nearest}-${cv.line.far} m)`, cv.camUp >= 55 && cv.camUp <= 95 && cv.line.seen >= 10 && cv.seenSoldiers[0] + cv.seenSoldiers[1] >= 150);
+  await page.keyboard.press('v');
+  await sleep(2500);
   // Look at the hottest point from the tank (the turret turned there) and count what the camera shows.
   await page.evaluate(() => {
     const I = window.__cmd, b = I.forces.battle.info();
@@ -581,7 +612,75 @@ async function close() {
   await page.close();
 }
 
-const sections = { scale, close, mg: mgFactory, combat };
+/**
+ * Gauntlet (command, round 1): the same take-control, but with the clock RUNNING at 1x (the speed button) when
+ * «Tomar el control aquí» is clicked (the passes above clicked while paused). The world must wait from the click, the
+ * march must reach contact (no «Pulsa G»), the first view must look along the bearing to the fight, and the tank must
+ * drive itself to the hottest stretch. Also opens the tactical map (M) there.
+ */
+async function entry1x() {
+  const page = await open('f3-missions', '&run=10&panel=0');
+  const off = await page.evaluate(() => {
+    const a = __front.ctx.sim.view.attacks.find((x) => x.attacker === 1 && x.defender > 0 && !x.naval && x.contactX >= 0);
+    return a ? { key: a.frontKey, id: a.id, troops: Math.round(a.troops) } : null;
+  });
+  if (!off) { row('E0', 'our offensive of the staged war', 'none', false); return; }
+  await page.evaluate((k) => __front.ctx.bus.emit('frontSelected', { key: k, fly: false }), off.key);
+  await until(page, (k) => !!document.querySelector(`.fu-war-front[data-key="${k}"] .fu-war-take`), off.key, 30000);
+  await page.locator('.fu-time-seg button').nth(2).click({ force: true });
+  const sp = await until(page, () => (window.__front.ctx.sim.view.speed === 1 ? true : null), null, 10000);
+  await sleep(3000);
+  const tick0 = await page.evaluate(() => window.__front.ctx.sim.view.tick);
+  row('E0', 'clock at 1x before the click (the speed button)', `speed ${await page.evaluate(() => window.__front.ctx.sim.view.speed)}, tick ${tick0}`, !!sp);
+  const t0 = Date.now();
+  await page.locator(`.fu-war-front[data-key="${off.key}"] .fu-war-take`).first().click();
+  // The click holds the world: a few real seconds later the sim has not run hours ahead.
+  await sleep(4000);
+  const tick1 = await page.evaluate(() => window.__front.ctx.sim.view.tick);
+  row('E1', 'the world waits from the click (no game hours pass before the march)', `ticks after 4 real s: ${tick1 - tick0} (1x would be ~40)`, tick1 - tick0 <= 6);
+  await small(page, true);
+  const play = await until(page, () => (window.__cmdStats?.phase === 'play' ? window.__cmdStats : null), null, 900000, 1000);
+  const tPlay = Math.round((Date.now() - t0) / 1000);
+  const st = await page.evaluate(() => ({ tr: window.__cmdStats.transits, hostile: window.__cmdStats.nearestHostileM, battle: window.__cmdStats.battle, notice: window.__cmdStats.notice }));
+  const tr = st.tr?.[0];
+  row('E2', 'the march reaches the fight (contact, a battle standing), never «Pulsa G»', `${tPlay} real s to play; march ${tr ? `${tr.km.toFixed(1)} km, ${tr.legs} legs, stop «${tr.stop}${tr.short ? '/' + tr.short : ''}», ${(tr.realMs / 1000).toFixed(1)} real s` : 'none'}; nearest hostile ${st.hostile} m; battle ${st.battle?.active ? `active, line ${st.battle.lineM} m` : 'not active'}; notice «${st.notice}»`, !!play && st.hostile !== null && st.hostile < 4000 && !!st.battle?.active && !/Pulsa G/.test(st.notice ?? ''));
+  // The first view looks along the bearing to the fight, over the ground (not into a slope).
+  await small(page, false);
+  const view = await page.evaluate(() => {
+    const I = window.__cmd, cam = I.camera;
+    const f = new cam.position.constructor();
+    cam.getWorldDirection(f);
+    let hit = -1;
+    for (let s = 5; s < 3000; s += 5) {
+      const x = cam.position.x + f.x * s, y = cam.position.y + f.y * s, z = cam.position.z + f.z * s;
+      if (I.ground.heightAt(x, z) > y) { hit = s; break; }
+    }
+    const hot = window.__cmdStats.battle?.hot ?? null;
+    const P = I.world.player.pos;
+    const b = hot ? Math.atan2(hot.x - P.x, hot.z - P.z) : null;
+    const camB = Math.atan2(f.x, f.z);
+    let dB = b === null ? null : Math.abs(((camB - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+    return { hit, dBdeg: dB === null ? null : Math.round((dB * 180) / Math.PI), pitch: Math.round(Math.asin(f.y) * 573) / 10 };
+  });
+  await snap(page, 'entry1x-1-first-view');
+  row('E3', 'the first view looks toward the fight, over the ground', `view ray meets the ground at ${view.hit < 0 ? 'none (horizon)' : view.hit + ' m'}; ${view.dBdeg === null ? 'no hot point' : `${view.dBdeg}° off the bearing to the hottest point`}; pitch ${view.pitch}°`, (view.hit < 0 || view.hit > 150) && (view.dBdeg === null || view.dBdeg < 50));
+  // The tactical map there.
+  await page.keyboard.press('KeyM');
+  await sleep(3000);
+  const map = await page.evaluate(() => ({ open: document.querySelector('.fu-cmdx-map.show') !== null }));
+  await snap(page, 'entry1x-2-tacmap');
+  await page.keyboard.press('KeyM');
+  row('E4', 'the tactical map opens at the front', JSON.stringify(map), map.open);
+  // The tank drives itself to the hottest stretch.
+  await small(page, true);
+  const drove = await until(page, () => (window.__cmdStats?.battle && (window.__cmdStats.battle.lastDrive || (!window.__cmdStats.battle.driving && window.__cmdStats.battle.lineM < 450)) ? window.__cmdStats.battle : null), null, 1_200_000, 2000);
+  await small(page, false);
+  row('S7b', 'clicked at 1x: the tank drives on to the hottest stretch by itself', drove ? `drive «${drove.lastDrive}», line ${drove.lineM} m, hot point ${drove.hotM} m (${Math.round((Date.now() - t0) / 1000)} real s after the click)` : 'no drive', !!drove && drove.lineM >= 0 && drove.lineM < 450);
+  await snap(page, 'entry1x-3-arrived');
+  await page.close();
+}
+
+const sections = { scale, close, mg: mgFactory, combat, entry1x };
 for (const [k, fn] of Object.entries(sections)) {
   if (only && !only.has(k) && !(k === 'combat' && (only.has('kill') || only.has('ram') || only.has('plain')))) continue;
   try {

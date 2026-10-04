@@ -470,8 +470,13 @@ tiles per second, makes wars whiplash.
   semi-transparent shaft (≤ 5 % of the corridor, 4-7 px) from 3 tiles behind the line with a proportional head whose
   tip lands ON the axis point, the corridor (≤ the front's length) as two faint dashed rails (kind 3), all under the
   bands (renderOrder 42 < 43) and knocked out on every border / coast (the fragment samples the territory owner texture,
-  `GlobeApi.ownerTexture()`), fading out between 1,700 and 1,000 km (`uArrowFill`); naval (transport route),
-  mobilization (pulsing, until `mobilizeUntilTick`). Rebuilt into preallocated buffers when fronts / attacks / wars
+  `GlobeApi.ownerTexture()`), fading out between 1,700 and 1,000 km (`uArrowFill`); naval (transport route; gauntlet
+  round 1: `invasionShown` — only a real landing, the landing tile owned by a nation at war with the convoy's owner,
+  of the human or aimed at him or an ally, or anyone's hovered / selected convoy; faded by `uNavalFill` 400-1,000 km,
+  shaft capped by `uNavalCap` ~4 px below 1,000 km, border knock-out), mobilization (pulsing, until
+  `mobilizeUntilTick`). Below 260 km the bands slim (`uThin`) to a 2-3 px two-colour contact line without chevrons
+  or arrows, down to 30 km, where the battlefield's ground ribbon (`render/battle/terrain.ts`: `uSideA/B`,
+  `uSideK`, `uRibbonK`; each side's half of the field at 0.2 of its colour, split on the sub-tile line) takes over. Rebuilt into preallocated buffers when fronts / attacks / wars
   change and at 2 Hz. Debug: `__frontOverlay.stats()` (per arrow: corridor, rails, front km, shaft/head sizes, tail /
   tip / axis lat-lon), `.setArrowsVisible()`, `.arrowFade()`.
 * **The line as one depth** (sim, `sim/frontLine.ts`, T41): per front, a window 150 km along the line × ±75 km across
@@ -1705,10 +1710,16 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   `info()` for the HUD chip, the arrival notice and `__cmdStats.battle` (`hotLive`: the hot point comes from the
   fighting, smoothed over ~6 s with hysteresis; false on a quiet line, where it is the line point nearest the player);
   `standOff(at, depth)` = the point `depth` m behind the line on the friendly side level with `at`; `bestStandOff`
-  = where «Ir al combate» drives inside a battle (standable ground with the enemy's forward trench and the figures ahead
-  in sight, the enemy's weighing most, ±450 m along, 150-380 m deep); `relayoutAround(player)` (index.ts calls it when
-  the drive to the hot stretch arrives; the `command-battle` shot too) lays the figures out of the tank's sight out
-  again where it sees them; `goodSpot` / `sees`: new figures stand on walkable ground in the player's sight (a few
+  = where «Ir al combate» drives inside a battle (gauntlet round 1: of the line within ±1.5 km of the hot point, the
+  flattest stretch by `relief(s)` — RMS of the heights over the fight's box left after a plane fit, + 15 % of the
+  plane's rise over 400 m, + water — then a standable spot with the enemy's forward trench `VANTAGE_TO_TRENCH` 300 m
+  ahead and in sight, a little above no man's land; the view looks along the line ~35° off its normal at the side
+  with more trench in sight: `vantageLook(from)`); `relayoutAround(player, look)` (index.ts calls it when the drive to
+  the hot stretch arrives, with the vantage's look point; the `command-battle` shot too) lays the figures out of the
+  tank's sight, behind it (ours) or out of the picture (> 60° off the view or beyond 900 m) out again: 75 % of the
+  squads and of the forward trench's men in the picture (`framedSpot`: ours 150-400 m, theirs 250-450 m, ±40° of the
+  view), the rest as before; squads stand in close order (two ranks, 3.2 m between files, the rear rank 3.5 m behind,
+  each man's goal his place at the squad's halt line); `foeLine(step)` (tools: the enemy's line as points); `goodSpot` / `sees`: new figures stand on walkable ground in the player's sight (a few
   tries per squad or man; own assault squads partly around the tank, `playerD`); `recentreMembers` re-lays up to 160
   far sleepers near the player when the near band has thinned; `trampled(x, z)` + `groundVersion` (Grass.trample).
 * `src/command/models/soldier.ts` — soldier geometry per variant (rifleman, AT gunner, machine gunner) and level of
@@ -1725,9 +1736,13 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
 * `src/command/world.ts` — soldier meshes per team × variant for the active men, in two levels packed every frame
   by `updateSoldierInstances` (the full figure, with shadows, while a man is ≥ `SOLDIER_HI_PX` 13 px tall on screen;
   the light one otherwise: 1.1k instead of 5.6k vertices), and per team for the crowd (light detail); `uniformOf` (→ `fieldUniform`), `bandOf`, `setPose`, `shotFired`; `updateCrowd(camera, viewH, …)`
-  scales far figures to ~`CROWD_MIN_PX` (5 px, ≤ `CROWD_MAX_SCALE` 3.5) and tints them toward the nation beyond 450 m;
+  scales far figures so a man kneeling (`READ_H` 1.2 m, gauntlet round 1) keeps ~`CROWD_MIN_PX` 6.5 px (≤ `CROWD_MAX_SCALE`
+  4) and tints them toward the nation beyond 450 m;
   active soldiers get the same `readableScale` (none in the gunner's sight), kept in `Ent.drawScale`, which `center()`
-  and the player's bullet sphere follow; far muzzle flashes (~3 px) and tracers (≥ ~1.4 px) keep a size on screen
+  and the player's bullet sphere follow; far muzzle flashes (~5 px within 900 m, ~3 px beyond) and tracers (≥ ~2 px)
+  keep a size on screen; an assault squad's puppets move in lockstep (the squad's gait) and fire in volleys (each man
+  once per 3-5 s, the squad within half a second); awake assault men keep their place in the close order (ai.ts
+  `nextMoveTarget`: little lateral weave for wave members)
   (`viewPos`, `ppm1` from the last frame);
   `distTone` / `farTint` (far figures darker; figures small on screen in their nation's colour, by pixels tall;
   crowd and active alike);
@@ -1735,7 +1750,9 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   `order`, `wave`, `look`; visual-only tracers `vtrace` and AT rockets); spatial grid `buildGrid` / `forEachIn` for
   rounds, splash and ramming; splash lethal to men (×1.8, cover 0.7); player bullets hit a man within 0.78 m; pose-aware
   `center()`; player MG rounds stop at buildings (`sceneryHit`) with chips and glass.
-* `src/command/player/tank.ts` — HE 40 dmg / 15 m splash, coax 9 dmg; `updateFocus` (target brackets, lead point for the
+* `src/command/player/tank.ts` — `toggleOverview()` / `overview` (V, gauntlet round 1: the chase camera eases up to
+  `OVERVIEW_UP` 72 m over the ground `OVERVIEW_BACK` 60 m behind the tank, looking at the ground 330 m ahead along the
+  view, for `OVERVIEW_S` 7 s on the wall clock; the gunner's sight or V ends it); HE 40 dmg / 15 m splash, coax 9 dmg; `updateFocus` (target brackets, lead point for the
   loaded round → `HudState.focus` / `lead`, drawn by `hud.ts drawFocus`); collisions call `ctx.ram` /
   `ctx.ramObstacle`; `driveTo` / `onDriveEnd`: the tactical self-drive to a point (steers, slows in turns, any driving
   key takes over, ends within 14 m — pass 2, the vantage is often a crest — or stuck 10 s).
@@ -1764,3 +1781,33 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
 * Verifier: `node tools/f32-verify.mjs [--only scale,plain,kill,ram,close,mg]` (counts soldiers in the camera's line
   of sight, not only in the frame; no-HMR server:
   `npx vite --config tools/vite.nowatch.config.mjs`), shots in `shots/owner-32-1/verify/`.
+
+## 31. Command gauntlet, round 1 (command area) — where it lives
+
+* Entry with the clock running: `src/app/bootstrap.ts enterCommandMode` sets `setClock('tactical', 1)` at the click
+  (logs `[command] entry: clock held …`); `src/command/index.ts marchTo` sends `hold: {frontKey, attackId}` with every
+  travel clock of a march to an action → `shared/protocol.ts` clock message `hold`, `sim/client.ts setClock(…, hold)`,
+  `sim/worker.ts` → `Game.holdFront` (transient, not saved) → `sim/attacks.ts` adds no pressure to that front's
+  offensives (`held`). `afterIntro` / `relocate`: legs exhausted (or a quiet stretch) → `shortNotice` + `goToCombat()`
+  (no «Pulsa G»); `shortNotice` picks `command.transit.short.legs` / `legsFaster` by `lineSpeedNear()` against the
+  unit's `speedKmh`; `foeOnLine()` keeps «empty» for a stretch really without enemy troops; `faceContact(tx, ty)` turns
+  the hull and the view along the bearing to the contact, pitched over the ground on it (entry after the build, and
+  `arrivalNotice`); `goToCombat` near path: in contact (no compression) the tank drives itself there with
+  `TankController.driveTo`. Verifier: `node tools/f32-verify.mjs --only entry1x` (E0-E4, S7b: clicked at 1x).
+* Tactical map: `src/command/tacmap.ts` (`TacMap.draw(TacMapInput)`: `buildBase` = relief from
+  `getLocalHeightfield(…, 256, {refLat, seamless, detail 0.6})` hillshaded into a 256² canvas scaled smoothly, land
+  tint and border cells from a quadratic B-spline owner coverage on a 200² grid, cached per centre and owner signature;
+  per draw: rails, roads (`Civil.mapRoads`), fronts with «Frente con X», towns, NATO symbols (`render/units/icons.ts
+  iconAtlasCanvas()` / `glyphRect()`), destination line with distance and march time, scale bar, north arrow;
+  `stats`). Tools: `__cmd.toggleMap()`, `__cmd.mapStats()`; shot `command-map`.
+* Labels: `src/command/hud/labels.ts` (`labelBoard`: reset per frame by `hud.ts draw`, `reserveReticle` for the tank,
+  `place()` with the 70 px clear disc and leader lines, `placeAt()` for world labels); `hud/overlay.ts update` places
+  the objective's text, the destination's text, the hover tip and the world labels on it; `edgeArrow` / `edgeText`
+  keep edge-marker texts inside the screen on the inward side. Chip button by target kind: `goKey()` (index.ts).
+* Borders: `askCross` (C crosses, Enter/Esc go back) → `turnBackFrom(owner)` (`turnBack` state; tank `driveTo` 150 m
+  back, `JetController.turnTo(p)`, `ShipController.comeAbout(yaw)`); `updateBorders` lets the turn swing over the line
+  without asking again, hides a stale approach notice (`approachText`) and says «Estás en territorio de X…»
+  (`distOutOf`). Piracy question: `ShipIntercept.focus(e)` turns the stop panel to the ship in the sights.
+* Travel view: index.ts travel camera (lower-third pitch), fog density by camera height (`visGround` → 70 km, 120 km
+  for jets), `src/command/env/farroads.ts` (`FarRoads`: constant-pixel-width road ribbons from `Civil.mapRoads`,
+  shown when the camera is > 350 m above the ground).

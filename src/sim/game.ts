@@ -137,6 +137,11 @@ export class Game implements SimGame {
   readonly command: CommandSystem;
   /** v2 (W5): the worker runs travel time (set from the clock request): controlledMove checks the strategic speed. */
   commandTravel = false;
+  /**
+   * Command mode's march to an action (§9.3, gauntlet fix): the line of this front / offensive holds while the unit
+   * marches to it (transient, never saved; headless runs never set it).
+   */
+  holdFront: { frontKey: number; attackId: number } | null = null;
   private ai: AiDirector;
   private worldEvents: WorldEventDirector;
   private aiErrors = 0;
@@ -1762,7 +1767,7 @@ const SAVE_SPEC: GraphSpec = {
     DiplomacySystem, FrontTracker, LabelPlacer, EnclaveSystem, WarSystem, WaterNav, ...EVENT_CLASSES, NavalSystem,
   ],
   skip: new Map<SaveCtor, ReadonlySet<string>>([
-    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'command', 'commandTravel', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug', 'rules'])],
+    [Game, new Set(['world', 'config', 'terrain', 'elevation', 'playable', 'landTiles', 'ai', 'worldEvents', 'invariants', 'subSteppers', 'command', 'commandTravel', 'holdFront', 'onError', 'frontStamp', 'nb', 'nb2', 'tickDebug', 'rules'])],
     [AttackSystem, new Set(['terrainTime', 'terrainDef', 'nb', 'nb2', 'tc', 'ready', 'atkArmor', 'defArmor', 'posts'])],
     [WeaponSystem, new Set(['falloutStamp', 'threats'])],
     [EnclaveSystem, new Set(['stamp', 'stack', 'nb', 'nb2'])],

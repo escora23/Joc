@@ -653,8 +653,8 @@ export function createSimClient(bus: GameBus): SimClientApi {
         postToWorker({ kind: 'save', requestId });
       });
     },
-    setClock(mode, rate, focus, throttled) {
-      postToWorker({ kind: 'clock', mode, rate, focus, throttled });
+    setClock(mode, rate, focus, throttled, hold) {
+      postToWorker({ kind: 'clock', mode, rate, focus, throttled, hold: hold ?? null });
     },
     setClockSettings(crisisTime, observationTime) {
       clockSettings = { crisisTime, observationTime };

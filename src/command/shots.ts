@@ -491,6 +491,21 @@ registerShot('command-tank', 'command', 'Tank at a real front (the command-front
   await freezeAndWait(s, I);
 });
 
+registerShot('command-map', 'command', 'The tactical map (M) at a real front: relief, land and borders, roads, towns, NATO symbols, the front and a destination', async (s) => {
+  await stageBorder(s, UnitType.ArmoredDivision, 42.7, -0.5, 16, 2, 200, (st, foe, b) => {
+    st.ctx.sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: foe, tile: b.fy * MAP_W + b.fx, targetTile: -1 });
+  }, 2);
+  if (live(s)) return;
+  const I = internalsOrThrow();
+  I.skipIntro();
+  const w = I.where();
+  I.setWaypoint(w.lat - 0.12, w.lon - 0.15);
+  I.toggleMap();
+  await s.waitFrames(30);
+  await s.wait(1500);
+  await freezeAndWait(s, I);
+});
+
 registerShot('command-jet', 'command', 'Fighter over a front at war: enemy aircraft only from real squadrons', async (s) => {
   await stage(s, {
     unit: UnitType.FighterSquadron, lat: 42.4, lon: -0.6, hour: 17, ownRadius: 3, neighbour: { lat: 43.2, lon: -0.5, radius: 4 }, war: 160,
@@ -912,14 +927,15 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
     await s.wait(4500);
     await s.waitFrames(4);
   }
-  // As on arriving through «Ir al combate» (index.ts onDriveEnd): the fight laid out where the tank sees it.
-  const moved = I.forces.battle.relayoutAround(P, I.forces.battle.info().hot);
-  console.warn(`[battle-shot] relayout around the tank: ${moved} figures`);
+  // As on arriving through «Ir al combate» (index.ts onDriveEnd): the fight laid out where the tank sees it, in the view
+  // along the line the vantage was chosen for (gauntlet round 1).
+  const look = I.forces.battle.vantageLook(P.pos) ?? I.forces.battle.info().hot ?? hot;
+  const moved = I.forces.battle.relayoutAround(P, look);
+  console.warn(`[battle-shot] relayout around the tank: ${moved} figures; view along the line to ${Math.round(Math.hypot(look.x - P.pos.x, look.z - P.pos.z))} m`);
   await s.wait(2500);
-  const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; snapTurret?(): void; setZoom?(on: boolean): void };
+  const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; snapTurret?(): void; setZoom?(on: boolean): void; toggleOverview?(sec?: number): boolean };
   const aimHot = () => {
-    const h = I.forces.battle.info().hot ?? hot;
-    c.aimAt(h.clone().setY(h.y + 2));
+    c.aimAt(look.clone().setY(look.y + 2));
   };
   aimHot();
   c.snapTurret?.();
@@ -936,6 +952,9 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
     c.aimAt(foe ? foe.pos.clone().setY(foe.pos.y + 1) : h.setY(h.y + 2));
     c.snapTurret?.();
     c.setZoom?.(true);
+  } else if (view === 'V') {
+    // The overview key (V) as the player presses it: the camera rises over the line (held for the capture).
+    c.toggleOverview?.(60);
   } else if (view === 'overview') {
     const back = new THREE.Vector3().subVectors(P.pos, h).setY(0).normalize();
     const pos = P.pos.clone().addScaledVector(back, Number(s.params.get('back') ?? 120));
@@ -958,11 +977,32 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
   }
   I.simulate(3, 1 / 30);
   await s.waitFrames(6);
-  // Census: soldiers of each side in the camera's line of sight (on screen and not behind the ground).
+  if (view === 'V') await s.wait(2500);
+  // Census: soldiers of each side in the camera's line of sight (on screen and not behind the ground), how many of them
+  // are drawn at least 6 px tall (their pose's height × the readable scale), and the enemy's line in sight.
   const cam = I.camera;
   cam.updateMatrixWorld();
   const v = new THREE.Vector3();
-  const seen = [0, 0], frame = [0, 0], within600 = [0, 0], all = [0, 0];
+  const seen = [0, 0], frame = [0, 0], within600 = [0, 0], all = [0, 0], big6 = [0, 0];
+  const ppm1 = (s.ctx.renderer.domElement.clientHeight || innerHeight) / (2 * Math.tan((cam.fov * Math.PI) / 360));
+  const poseH = [1.8, 1.8, 1.7, 1.2, 0.6, 0.3, 1.8, 1.45];
+  const line = { pts: 0, seen: 0, nearest: Infinity };
+  for (const q of I.forces.battle.foeLine(25)) {
+    const p = q.clone().project(cam);
+    if (p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1) continue;
+    line.pts++;
+    let ok = true;
+    const cp = cam.position;
+    for (let k = 1; k < 40 && ok; k++) {
+      const f = k / 40;
+      if (f > 0.97) break;
+      if (I.ground.heightAt(cp.x + (q.x - cp.x) * f, cp.z + (q.z - cp.z) * f) > cp.y + (q.y - cp.y) * f) ok = false;
+    }
+    if (ok) {
+      line.seen++;
+      line.nearest = Math.min(line.nearest, Math.round(Math.hypot(q.x - P.pos.x, q.z - P.pos.z)));
+    }
+  }
   for (const e of I.world.ents) {
     if (!e.alive || e.player || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
     all[e.team]++;
@@ -978,9 +1018,14 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
       if (f > 0.97) break;
       if (I.ground.heightAt(cp.x + (v.x - cp.x) * f, cp.z + (v.z - cp.z) * f) > cp.y + (v.y - cp.y) * f) ok = false;
     }
-    if (ok) seen[e.team]++;
+    if (ok) {
+      seen[e.team]++;
+      const px = ((poseH[e.pose] ?? 1.8) * (e.drawScale || 1) * ppm1) / Math.max(1, cam.position.distanceTo(v));
+      if (px >= 6) big6[e.team]++;
+    }
   }
-  (window as unknown as { __battleShot?: unknown }).__battleShot = { seen, frame, within600, all, info: { ...b, hot: null, near: null } };
-  console.warn(`[battle-shot] in sight ${seen[0]} ours + ${seen[1]} enemy; in frame ${frame[0]} + ${frame[1]}; within 600 m ${within600[0]} + ${within600[1]}; all ${all[0]} + ${all[1]}; sides ${JSON.stringify(b.sides)}`);
+  const camUp = Math.round(cam.position.y - I.ground.heightAt(cam.position.x, cam.position.z));
+  (window as unknown as { __battleShot?: unknown }).__battleShot = { seen, frame, within600, all, big6, line, camUp, info: { ...b, hot: null, near: null } };
+  console.warn(`[battle-shot] in sight ${seen[0]} ours + ${seen[1]} enemy (≥ 6 px: ${big6[0]} + ${big6[1]}); in frame ${frame[0]} + ${frame[1]}; within 600 m ${within600[0]} + ${within600[1]}; all ${all[0]} + ${all[1]}; enemy line ${line.seen}/${line.pts} points in sight, nearest ${line.nearest} m; camera ${camUp} m over the ground; sides ${JSON.stringify(b.sides)}`);
   await freezeAndWait(s, I);
 }, 10);

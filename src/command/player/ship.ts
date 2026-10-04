@@ -55,6 +55,13 @@ export class ShipController implements Controller {
     this.lookYaw = Math.atan2(-(p.x - this.ent.pos.x), -(p.z - this.ent.pos.z));
   }
 
+  /** Come about to a heading (a turn back from a border): slow ahead, rudder hard over, until the bow is on it. */
+  comeAbout(yaw: number): void {
+    this.aboutYaw = yaw;
+    this.telegraph = 1;
+  }
+  private aboutYaw: number | null = null;
+
   aimAt(p: THREE.Vector3): void {
     this.auto = p.clone();
     const dx = p.x - this.ent.pos.x, dz = p.z - this.ent.pos.z;
@@ -91,8 +98,15 @@ export class ShipController implements Controller {
       if (inp.hit('KeyW') || inp.hit('ArrowUp')) this.telegraph = Math.min(4, this.telegraph + 1);
       if (inp.hit('KeyS') || inp.hit('ArrowDown')) this.telegraph = Math.max(-1, this.telegraph - 1);
       const rIn = (inp.down('KeyA') || inp.down('ArrowLeft') ? 1 : 0) - (inp.down('KeyD') || inp.down('ArrowRight') ? 1 : 0);
-      if (rIn) this.rudder = Math.max(-1, Math.min(1, this.rudder + rIn * dt * 0.9));
-      else this.rudder += -this.rudder * Math.min(1, dt * 0.5);
+      if (rIn) {
+        this.rudder = Math.max(-1, Math.min(1, this.rudder + rIn * dt * 0.9));
+        this.aboutYaw = null;
+      } else if (this.aboutYaw === null) this.rudder += -this.rudder * Math.min(1, dt * 0.5);
+    }
+    if (this.aboutYaw !== null) {
+      const d = angleDelta(e.yaw, this.aboutYaw);
+      this.rudder += (Math.sign(d) * Math.min(1, Math.abs(d) * 3) - this.rudder) * Math.min(1, dt * 1.5);
+      if (Math.abs(d) < 0.12) this.aboutYaw = null;
     }
     if (this.lookYaw !== null) {
       const d = angleDelta(this.aimYaw, this.lookYaw);

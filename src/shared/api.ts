@@ -187,8 +187,10 @@ export interface SimClientApi {
   /**
    * Request a clock mode (§2.2, §14.6): 'observation' from the camera altitude (focus = camera ground point, tile
    * coords), 'tactical' / 'travel' from command mode with a rate in game s per real s. Crisis is decided by the worker.
+   * `hold` (command mode's march to an action): the line of that front / offensive does not advance while the unit
+   * marches to it behind the fade (the march takes a few game hours; every clock message without it lifts the hold).
    */
-  setClock(mode: 'strategic' | 'observation' | 'tactical' | 'travel', rate?: number, focus?: { x: number; y: number }, throttled?: boolean): void;
+  setClock(mode: 'strategic' | 'observation' | 'tactical' | 'travel', rate?: number, focus?: { x: number; y: number }, throttled?: boolean, hold?: { frontKey: number; attackId: number } | null): void;
   /** Debug/measurement hook: called when an update ARRIVES from the worker (before the frame applies it). */
   onArrival: ((u: TickUpdate, atMs: number) => void) | null;
   /** The player's crisis / observation settings (the worker decides crisis time from them, §8.5). Kept across sessions. */

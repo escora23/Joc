@@ -476,7 +476,7 @@ export type ToWorker =
    * Main-thread clock request (§2.2, §14.6): 'observation' from the camera altitude with the camera's ground point as
    * focus; 'tactical' / 'travel' from command mode (rate = game s per real s). Crisis is decided by the worker.
    */
-  | { kind: 'clock'; mode: 'strategic' | 'observation' | 'tactical' | 'travel'; rate?: number; focus?: { x: number; y: number }; throttled?: boolean }
+  | { kind: 'clock'; mode: 'strategic' | 'observation' | 'tactical' | 'travel'; rate?: number; focus?: { x: number; y: number }; throttled?: boolean; hold?: { frontKey: number; attackId: number } | null }
   /** Player settings the worker needs to decide crisis and observation time; sent at start and on every change. */
   | { kind: 'settings'; crisisTime: 'always' | 'mine' | 'off'; observationTime: boolean }
   /** Serialise the game (§12.8); the worker answers with 'saved'. */

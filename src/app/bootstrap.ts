@@ -142,11 +142,17 @@ export async function bootstrap(): Promise<void> {
         bus.emit('uiSound', { kind: 'error' });
         return;
       }
+      // The world waits from the click (gauntlet fix): at 1x a game hour passes every real second, and the dive, the
+      // fade and the scene build take several; an offensive the player is going to join must not run tens of km away
+      // before the march even starts. Tactical time (1 game s per real s) until command mode sets its own clock.
+      const t0 = performance.now();
+      ctx.sim.setClock('tactical', 1, { x: u0.x, y: u0.y });
       // v2 (§9.2): the unit stops where it is in the sim first; the local scene is then built exactly there.
       ctx.sim.send({ type: 'unitControl', unitId, controlled: true });
       await waitSimUpdate(600);
       const params = commandParams(unitId, goal);
       if (!params) {
+        ctx.sim.setClock('strategic');
         ctx.sim.send({ type: 'unitControl', unitId, controlled: false });
         bus.emit('uiSound', { kind: 'error' });
         return;
@@ -159,6 +165,7 @@ export async function bootstrap(): Promise<void> {
       const far = !!params.goal && tileKmXY(params.x ?? 0, params.y ?? 0, params.goal.x, params.goal.y) > 12;
       if (!params.battleHandoff?.camera && !far) await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
       await ctx.post.fadeTo(1, isShot ? 1 : 350);
+      console.info(`[command] entry: clock held, dive and fade in ${((performance.now() - t0) / 1000).toFixed(1)} real s`);
       await ctx.command.enter(params);
       setState('command');
       bus.emit('commandEnter', { params });

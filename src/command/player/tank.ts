@@ -17,6 +17,11 @@ const RELOAD = 4.6;
 const CAM_PIVOT = 3.1;
 const CAM_DIST = 14;
 const CAM_LIFT = 1.9;
+/** Overview (V): how long it lasts (s), the camera's height over the ground, how far behind the tank, where it looks. */
+const OVERVIEW_S = 7;
+const OVERVIEW_UP = 72;
+const OVERVIEW_BACK = 60;
+const OVERVIEW_AHEAD = 330;
 const T1 = new THREE.Vector3();
 const T2 = new THREE.Vector3();
 const T3 = new THREE.Vector3();
@@ -82,6 +87,25 @@ export class TankController implements Controller {
   onDriveEnd: ((why: 'arrived' | 'manual' | 'stuck') => void) | null = null;
   private driveStuck = 0;
   private driveBest = Infinity;
+
+  /**
+   * Overview (V, gauntlet round 1 of owner item 32): for OVERVIEW_S seconds the camera rises to ~70 m over the ground
+   * behind the tank, looking down along the view, so the player takes in the whole line — our waves, the enemy trench,
+   * the shell bursts along the front — then settles back behind the tank. V again (or the gunner's sight) ends it.
+   * Wall-clock timed (it works paused and on slow frames). Returns whether it is on now.
+   */
+  toggleOverview(sec = OVERVIEW_S): boolean {
+    const now = performance.now();
+    this.overviewUntil = this.overviewUntil > now ? 0 : now + sec * 1000;
+    return this.overviewUntil > now;
+  }
+  /** 0 (chase camera) .. 1 (overview): how far the camera is into the overview. */
+  get overview(): number {
+    return this.overviewK;
+  }
+  private overviewUntil = 0;
+  private overviewK = 0;
+  private overviewWall = 0;
 
   /** Gunner's sight on/off (staging; players hold the right mouse button). */
   setZoom(on: boolean): void {
@@ -435,6 +459,29 @@ export class TankController implements Controller {
       if (cam.position.y < gh) cam.position.y = gh;
     }
     T2.copy(cam.position).add(DIR);
+    // The overview (V): eased up to OVERVIEW_UP m over the ground OVERVIEW_BACK m behind the tank, looking at the
+    // ground OVERVIEW_AHEAD m ahead along the view.
+    {
+      const now = performance.now();
+      // (On the wall clock, and not clamped short: on very slow frames the camera still gets there.)
+      const wdt = this.overviewWall ? Math.min(1, (now - this.overviewWall) / 1000) : 0;
+      this.overviewWall = now;
+      if (this.zoom) this.overviewUntil = 0;
+      const want = now < this.overviewUntil ? 1 : 0;
+      this.overviewK += Math.sign(want - this.overviewK) * Math.min(Math.abs(want - this.overviewK), wdt / 0.9);
+      if (this.overviewK > 0.001 && !this.zoom) {
+        const k = this.overviewK * this.overviewK * (3 - 2 * this.overviewK);
+        const hx = Math.sin(this.aimYaw), hz = Math.cos(this.aimYaw);
+        const ox = e.pos.x + hx * OVERVIEW_BACK, oz = e.pos.z + hz * OVERVIEW_BACK;
+        const oy = Math.max(this.c.ground.surfaceAt(ox, oz), e.pos.y) + OVERVIEW_UP;
+        const lx = e.pos.x - hx * OVERVIEW_AHEAD, lz = e.pos.z - hz * OVERVIEW_AHEAD;
+        const ly = this.c.ground.surfaceAt(lx, lz);
+        // The chase view's own look point (100 m along its aim), blended toward the overview's.
+        T3.copy(cam.position).addScaledVector(DIR, 100);
+        cam.position.lerp(T1.set(ox, oy, oz), k);
+        T2.copy(T3).lerp(G1.set(lx, ly, lz), k);
+      }
+    }
     cam.up.set(0, 1, 0);
     cam.lookAt(T2);
     cam.updateProjectionMatrix();

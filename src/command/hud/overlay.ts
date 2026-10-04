@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { formatNumber, t } from '../../shared/i18n';
 import type { CommandKind } from '../../shared/types';
 import type { CivilLabel } from '../civil';
+import { labelBoard, leaderLine, type Placed } from './labels';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -609,27 +610,51 @@ export class CommandOverlay {
       } else if (age > ALERT_S) a.el.style.opacity = '0';
     }
     if (this.alertList.length === 0) this.alerts.querySelector('.back')?.remove();
-    // World labels.
+    // World labels, markers and the hover tip, placed on the board the vehicle HUD started this frame (labels.ts):
+    // the reticle keeps a clear disc, higher priorities first (objective marker, destination, the force under the
+    // cursor, then borders, forces, towns and bases), a label pushed out of the disc gets a leader line, a label that
+    // still collides is dropped.
     const g = this.g, W = this.w, H = this.h;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, W, H);
     const maxD = kind === 'jet' ? 120_000 : kind === 'ship' ? 60_000 : 32_000;
-    const placed: { x: number; y: number; w: number }[] = [];
-    // Fix pass 3 (#29a): the objective's marker and the destination marker go first — place labels never sit on them,
-    // and the destination's text is left out when it marks the same spot as the objective (one label, one number).
+    const board = labelBoard;
     const onScreen = (v: THREE.Vector3): { x: number; y: number } | null => {
       P.copy(v).project(camera);
       if (P.z > 1 || P.z < -1) return null;
       const x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
       return x < 20 || x > W - 20 || y < 20 || y > H - 20 ? null : { x, y };
     };
-    const cmS = this.combatMarker ? onScreen(this.combatMarker.pos) : null;
-    const wpS = waypoint ? onScreen(waypoint) : null;
-    const wpMerged = !!(cmS && wpS && Math.hypot(cmS.x - wpS.x, cmS.y - wpS.y) < 90);
-    if (cmS) placed.push({ x: cmS.x, y: cmS.y - 12, w: 240 });
-    if (wpS && !wpMerged) placed.push({ x: wpS.x, y: wpS.y - 10, w: 160 });
-    const sorted = [...labels].map((l) => ({ l, d: camera.position.distanceTo(P.set(l.x, l.y, l.z)) })).filter((o) => o.d < maxD).sort((a, b) => rankOf(a.l) - rankOf(b.l) || a.d - b.d);
     this.drawnLabels.length = 0;
+    const cm = this.combatMarker;
+    const cmS = cm ? onScreen(cm.pos) : null;
+    const wpS = waypoint ? onScreen(waypoint) : null;
+    // Fix pass 3 (#29a): the destination's text is left out when it marks the same spot as the objective.
+    const wpMerged = !!(cmS && wpS && Math.hypot(cmS.x - wpS.x, cmS.y - wpS.y) < 90);
+    // 1. The objective (hottest point, nearest action) on screen: its ring and its text.
+    let cmText: { r: Placed; ax: number; ay: number } | null = null;
+    if (cm && cmS) {
+      g.font = '700 12px "Barlow Condensed", sans-serif';
+      const w = g.measureText(cm.text).width + 8;
+      board.reserve({ x: cmS.x - 18, y: cmS.y - 18, w: 36, h: 36 });
+      const r = board.place(cmS.x, cmS.y, w, 15, 16);
+      if (r) cmText = { r, ax: cmS.x, ay: cmS.y };
+    }
+    // 2. The destination's text.
+    let wpText: Placed | null = null;
+    if (wpS && !wpMerged && waypointText) {
+      g.font = '700 11px "Barlow Condensed", sans-serif';
+      wpText = board.place(wpS.x, wpS.y, g.measureText(waypointText).width + 8, 14, 15);
+    }
+    // 3. Where the force under the cursor comes from: beside the cursor, never on the reticle.
+    let hoverR: Placed | null = null;
+    if (hover) {
+      g.font = '600 12px "Barlow", sans-serif';
+      const w = g.measureText(hover.text).width + 16;
+      hoverR = board.place(hover.x + w / 2 + 14, hover.y + 22, w, 22, 0) ?? board.place(hover.x, hover.y, w, 22, 18);
+    }
+    // 4. World labels by rank and distance.
+    const sorted = [...labels].map((l) => ({ l, d: camera.position.distanceTo(P.set(l.x, l.y, l.z)) })).filter((o) => o.d < maxD).sort((a, b) => rankOf(a.l) - rankOf(b.l) || a.d - b.d);
     for (const { l, d } of sorted) {
       P.set(l.x, l.y, l.z).project(camera);
       if (P.z > 1 || P.z < -1) continue;
@@ -638,9 +663,15 @@ export class CommandOverlay {
       const big = l.kind === 'capital' || l.kind === 'city' || (l.kind === 'town' && d < maxD * 0.5);
       g.font = `700 ${big ? 13 : 11}px "Barlow Condensed", "Rajdhani", sans-serif`;
       const txt = l.text.toUpperCase();
-      const w = g.measureText(txt).width;
-      if (placed.some((p) => Math.abs(p.x - x) < (p.w + w) / 2 + 8 && Math.abs(p.y - y) < 26)) continue;
-      placed.push({ x, y, w });
+      const dist = d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d)} m`;
+      const sub = l.sub ? `${l.sub} · ${dist}` : '';
+      let w = g.measureText(txt).width;
+      if (sub) {
+        g.font = '600 10px "Barlow", sans-serif';
+        w = Math.max(w, g.measureText(sub).width);
+        g.font = `700 ${big ? 13 : 11}px "Barlow Condensed", "Rajdhani", sans-serif`;
+      }
+      if (!board.placeAt({ x: x - w / 2 - 3, y: y - (big ? 13 : 11), w: w + 6, h: sub ? 32 : 18 })) continue;
       g.textAlign = 'center';
       g.fillStyle = 'rgba(0,0,0,0.55)';
       g.fillText(txt, x + 1, y + 1);
@@ -649,87 +680,51 @@ export class CommandOverlay {
       g.fillText(txt, x, y);
       g.fillStyle = l.color;
       g.fillRect(x - 5, y + 5, 10, 3);
-      if (l.sub) {
+      if (sub) {
         g.font = '600 10px "Barlow", sans-serif';
         g.fillStyle = 'rgba(200,215,230,0.85)';
-        g.fillText(`${l.sub} · ${d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d)} m`}`, x, y + 18);
+        g.fillText(sub, x, y + 18);
       }
-      this.drawnLabels.push(`${l.text}${l.sub ? ` | ${l.sub} · ${d >= 1000 ? `${formatNumber(d / 1000, d < 10_000 ? 1 : 0)} km` : `${Math.round(d)} m`}` : ''}`);
+      this.drawnLabels.push(`${l.text}${sub ? ` | ${sub}` : ''}`);
     }
     // Destination marker.
     if (waypoint) {
-      P.copy(waypoint).project(camera);
-      const on = P.z < 1 && P.z > -1;
-      let x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
-      if (!on || x < 20 || x > W - 20 || y < 20 || y > H - 20) {
-        // Off screen: an arrow on the edge toward it.
-        const dx = on ? x - W / 2 : -(x - W / 2), dy = on ? y - H / 2 : -(y - H / 2);
-        const a = Math.atan2(dy, dx);
-        x = W / 2 + Math.cos(a) * (W / 2 - 40);
-        y = H / 2 + Math.sin(a) * (H / 2 - 40);
-        g.save();
-        g.translate(x, y);
-        g.rotate(a);
-        g.fillStyle = 'rgba(255,213,138,0.95)';
-        g.beginPath();
-        g.moveTo(12, 0);
-        g.lineTo(-6, -8);
-        g.lineTo(-6, 8);
-        g.closePath();
-        g.fill();
-        g.restore();
+      const col = 'rgba(255,213,138,0.95)';
+      if (!wpS) {
+        P.copy(waypoint).project(camera);
+        const edge = this.edgeArrow(P, W, H, 40, 40, 40, col, 12);
+        if (!wpMerged && waypointText) this.edgeText(waypointText, edge, W, '700 11px "Barlow Condensed", sans-serif', col);
       } else {
-        g.strokeStyle = 'rgba(255,213,138,0.95)';
+        g.strokeStyle = col;
         g.lineWidth = 2;
         g.beginPath();
-        g.moveTo(x, y - 12);
-        g.lineTo(x + 9, y);
-        g.lineTo(x, y + 12);
-        g.lineTo(x - 9, y);
+        g.moveTo(wpS.x, wpS.y - 12);
+        g.lineTo(wpS.x + 9, wpS.y);
+        g.lineTo(wpS.x, wpS.y + 12);
+        g.lineTo(wpS.x - 9, wpS.y);
         g.closePath();
         g.stroke();
+        if (wpText) {
+          if (wpText.leader) leaderLine(g, wpS.x, wpS.y, wpText, col);
+          g.font = '700 11px "Barlow Condensed", sans-serif';
+          g.fillStyle = col;
+          g.textAlign = 'center';
+          g.fillText(waypointText, wpText.x + wpText.w / 2, wpText.y + 11);
+        }
       }
-      g.font = '700 11px "Barlow Condensed", sans-serif';
-      g.fillStyle = 'rgba(255,213,138,0.95)';
-      g.textAlign = 'center';
-      if (!wpMerged) g.fillText(waypointText, x, y - 18);
     }
     // The nearest action (#26): always on screen — a red ring on it, or an arrow on the edge pointing to it.
-    const cm = this.combatMarker;
     if (cm) {
-      P.copy(cm.pos).project(camera);
-      const on = P.z < 1 && P.z > -1;
-      let x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
       const col = 'rgba(255,106,74,0.95)';
       g.textAlign = 'center';
       g.font = '700 12px "Barlow Condensed", sans-serif';
-      if (!on || x < 30 || x > W - 30 || y < 70 || y > H - 50) {
-        const dx = on ? x - W / 2 : -(x - W / 2), dy = on ? y - H / 2 : -(y - H / 2);
-        const a = Math.atan2(dy, dx);
+      P.copy(cm.pos).project(camera);
+      const on = P.z < 1 && P.z > -1;
+      const x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
+      if (!cmS || !on || x < 30 || x > W - 30 || y < 70 || y > H - 50) {
         // On an inner rectangle (clear of the chip and compass at the top and the panels at the bottom).
-        const hw = W / 2 - 60, top = 150, bot = H - 150;
-        const cx = Math.cos(a), cy = Math.sin(a);
-        const kx = Math.abs(cx) > 1e-6 ? hw / Math.abs(cx) : Infinity;
-        const ky = cy < 0 ? (H / 2 - top) / -cy : cy > 0 ? (bot - H / 2) / cy : Infinity;
-        const k = Math.min(kx, ky);
-        x = W / 2 + cx * k;
-        y = H / 2 + cy * k;
-        g.save();
-        g.translate(x, y);
-        g.rotate(a);
-        g.fillStyle = col;
-        g.beginPath();
-        g.moveTo(18, 0);
-        g.lineTo(-8, -12);
-        g.lineTo(-3, 0);
-        g.lineTo(-8, 12);
-        g.closePath();
-        g.fill();
-        g.restore();
-        g.fillStyle = 'rgba(0,0,0,0.6)';
-        g.fillText(cm.text, x + 1, y + 29);
-        g.fillStyle = col;
-        g.fillText(cm.text, x, y + 28);
+        const edge = this.edgeArrow(P, W, H, 60, 150, 150, col, 18);
+        this.edgeText(cm.text, edge, W, '700 12px "Barlow Condensed", sans-serif', col);
       } else {
         const r = 11 + (cm.contact ? Math.sin(this.time * 6) * 2 : 0);
         g.strokeStyle = col;
@@ -743,10 +738,15 @@ export class CommandOverlay {
         g.moveTo(x, y - r - 6);
         g.lineTo(x, y - r + 3);
         g.stroke();
-        g.fillStyle = 'rgba(0,0,0,0.6)';
-        g.fillText(cm.text, x + 1, y - r - 9);
-        g.fillStyle = col;
-        g.fillText(cm.text, x, y - r - 10);
+        if (cmText) {
+          const tr = cmText.r;
+          if (tr.leader) leaderLine(g, x, y, tr, col);
+          const tx = tr.x + tr.w / 2, ty = tr.y + 11.5;
+          g.fillStyle = 'rgba(0,0,0,0.6)';
+          g.fillText(cm.text, tx + 1, ty + 1);
+          g.fillStyle = col;
+          g.fillText(cm.text, tx, ty);
+        }
       }
       this.drawnLabels.push(`combat: ${cm.text}`);
     }
@@ -755,39 +755,13 @@ export class CommandOverlay {
     if (sm) {
       P.copy(sm.pos).project(camera);
       const on = P.z < 1 && P.z > -1;
-      let x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
+      const x = (P.x * 0.5 + 0.5) * W, y = (-P.y * 0.5 + 0.5) * H;
       g.textAlign = 'center';
       g.font = '700 12px "Barlow Condensed", sans-serif';
       const col = sm.color;
       if (!on || x < 40 || x > W - 40 || y < 90 || y > H - 60) {
-        const dx = on ? x - W / 2 : -(x - W / 2), dy = on ? y - H / 2 : -(y - H / 2);
-        const a = Math.atan2(dy, dx);
-        const hw = W / 2 - 70, top = 160, bot = H - 160;
-        const cx = Math.cos(a), cy = Math.sin(a);
-        const kx = Math.abs(cx) > 1e-6 ? hw / Math.abs(cx) : Infinity;
-        const ky = cy < 0 ? (H / 2 - top) / -cy : cy > 0 ? (bot - H / 2) / cy : Infinity;
-        const k = Math.min(kx, ky);
-        x = W / 2 + cx * k;
-        y = H / 2 + cy * k;
-        g.save();
-        g.translate(x, y);
-        g.rotate(a);
-        g.fillStyle = col;
-        g.strokeStyle = 'rgba(0,0,0,0.7)';
-        g.lineWidth = 2;
-        g.beginPath();
-        g.moveTo(20, 0);
-        g.lineTo(-8, -13);
-        g.lineTo(-2, 0);
-        g.lineTo(-8, 13);
-        g.closePath();
-        g.stroke();
-        g.fill();
-        g.restore();
-        g.fillStyle = 'rgba(0,0,0,0.65)';
-        g.fillText(sm.text, x + 1, y + 31);
-        g.fillStyle = '#fff';
-        g.fillText(sm.text, x, y + 30);
+        const edge = this.edgeArrow(P, W, H, 70, 160, 160, col, 20, true);
+        this.edgeText(sm.text, edge, W, '700 12px "Barlow Condensed", sans-serif', '#fff');
       } else {
         // Brackets sized to the hull at its distance.
         const d = Math.max(1, camera.position.distanceTo(sm.pos));
@@ -804,26 +778,90 @@ export class CommandOverlay {
           g.lineTo(bx - sx * c, by);
         }
         g.stroke();
+        const w = g.measureText(sm.text).width;
+        const tx = Math.max(w / 2 + 6, Math.min(W - w / 2 - 6, x));
         g.fillStyle = 'rgba(0,0,0,0.65)';
-        g.fillText(sm.text, x + 1, yb - r * 0.5 - 9);
+        g.fillText(sm.text, tx + 1, yb - r * 0.5 - 9);
         g.fillStyle = '#fff';
-        g.fillText(sm.text, x, yb - r * 0.5 - 10);
+        g.fillText(sm.text, tx, yb - r * 0.5 - 10);
       }
       this.drawnLabels.push(`ship: ${sm.text}`);
     }
     // Where the force under the cursor comes from.
-    if (hover) {
+    if (hover && hoverR) {
       g.font = '600 12px "Barlow", sans-serif';
-      const w = g.measureText(hover.text).width + 16;
-      const x = Math.min(W - w - 8, hover.x + 14), y = Math.min(H - 30, hover.y + 12);
+      if (hoverR.leader) leaderLine(g, hover.x, hover.y, hoverR, 'rgba(132,196,255,0.8)');
       g.fillStyle = 'rgba(6,10,16,0.88)';
-      g.fillRect(x, y, w, 22);
+      g.fillRect(hoverR.x, hoverR.y, hoverR.w, 22);
       g.strokeStyle = 'rgba(132,196,255,0.35)';
-      g.strokeRect(x + 0.5, y + 0.5, w - 1, 21);
+      g.strokeRect(hoverR.x + 0.5, hoverR.y + 0.5, hoverR.w - 1, 21);
       g.fillStyle = '#e8f2ff';
       g.textAlign = 'left';
-      g.fillText(hover.text, x + 8, y + 15);
+      g.fillText(hover.text, hoverR.x + 8, hoverR.y + 15);
     }
+  }
+
+  /**
+   * An arrow on an inner rectangle of the screen pointing toward an off-screen point (projected in P): returns where
+   * it stands and the direction it points, for its text.
+   */
+  private edgeArrow(Pp: THREE.Vector3, W: number, H: number, side: number, top: number, bottom: number, col: string, len: number, outline = false): { x: number; y: number; cx: number; cy: number } {
+    const g = this.g;
+    const on = Pp.z < 1 && Pp.z > -1;
+    const x0 = (Pp.x * 0.5 + 0.5) * W, y0 = (-Pp.y * 0.5 + 0.5) * H;
+    const dx = on ? x0 - W / 2 : -(x0 - W / 2), dy = on ? y0 - H / 2 : -(y0 - H / 2);
+    const a = Math.atan2(dy, dx);
+    const hw = W / 2 - side;
+    const cx = Math.cos(a), cy = Math.sin(a);
+    const kx = Math.abs(cx) > 1e-6 ? hw / Math.abs(cx) : Infinity;
+    const ky = cy < 0 ? (H / 2 - top) / -cy : cy > 0 ? (H / 2 - bottom) / cy : Infinity;
+    const k = Math.min(kx, ky);
+    const x = W / 2 + cx * k, y = H / 2 + cy * k;
+    g.save();
+    g.translate(x, y);
+    g.rotate(a);
+    g.fillStyle = col;
+    g.beginPath();
+    g.moveTo(len, 0);
+    g.lineTo(-8, -len * 0.68);
+    g.lineTo(-3, 0);
+    g.lineTo(-8, len * 0.68);
+    g.closePath();
+    if (outline) {
+      g.strokeStyle = 'rgba(0,0,0,0.7)';
+      g.lineWidth = 2;
+      g.stroke();
+    }
+    g.fill();
+    g.restore();
+    return { x, y, cx, cy };
+  }
+
+  /**
+   * The text of an edge arrow, kept inside the screen: beside the arrow on the side that faces inward (left of an
+   * arrow on the right edge, right of one on the left edge, under or over one on the top or bottom edge).
+   */
+  private edgeText(text: string, e: { x: number; y: number; cx: number; cy: number }, W: number, font: string, col: string): void {
+    const g = this.g;
+    g.font = font;
+    const w = g.measureText(text).width;
+    let tx: number, ty: number;
+    if (Math.abs(e.cx) > 0.55) {
+      // Side edges: the text runs inward from the arrow.
+      g.textAlign = e.cx > 0 ? 'right' : 'left';
+      tx = e.cx > 0 ? e.x - 24 : e.x + 24;
+      ty = e.y + 4;
+    } else {
+      g.textAlign = 'center';
+      tx = Math.max(w / 2 + 8, Math.min(W - w / 2 - 8, e.x));
+      ty = e.cy > 0 ? e.y - 22 : e.y + 30;
+    }
+    if (g.textAlign === 'right') tx = Math.max(w + 8, tx);
+    else if (g.textAlign === 'left') tx = Math.min(W - w - 8, tx);
+    g.fillStyle = 'rgba(0,0,0,0.6)';
+    g.fillText(text, tx + 1, ty + 1);
+    g.fillStyle = col;
+    g.fillText(text, tx, ty);
   }
 }
 

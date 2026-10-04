@@ -19,7 +19,7 @@ import { battleCentre, subsolarPoint, sunDirection, tangentFrame, tileXYToLatLon
 import { formatNumber, playerName, t } from '../shared/i18n';
 import type { QualityProfile } from '../shared/quality';
 import { Rng } from '../shared/rng';
-import { easeInOutCubic } from '../shared/math';
+import { angleDelta, easeInOutCubic } from '../shared/math';
 import { deriveLocalForces, holderAt } from '../shared/localForces';
 import { localSideText } from '../shared/localForcesText';
 import { isWaterTerrain } from '../shared/terrain';
@@ -57,6 +57,7 @@ import type { Proj } from './world';
 import { NightKit } from './night';
 import { FLIGHT_CEILING_M, Forces } from './forces';
 import { TacMap } from './tacmap';
+import { FarRoads } from './env/farroads';
 import { fmtDur, wireIncursionAlerts } from './alerts';
 import { alongRoute, atWar, combatTargets, planRoute, routeProgress, tileBearing, tileKm, type CombatTarget, type Route, type Targets } from './goto';
 
@@ -178,6 +179,9 @@ export interface CommandInternals {
   fire(): { checks: number; cleared: number; held: number; asked: number; silent: number; last: string; answers: string[]; hold: boolean; dialog: string };
   /** Owner item 31: «Bloquear esta zona» as if B was pressed on the warship. */
   blockadeHere(): boolean;
+  /** Open or close the tactical map as M does (tools); the map's draw stats. */
+  toggleMap(): boolean;
+  mapStats(): Record<string, number> | null;
 }
 
 let internals: CommandInternals | null = null;
@@ -223,6 +227,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let civil: Civil | null = null;
   let forces: Forces | null = null;
   let tacmap: TacMap | null = null;
+  /** The road network as the travel camera sees it (a few px wide at any range). */
+  const farRoads = new FarRoads();
   let warmMesh: THREE.Mesh | null = null;
   let pmrem: THREE.PMREMGenerator | null = null;
   let envRT: THREE.WebGLRenderTarget | null = null;
@@ -571,6 +577,27 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     return best;
   }
+
+  /** Distance (m) from a scene point inside `o`'s land back to the nearest ground that is not `o`'s (within ~1 tile). */
+  function distOutOf(p: THREE.Vector3, o: number): number {
+    const tp = tileOf(p.x, p.z);
+    const cx = Math.floor(tp.x), cy = Math.floor(tp.y);
+    let best = Infinity;
+    const a = { x: 0, z: 0 }, b = { x: 0, z: 0 };
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const tx = cx + dx, ty = cy + dy;
+        if (ty < 0 || ty >= MAP_H || ownerOfTile(tileIndex(tx, ty)) === o) continue;
+        frame.sceneOfTile(tx, ty, a);
+        frame.sceneOfTile(tx + 1, ty + 1, b);
+        const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), z0 = Math.min(a.z, b.z), z1 = Math.max(a.z, b.z);
+        best = Math.min(best, Math.hypot(Math.max(x0 - p.x, 0, p.x - x1), Math.max(z0 - p.z, 0, p.z - z1)));
+      }
+    }
+    return best;
+  }
+  /** The approach notice on screen (hidden once the line is crossed). */
+  let approachText = '';
 
   function unitView() {
     return params ? ctx.sim.view.units.get(params.unitId) ?? null : null;
@@ -1368,6 +1395,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     grass?.configure(ground, kind === 'tank' ? q.commandDetail : 0);
     civil.begin(frame, ground, kind);
     scatter.keepOut = civil.keepOut;
+    // Owner item 32 (gauntlet round 1): a battle's ground is shelled bare of trees (the crew sees its battle).
+    scatter.shelled = kind === 'tank' && forces ? { at: (x, z) => forces!.battle.shelledAt(x, z), version: () => forces!.battle.groundVersion } : null;
     if (grass) {
       grass.keepOut = civil.keepOut;
       // Owner item 32: a battle treads the grass down along its lines (men in the open stay in sight).
@@ -1553,30 +1582,65 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   async function askCross(owner: number): Promise<void> {
     const name = nationName(owner);
     const bodyKey = kind === 'jet' ? 'command.incursion.bodyAir' : kind === 'ship' ? 'command.incursion.bodyWater' : 'command.incursion.body';
+    // Safe defaults (as for firing, item 31): Enter and Esc both mean «Volver»; crossing is a click or the C key shown
+    // on its button, never a reflexive Enter.
     const i = await decide(t('command.incursion.title', { nation: name }), t(bodyKey, { nation: name }), '', [
-      { label: t('command.incursion.cross'), cls: 'danger', key: 'Enter' },
-      { label: t('command.incursion.back'), cls: 'pri', key: 'Esc' },
+      { label: t('command.incursion.cross'), cls: 'danger', key: 'C', code: 'KeyC' },
+      { label: t('command.incursion.back'), cls: 'pri', key: t('command.fire.safeKeys'), safe: true },
     ]);
-    const P = player();
     console.info(`[command] border crossing into ${owner}: ${i === 0 ? 'cross' : 'back'} (${i})`);
     if (i === 0) {
       confirmed.add(owner);
       return;
     }
-    // Go back: turn the vehicle around at the border.
-    if (P) {
-      P.pos.copy(lastSafe);
-      P.yaw += Math.PI;
-      P.speed = kind === 'jet' ? P.speed : 0;
-      if (kind === 'jet') {
-        P.quat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
-        P.vel.multiplyScalar(-1);
-        controller = makeController(P);
-        if (internals) internals.controller = controller;
-      }
-      autopilot = false;
-    }
+    turnBackFrom(owner);
   }
+
+  /**
+   * «Volver» at a border: the vehicle stays on our side and turns back by itself, physically (no 180° in one frame).
+   * The tank stops at the line and pivots toward a point 150 m back, then drives there; the jet flies a banked turn
+   * toward a point 6 km back; the ship stops and comes about. While the turn lasts (at most 20 s, or until the
+   * vehicle faces home) the few metres or hundreds of metres it swings over the line are not an incursion: the sim is
+   * sent the last point on our side, and the question is not asked again.
+   */
+  function turnBackFrom(owner: number): void {
+    const P = player();
+    if (!P) return;
+    autopilot = false;
+    // Where home is: from the line back through the last safe point.
+    const bx = borderNear && borderNear.owner === owner ? borderNear.x : P.pos.x - Math.sin(P.yaw) * 30;
+    const bz = borderNear && borderNear.owner === owner ? borderNear.z : P.pos.z - Math.cos(P.yaw) * 30;
+    let hx = lastSafe.x - bx, hz = lastSafe.z - bz;
+    const hl = Math.hypot(hx, hz);
+    if (hl < 1) {
+      hx = Math.sin(P.yaw);
+      hz = Math.cos(P.yaw);
+    } else {
+      hx /= hl;
+      hz /= hl;
+    }
+    P.pos.copy(lastSafe);
+    const back = kind === 'jet' ? 6000 : kind === 'ship' ? 900 : 150;
+    const goal = new THREE.Vector3(lastSafe.x + hx * back, lastSafe.y, lastSafe.z + hz * back);
+    turnBack = { owner, until: performance.now() + 20_000, yaw: Math.atan2(-hx, -hz) };
+    if (controller instanceof TankController) {
+      P.speed = 0;
+      goal.y = ground ? ground.heightAt(goal.x, goal.z) : goal.y;
+      controller.driveTo = goal;
+      controller.onDriveEnd = () => {
+        turnBack = null;
+      };
+    } else if (controller instanceof JetController) {
+      goal.y = Math.max(P.pos.y, (ground?.surfaceAt(goal.x, goal.z) ?? 0) + 400);
+      controller.turnTo(goal);
+    } else if (controller instanceof ShipController) {
+      P.speed = Math.min(P.speed, 2);
+      controller.comeAbout(turnBack.yaw);
+    }
+    overlay?.showNotice(t('command.incursion.turning', { nation: nationName(owner) }), 4, true);
+  }
+  /** A turn back from a border in progress (see turnBackFrom). */
+  let turnBack: { owner: number; until: number; yaw: number } | null = null;
 
   // -----------------------------------------------------------------------------------------------
   // Owner item 31: firing on a nation at peace is asked BEFORE any round leaves the barrel
@@ -1781,6 +1845,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!intercept || !P || decision) return;
     const view = ctx.sim.view;
     const name = nationName(e.nation);
+    // The stop panel turns to this ship: the panel and the question name the same one (its kind and its figures).
+    intercept.focus(e);
+    intercept.update(0, view, P, { hit: () => false }, false);
     const ship = t(e.kind === 'transport' ? 'naval.cmd.convoy' : 'naval.cmd.merchant', { name });
     const o = intercept.options(view, e, P);
     const w = Math.abs(PIRACY_OPINION.warningShot), v = Math.abs(PIRACY_OPINION.seize);
@@ -1961,6 +2028,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     scatter?.rebase(dx, dz);
     grass?.rebase(dx, dz);
     civil?.rebase(dx, dz);
+    farRoads.rebase(dx, dz);
     controller?.rebase?.(dx, dz);
     fx?.clear();
     camera.position.x -= dx;
@@ -2160,6 +2228,18 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     return t(`command.obj.mission.${c.order ?? 'move'}`, { nation });
   }
 
+  /**
+   * The chip's button names what G does for this target: a far front «Ir al frente más cercano»; an enemy ship,
+   * squadron or division «Ir a interceptar» (a warship or a jet) or «Ir al combate» (a tank); a port or a mission
+   * «Ir al puerto» / «Ir a la misión»; a near line or battle «Ir al combate».
+   */
+  function goKey(c: CombatTarget, km: number): string {
+    if (c.kind === 'unit') return kind === 'tank' ? 'command.go.combat' : 'command.go.intercept';
+    if (c.kind === 'port') return 'command.go.port';
+    if (c.kind === 'mission') return 'command.go.mission';
+    return km > FAR_KM[kind] ? 'command.go.front' : 'command.go.combat';
+  }
+
   const dirWord = (brg: number): string => t(`command.dir.${Math.round(brg / 45) % 8}`);
   /** «unos N» soldiers: two significant figures (16.250 → 16.000, 463 → 460, 46 → 46). */
   const roundTroops = (n: number): number => {
@@ -2246,7 +2326,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const sub = c !== m && m ? (m.km < 1 ? targetTitle(m) : t('command.obj.alsoMission', { what: targetTitle(m), km: formatNumber(m.km, 0) }))
       : c === m && targets.nearest && targets.nearest.km < c.km - 5 ? t('command.obj.nearer', { what: targetTitle(targets.nearest), km: formatNumber(targets.nearest.km, 0) })
         : km > FAR_KM[kind] ? t('command.obj.farSub', { h: formatNumber(km / UNIT_DEFS[params!.unitType].speedKmh, 1) }) : t('command.obj.nearSub');
-    overlay.setCombat({ title: targetTitle(c), sub, dist, contact: false, go: t(km > FAR_KM[kind] ? 'command.go.front' : 'command.go.combat') });
+    overlay.setCombat({ title: targetTitle(c), sub, dist, contact: false, go: t(goKey(c, km)) });
     const sp = frame.sceneOfTile(c.tx, c.ty, { x: 0, z: 0 });
     const y = ground.surfaceAt(sp.x, sp.z);
     overlay.combatMarker = { pos: tmp3.set(sp.x, (Number.isFinite(y) ? Math.max(0, y) : 0) + (kind === 'jet' ? 400 : 40), sp.z), text: `${targetTitle(c)} · ${formatNumber(km, km < 10 ? 1 : 0)} km`, contact: false };
@@ -2322,11 +2402,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (why === 'arrived') {
         const hb0 = forces?.battle.info().hot;
         hotArrived = hb0 ? { pos: P.pos.clone(), hot: hb0.clone() } : null;
-        // The fight is laid out around the tank where it sees it (figures behind a crest come into its sight).
-        forces?.battle.relayoutAround(P, hb0);
+        // The fight is laid out around the tank where it sees it (figures behind a crest come into its sight), in the
+        // view along the line the vantage was chosen for (gauntlet round 1: the enemy trench receding across the
+        // picture, not a slope straight ahead).
+        const look = forces?.battle.vantageLook(P.pos) ?? hb0 ?? null;
+        forces?.battle.relayoutAround(P, look);
         overlay?.showNotice(t('command.go.inBattle'), 3.5);
         // The view turns to the fighting (the mouse takes it from there).
-        const hb = forces?.battle.info().hot;
+        const hb = look ?? forces?.battle.info().hot;
         if (hb && controller instanceof TankController) controller.lookAt(hb.clone().setY(hb.y + 2));
       }
     };
@@ -2393,7 +2476,20 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // Near, or fired upon a moment ago: the local autopilot (the + key compresses time when nothing is in reach).
     if (c.km - stop < NEAR_DRIVE_KM[kind] || localSec - lastFiredSec < 30) {
       nearWaypoint();
-      const ok = contactNow() ? false : setRequested(inOwnOrFriendlyLand() ? 60 : 10);
+      let ok = contactNow() ? false : setRequested(inOwnOrFriendlyLand() ? 60 : 10);
+      if (!ok && controller instanceof TankController && waypoint && ground) {
+        // Contact holds the clock at 1:1 (no time compression): the tank drives itself there at tactical speed (any
+        // driving key takes over), as it does to a battle's hot stretch.
+        const dest = new THREE.Vector3(waypoint.x, ground.heightAt(waypoint.x, waypoint.z), waypoint.z);
+        const wp = waypoint;
+        controller.driveTo = dest;
+        controller.onDriveEnd = (why) => {
+          lastDrive = why;
+          if (waypoint === wp) waypoint = null;
+        };
+        autopilot = false;
+        ok = true;
+      }
       overlay.showNotice(t(ok ? 'command.go.driving' : 'command.go.drive', { what: title, km: formatNumber(Math.max(0, c.km - stop), 1) }), 4, true);
       return;
     }
@@ -2428,6 +2524,18 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     for (const fr of lf.fronts) {
       const foe = fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0;
       if (!foe || !atWar(ctx.sim.view, foe) || fr.nearest.distKm > CONTACT_LINE_KM) continue;
+      const side = lf.sides.find((q) => q.owner === foe);
+      if (side && side.pools.front + side.pools.offensive >= 1) return true;
+    }
+    return false;
+  }
+
+  /** An enemy at war holds the nearest contact line within 2 km with soldiers on it (the march reached a manned line). */
+  function foeOnLine(x: number, y: number): boolean {
+    const lf = deriveLocalForces(ctx.sim.view, x, y, 12, HUMAN_ID);
+    for (const fr of lf.fronts) {
+      const foe = fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0;
+      if (!foe || !atWar(ctx.sim.view, foe) || fr.nearest.distKm > 2) continue;
       const side = lf.sides.find((q) => q.owner === foe);
       if (side && side.pools.front + side.pools.offensive >= 1) return true;
     }
@@ -2558,8 +2666,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     const stop = c.kind === 'unit' ? STOP_KM[kind] * 2 : STOP_KM[kind];
     if (c.km - stop < (toAction ? 0.4 : HOP_KM[kind])) {
-      // At the line and still no contact: the enemy has nobody on this stretch.
-      marchShort = toAction ? 'empty' : '';
+      // At the line: «empty» only when the enemy really has nobody on this stretch (else the scene shows them).
+      marchShort = toAction && !foeOnLine(uv.x, uv.y) ? 'empty' : '';
       return null;
     }
     const route = planRoute(uv.x, uv.y, c.tx, c.ty, stop, passableTile, kind === 'jet' ? 4000 : 2500);
@@ -2596,7 +2704,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     throttled = false;
     decision = false;
     const focus = { x: route.pts[0].x, y: route.pts[0].y };
-    ctx.sim.setClock('travel', rate, focus, false);
+    // Marching to an action: its line waits for the unit (the march lasts a few game hours; a moving offensive would
+    // otherwise run away from it leg after leg). Every other clock message lifts the hold.
+    const hold = kind === 'tank' && (entryFrontKey || entryAttackId || c.frontKey) ? { frontKey: entryFrontKey || c.frontKey || 0, attackId: entryAttackId } : null;
+    ctx.sim.setClock('travel', rate, focus, false, hold);
     sentClock = { mode: 'travel', rate, throttled: false, at: performance.now() };
     const sec0 = ctx.sim.view.command?.sec ?? 0;
     let lastSend = 0, km = 0, stopBy = 'arrived', stall = 0, lastKm = -1, stallSince = performance.now();
@@ -2642,7 +2753,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         ctx.sim.send({ type: 'controlledMove', unitId: p0.unitId, x: pt.x, y: pt.y, heading: pt.heading });
         sends++;
         if (now - sentClock.at > 1000) {
-          ctx.sim.setClock('travel', rate, { x: uv.x, y: uv.y }, false);
+          ctx.sim.setClock('travel', rate, { x: uv.x, y: uv.y }, false, hold);
           sentClock.at = now;
         }
       }
@@ -2712,7 +2823,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     // Near the line it runs slower (from ×120): the line itself moves, and each real second of view lag lets it go on.
     rate = Math.round(Math.max(FOLLOW_RATE_MIN, Math.min(TRANSIT_RATE_MAX, (hours * 3600) / (TRANSIT_REAL_S * 0.4))));
     requested = effRate = rate;
-    ctx.sim.setClock('travel', rate, { x: route.pts[0].x, y: route.pts[0].y }, false);
+    ctx.sim.setClock('travel', rate, { x: route.pts[0].x, y: route.pts[0].y }, false, hold);
     sentClock = { mode: 'travel', rate, throttled: false, at: performance.now() };
     legSec0 = ctx.sim.view.command?.sec ?? legSec0;
     km = 0;
@@ -2759,6 +2870,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const next = chosenTarget();
       const toAction = kind === 'tank' && (entryFrontKey > 0 || entryAttackId > 0);
       if (!toAction && !contact && next && next.km - STOP_KM[kind] >= HOP_KM[kind]) {
+        marchLegs = 1;
+        void goToCombat();
+      } else if (!contact && (marchShort === 'legs' || marchShort === 'empty')) {
+        // Gauntlet fix: the march used its legs (or reached a quiet stretch) short of contact: «Ir al combate» goes on
+        // by itself (a drive to the line, a hot stretch, or one more march), no «Pulsa G».
+        shortNotice(next ?? goal);
         marchLegs = 1;
         void goToCombat();
       } else if (!contact && marchShort) shortNotice(next ?? goal);
@@ -2814,8 +2931,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const inReach = !!P && !!forces && forces.nearestHostile(P.pos).dist < REACH_M[kind];
     // (The march itself already chained its legs from the sim until contact; a new march, with a scene rebuild, only
     // when it ran out of legs.)
-    if (stopBy === 'arrived' && marchShort === 'legs' && next && !inReach && next.km - STOP_KM[kind] >= HOP_KM[kind] && marchLegs < 3) {
+    if (stopBy === 'arrived' && marchShort === 'legs' && next && !inReach && marchLegs < 3) {
+      // Still short of contact: on to it by itself (a drive when near, else one more march), no «Pulsa G».
       marchLegs++;
+      shortNotice(next);
       await goToCombat();
     } else {
       marchLegs = 0;
@@ -2824,14 +2943,63 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
   let marchLegs = 0;
 
-  /** The march to the action stopped short of contact: say why, plainly (fix 2, #26). */
+  /**
+   * The march to the action stopped short of contact: say why, plainly (fix 2, #26). «The line moves faster than the
+   * march» only when the line's measured speed there really exceeds the unit's march speed.
+   */
   function shortNotice(c: CombatTarget): void {
     const P = player();
-    if (!P || !overlay || !marchShort) return;
+    if (!P || !overlay || !marchShort || !params) return;
     const tp = tileOf(P.pos.x, P.pos.z);
     const km = tileKm(tp.x, tp.y, c.tx, c.ty);
-    console.info(`[command] march short of contact (${marchShort}): ${km.toFixed(1)} km from ${targetTitle(c)}`);
-    overlay.showNotice(t(`command.transit.short.${marchShort}`, { nation: nationName(c.owner), km: formatNumber(km, 1) }), 8, true);
+    let key = marchShort;
+    if (marchShort === 'legs') {
+      const lineKmh = lineSpeedNear(tp.x, tp.y);
+      key = lineKmh > UNIT_DEFS[params.unitType].speedKmh ? 'legsFaster' : 'legs';
+      console.info(`[command] march short of contact (legs): line ${lineKmh.toFixed(1)} km/h, march ${UNIT_DEFS[params.unitType].speedKmh} km/h`);
+    }
+    console.info(`[command] march short of contact (${key}): ${km.toFixed(1)} km from ${targetTitle(c)}`);
+    overlay.showNotice(t(`command.transit.short.${key}`, { nation: nationName(c.owner), km: formatNumber(km, 1), kmh: formatNumber(lineSpeedNear(tp.x, tp.y), 0) }), 8, true);
+  }
+
+  /** The measured speed (km/h) of the nearest contact line at war around a tile point (0 if none). */
+  function lineSpeedNear(x: number, y: number): number {
+    const lf = deriveLocalForces(ctx.sim.view, x, y, 30, HUMAN_ID);
+    for (const fr of lf.fronts) {
+      const foe = fr.a === HUMAN_ID ? fr.b : fr.b === HUMAN_ID ? fr.a : 0;
+      if (foe && atWar(ctx.sim.view, foe)) return fr.line?.kmh ?? 0;
+    }
+    return 0;
+  }
+
+  /**
+   * Point the vehicle and the view along the bearing to the action (gauntlet fix): the hull turns to it, and the view
+   * looks just over the ground along that bearing (a slope ahead no longer fills the screen with only the barrel).
+   */
+  function faceContact(tx: number, ty: number): void {
+    const P = player();
+    if (!P || !ground || !controller) return;
+    const sp = frame.sceneOfTile(tx, ty, { x: 0, z: 0 });
+    const dx = sp.x - P.pos.x, dz = sp.z - P.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 30) return;
+    const ux = dx / d, uz = dz / d;
+    const yaw = Math.atan2(-ux, -uz);
+    const eye = P.pos.y + (kind === 'tank' ? 5 : 20);
+    // The lowest pitch that sees over the ground along the bearing (60 m … 1.5 km), a little above it.
+    let pitch = -0.04;
+    for (let s = 60; s <= Math.min(1500, d); s += 30) {
+      const h = ground.heightAt(P.pos.x + ux * s, P.pos.z + uz * s) + 4;
+      pitch = Math.max(pitch, Math.atan2(h - eye, s));
+    }
+    pitch = Math.min(0.3, pitch + 0.015);
+    if (kind === 'tank') {
+      P.yaw = yaw;
+      P.speed = 0;
+    }
+    const look = new THREE.Vector3(P.pos.x + ux * 1000, P.pos.y + 3 + Math.tan(pitch) * 1000, P.pos.z + uz * 1000);
+    if (controller instanceof TankController) controller.lookAt(look);
+    else controller.aimAt?.(look);
   }
 
   function arrivalNotice(c: CombatTarget, stopBy: string): void {
@@ -2842,11 +3010,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const dir = dirWord(tileBearing(tp.x, tp.y, c.tx, c.ty));
     overlay.showNotice(t(`command.transit.end.${stopBy === 'enemy' ? 'enemy' : stopBy === 'player' ? 'player' : 'arrived'}`, { what: targetTitle(c), km: formatNumber(km, 1), dir }), 6, stopBy !== 'enemy');
     // Face the action.
-    const sp = frame.sceneOfTile(c.tx, c.ty, { x: 0, z: 0 });
-    if (kind === 'tank' && Math.hypot(sp.x - P.pos.x, sp.z - P.pos.z) > 50) {
-      P.yaw = Math.atan2(-(sp.x - P.pos.x), -(sp.z - P.pos.z));
-      controller?.aimAt?.(tmp3.set(sp.x, ground!.surfaceAt(sp.x, sp.z) + 2, sp.z));
-    }
+    if (kind === 'tank') faceContact(c.tx, c.ty);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -3164,17 +3328,39 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const o = holderOfScene(P.pos.x, P.pos.z);
     prevLandOwner = landOwner;
     landOwner = o;
+    if (turnBack) {
+      // Turning back from a border (askCross «Volver»): done once the vehicle faces home on our side, or after 20 s.
+      const facing = Math.abs(angleDelta(P.yaw, turnBack.yaw)) < 0.45;
+      if (now > turnBack.until || (facing && !(incursionOwner(o) && !confirmed.has(o)))) {
+        turnBack = null;
+        if (controller instanceof JetController) controller.turnTo(null);
+      }
+    }
     if (incursionOwner(o) && !confirmed.has(o)) {
+      landOwner = prevLandOwner;
+      if (turnBack && turnBack.owner === o) {
+        // The turn swings over the line (a jet's radius): not an incursion, no second question. A tank or a ship
+        // pivots where it stopped.
+        if (kind !== 'jet') P.pos.copy(lastSafe);
+        return;
+      }
       // Blocked at the line until the player decides.
       P.pos.copy(lastSafe);
       P.speed = kind === 'jet' ? P.speed : 0;
-      landOwner = prevLandOwner;
       void askCross(o);
       return;
     }
     lastSafe.copy(P.pos);
     if (o !== prevLandOwner) {
-      if (o > 0 && o !== HUMAN_ID && !incursionOwner(o) && ctx.sim.view.pairState(HUMAN_ID, o) !== 'war' && !freeNoticed.has(o)) {
+      // A border notice shown on the way in is stale once across: the text says where the player now is.
+      if (approachText) {
+        overlay?.hideNotice(approachText);
+        approachText = '';
+      }
+      if (o > 0 && o !== HUMAN_ID && incursionOwner(o)) {
+        const back = distOutOf(P.pos, o);
+        overlay?.showNotice(t('command.border.inside', { nation: nationName(o), km: formatNumber(Math.max(0.1, back / 1000), 1) }), 4.5);
+      } else if (o > 0 && o !== HUMAN_ID && !incursionOwner(o) && ctx.sim.view.pairState(HUMAN_ID, o) !== 'war' && !freeNoticed.has(o)) {
         freeNoticed.add(o);
         overlay?.showNotice(t('command.border.enterFree', { nation: nationName(o), state: stateWord(o) }), 3.5, true);
       } else if (prevLandOwner > 0 && prevLandOwner !== HUMAN_ID && incursionOwner(prevLandOwner)) {
@@ -3186,7 +3372,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const last = warned.get(borderNear.owner) ?? -1e9;
       if (now - last > 20_000) {
         warned.set(borderNear.owner, now);
-        overlay?.showNotice(t('command.border.approach', { nation: nationName(borderNear.owner), state: stateWord(borderNear.owner), km: formatNumber(borderNear.distM / 1000, 1) }), 4);
+        approachText = t('command.border.approach', { nation: nationName(borderNear.owner), state: stateWord(borderNear.owner), km: formatNumber(borderNear.distM / 1000, 1) });
+        overlay?.showNotice(approachText, 4);
       }
       if (requested > 1 || effRate > 1) dropToTactical('command.travel.border');
     }
@@ -3216,6 +3403,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       scatter = new Scatter(mats.prop);
       grass = new Grass();
       civil = new Civil(mats.prop);
+      scene.add(farRoads.mesh);
       const q = ctx.quality;
       fx = new Effects(atlas, decals, Math.min(q.particles, 14000), q.decals, mats.wreck);
       world = new World(mats, ground, fx, new Rng(1));
@@ -3288,6 +3476,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           return { ...fireStats, answers: [...fireStats.answers], hold: fireHold, dialog: overlay?.dialogText ?? '' };
         },
         blockadeHere: () => blockadeHere(),
+        toggleMap: () => {
+          if (!tacmap) return false;
+          tacmap.toggle(kind);
+          lastMapWall = 0;
+          return tacmap.isOpen;
+        },
+        mapStats: () => (tacmap ? { ...tacmap.stats } : null),
         goCombat: () => goToCombat(),
         targets() {
           refreshTargets(true);
@@ -3460,6 +3655,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           }, 3600);
         }
       }
+      // Taken to an action: the tank and the view face it (not whatever the last leg of the march pointed at).
+      if (kind === 'tank' && entryGoal && !p.battleHandoff) {
+        const uv = unitView();
+        const lc = uv && (entryFrontKey || entryAttackId) ? liveContact(uv.x, uv.y) : null;
+        const c = lc ?? entryGoal;
+        faceContact(c.tx, c.ty);
+      }
       if (controller) {
         controller.updateCamera(0);
         introTo.copy(camera.position);
@@ -3518,6 +3720,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       grass?.configure(null, 0);
       ground?.clear();
       civil?.clear();
+      farRoads.clear();
       controller = null;
       brain = null;
       intercept?.dispose();
@@ -3581,6 +3784,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         if (input.hit('KeyL') && kind !== 'jet') {
           night.lightsOn = !night.lightsOn;
           overlay.showNotice(t(night.lightsOn ? 'command.lights.on' : 'command.lights.off'), 2.5, true);
+        }
+        // Owner item 32 (gauntlet round 1): V lifts the tank's camera for a few seconds over the whole line.
+        if (input.hit('KeyV') && controller instanceof TankController) {
+          overlay.showNotice(t(controller.toggleOverview() ? 'command.view.overview' : 'command.view.chase'), 3, true);
         }
         // Ships: Tab names the next ship in reach on the stop panel (read here, every frame, so no press is lost).
         if (kind === 'ship' && input.hit('Tab')) intercept?.requestNext();
@@ -3728,9 +3935,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         tmp.copy(e.pos).addScaledVector(tmp2, kind === 'jet' ? 1400 : 260);
         camera.lookAt(tmp.lerp(outroLook, 1 - easeInOutCubic(k)));
       } else if (travel && effRate >= 300 && P) {
-        // High compression: the camera rises to 1–1.5 km behind the column and looks ahead.
+        // High compression: the camera rises to ~1 km behind the column and looks ahead, pitched so the column stands
+        // in the lower third of the frame (about 18° under the centre) with the country ahead to the horizon above it.
         const fw = forwardOf(P.yaw, tmp2);
-        const back = kind === 'jet' ? 2500 : kind === 'ship' ? 2200 : 1100, up = kind === 'jet' ? 900 : kind === 'ship' ? 900 : 1150;
+        const back = kind === 'jet' ? 2500 : kind === 'ship' ? 2200 : 1800, up = kind === 'jet' ? 900 : kind === 'ship' ? 900 : 1000;
         tmp.copy(P.pos).addScaledVector(fw, -back);
         tmp.y = Math.max(P.pos.y, ground.surfaceAt(tmp.x, tmp.z)) + up;
         if (!travelCamInit || !travelCam) {
@@ -3739,7 +3947,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         }
         travelCamPos.lerp(tmp, 1 - Math.exp(-2.5 * realDt));
         camera.position.copy(travelCamPos);
-        tmp.copy(P.pos).addScaledVector(fw, kind === 'jet' ? 8000 : 3500);
+        // The look point: the depression to the vehicle less ~18° (the lower third of a 62° frame).
+        const hv = camera.position.y - P.pos.y, dv = Math.max(1, Math.hypot(camera.position.x - P.pos.x, camera.position.z - P.pos.z));
+        const lookDep = Math.max(0.03, Math.atan2(hv, dv) - 0.31);
+        const ahead = Math.min(kind === 'jet' ? 9000 : 6000, hv / Math.tan(lookDep) - dv);
+        tmp.copy(P.pos).addScaledVector(fw, Math.max(800, ahead));
+        tmp.y = P.pos.y;
         camera.lookAt(tmp);
         travelCam = true;
       } else {
@@ -3762,10 +3975,18 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           }
         }
       }
-      // Lighter fog from high up (travel camera, jets).
+      // Lighter fog from high up (travel camera, jets): the haze thins with the camera's height so a clear day from
+      // ~1 km up sees 60-80 km (as far as the horizon patch reaches), not a white wall at 15 km. The density is the one
+      // that leaves ~95 % haze (d·ρ = 1.73 for exp²) at that visibility; never thicker than the ground-level fog.
       const camAgl = camera.position.y - ground.surfaceAt(camera.position.x, camera.position.z);
-      const fd = fogBase * (camAgl > 300 ? Math.max(0.35, 1 - (camAgl - 300) / 1500) : 1);
-      if (Math.abs(fd - fog.density) > fogBase * 0.02) applyAtmosphere(atmos, fd);
+      const visGround = 1.73 / fogBase;
+      const visHigh = Math.max(visGround, kind === 'jet' ? 120_000 : 70_000);
+      const hk = Math.max(0, Math.min(1, (camAgl - 150) / 750));
+      const vis = visGround + (visHigh - visGround) * hk * hk * (3 - 2 * hk);
+      const fd = Math.min(fogBase * (camAgl > 300 ? Math.max(0.35, 1 - (camAgl - 300) / 1500) : 1), 1.73 / vis);
+      if (Math.abs(fd - fog.density) > fd * 0.03) applyAtmosphere(atmos, fd);
+      // The road network seen from high up.
+      farRoads.update(civil.mapRoads, frame, ground, camera, cctx.viewH, camAgl > 350, frame.offX + camera.position.x, frame.offZ + camera.position.z);
       applyShake(realDt);
       camera.updateMatrixWorld();
       // Owner item 32: through the gunner's sight (13°, low) the grass a few metres ahead would fill the view.
@@ -3824,7 +4045,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);
       if (tacmap?.isOpen && now - lastMapWall > 500 && P) {
         lastMapWall = now;
-        tacmap.draw(view, frame, ground, civil, P.pos, P.yaw, waypoint, params!.unitId);
+        tacmap.draw({
+          view, frame, ground, civil, player: P.pos, playerYaw: P.yaw, waypoint, controlledId: params!.unitId,
+          speedKmh: UNIT_DEFS[params!.unitType].speedKmh, terrain: ctx.world?.terrain ?? null, nameOf: nationName,
+        });
       }
       input.endFrame();
       // --- Stats for tools (verifier, shots) ---
@@ -3859,6 +4083,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
             return {
               active: b.active, frontKey: b.frontKey, heat: +b.heat.toFixed(2), shells10: b.shells10, fallen10: b.fallen10,
               hotM: b.hot ? Math.round(Math.hypot(b.hot.x - P.pos.x, b.hot.z - P.pos.z)) : -1,
+              hot: b.hot ? { x: Math.round(b.hot.x), z: Math.round(b.hot.z) } : null,
               lineM: b.near ? Math.round(Math.hypot(b.near.x - P.pos.x, b.near.z - P.pos.z)) : -1,
               // Owner item 32: the auto-drive to the hottest stretch (G, or on arrival) and how far its stand-off is.
               driving: controller instanceof TankController && !!controller.driveTo, lastDrive,

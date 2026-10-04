@@ -99,6 +99,18 @@ export function unitCategory(t: UnitType): number {
 // Atlas (canvas 2D, white glyphs on transparent)
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * The glyph atlas as a 2D canvas (white glyphs on transparent, CELL px cells), drawn once and shared: command mode's
+ * tactical map draws the same NATO symbols as the strategic icon layer. `glyphRect(i)` is a glyph's source rectangle.
+ */
+let atlas2d: HTMLCanvasElement | null = null;
+export function iconAtlasCanvas(): HTMLCanvasElement {
+  return (atlas2d ??= drawAtlas());
+}
+export function glyphRect(i: number): [number, number, number] {
+  return [(i % COLS) * CELL, Math.floor(i / COLS) * CELL, CELL];
+}
+
 function drawAtlas(): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = ATLAS;

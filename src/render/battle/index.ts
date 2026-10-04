@@ -29,7 +29,7 @@ import { UnitMode, UnitType, type FrontView, type LatLon } from '../../shared/ty
 import { deriveLocalForcesAt, publishedLineOffset, visibleSplit, type LocalForces, type LocalFront } from '../../shared/localForces';
 import { Biome, getLocalHeightfield, getWorldAux } from '../../data';
 import { updateAir, type AirState } from './atmo';
-import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, separateTeamColors } from './common';
+import { FastRng, M_PER_DEG, R_M, createBattleUniforms, depthVariant, hexToLinear, separateTeamColors } from './common';
 import { createEffects, type Effects } from './effects';
 import { createFarLayer, gcKm, type FarLayer } from './far';
 import { createFrontOverlay, type FrontOverlay } from './overlay';
@@ -865,6 +865,11 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
     const colA = pa?.color ?? 0x3d7eff, colB = separateTeamColors(colA, pb?.color ?? 0xe04040);
     infantry.setColors(colA, colB);
     vehicles.setColors(colA, colB);
+    // The two sides on the ground itself (gauntlet round 1, FEEDBACK-1 item 11): each half of the field lightly in its
+    // nation's colour, split along the contact line, and the two-colour ribbon on the line (terrain.ts).
+    hexToLinear(colA, uniforms.uSideA.value);
+    hexToLinear(colB, uniforms.uSideB.value);
+    uniforms.uSideK.value = an.frontA > 0 && an.frontB > 0 ? 1 : 0;
     const st = frontStats(an.frontA, an.frontB);
     frontIntensity = lfFront ? lfFront.intensity : st.intensity;
     activity = Math.min(1, 0.45 + frontIntensity * 0.7);
@@ -1523,6 +1528,8 @@ export function createBattleRenderer(ctx: GameContext): BattleApi {
       const camH = camL.y - heightAt(camL.x, camL.z);
       uniforms.uRimK.value = quality.globeDetail <= 0 ? 0 : smoothstep(250, 900, camH);
       uniforms.uTerrK.value = smoothstep(1500, 5000, camH);
+      // The contact ribbon is a map mark: gone with the camera down among the men (the trenches show the line there).
+      uniforms.uRibbonK.value = smoothstep(150, 600, camH);
       // Fully shown, the battlefield is the ground: the globe's coarser relief (a smoothed valley floor sits tens of
       // metres above the real one) must not poke through it at grazing views. Inside the part of the patch that never
       // dissolves (the rim melts into the globe from 47 km when the camera is high; it stays solid when low).

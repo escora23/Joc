@@ -1474,6 +1474,22 @@ is written back to the simulation. There are no missions, objectives, waves, ope
     holes.
   * Reference: an autopilot road march of 300 km at 40 km/h takes 7.5 game hours = 75 ticks: 30 real seconds at ×900
     when the stream keeps up.
+  * **Travel camera** (×300 and up): ~1 km up and 1.8 km behind the column, pitched so the column stands in the lower
+    third of the frame (about 18° under the centre) with the country ahead up to the horizon. The haze thins with the
+    camera's height: from ~1 km up a clear day sees 60–80 km (exp² density for ~95 % haze at that range, never thicker
+    than the ground-level fog), as far as the 120 km horizon patch reaches. The road network between the towns in reach
+    is drawn as a ribbon that keeps ~2 px on screen at any range (`env/farroads.ts`, from `civil.mapRoads`), so the
+    villages read as linked places, not dot-clouds.
+* **Taking control at an action with the clock running (gauntlet fix).** The world waits from the click: the app sets
+  tactical time (1 game s per real s) the moment «Tomar el control» is pressed, before the dive and the fade (at 1x a
+  game hour passes every real second, and on a slow machine the entry took minutes: the offensive ran tens of km away
+  before the march began). During the march to an action the clock runs fast (×120…×3600) for the whole world, but the
+  target front's line holds (`setClock(…, hold: {frontKey, attackId})`, `Game.holdFront`: that front's offensives add no
+  pressure while the unit marches to them; every other clock message lifts it). If the march still ends short of
+  contact (its legs run out), «Ir al combate» goes on by itself (a drive to the line at tactical speed when the enemy is
+  in reach, else one more march): never «Pulsa G para seguir». The notice says what happened; «the line moves faster
+  than the march» only when its measured speed really exceeds the unit's march speed. The first view looks along the
+  bearing to the contact, pitched just over the ground on that bearing (not into a slope).
 * The clock is set with a new worker message `{kind: 'clock', mode, rate}` (§14.6). Crisis time never engages in
   command mode; nuclear alarms still show.
 * **Sub-tick simulation.** A tick lasts 6 real minutes in tactical time, so command-mode systems cannot wait for ticks.
@@ -1555,8 +1571,14 @@ If every pool is empty, the scene is peaceful. There is no fallback "strongest n
 1. **Approach.** At 2 km from the border of a nation you are at peace with, the HUD shows «Frontera con Francia (en paz)
    a 2 km» and travel drops to ×1.
 2. **Confirm.** Crossing asks once per border per session: «Entrar en Francia sin permiso es una incursión. Francia
-   recibirá una alerta y podrá protestar, enviar fuerzas o declararte la guerra.» [Cruzar] [Volver]. With an alliance or
-   open borders there is no incursion, only a notice.
+   recibirá una alerta y podrá protestar, enviar fuerzas o declararte la guerra.» [Cruzar · C] [Volver · Intro · Esc].
+   Safe defaults as for firing (item 31): Enter and Esc mean «Volver»; crossing is a click or the C key shown on its
+   button. «Volver» turns the vehicle back physically, never a 180° in one frame: the tank stops at the line and pivots
+   toward a point 150 m back on our side, then drives there; the jet flies a banked turn toward a point 6 km back; the
+   ship comes about at slow ahead. While the turn lasts (≤ 20 s, until the vehicle faces home) the swing over the line is
+   not an incursion (no move is sent across it) and the question is not asked again. Inside a foreign land the notice
+   reads «Estás en territorio de Suiza: la frontera queda a 0,2 km detrás» (an approach notice is hidden once across).
+   With an alliance or open borders there is no incursion, only a notice.
 3. **Event and warning** (reworked after owner feedback #19). The first `controlledMove` into a foreign tile makes the
    sim emit `borderIncursion {stage: 'entered', graceSec}` to both sides, and the victim warns at once on the radio
    («Estás violando el espacio aéreo de X. Da la vuelta o serás interceptada») with a visible countdown: a grace of
@@ -1646,8 +1668,17 @@ Existing bindings are kept; new keys are marked **new**.
 | | | | | **B** | «Bloquear esta zona» (item 31) |
 | Esc | leave command mode | Esc | leave | Esc | leave |
 
-The **tactical map** (`M`) is a 2D overlay of 60 km (tank), 300 km (jet) or 150 km (ship) around the vehicle: relief
-shading, ownership and borders, towns, known forces as icons (§10.7), fronts; a click sets the autopilot waypoint.
+The **tactical map** (`M`) is a 2D overlay of 60 km (tank), 300 km (jet) or 150 km (ship) around the vehicle, north
+up, drawn like a staff map (`command/tacmap.ts`, rebuilt in the gauntlet round): relief from a 256² local heightfield of
+the place (the scene's own relief and biomes) in muted biome colours under a standard hillshade (light from the
+north-west at 45°, z-factor 2), scaled smoothly; each nation's land as a translucent tint and the borders as one smooth
+line from the same quadratic B-spline coverage of the owner grid as the globe (water tiles do not vote); roads (the
+civil layer's network, same meanders) and railways (the sim's rail graph); towns by size with their names (placed
+without overlaps); structures and units with the strategic NATO symbols (frame by relation: own rectangle, ally dashed,
+at war diamond, others rounded; owner's fill; an hp bar when hurt); fronts at war as a thick orange line named «Frente
+con X»; your unit, the destination (dashed line, distance and march time at the unit's march speed, also in a line
+under the map); a scale bar and a north arrow; a legend of every symbol. A click sets the autopilot waypoint; a
+right-click clears it.
 
 ### 9.11 HUD
 
@@ -1657,6 +1688,15 @@ shading, ownership and borders, towns, known forces as icons (§10.7), fronts; a
 * Bottom: formation status (4 tank pips), integrity, ammo; for jets fuel is not simulated beyond the squadron reach.
 * Contact indicators: enemy direction markers, and the source of the local forces on hover («Guarnición del Frente de
   Lyon · 1.840 tropas en la zona»).
+* **Label placement** (`hud/labels.ts`, gauntlet fix): the vehicle HUD and the strategic layer share one board per
+  frame. The reticle keeps a clear disc of 70 px; what belongs to it (the target bracket's label, the range readout, the
+  reload tag) is reserved first; then, by priority, the objective / hottest-point marker's text, the destination's text,
+  the force under the cursor (drawn beside the cursor, never on the reticle), vehicle labels near the reticle, then
+  borders, forces, towns and bases. A label whose place falls in the disc is pushed out along the ray from the reticle
+  with a thin leader line to what it names; one that still collides is dropped. Edge arrows keep their text inside the
+  screen, on the side that faces inward. The chip's button names what G does for the target: «Ir al frente más
+  cercano» (a far front), «Ir a interceptar» (an enemy ship or squadron, from a warship or a jet), «Ir al combate» (a
+  line, a battle, an enemy division), «Ir al puerto», «Ir a la misión». The exit button reads «VOLVER AL MAPA».
 * No objective counter, no operation name.
 
 ### 9.12 Exit
@@ -1877,14 +1917,19 @@ One overlay module (`src/render/battle/overlay.ts`, ≤ 4 draw calls), fed by `v
 * **Operational arrow** per offensive: a curved arrow from 3 tiles behind the attacker's line to the axis point, its
   shaft as wide as the offensive's corridor (§4.3) at world scale with a 6 px minimum, attacker colour with a dark
   outline, 70 % opacity. Naval invasions: an arrow
-  along the convoy route ending at the landing.
+  along the convoy route ending at the landing — only for a real landing (gauntlet round 1: the landing tile belongs to
+  a nation the convoy's owner is at war with), the human's or aimed at him or an ally, or any convoy hovered or
+  selected; settlers bound for unclaimed land and moves to a nation's own coast have only their route line. It fades
+  between 1,000 and 400 km, slims to ~4 px half-width below 1,000 km and lets borders show through.
 * **Front badge** at the middle of the band: two colour chips with 3-letter codes (country ISO3; «TÚ» for the human), a
   tug-of-war bar (attacker share `Pa / (Pa + Pd)`), the **measured** advance (`advanceKmh`, §4.5: «▶ 5 km/h»,
   «‖ estancado» or «▶ 8 km/h · consolidando»), and division chips per side. Hover: names, troops per side, casualties, days of fighting, divisions. Click: select the front (camera and
   Guerra panel).
 * **Mobilization arrows**: during an aggressor's mobilization window, short pulsing arrows on its side of the border.
-* Visible above 150 km; hidden in command mode. A verifier must be able to say from one screenshot at 2,500 km who
-  attacks whom, in which direction, and who is winning.
+* In full above 260 km; hidden in command mode. Coming down (gauntlet round 1) the band slims to a 2-3 px two-colour
+  contact line (no chevrons; every arrow gone by 150 km) that stays down to 30-45 km, where the battlefield's own
+  ground ribbon (§11.5) takes over. A verifier must be able to say from one screenshot at 2,500 km who attacks whom, in
+  which direction, and who is winning.
 
 ### 11.3 The Guerra y frentes panel (`G`)
 
@@ -1922,6 +1967,10 @@ side being pushed; at most 6 smoke columns per front in view, opacity ≤ 0.35, 
   the anchor (1 tank per 25 % integrity + 2 IFVs). No generic vehicles.
 * **Air and sea**: real squadrons patrolling or striking over the front fly over; drone swarms supporting the front circle
   above; warships bombarding within range appear offshore with naval gunfire.
+* **Whose side is whose, on the ground** (gauntlet round 1, item 11): each side's half of the battlefield takes its
+  nation's colour at 0.2 (the globe's territory fill), split along the sub-tile contact line, and a thin two-colour
+  ribbon (each half in its side's colour, a dark hairline down the middle; a few pixels wide at any height, gone with
+  the camera below ~150 m among the men) marks the line, continuing the orbit's slim contact line.
 * Casualties stay visual (the sim decides the numbers); explosion rate follows the front intensity.
 * Pressing `T` on a division from a visible battle hands the spawned entities to command mode (§9.6).
 
@@ -3504,7 +3553,23 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   its sight and more than 150 m off, up to 70 % of a side, stand again on ground in its sight — waves at every stage,
   a third of our squads around the tank, defenders in the trench or in foxholes up to 60 m before and 40 m behind it)
   and the view turns to the fighting. Inside a battle, G does the
-  same whenever the stretch is more than 150 m away. The drive's goal follows the stretch as the line moves (up to 4
+  same whenever the stretch is more than 150 m away.
+* **Gauntlet round 1: an army at scale from the default camera.** In the Pyrenees the vantage above (the most figures
+  in sight) was a hilltop looking across a valley at a mountainside 500 m off, where 800 men read as 2-6 px specks.
+  Now the drive goes to the **flattest ground within ±1.5 km** of the hot point (RMS bumps of the fight's box — 320 m
+  behind our line to 180 m beyond it, ±200 m along — after a plane fit, + 15 % of the plane's own rise over 400 m,
+  + water, + 9 m per km from the hot point), to a standable spot with the **enemy's forward trench 300 m ahead**
+  (250-350) and in sight, a few metres above no man's land if it can be; the view turns **along the line**, ~35° off
+  its normal toward the side with more of the trench in sight, so the trench and the waves recede across the picture.
+  On arrival 75 % of the squads and of the forward trench's men stand in the picture (ours 150-400 m from the tank,
+  theirs 250-450 m, ±40° of the view); squads keep **close order** (two ranks, 3.2 m between files, the rear rank
+  3.5 m behind; every man's goal is his place at the squad's halt line, puppets move in lockstep, awake men barely
+  weave) and fire in **volleys** (the squad's riflemen within half a second, every 3-5 s by heat); flashes keep
+  ~5 px within 900 m (riflemen awake ~4 px) and tracers ~2 px; the readable scale keeps a **kneeling** man (1.2 m)
+  6.5 px tall (a standing man was the reference: the kneeling majority were 3-4 px). **V** lifts the camera for 7 s
+  to ~72 m over the ground 60 m behind the tank, looking 330 m ahead along the view (the whole line at once); V again
+  or the sight ends it. Acceptance (f32-verify S8/S9): from the default chase camera on arrival ≥ 150 figures drawn
+  ≥ 6 px and the enemy line in sight 250-380 m off; V at 55-95 m with the enemy line and ≥ 150 men in view. The drive's goal follows the stretch as the line moves (up to 4
   times); it gives up after 10 s without headway.
 * In command mode the chip at the top always names the battle: «Batalla en la línea contra X · Lo más duro, a 1,2 km
   · intensidad alta · N nuestros y M enemigos en este tramo» with a compass direction and a world marker on the hot

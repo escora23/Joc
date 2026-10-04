@@ -230,6 +230,11 @@ export const SLEEP_M = 1400;
 const CROWD_MAX_SCALE = 4;
 const CROWD_MIN_PX = 6.5;
 /**
+ * The height (m) the readable scale keeps CROWD_MIN_PX tall: a man kneeling to fire (gauntlet round 1: scaled for a
+ * man standing, the kneeling majority of a battle were 3-4 px specks on the slopes).
+ */
+const READ_H = 1.2;
+/**
  * Owner item 32 (pass 2): a figure darkens with distance from ~120 m (to 60 % at ~700 m and beyond). Field colours are
  * made to blend into the ground; a few pixels of man read against sunlit grass and rock by contrast, as a silhouette.
  */
@@ -660,10 +665,15 @@ export class World {
   private readonly crowdCam = new THREE.Vector3(1e9, 0, 0);
   private crowdDirty = true;
 
+  /** The world size (m) that is `px` pixels across at p in the last frame's view (far flashes and tracers keep a size). */
+  screenSize(p: THREE.Vector3, px: number): number {
+    return (px * Math.hypot(p.x - this.viewPos.x, p.y - this.viewPos.y, p.z - this.viewPos.z)) / this.ppm1;
+  }
+
   /** The scale that keeps a man CROWD_MIN_PX tall in the last frame's view (1 near, at most CROWD_MAX_SCALE). */
   private readableScale(p: THREE.Vector3): number {
     const d = Math.max(1, Math.hypot(p.x - this.viewPos.x, p.y - this.viewPos.y, p.z - this.viewPos.z));
-    const px = (1.8 * this.ppm1) / d;
+    const px = (READ_H * this.ppm1) / d;
     return Math.max(1, Math.min(CROWD_MAX_SCALE, CROWD_MIN_PX / Math.max(1e-3, px)));
   }
 
@@ -760,7 +770,7 @@ export class World {
           im.setColorAt(i, this.tmpColor);
           if (im.instanceColor) im.instanceColor.needsUpdate = true;
         }
-        const px = (1.8 * ppm1) / Math.max(1, d);
+        const px = (READ_H * ppm1) / Math.max(1, d);
         const sc = Math.max(1, Math.min(CROWD_MAX_SCALE, CROWD_MIN_PX / Math.max(1e-3, px)));
         e.drawScale = sc;
         this.e.set(0, e.yaw, 0, 'YXZ');
@@ -806,7 +816,8 @@ export class World {
           // Half of each cycle on the move (an assault reads by its men running), half down firing.
           const rush = dist > 5 && ph < 0.5;
           if (rush) {
-            this.setPose(e, e.seed < 0.25 ? POSE.run : POSE.rush);
+            // The squad moves as one (its men keep their places in the formation): the gait is the squad's, not the man's.
+            this.setPose(e, e.wave % 4 === 0 ? POSE.run : POSE.rush);
             const sp = e.pose === POSE.run ? 3.6 : 2.8;
             e.yaw = Math.atan2(-dx, -dz);
             e.speed = sp;
@@ -831,6 +842,17 @@ export class World {
         const lx = e.look.x - e.pos.x, lz = e.look.z - e.pos.z;
         if (lx * lx + lz * lz > 1) e.yaw = Math.atan2(-lx, -lz);
         if (heat <= 0.01) continue;
+        if (e.order === 'front' && e.wave >= 0 && e.variant === 0) {
+          // A squad down to fire fires together (gauntlet round 1): a volley every few seconds, its riflemen within half
+          // a second of each other — from 500 m a ripple of flashes and a sheaf of tracers that reads as one squad.
+          const per = (3.2 + (e.wave % 4) * 0.5) / (0.5 + heat * 0.7);
+          const off = e.wave * 1.37 + e.seed * 0.5;
+          if (((t + off) % per) < ((t - dt + off) % per)) {
+            e.fireT = t;
+            this.puppetShot(e);
+          }
+          continue;
+        }
         e.fireCd -= dt * (0.35 + heat);
         if (e.fireCd > 0) continue;
         if (e.burst <= 0) e.burst = e.variant === 2 ? 6 + Math.floor(this.rng.next() * 8) : 2 + Math.floor(this.rng.next() * 3);
@@ -869,8 +891,9 @@ export class World {
     const cam = this.viewPos;
     const dCam = Math.hypot(mx - cam.x, mz - cam.z);
     const big = Math.max(1, dCam / 250);
-    // A muzzle flash stays ~3 px across however far (a line firing reads as a line of twinkles from a kilometre).
-    const flash = Math.max(0.3, (3 * dCam) / this.ppm1);
+    // A muzzle flash stays ~3 px across however far (a line firing reads as a line of twinkles from a kilometre), ~5 px
+    // within 900 m (gauntlet round 1: a squad's volley readable at 500 m).
+    const flash = Math.max(0.3, ((dCam < 900 ? 5 : 3) * dCam) / this.ppm1);
     if (e.variant === 1) {
       // An anti-tank rocket: a smoky streak and a blast at its line.
       TMP2.set(mx, my, mz);
@@ -1470,9 +1493,10 @@ export class World {
       if (V[o + 6] <= 0) continue;
       const sp = Math.hypot(V[o + 3], V[o + 4], V[o + 5]);
       const len = Math.min(24, sp * 0.024) / sp;
-      // At least ~1.4 px wide where it is now (a far tracer of 0.1 m is invisible beyond a few hundred metres).
+      // At least ~2 px wide where it is now (a far tracer of 0.1 m is invisible beyond a few hundred metres; gauntlet
+      // round 1: 1.4 px did not read at 500 m).
       const dv = Math.hypot(V[o] - this.viewPos.x, V[o + 1] - this.viewPos.y, V[o + 2] - this.viewPos.z);
-      const w = Math.max(V[o + 7], Math.min(2.5, (1.4 * dv) / this.ppm1));
+      const w = Math.max(V[o + 7], Math.min(3, (2 * dv) / this.ppm1));
       const rocket = sp < 300;
       if (rocket) {
         P.glow(V[o], V[o + 1], V[o + 2], w * 6, 6, 3.4, 1.4, 1);

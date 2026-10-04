@@ -76,6 +76,10 @@ uniform float uHalf;
 uniform float uDebugSplat;
 uniform float uRimK;
 uniform float uTerrK;
+uniform vec3 uSideA;
+uniform vec3 uSideB;
+uniform float uSideK;
+uniform float uRibbonK;
 varying vec3 vPos;
 varying vec3 vNrm;
 varying float vRim;
@@ -303,6 +307,27 @@ void main() {
     // territory colour takes over.
     fa *= max(uTerrK, smoothstep(30000.0, 47000.0, length(vPos.xz)));
     alb = territoryFill(alb, vTerr.rgb, fa);
+  }
+  // Who holds which side, on the ground itself (gauntlet round 1, FEEDBACK-1 item 11: «where, who against whom»
+  // depended on two floating labels). Each side's half of the battlefield takes its nation's colour lightly (0.2, the
+  // globe's own fill), split along the sim's sub-tile contact line; a thin two-colour ribbon marks the line itself, a
+  // few pixels wide at any height (the orbit's front band hands over to it as the camera comes down), each half in its
+  // side's colour with a dark hairline down the middle. Toward the patch's rim the territory fill takes over.
+  if (uSideK > 0.001) {
+    float alongS = 1.0 - smoothstep(uFrontL * 0.85, uFrontL * 1.02, abs(fc.x));
+    float sideK = uSideK * alongS * (1.0 - smoothstep(9000.0, 15000.0, length(xz))) * (1.0 - smoothstep(0.35, 0.8, waterK));
+    if (sideK > 0.001) {
+      float soft = 3.0 + 3.0 * px;
+      vec3 sc = mix(uSideA, uSideB, smoothstep(-soft, soft, fc.y));
+      // (With the camera high the territory fill above takes over the halves; the ribbon stays.)
+      alb = territoryFill(alb, sc, 0.2 * sideK * (1.0 - 0.7 * uTerrK));
+      float d = abs(fc.y);
+      float halfW = max(4.0, 2.0 * px);
+      float rib = (1.0 - smoothstep(halfW, halfW + 1.2 * px + 0.5, d)) * sideK * uRibbonK;
+      alb = mix(alb, territoryTarget(alb, fc.y < 0.0 ? uSideA : uSideB) * 1.15, rib * 0.85);
+      float hair = 1.0 - smoothstep(0.3 * px + 0.3, 0.8 * px + 0.7, d);
+      alb = mix(alb, vec3(0.015), hair * rib * 0.8);
+    }
   }
 
   // Crude slope/cavity occlusion from the macro noise.

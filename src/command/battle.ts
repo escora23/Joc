@@ -73,6 +73,8 @@ const WIRE_CAP = 700;
 /** Shell holes in the battle's stretch. */
 const HOLES_CAP = 420;
 const STEP_M = 10;
+/** The tank's vantage at the hot stretch: this far from the enemy's forward trench (m; gauntlet round 1: 250-350). */
+const VANTAGE_TO_TRENCH = 300;
 
 export interface BattleSideInfo {
   owner: number;
@@ -150,6 +152,14 @@ const M4 = new THREE.Matrix4();
 const Q = new THREE.Quaternion();
 const E = new THREE.Euler();
 const S1 = new THREE.Vector3(1, 1, 1);
+/** A framed spot (arc s, depth d) while laying out the fight in the view. */
+const FV = { s: 0, d: 0 };
+/** Land cover sample (relief: woods and towns). */
+const SAMPLE = { splat: new Float32Array(8), tint: [0, 0, 0] as [number, number, number] };
+
+function fract(x: number): number {
+  return x - Math.floor(x);
+}
 
 export class BattleLine {
   readonly group = new THREE.Group();
@@ -280,11 +290,18 @@ export class BattleLine {
   }
 
   /**
-   * Where a tank should stand to fight at the hot stretch (`at`): around `depth` m behind the line on the friendly side,
-   * on ground a tank can stand on (slope ≤ ~22° over 10 m, dry), looking at the fight: the most of the enemy's line
-   * near `at` (its forward trench) and of the battle's figures ahead of it in sight from the commander's eye (3 m up,
-   * not behind a crest); figures behind count a quarter. Candidates ±300 m along the line and 150-380 m deep; the nearer
-   * to the ideal, the better.
+   * Where a tank should stand to fight at the hot stretch (`at`), and where it looks (gauntlet round 1, owner item 32:
+   * in the Pyrenees the old vantage, the place with the most figures in sight, was a hilltop looking across a valley
+   * at a mountainside 500 m off, where an army of 800 read as specks on a slope).
+   *   1. The stretch: of the line within ±1.5 km of `at` (100 m steps), the flattest ground for the fight — the box
+   *      from 320 m behind our line to 180 m beyond it, ±200 m along — by the bumps left after fitting a plane (ridges
+   *      and gullies), a little for a steep plane, much for water, and a little for every kilometre from `at`.
+   *   2. The spot: on our side, deep enough that the enemy's forward trench lies 250-350 m ahead (`VANTAGE_TO_TRENCH`),
+   *      on ground a tank stands on, with the most of that trench in sight from the commander's eye (3 m up), a few
+   *      metres above no man's land if it can be (a gentle rise behind our line).
+   *   3. The view: along the line, not straight across it — toward the enemy trench ~35° off the line's normal, on the
+   *      side where more of it is in sight (`vantageLook`), so the trench and the waves recede across the picture.
+   * `depth` is the depth of the plain stand-off (the fallback when nothing better is found).
    */
   bestStandOff(at: THREE.Vector3, depth: number, out: THREE.Vector3): THREE.Vector3 | null {
     if (!this.standOff(at, depth, out)) return null;
@@ -292,61 +309,182 @@ export class BattleLine {
     const g = this.host.ground;
     const c = this.centre!;
     const s0 = this.alongOf(at.x - c.x, at.z - c.z);
-    const figs: Ent[] = [];
-    // A sample of the figures (about 250: the score is a share, and each one costs a line-of-sight walk).
-    const total = [...this.sides.values()].reduce((n, q) => n + q.members.length, 0);
-    const stride = Math.max(3, Math.ceil(total / 250));
-    for (const st of this.sides.values()) for (let i = 0; i < st.members.length; i += stride) if (st.members[i].e.alive) figs.push(st.members[i].e);
-    // The enemy's forward trench around the hot stretch (what the crew must see).
-    const marks: THREE.Vector3[] = [];
-    for (const ds of [-200, -100, 0, 100, 200]) {
-      const sm = Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds));
-      const m = this.at(sm, -own.sign * this.trenchDepth((-own.sign) as 1 | -1, TRENCH_D, sm), new THREE.Vector3());
-      m.y = g.heightAt(m.x, m.z) + 1;
-      marks.push(m);
+    const lo = this.sMin + 260, hi = this.sMin + (this.nPts - 1) * STEP_M - 260;
+    // 1. The flattest stretch within ±1.5 km.
+    let sF = Math.max(lo, Math.min(hi, s0)), bestR = Infinity;
+    for (let k = -15; k <= 15; k++) {
+      const s = s0 + k * 100;
+      if (s < lo || s > hi) continue;
+      const r = this.relief(s, own.sign) + Math.abs(k) * 0.9;
+      if (r < bestR) {
+        bestR = r;
+        sF = s;
+      }
     }
+    // 2. The spot: the enemy's forward trench 250-350 m ahead, in sight, on standable ground.
+    const ft = this.foeTrench(own, sF);
+    const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
     const sees = (x: number, y0: number, z: number, tx: number, ty: number, tz: number): boolean => {
       const dx = tx - x, dz = tz - z;
-      const k = Math.max(4, Math.min(30, Math.round(Math.hypot(dx, dz) / 30)));
+      const k = Math.max(6, Math.min(30, Math.round(Math.hypot(dx, dz) / 20)));
       for (let j = 1; j < k; j++) {
         const f = j / k;
         if (g.heightAt(x + dx * f, z + dz * f) > y0 + (ty - y0) * f) return false;
       }
       return true;
     };
-    const n = new THREE.Vector3();
-    let best = -Infinity;
-    const cand = new THREE.Vector3();
-    // (Pass 2: a wider search along the line — in hills the place that overlooks the fight can be a few hundred
-    // metres off — but no deeper than 380 m: the tank fights among its infantry, not from the rear.)
-    for (const ds of [0, -100, 100, -200, 200, -300, 300, -450, 450]) {
-      for (const dd of [depth, depth - 70, depth + 80, depth + 160]) {
-        const s = Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds));
+    const mark = (s: number, o: THREE.Vector3): THREE.Vector3 => {
+      this.at(s, -own.sign * this.foeTrench(own, s), o);
+      o.y = g.heightAt(o.x, o.z) + 1;
+      return o;
+    };
+    // No man's land's mean height (a spot a little above it sees over it).
+    let mean = 0;
+    for (let j = -2; j <= 2; j++) mean += g.heightAt(this.at(sF + j * 100, 0, V1).x, V1.z) / 5;
+    const n = new THREE.Vector3(), cand = new THREE.Vector3(), m = new THREE.Vector3();
+    let best = -Infinity, bestSide: 1 | -1 = 1;
+    let found = false;
+    for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
+      for (const dd of [D, D - 40, D + 40, D + 90]) {
+        const s = sF + ds;
         this.at(s, own.sign * dd, cand);
         const h = g.heightAt(cand.x, cand.z);
-        if (h < 0.8 || g.normalAt(cand.x, cand.z, n, 10).y < 0.93) continue;
+        const ny = g.normalAt(cand.x, cand.z, n, 10).y;
+        if (h < 0.8 || ny < 0.93) continue;
         const y0 = h + 3;
-        // Toward the fight: the direction to `at`.
-        const fx = at.x - cand.x, fz = at.z - cand.z, fl = Math.hypot(fx, fz) || 1;
-        let score = 0;
-        for (const m of marks) if (sees(cand.x, y0, cand.z, m.x, m.y, m.z)) score += 15;
-        for (const e of figs) {
-          const dx = e.pos.x - cand.x, dz = e.pos.z - cand.z;
-          const d = Math.hypot(dx, dz);
-          if (d > 1200 || d < 1) continue;
-          if (!sees(cand.x, y0, cand.z, e.pos.x, e.pos.y + 1, e.pos.z)) continue;
-          // The enemy in sight counts most (there are fewer of them, and they are what the crew has come to fight).
-          score += ((dx * fx + dz * fz) / (d * fl) > 0.34 ? 1 : 0.25) * (e.team === 1 ? 3 : 0.6);
+        // The trench on each side of the spot (oblique views), and straight ahead.
+        let left = 0, right = 0, ahead = 0;
+        for (const off of [60, 130, 200, 270, 340]) {
+          if (sees(cand.x, y0, cand.z, ...mark(s + off, m).toArray() as [number, number, number])) right++;
+          if (sees(cand.x, y0, cand.z, ...mark(s - off, m).toArray() as [number, number, number])) left++;
         }
-        // (Along the line a vantage may be well off the hot point; deeper back it is out of the fight.)
-        score -= Math.abs(ds) * 0.02 + Math.abs(dd - depth) * 0.04;
+        if (sees(cand.x, y0, cand.z, ...mark(s, m).toArray() as [number, number, number])) ahead++;
+        const dist = Math.hypot(m.x - cand.x, m.z - cand.z);
+        const score = Math.max(left, right) * 3 + Math.min(left, right) + ahead * 4 + (ny - 0.93) * 60
+          + Math.max(0, Math.min(12, h - mean)) * 0.4 - Math.abs(ds) * 0.02 - Math.max(0, Math.abs(dist - 300) - 50) * 0.08;
         if (score > best) {
           best = score;
+          bestSide = right >= left ? 1 : -1;
           out.copy(cand).setY(h);
+          found = true;
         }
       }
     }
+    if (!found) {
+      // Nothing standable around the flattest stretch: the plain stand-off level with the hot point.
+      this.vantage = null;
+      return out;
+    }
+    // 3. The view along the line: the enemy trench ~35° off the normal, on the side the crew sees more of.
+    const sOut = this.alongOf(out.x - c.x, out.z - c.z);
+    const dOut = Math.abs(this.depthOf(out.x, out.z, sOut));
+    const look = mark(sOut + bestSide * 0.7 * (dOut + this.foeTrench(own, sOut)), new THREE.Vector3());
+    // (A new vantage: the trees around it go down too — scatter `shelled` — so the crew's view is the battle.)
+    if (!this.vantage || this.vantage.pos.distanceTo(out) > 30) this.groundVersion++;
+    this.vantage = { pos: out.clone(), look, relief: bestR };
     return out;
+  }
+
+  /**
+   * Tools (gauntlet round 1): the enemy's line as points every `step` m along the stretch — the hostile defenders'
+   * forward trench (1 m over the ground), or the contact line when the enemy attacks. Empty without a battle.
+   */
+  foeLine(step = 25): THREE.Vector3[] {
+    const out: THREE.Vector3[] = [];
+    if (!this.active || !this.centre) return out;
+    const own = [...this.sides.values()].find((q) => q.team === 0);
+    const foe = [...this.sides.values()].find((q) => q.team === 1);
+    if (!own || !foe) return out;
+    for (let s = -HALF_WINDOW_M; s <= HALF_WINDOW_M; s += step) {
+      const p = this.at(s, foe.role === 'attack' ? 0 : -own.sign * this.foeTrench(own, s), new THREE.Vector3());
+      p.y = this.host.ground.heightAt(p.x, p.z) + 1;
+      if (p.y > 1.5) out.push(p);
+    }
+    return out;
+  }
+
+  /** The last vantage `bestStandOff` chose: where it is, where its view along the line looks, its ground's relief. */
+  private vantage: { pos: THREE.Vector3; look: THREE.Vector3; relief: number } | null = null;
+
+  /**
+   * Where the view looks from the vantage the tank stands on (within 120 m of the last one chosen): along the line at
+   * the enemy's forward trench. Null elsewhere.
+   */
+  vantageLook(from: THREE.Vector3): THREE.Vector3 | null {
+    const v = this.vantage;
+    return v && Math.hypot(from.x - v.pos.x, from.z - v.pos.z) < 120 ? v.look.clone() : null;
+  }
+
+  /**
+   * How rough the battle's ground is at arc s (m): heights over the fight's box (±200 m along, from 320 m behind our
+   * line to 180 m beyond it), the RMS left after a plane fit (ridges, gullies, a valley between the lines), plus a
+   * little of the plane's own steepness and a heavy penalty for water.
+   */
+  private relief(s: number, ownSign: 1 | -1): number {
+    const g = this.host.ground;
+    const us = [-200, -100, 0, 100, 200], vs = [320, 220, 120, 20, -80, -180];
+    const hs: number[] = [];
+    let wet = 0, sum = 0, wood = 0;
+    for (const u of us) {
+      for (const v of vs) {
+        const p = this.at(s + u, ownSign * v, V1);
+        const h = g.heightAt(p.x, p.z);
+        if (h < 0.8) wet++;
+        // (Woods and towns: open ground reads better, even with the battle's ground shelled bare.)
+        if (g.sample(p.x, p.z, SAMPLE)) wood += SAMPLE.splat[2] + SAMPLE.splat[5];
+        hs.push(h);
+        sum += h;
+      }
+    }
+    const mean = sum / hs.length;
+    const vMean = vs.reduce((a, b) => a + b, 0) / vs.length;
+    let su = 0, sv = 0, uu = 0, vv = 0;
+    let i = 0;
+    for (const u of us) {
+      for (const v of vs) {
+        const h = hs[i++] - mean;
+        su += h * u;
+        sv += h * (v - vMean);
+        uu += u * u;
+        vv += (v - vMean) * (v - vMean);
+      }
+    }
+    const a = su / uu, b = sv / vv;
+    let rss = 0;
+    i = 0;
+    for (const u of us) for (const v of vs) {
+      const r = hs[i++] - mean - a * u - b * (v - vMean);
+      rss += r * r;
+    }
+    return Math.sqrt(rss / hs.length) + Math.hypot(a, b) * 400 * 0.15 + wet * 25 + (wood / hs.length) * 12;
+  }
+
+  /**
+   * Owner item 32 (gauntlet round 1): the battle's shelled ground, for the trees (env/scatter.ts `shelled`): 0 a tree
+   * stands, 1 it lies shattered, 2 it is gone. No man's land and the lines either side of it (within 220 m of the
+   * contact line, thinning out to 450 m) along the stretch, and 70 m around the tank's vantage, are shelled bare but for
+   * a few fallen trunks: the crew sees its battle, not the tree beside it.
+   */
+  shelledAt(x: number, z: number): number {
+    if (!this.active || !this.centre) return 0;
+    const u = fract(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453);
+    const v = this.vantage;
+    if (v && Math.hypot(x - v.pos.x, z - v.pos.z) < 70) return u < 0.2 ? 1 : 2;
+    const s = this.alongOf(x - this.centre.x, z - this.centre.z);
+    const over = Math.abs(s) - HALF_WINDOW_M;
+    if (over > 80) return 0;
+    const d = Math.abs(this.depthOf(x, z, s));
+    let k = d < 220 ? 1 : d < 450 ? 1 - (d - 220) / 230 : 0;
+    if (over > 0) k *= 1 - over / 80;
+    if (fract(u * 7.31 + 0.17) >= k) return 0;
+    return u < 0.3 ? 1 : 2;
+  }
+
+  /** Signed depth of (x, z) from the line at arc s (m toward side b). */
+  private depthOf(x: number, z: number, s: number): number {
+    const nrm = { x: 0, z: 0 };
+    const q = this.at(s, 0, V2, nrm);
+    return (x - q.x) * nrm.x + (z - q.z) * nrm.z;
   }
 
   /** Changes whenever the battle's ground does (the grass is trodden down again: index.ts → Grass.trample). */
@@ -791,8 +929,14 @@ export class BattleLine {
         // the infantry a tank supports — hundreds of men in the view, not specks on the far slopes.
         const own = st.team === 0 ? this.playerD * st.sign : -1;
         const escort = initial && own > 40 && own < WAVE_D1 + 200 && rng.next() < 0.34;
-        for (let tr = 0; tr < 4; tr++) {
-          if (escort) {
+        // Laid out in the view on arriving at the hot stretch (gauntlet round 1): most squads in the picture, ours
+        // 150-400 m from the tank, theirs 250-450 m, within ±40° of where the view looks.
+        const framed = !!this.ahead && rng.next() < 0.75;
+        for (let tr = 0; tr < 6; tr++) {
+          if (framed && this.framedSpot(player, st.team === 0 ? 150 : 250, st.team === 0 ? 400 : 450, FV)) {
+            s = FV.s;
+            start = Math.max(-(this.foeTrench(st, s) - HALT_SHORT) + 5, Math.min(WAVE_D1 + 200, FV.d * st.sign));
+          } else if (escort) {
             s = this.playerS + (rng.next() - 0.5) * 420;
             start = Math.max(-HALT_SHORT + 10, own + (rng.next() - 0.68) * 300);
           } else {
@@ -804,14 +948,20 @@ export class BattleLine {
           if (this.goodSpot(player, s, st.sign * start)) break;
         }
         const wave = st.waveN++;
+        // Close order (gauntlet round 1: men scattered 10 m apart over a 40 × 30 m patch read as specks, not a squad):
+        // two ranks, 3.2 m between files, the rear rank 3.5 m behind and staggered half a file; each man keeps his
+        // place in the formation up to the halt line short of the enemy trench (the whole squad halts together).
+        const files = Math.ceil(size / 2);
+        const halt = -(this.foeTrench(st, s) - HALT_SHORT) - rng.next() * 20;
         for (let i = 0; i < size; i++) {
-          const si = s + (rng.next() - 0.5) * 40;
-          const d0 = start + (rng.next() - 0.5) * 30;
-          const ft = this.foeTrench(st, si);
-          const halt = -(ft - HALT_SHORT) - rng.next() * 25;
+          const rank = i % 2, file = (i >> 1);
+          const along = (file - (files - 1) / 2) * 3.2 + rank * 1.6 + (rng.next() - 0.5) * 0.9;
+          const back = rank * 3.5 + (rng.next() - 0.5) * 1.0;
+          const si = s + along;
+          const d0 = start + back;
           const pos = this.at(si, st.sign * d0, V1);
-          const goal = this.at(si + (rng.next() - 0.5) * 20, st.sign * Math.min(d0, halt), new THREE.Vector3());
-          const look = this.at(si, -st.sign * ft, new THREE.Vector3());
+          const goal = this.at(si, st.sign * Math.min(d0, halt + back), new THREE.Vector3());
+          const look = this.at(si, -st.sign * this.foeTrench(st, si), new THREE.Vector3());
           // An AT team with one squad in three, a machine gunner in every squad (a platoon's weapons, pass 2: at the
           // battle's density one AT team per two squads made the tank's arrival a rain of missiles).
           const variant: 0 | 1 | 2 = i === 0 && wave % 3 === 0 ? 1 : i === 1 ? 2 : 0;
@@ -830,8 +980,11 @@ export class BattleLine {
       const goal = new THREE.Vector3();
       // Of a few places along the line, the first in the player's sight (see the attack above); after two tries in
       // the trench itself, a firing position (a foxhole) up to 60 m before it or 40 m behind it.
+      // (Laid out in the view on arriving, gauntlet round 1: most of the forward trench's men stand where the view
+      // looks along it, 250-450 m off.)
+      const framed = !!this.ahead && (initial ? r < 0.55 : r < 0.15) && rng.next() < 0.7;
       for (let tr = 0; tr < 5; tr++) {
-        s = this.spread(rng.next());
+        s = framed && this.framedSpot(player, 200, 470, FV) ? FV.s : this.spread(rng.next());
         if (initial ? r < 0.55 : r < 0.15) d = this.trenchDepth(st.sign, TRENCH_D, s) + 0.5 + rng.next() * 0.6 + (tr >= 2 ? -60 + rng.next() * 100 : 0);
         else if (initial ? r < 0.8 : r < 0.4) d = this.trenchDepth(st.sign, TRENCH2_D, s) + 0.5 + rng.next() * 0.6 + (tr >= 2 ? -60 + rng.next() * 100 : 0);
         else d = RESERVE_D0 + rng.next() * (RESERVE_D1 - RESERVE_D0);
@@ -874,13 +1027,19 @@ export class BattleLine {
     }
     let moved = 0;
     const ahead = this.ahead;
-    // Behind the tank (looking toward the fight): our men there are out of the view and the gun's way too.
+    // Behind the tank (looking toward the fight): our men there are out of the view and the gun's way too. And (gauntlet
+    // round 1) anyone well out of the picture — more than 60° off the view or beyond 900 m — is laid out again in it.
     const behind = (e: Ent): boolean => !!ahead && ((e.pos.x - player.pos.x) * ahead.x + (e.pos.z - player.pos.z) * ahead.z) < -60;
+    const offView = (e: Ent): boolean => {
+      if (!ahead) return false;
+      const dx = e.pos.x - player.pos.x, dz = e.pos.z - player.pos.z, l = Math.hypot(dx, dz) || 1;
+      return l > 900 || (dx * ahead.x + dz * ahead.z) / l < 0.5;
+    };
     for (const st of this.sides.values()) {
       const out = st.members.filter((m) => m.e.alive && m.e.pos.distanceTo(player.pos) > 150
-        && (!this.sees(player, m.e.pos.x, m.e.pos.z) || (st.team === 0 && behind(m.e))))
+        && (!this.sees(player, m.e.pos.x, m.e.pos.z) || (st.team === 0 && behind(m.e)) || offView(m.e)))
         .sort((a, b) => b.e.pos.distanceToSquared(player.pos) - a.e.pos.distanceToSquared(player.pos));
-      const n = Math.min(out.length, Math.round(st.target * 0.7));
+      const n = Math.min(out.length, Math.round(st.target * 0.75));
       for (let i = 0; i < n; i++) {
         this.host.world.despawn(out[i].e);
         st.members.splice(st.members.indexOf(out[i]), 1);
@@ -923,6 +1082,23 @@ export class BattleLine {
       if ((dx * this.ahead.x + dz * this.ahead.z) / l < 0.26) return false;
     }
     return this.sees(player, px, pz);
+  }
+
+  /**
+   * A place in the picture (laying out the fight around the tank on arrival): a point min..max m from the player within
+   * ±40° of where the view looks (`ahead`), as arc s and depth d (toward side b) on the line. False when not laying out.
+   */
+  private framedSpot(player: Ent, min: number, max: number, out: { s: number; d: number }): boolean {
+    const a = this.ahead;
+    if (!a || !this.centre) return false;
+    const rng = this.host.world.rng;
+    const ang = (rng.next() - 0.5) * 2 * 0.7, r = min + rng.next() * (max - min);
+    const cs = Math.cos(ang), sn = Math.sin(ang);
+    const x = player.pos.x + (a.x * cs - a.z * sn) * r, z = player.pos.z + (a.x * sn + a.z * cs) * r;
+    out.s = this.alongOf(x - this.centre.x, z - this.centre.z);
+    if (Math.abs(out.s) > HALF_WINDOW_M) return false;
+    out.d = this.depthOf(x, z, out.s);
+    return true;
   }
 
   private soldier(st: SideState, x: number, z: number, order: 'hold' | 'front', goal: THREE.Vector3, look: THREE.Vector3, wave: number, variant: 0 | 1 | 2, player: Ent): Ent | null {

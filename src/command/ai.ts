@@ -165,10 +165,13 @@ export class Brain {
     if (dist < 1) T1.set(0, 0, -1);
     T1.normalize();
     const s2 = Math.min(stride, dist * 0.6 + 20);
+    // A man of an assault squad keeps his place in its close order (gauntlet round 1: his goal is his place at the halt
+    // line, so the squad advances as one); others weave.
+    const j = !e.rig && e.wave >= 0 ? 0.08 : 0.9;
     e.moveT.set(
-      e.pos.x + T1.x * s2 + (r.next() - 0.5) * stride * 0.9,
+      e.pos.x + T1.x * s2 + (r.next() - 0.5) * stride * j,
       0,
-      e.pos.z + T1.z * s2 + (r.next() - 0.5) * stride * 0.9,
+      e.pos.z + T1.z * s2 + (r.next() - 0.5) * stride * j,
     );
   }
 
@@ -699,9 +702,11 @@ export class Brain {
       T4.y += (w.rng.next() - 0.5) * spread;
       T4.z += (w.rng.next() - 0.5) * spread * 2;
       T4.normalize();
-      w.fireBullet(e, e.team, T3, T4, 800, 4.5, w.rng.next() < 0.35, false, 0xffc080, 0.08, 1.2);
+      // (Gauntlet round 1: a rifleman's flash keeps ~4 px and his tracer ~2 px however far he is from the camera, so a
+      // squad firing reads at 500 m.)
+      w.fireBullet(e, e.team, T3, T4, 800, 4.5, w.rng.next() < 0.35, false, 0xffc080, Math.min(0.6, Math.max(0.08, w.screenSize(T3, 2))), 1.2);
       w.shotFired(e);
-      w.fx.gunFlash(T3.addScaledVector(T4, 0.9), T4, 0.5);
+      w.fx.gunFlash(T3.addScaledVector(T4, 0.9), T4, Math.min(3, Math.max(0.5, w.screenSize(T3, 4))));
       if (w.rng.next() < 0.15) w.fx.playAt('gunfire', T3, 0.25);
     }
   }

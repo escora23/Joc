@@ -1,6 +1,8 @@
 // FRONT ULTRA — the front overlay seen from orbit (DESIGN_V2 §11.2; owner: battle, W6).
 //
-// From 150 km up, every front of the simulation reads as a map symbol drawn over the globe (and over the clouds):
+// From 260 km up, every front of the simulation reads as a map symbol drawn over the globe (and over the clouds); coming
+// down, the band slims to a 2-3 px two-colour contact line (no chevrons, no arrows below 150 km) that the battlefield's
+// own ground ribbon takes over from 45 to 30 km (gauntlet round 1):
 //   * FRONT BAND along the sub-tile contact line, split lengthwise into the two nations' colours (side a behind the
 //     line, side b ahead of it), 1.5 tiles wide in world space with a 14 px minimum. Chevrons scroll across it toward
 //     the side that is losing ground, at a speed proportional to the MEASURED advance (FrontView.advanceKmh); there
@@ -12,7 +14,10 @@
 //     rails, not a filled body. It is drawn BELOW the front bands and lets every border line show through it (the
 //     territory owner texture knocks it out on borders), and fades out as the camera comes in: gone below 1,000 km,
 //     where the band, its chevrons and the borders tell the battle.
-//   * NAVAL INVASION arrows along the convoy's planned route, ending at the landing.
+//   * NAVAL INVASION arrows along the convoy's planned route, ending at the landing: only real landings (the landing
+//     tile belongs to a nation the convoy's owner is at war with) of the human or aimed at him or an ally, and anyone's
+//     hovered or selected convoy. They fade as the camera comes in (gone below 400 km), slim to ~4 px below 1,000 km and
+//     let borders show through; settlers and peaceful moves only have their route line (src/render/units/routes.ts).
 //   * MOBILIZATION arrows: while a war's aggressor mobilizes (tick < mobilizeUntilTick), short pulsing arrows on its
 //     side of the border pointing at the target; they disappear with the mobilization window.
 // The badges (ISO3 chips, tug-of-war bar, measured km/h, hover, click) are DOM, in src/ui/hud/frontBadges.ts.
@@ -28,13 +33,18 @@ import type { GameContext } from '../../shared/api';
 import { MAP_H, MAP_W, TILE_KM } from '../../shared/constants';
 import { latLonToVec3, tileXYToLatLon, wrapDX } from '../../shared/geo';
 import { smoothstep } from '../../shared/math';
-import { UnitState, UnitType, type AttackView, type FrontView, type LatLon } from '../../shared/types';
+import { UnitState, UnitType, type AttackView, type FrontView, type LatLon, type UnitView } from '../../shared/types';
 import { inverseToneGlsl } from '../units/icons';
 import { separateTeamColors } from './common';
 
-/** Visible above this camera altitude (km), fully from OVERLAY_FULL_ALT. */
+/**
+ * Bands, chevrons and arrows in full above OVERLAY_FULL_ALT, gone (arrows, chevrons) by OVERLAY_MIN_ALT; in between and
+ * below, the band slims to a 2-3 px two-colour contact line, down to OVERLAY_LINE_END (gauntlet round 1: it hands over
+ * to the battlefield's ground ribbon, src/render/battle/terrain.ts).
+ */
 export const OVERLAY_MIN_ALT = 150;
 const OVERLAY_FULL_ALT = 260;
+const OVERLAY_LINE_END = 30;
 const BAND_VERTS = 16384;
 const ARROW_VERTS = 16384;
 /** Half-width of an active band in km (1.5 tiles in all) and its pixel minimum; the same for quiet dashed lines. */
@@ -147,12 +157,17 @@ varying vec4 vInfo;
 varying float vCross;
 varying float vUpx;
 varying float vHalfPx;
+uniform float uThin;
 ${COMMON_VERT}
 void main() {
   bool quiet = aInfo.z > 0.5;
   float halfPx, pxPerKm;
   float minPx = quiet ? ${QUIET_MIN_HALF_PX.toFixed(2)} + aInfo.w * 0.8 : ${BAND_MIN_HALF_PX.toFixed(2)} + aInfo.w * 1.0;
-  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, minPx, 1e5, halfPx, pxPerKm);
+  // Coming down (uThin -> 1 below 260 km) the band slims to a 2-3 px two-colour line along the contact, which the
+  // battlefield's own ground ribbon takes over from 45 km down (gauntlet round 1, FEEDBACK-1 item 11).
+  minPx = mix(minPx, 2.0 + aInfo.w * 0.5, uThin);
+  float maxPx = mix(1e5, 3.0 + aInfo.w * 0.5, uThin);
+  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, minPx, maxPx, halfPx, pxPerKm);
   vColA = aColA;
   vColB = aColB;
   vInfo = aInfo;
@@ -165,6 +180,7 @@ const BAND_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uAlpha;
 uniform float uPx;
+uniform float uThin;
 varying vec3 vColA;
 varying vec3 vColB;
 varying vec4 vInfo;
@@ -188,12 +204,13 @@ void main() {
     gl_FragColor = vec4(untone(col), a * 0.95);
     return;
   }
-  // The contact seam and a dark outline keep both colours legible over any territory.
-  col = mix(col, vec3(0.02), (1.0 - smoothstep(0.35, 1.1, midPx / uPx)) * 0.9);
-  col = mix(col, vec3(0.02), (1.0 - smoothstep(0.9, 2.0, edgePx / uPx)) * 0.9);
+  // The contact seam and a dark outline keep both colours legible over any territory (hairlines on the slim line).
+  float hl = mix(1.0, 0.35, uThin);
+  col = mix(col, vec3(0.02), (1.0 - smoothstep(0.35 * hl, 1.1 * hl, midPx / uPx)) * 0.9);
+  col = mix(col, vec3(0.02), (1.0 - smoothstep(0.9 * hl, 2.0 * hl, edgePx / uPx)) * 0.9);
   // Chevrons toward the side losing ground: bold Λ marks (light core, dark rim) across the whole band, scrolling
   // toward their apex at a speed that follows the measured advance.
-  if (abs(vInfo.x) > 0.5) {
+  if (abs(vInfo.x) > 0.5 && uThin < 0.98) {
     float y = side * vHalfPx * vInfo.x;
     float P = max(22.0 * uPx, vHalfPx * 2.4);
     float cx = mod(vUpx, P) - 0.5 * P;
@@ -223,9 +240,12 @@ varying float vU;
 varying float vHalfPx;
 varying vec3 vWorld;
 ${COMMON_VERT}
+uniform float uNavalCap;
 void main() {
   float halfPx, pxPerKm;
-  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, aInfo.y, aInfo.w, halfPx, pxPerKm);
+  // A negative max half-width is a multiple of the naval cap (the invasion arrows slim down as the camera comes in).
+  float maxPx = aInfo.w < 0.0 ? -aInfo.w * uNavalCap : aInfo.w;
+  gl_Position = extrude(position, aTan, aRef, aGeo.x, aGeo.z, aInfo.y, maxPx, halfPx, pxPerKm);
   // The fragment's own ground point (the extrusion is in screen space): the border knock-out samples ownership there.
   vec3 nn = normalize(position);
   vec3 across = aRef - dot(aRef, nn) * nn;
@@ -242,6 +262,8 @@ const ARROW_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uAlpha;
 uniform float uArrowFill;
+uniform float uNavalFill;
+uniform float uThin;
 uniform float uPx;
 uniform sampler2D uOwner;
 uniform float uOwnerOn;
@@ -273,7 +295,8 @@ float borderHere() {
   return b * uOwnerOn;
 }
 void main() {
-  float a = uAlpha * vVis;
+  // (Below 260 km only the slim contact line stays: every arrow is gone by 150 km, as the whole overlay was before.)
+  float a = uAlpha * vVis * (1.0 - uThin);
   if (a < 0.003) discard;
   float edgePx = (1.0 - abs(vSide)) * vHalfPx;
   float outline = 1.0 - smoothstep(0.6 * uPx, 1.3 * uPx, edgePx);
@@ -298,7 +321,11 @@ void main() {
     if (alpha < 0.003) discard;
     alpha *= 1.0 - 0.88 * borderHere();
   } else if (vInfo.x < 1.5) {
-    alpha = 0.85 * smoothstep(0.0, 0.08, vU);
+    // Naval invasion (a real landing): like the operational arrow, it fades as the camera comes in (gone below 400 km,
+    // where the convoy's own route line and its ships tell it) and lets every border show through it.
+    alpha = 0.85 * smoothstep(0.0, 0.08, vU) * uNavalFill;
+    if (alpha < 0.003) discard;
+    alpha *= 1.0 - 0.88 * borderHere();
   } else {
     // Mobilization: pulsing.
     alpha = (0.45 + 0.45 * sin(uTime * 4.2 + vInfo.z)) * smoothstep(0.0, 0.25, vU);
@@ -385,6 +412,9 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     uTime: { value: 0 },
     uAlpha: { value: 1 },
     uArrowFill: { value: 1 },
+    uNavalFill: { value: 1 },
+    uNavalCap: { value: 9 },
+    uThin: { value: 0 },
     uOwner: { value: ownerFallback as THREE.Texture },
     uOwnerOn: { value: 0 },
   };
@@ -406,6 +436,20 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
   const rgbA: [number, number, number] = [0, 0, 0];
   const rgbB: [number, number, number] = [0, 0, 0];
   const st: OverlayStats = { fronts: 0, quiet: 0, arrows: [], naval: 0, mobilization: 0, chevrons: {}, drawCalls: 2, order: { bands: 43, arrows: 42 }, bandVerts: 0, arrowVerts: 0, rebuilds: 0 };
+
+  // Selected and hovered units: anyone's invasion arrow is drawn for them (rebuilt at once on a change).
+  const focusUnits = new Set<number>();
+  let hoverUnit = -1;
+  ctx.bus.on('selectionChanged', (e) => {
+    focusUnits.clear();
+    for (const id of e.unitIds) focusUnits.add(id);
+    rebuildAcc = 1;
+  });
+  ctx.bus.on('worldHover', (e) => {
+    if (e.unitId === hoverUnit) return;
+    hoverUnit = e.unitId;
+    rebuildAcc = 1;
+  });
 
   st.order.bands = bands.mesh.renderOrder;
   st.order.arrows = arrows.mesh.renderOrder;
@@ -757,10 +801,28 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     }
   }
 
-  function addNaval(): void {
+  /**
+   * A transport whose arrow is drawn: a real landing (its landing tile belongs to another nation it is at war with,
+   * and it is not turning back), of the human, or aimed at the human or an ally of his; anyone's while hovered or
+   * selected. Settlers bound for unclaimed land and moves to a nation's own coast get no arrow (their route line in
+   * src/render/units/routes.ts is enough): forty thick coloured slabs over Europe told nothing about the war.
+   */
+  function invasionShown(u: UnitView, human: number): boolean {
+    const view = ctx.sim.view;
+    if (u.state === UnitState.Returning) return false;
+    const tx = Math.floor(u.targetX), ty = Math.floor(u.targetY);
+    if (!(tx >= 0 && ty >= 0 && ty < MAP_H)) return false;
+    const target = view.owner[ty * MAP_W + (((tx % MAP_W) + MAP_W) % MAP_W)] ?? 0;
+    if (target <= 0 || target === u.owner || view.pairState(u.owner, target) !== 'war') return false;
+    if (u.owner === human || target === human || focusUnits.has(u.id) || u.id === hoverUnit) return true;
+    return view.hasTreaty(human, target, 'alliance');
+  }
+
+  function addNaval(human: number): void {
     const view = ctx.sim.view;
     for (const u of view.units.values()) {
       if (u.type !== UnitType.TransportShip || u.state === UnitState.Destroyed) continue;
+      if (!invasionShown(u, human)) continue;
       const route = view.routes.get(u.id);
       let m = 0;
       curveX[m] = u.x;
@@ -792,7 +854,8 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       }
       for (let k = 1; k < m; k++) curveX[k] = curveX[k - 1] + wrapDX(curveX[k - 1], curveX[k]);
       rgb(colorOf(u.owner), rgbA);
-      if (addArrow(m, 1, 7, 3, 1e4, 7 * 1.55, 3 * 1.9, 1e4, Math.max(25, 7 * 2.1), 0) > 0) st.naval++;
+      // (Max half-widths as multiples of the naval cap, uNavalCap: ~4 px for the shaft below 1,000 km.)
+      if (addArrow(m, 1, 7, 3, -1, 7 * 1.55, 3 * 1.9, -2, Math.max(25, 7 * 2.1), 0) > 0) st.naval++;
     }
   }
 
@@ -833,7 +896,7 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     if (view.phase === 'playing' || view.phase === 'ended') {
       for (const f of view.fronts) if (f.b !== 0 && f.a !== 0) addFront(f, human);
       for (const a of view.attacks) addOffensive(a, a.frontKey ? view.frontByKey.get(a.frontKey) : undefined, human);
-      addNaval();
+      addNaval(human);
       addMobilization(human);
     }
     flush(bands);
@@ -848,7 +911,9 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
     group,
     update(visualDt, altKm, visible) {
       const view = ctx.sim.view;
-      const fade = visible ? smoothstep(OVERLAY_MIN_ALT, OVERLAY_FULL_ALT, altKm) : 0;
+      // Full from OVERLAY_FULL_ALT; below it the bands slim to a contact line (uThin) that stays down to the battlefield,
+      // whose ground ribbon takes over between 45 and 30 km (the patch fades in from 42 km).
+      const fade = visible ? smoothstep(OVERLAY_LINE_END, OVERLAY_LINE_END + 15, altKm) : 0;
       group.visible = fade > 0.002 && view.phase !== 'none';
       time += visualDt;
       rebuildAcc += visualDt;
@@ -866,8 +931,12 @@ export function createFrontOverlay(ctx: GameContext): FrontOverlay {
       uniforms.uPx.value = ctx.renderer.getPixelRatio();
       uniforms.uTime.value = time;
       uniforms.uAlpha.value = fade;
+      uniforms.uThin.value = 1 - smoothstep(OVERLAY_MIN_ALT, OVERLAY_FULL_ALT, altKm);
       // Operational arrows (#22): full from 1,700 km, gone below 1,000 km (the band and the borders tell it there).
       uniforms.uArrowFill.value = smoothstep(1000, 1700, altKm);
+      // Naval invasions: gone below 400 km, and at most ~4 px half-width below 1,000 km (9 px from 1,700 km).
+      uniforms.uNavalFill.value = smoothstep(400, 1000, altKm);
+      uniforms.uNavalCap.value = 4 + 5 * smoothstep(1000, 1700, altKm);
       if (!uniforms.uOwnerOn.value) {
         const tex = ctx.globe.ownerTexture?.();
         if (tex) {

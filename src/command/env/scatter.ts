@@ -111,6 +111,10 @@ export class Scatter {
    */
   stream(ground: Ground, x: number, z: number, offX: number, offZ: number, radius: number, cell: number, density: number, treeScale: number, budgetMs: number): number {
     const t0 = performance.now();
+    if (this.shelled && this.shelled.version() !== this.shelledV) {
+      this.shelledV = this.shelled.version();
+      this.pruneShelled();
+    }
     if (!this.job) {
       if (Math.hypot(x - this.lastCx, z - this.lastCz) < radius * 0.22) return 0;
       if (!ground.nearReady(x, z)) return 0;
@@ -186,6 +190,14 @@ export class Scatter {
         }
         if (type < 0 || j.counts[type] >= this.caps[type]) continue;
         if (this.keepOut && this.keepOut(sx, sz)) continue;
+        if ((type === 0 || type === 1) && this.shelled) {
+          const v = this.shelled.at(sx, sz);
+          if (v === 2) continue;
+          if (v === 1) {
+            this.fell(sx, sz);
+            this.p.y += 0.3;
+          }
+        }
         this.m.compose(this.p, this.q, this.s);
         const k = j.counts[type]++;
         this.m.toArray(j.mats[type], k * 16);
@@ -197,6 +209,63 @@ export class Scatter {
     }
     if (j.row >= j.rows) this.commit(j);
     return performance.now() - t0;
+  }
+
+  /**
+   * Owner item 32 (gauntlet round 1): the battle's shelled ground, for trees — 0 a tree stands, 1 it lies shattered on
+   * the ground, 2 it is gone. Consulted as trees are laid out, and re-applied to the standing ones whenever its version
+   * changes (the battle moved): a fight is not fought in a forest the tank cannot see out of.
+   */
+  shelled: { at(x: number, z: number): number; version(): number } | null = null;
+  private shelledV = -1;
+  private readonly tilt = new THREE.Quaternion();
+
+  /** Trees on shelled ground go down or go (see `shelled`), keeping the instance arrays packed. */
+  private pruneShelled(): void {
+    const f = this.shelled;
+    if (!f) return;
+    const gx = this.group.position.x, gz = this.group.position.z;
+    for (const im of [this.conifers, this.broadleaf]) {
+      const a = im.instanceMatrix.array as Float32Array;
+      const col = im.instanceColor ? (im.instanceColor.array as Float32Array) : null;
+      let n = im.count;
+      let changed = false;
+      for (let i = 0; i < n; i++) {
+        const o = i * 16;
+        const x = a[o + 12] + gx, z = a[o + 14] + gz;
+        const v = f.at(x, z);
+        if (v === 0) continue;
+        if (v === 1) {
+          const upY = a[o + 5] / Math.max(1e-6, Math.hypot(a[o + 4], a[o + 5], a[o + 6]));
+          if (upY < 0.5) continue;
+          this.m.fromArray(a, o);
+          this.m.decompose(this.p, this.q, this.s);
+          this.fell(x, z);
+          this.p.y += 0.3;
+          this.m.compose(this.p, this.q, this.s).toArray(a, o);
+          changed = true;
+          continue;
+        }
+        // Gone: the last instance takes its slot.
+        n--;
+        a.copyWithin(o, n * 16, n * 16 + 16);
+        if (col) col.copyWithin(i * 3, n * 3, n * 3 + 3);
+        i--;
+        changed = true;
+      }
+      if (changed) {
+        im.count = n;
+        im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      }
+    }
+  }
+
+  /** Lay the tree in this.q down (about its base, toward a direction of its own). */
+  private fell(x: number, z: number): void {
+    const a = hash2(Math.floor(x * 3.1), Math.floor(z * 2.7)) * Math.PI * 2;
+    this.tilt.setFromAxisAngle(this.n.set(Math.cos(a), 0, Math.sin(a)), 1.45);
+    this.q.premultiply(this.tilt);
   }
 
   /** Latitude of the session (conifer bias). */
@@ -222,6 +291,8 @@ export class Scatter {
     this.lastCx = j.cx;
     this.lastCz = j.cz;
     this.job = null;
+    // (The battle may have moved while this layout was being built: its shelled ground is applied again.)
+    this.shelledV = -1;
   }
 
   /** Does any tree trunk / crown stand within `r` m of the XZ segment a-b? (staging and line-of-sight polish) */

@@ -11,6 +11,7 @@ import { formatNumber, t } from '../../shared/i18n';
 import { ENT_DEFS, type Ent, type EntKind, type World } from '../world';
 import type { HudState } from '../player/common';
 import { HUD_CSS } from './style';
+import { CLEAR_PX, labelBoard, leaderLine } from './labels';
 
 let styleInjected = false;
 
@@ -373,8 +374,12 @@ export class CommandHud {
     const W = this.w, H = this.h;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    if (this.root.classList.contains('fu-cmd-cine')) return;
     const cx = W / 2, cy = H / 2;
+    // One placement board for this frame's labels (this HUD and the strategic layer): the reticle keeps a clear disc,
+    // and what belongs to the reticle is reserved first.
+    labelBoard.reset(W, H, cx, cy, CLEAR_PX);
+    if (this.root.classList.contains('fu-cmd-cine')) return;
+    if (s.kind === 'tank') this.reserveReticle(g, s, cx, cy);
     this.drawMarkers(g, camera, world, W, H, s);
     this.drawCompass(g, s, cx);
     if (s.kind === 'tank') {
@@ -427,6 +432,21 @@ export class CommandHud {
       g.fill();
       g.restore();
     }
+  }
+
+  /** The tank reticle's own texts (target bracket label, range readout, reload tag): reserved before any other label. */
+  private reserveReticle(g: CanvasRenderingContext2D, s: HudState, cx: number, cy: number): void {
+    const f = s.focus;
+    if (f.visible) {
+      g.font = '700 11px "Barlow Condensed", "Rajdhani", sans-serif';
+      const d = f.distM >= 1000 ? `${(f.distM / 1000).toFixed(1)} km` : `${Math.round(f.distM / 10) * 10} m`;
+      const w = g.measureText(`${t('command.target.lock')} · ${t(`command.type.${f.kind}`)} · ${d}`).width;
+      labelBoard.reserve({ x: f.x - w / 2 - 2, y: f.y - f.r - 18, w: w + 4, h: 15 });
+      labelBoard.reserve({ x: f.x - f.r - 2, y: f.y - f.r - 2, w: f.r * 2 + 4, h: f.r * 2 + 4 });
+    }
+    if (s.lead.visible) labelBoard.reserve({ x: s.lead.x - 20, y: s.lead.y - 8, w: 40, h: 30 });
+    labelBoard.reserve({ x: cx + 20, y: cy + 17, w: 64, h: 17 });
+    if (s.reload < 1) labelBoard.reserve({ x: cx + 40, y: cy - 34, w: 70, h: 14 });
   }
 
   /** W7: a point whose entity already carries a label of its own (the stop panel's ship): no second name tag there. */
@@ -520,25 +540,23 @@ export class CommandHud {
         g.fill();
       }
     }
-    // Labels: closest to the crosshair first, skip any that would overlap a placed one.
+    // Labels: closest to the crosshair first, placed on the shared board (clear of the reticle's disc and of what is
+    // already there, pushed out with a leader line when their marker sits near the reticle); the rest are dropped.
     this.labels.sort(byScore);
     let placed = 0;
     for (let i = 0; i < this.labels.length && placed < 3; i++) {
       const L = this.labels[i];
-      let clash = false;
-      for (let j = 0; j < placed; j++) {
-        const P = this.labels[j];
-        if (Math.abs(P.x - L.x) < (P.w + L.w) / 2 + 6 && Math.abs(P.y - L.y) < 14) {
-          clash = true;
-          break;
-        }
-      }
-      if (clash) continue;
-      this.labels[placed++] = L;
+      const ax = L.x, ay = L.y + 11;
+      const r = labelBoard.place(ax, ay, L.w + 6, 13, 8);
+      if (!r) continue;
+      placed++;
+      if (r.leader) leaderLine(g, ax, ay, r, 'rgba(255,150,140,0.9)');
+      const tx = r.x + r.w / 2, ty = r.y + 10.5;
+      g.textAlign = 'center';
       g.fillStyle = 'rgba(0,0,0,0.6)';
-      g.fillText(L.txt, L.x + 1, L.y + 1);
+      g.fillText(L.txt, tx + 1, ty + 1);
       g.fillStyle = 'rgba(255,150,140,0.95)';
-      g.fillText(L.txt, L.x, L.y);
+      g.fillText(L.txt, tx, ty);
     }
     this.labels.length = 0;
     // Incoming guided missiles aimed at the player: bright warning chevrons.

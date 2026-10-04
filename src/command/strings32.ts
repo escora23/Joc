@@ -31,7 +31,9 @@ const es: Record<string, string> = {
   'command.lead.he': 'apunta aquí',
   'command.go.battle': 'Hacia lo más duro del combate, a {m} m, entre nuestra línea. Conduce solo: cualquier tecla de marcha toma el mando.',
   'command.go.autoHot': 'Tu carro avanza solo hasta lo más duro, a {m} m (cualquier tecla de marcha toma el mando).',
-  'command.go.inBattle': 'Estás en lo más duro del combate: la línea enemiga está justo delante.',
+  'command.go.inBattle': 'Estás en lo más duro del combate: la línea enemiga está delante. V: ver toda la línea desde lo alto.',
+  'command.view.overview': 'Vista general: la cámara sube unos segundos sobre la línea. V otra vez para volver.',
+  'command.view.chase': 'De vuelta detrás del carro.',
 };
 
 const en: Record<string, string> = {
@@ -63,7 +65,9 @@ const en: Record<string, string> = {
   'command.lead.he': 'aim here',
   'command.go.battle': 'Heading for the heaviest fighting, {m} m away, among our line. It drives itself: any driving key takes over.',
   'command.go.autoHot': 'Your tank drives itself to the heaviest fighting, {m} m away (any driving key takes over).',
-  'command.go.inBattle': 'You are where the fighting is heaviest: the enemy line is right ahead.',
+  'command.go.inBattle': 'You are where the fighting is heaviest: the enemy line is ahead. V: see the whole line from above.',
+  'command.view.overview': 'Overview: the camera rises over the line for a few seconds. V again to come back.',
+  'command.view.chase': 'Back behind the tank.',
 };
 
 export const COMMAND_STRINGS_32 = { es, en };

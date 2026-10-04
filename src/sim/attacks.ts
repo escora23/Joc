@@ -763,6 +763,8 @@ export class AttackSystem {
     const ready = this.ready;
     ready.length = 0;
     let fortSum = 0, fortN = 0, coverN = 0, coverArm = 0;
+    const hf = g.holdFront;
+    const held = !!hf && ((hf.attackId > 0 && a.id === hf.attackId) || (hf.frontKey > 0 && a.frontKey === hf.frontKey));
     for (const [t, p0] of a.pressure) {
       // Lazy validation: still the defender's, still touching the attacker.
       if (owner[t] !== def) {
@@ -809,6 +811,8 @@ export class AttackSystem {
         const axis = perp < 0 ? 0.8 : perp <= AXIS_CORE ? 1 : 0.8;
         inc = (Math.min(ADVANCE_MAX_KMH, v * armor) * axis * 0.1) / (extent * terrain);
       }
+      // Command mode's march to this front: its line waits for the unit (Game.holdFront).
+      if (held) inc = 0;
       const p = p0 + inc;
       a.pushThisTick += inc;
       a.pressure.set(t, p);

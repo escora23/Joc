@@ -199,6 +199,11 @@ export class Civil {
   towns: Town[] = [];
   /** Road polylines in absolute map meters (for gates and keep-out), rebuilt with the towns. */
   private roadAbs: number[][] = [];
+  /**
+   * Every road between the towns in reach, coarse (one point every ~300 m along the same meanders as the 3D road), in
+   * absolute map meters: the tactical map and the far road ribbon of travel mode draw them.
+   */
+  mapRoads: number[][] = [];
   private keepGrid = new Map<string, number[]>();
   /** Discs kept clear for the whole session (the entry point), absolute meters. */
   private readonly clearDiscs: number[] = [];
@@ -275,6 +280,7 @@ export class Civil {
     this.labels = [];
     this.towns = [];
     this.roadAbs = [];
+    this.mapRoads = [];
     this.keepGrid.clear();
     this.clearDiscs.length = 0;
     this.lastAx = this.lastAz = 1e12;
@@ -506,10 +512,25 @@ export class Civil {
     // Drape the roads that come within reach (gentle deterministic meanders), and remember them for gates.
     const rib = new Ribbon();
     this.roadAbs = [];
+    this.mapRoads = [];
     let roadN = 0;
     for (const [x0, z0, x1, z1, k] of roads) {
       const L = Math.hypot(x1 - x0, z1 - z0);
       if (L < 50) continue;
+      {
+        // The whole road, coarse (the map and the far ribbon): the same meanders as the near ribbon below.
+        const seed = hashStr(k);
+        const ux = (x1 - x0) / L, uz = (z1 - z0) / L;
+        const amp = Math.min(900, L * 0.05);
+        const n = Math.max(2, Math.ceil(L / 300));
+        const line: number[] = [];
+        for (let q = 0; q <= n; q++) {
+          const tt = q / n;
+          const wob = Math.sin(tt * Math.PI) * (Math.sin(tt * 5.1 + seed * 6.28) * 0.6 + Math.sin(tt * 13.7 + seed * 3.1) * 0.25) * amp;
+          line.push(x0 + ux * L * tt - uz * wob, z0 + uz * L * tt + ux * wob);
+        }
+        this.mapRoads.push(line);
+      }
       if (segDist(ax, az, x0, z0, x1, z1) > R.road + 2000) continue;
       const seed = hashStr(k);
       const ux = (x1 - x0) / L, uz = (z1 - z0) / L;

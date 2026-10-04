@@ -321,6 +321,24 @@ if (!only || only.has('orbit')) await section('orbit', async () => {
     row('V1d', 'the operational arrow fades out when zoomed in (gone at 1,000 km)', `arrow alpha factor ${z.toFixed(3)} at 1,000 km`, z < 0.01);
   }
   row('V1c', 'badge: both ISO3 codes, tug-of-war bar Pa/(Pa+Pd), measured km/h', b ? `${b.text} share ${b.share} (Pa/(Pa+Pd) ${(o.f.pa / (o.f.pa + o.f.pd)).toFixed(3)})` : 'no badge', !!b && b.text.includes(o.isoA) && b.text.includes(o.isoB) && /km\/h/.test(b.text) && Math.abs(b.share - o.f.pa / (o.f.pa + o.f.pd)) < 0.02);
+  // Gauntlet round 1: naval invasion arrows only for real landings (the landing tile's owner is at war with the convoy's
+  // owner) of the human or aimed at him or an ally; settlers and peaceful moves have only their route line.
+  const nv = await page.evaluate(() => {
+    const v = __front.ctx.sim.view, st = window.__frontOverlay.stats();
+    const r = { drawn: st.naval, transports: 0, real: 0, expected: 0, neutral: 0, peaceful: 0 };
+    for (const u of v.units.values()) {
+      if (u.type !== 0 || u.state === 6) continue;
+      r.transports++;
+      const o = v.owner[Math.floor(u.targetY) * 1600 + Math.floor(u.targetX)];
+      if (o === 0) { r.neutral++; continue; }
+      if (o === u.owner || v.pairState(u.owner, o) !== 'war') { r.peaceful++; continue; }
+      r.real++;
+      // (A convoy turning back, UnitState.Returning, has no arrow.)
+      if (u.state !== 3 && (u.owner === 1 || o === 1 || v.hasTreaty(1, o, 'alliance'))) r.expected++;
+    }
+    return r;
+  });
+  row('V1e', 'naval invasion arrows only for real landings that concern the player', `${nv.drawn} drawn of ${nv.transports} transports (${nv.real} real landings, ${nv.expected} of them the player's or on him/allies; ${nv.neutral} to unclaimed land, ${nv.peaceful} peaceful)`, nv.drawn === nv.expected);
   row('V13', 'overlay draw calls / allocation (2 batches, preallocated)', `${o.st.drawCalls} draw calls, ${o.st.bandVerts}+${o.st.arrowVerts} vertices, ${o.st.rebuilds} rebuilds`, o.st.drawCalls <= 4);
   // Guerra panel: G opens it; rows with garrisons; Ir; Prioridad alta; Proponer paz; Pedir ayuda; Retirar.
   await page.evaluate(() => { __front.ctx.app.setSpeed(0); });

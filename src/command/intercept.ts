@@ -272,6 +272,16 @@ export class ShipIntercept {
     return this.target;
   }
 
+  /**
+   * The ship in the gun's sights becomes the panel's ship (a fire question names it): the panel and the question
+   * always speak of the same ship, with its own kind (merchant or troop convoy) and figures.
+   */
+  focus(e: Ent): void {
+    if (this.boarding || !e.alive) return;
+    this.picked = e;
+    this.target = e;
+  }
+
   /** The sim's view of the target (its unit), for the status line. */
   private simUnit(view: GameView, e: Ent) {
     return e.src ? view.units.get(e.src.id) : undefined;

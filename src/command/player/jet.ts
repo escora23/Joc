@@ -64,8 +64,19 @@ export class JetController implements Controller {
     this.aimDir.set(-Math.sin(this.aimYaw) * cp, Math.sin(this.aimPitch), -Math.cos(this.aimYaw) * cp);
   }
 
+  /**
+   * Fly a banked turn toward a point (a turn back from a border): the instructor rolls and pulls as it does for the
+   * mouse aim; the mouse takes over again when moved, or once the nose is on the point.
+   */
+  turnTo(p: THREE.Vector3 | null): void {
+    this.auto = p ? p.clone() : null;
+    this.autoRelease = !!p;
+  }
+  private autoRelease = false;
+
   aimAt(p: THREE.Vector3): void {
     this.auto = p.clone();
+    this.autoRelease = false;
     T1.subVectors(p, this.ent.pos).normalize();
     this.aimYaw = Math.atan2(-T1.x, -T1.z);
     this.aimPitch = Math.asin(Math.max(-1, Math.min(1, T1.y)));
@@ -100,6 +111,10 @@ export class JetController implements Controller {
       if (inp.down('KeyW')) this.throttle = Math.min(1, this.throttle + dt * 0.6);
       if (inp.down('KeyS')) this.throttle = Math.max(0, this.throttle - dt * 0.6);
       this.ab = inp.down('ShiftLeft') || inp.down('ShiftRight') || (inp.down('KeyW') && this.throttle >= 1);
+    }
+    if (this.auto && this.autoRelease && allowInput && Math.hypot(MOUSE.x, MOUSE.y) > 3) {
+      this.auto = null;
+      this.autoRelease = false;
     }
     if (this.auto) {
       T1.subVectors(this.auto, e.pos).normalize();

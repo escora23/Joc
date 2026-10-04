@@ -76,6 +76,15 @@ export interface BattleUniforms {
   uRimK: THREE.IUniform<number>;
   /** Territory fill on the battlefield (0 with the camera low over it: the banners say whose land it is; 1 from ~5 km up). */
   uTerrK: THREE.IUniform<number>;
+  /**
+   * Gauntlet round 1 (FEEDBACK-1 item 11): the two sides' colours (linear) on the ground, split along the sub-tile
+   * contact line — side a (frontCoords v < 0) and side b — their strength (0 none .. 1 on a battle at war) and the
+   * contact ribbon's (0 with the camera very low, where the trenches and the men show the line).
+   */
+  uSideA: THREE.IUniform<THREE.Vector3>;
+  uSideB: THREE.IUniform<THREE.Vector3>;
+  uSideK: THREE.IUniform<number>;
+  uRibbonK: THREE.IUniform<number>;
 }
 
 export function createBattleUniforms(): BattleUniforms {
@@ -126,6 +135,10 @@ export function createBattleUniforms(): BattleUniforms {
     uFieldRot: { value: new THREE.Vector2(1, 0) },
     uRimK: { value: 1 },
     uTerrK: { value: 1 },
+    uSideA: { value: new THREE.Vector3(0.1, 0.3, 1) },
+    uSideB: { value: new THREE.Vector3(0.8, 0.1, 0.1) },
+    uSideK: { value: 0 },
+    uRibbonK: { value: 1 },
   };
 }
 
