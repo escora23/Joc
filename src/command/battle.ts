@@ -356,6 +356,9 @@ export class BattleLine {
       const gc = g.surfaceAt(cx, cz) + 1.4;
       const cy = Math.max(gc, h + 5);
       clamp = Math.max(0, gc - (h + 5));
+      // The tank itself in the picture: a knoll or a rock between the camera and the turret hides the tank and half the
+      // view (counted as a large clamp).
+      if (!sees(cx, cy, cz, x, h + 2.6, z)) clamp += 12;
       const inCone = (px: number, pz: number, lo: number, hi: number): boolean => {
         const dx = px - x, dz = pz - z, l = Math.hypot(dx, dz);
         return l >= lo && l <= hi && (dx * ax + dz * az) / l > 0.82;
@@ -382,7 +385,8 @@ export class BattleLine {
       const sF = stretches[si].s, rF = stretches[si].r;
       const ft = this.foeTrench(own, sF);
       const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
-      for (const minNy of [0.93, 0.9]) {
+      // (Steep country — the high Pyrenees — may have no 22° ground at all: then up to ~32°, which a tank still climbs.)
+      for (const minNy of [0.93, 0.9, 0.85]) {
         if (found && minNy < 0.93) break;
         for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
           for (const dd of [D, D - 40, D + 40, D + 90]) {
@@ -395,7 +399,7 @@ export class BattleLine {
               mark(s + side * 0.7 * (dd + this.foeTrench(own, s)), lk);
               const v = view(s, cand.x, h, cand.z, lk);
               const score = v.trench * 3 + v.field + (ny - 0.93) * 60 - Math.abs(ds) * 0.02 - clamp * 4
-                - (v.near < Infinity ? Math.max(0, Math.abs(v.near - 300) - 50) * 0.05 : 15) - rF * 0.6 - (minNy < 0.93 ? 6 : 0);
+                - (v.near < Infinity ? Math.max(0, Math.abs(v.near - 300) - 50) * 0.05 : 15) - rF * 0.6 - (minNy < 0.93 ? 6 : 0) - (minNy < 0.9 ? 6 : 0);
               if (score > best) {
                 best = score;
                 bestR = rF;
@@ -408,6 +412,7 @@ export class BattleLine {
         }
       }
     }
+    this.vantageScore = found ? Math.round(best) : null;
     if (!found) {
       // Nothing standable around the flattest stretch: the plain stand-off level with the hot point.
       this.vantage = null;
@@ -439,6 +444,8 @@ export class BattleLine {
     return out;
   }
 
+  /** Tools: the last vantage's score (null: none found, the plain stand-off). */
+  vantageScore: number | null = null;
   /** The last vantage `bestStandOff` chose: where it is, where its view along the line looks, its ground's relief. */
   private vantage: { pos: THREE.Vector3; look: THREE.Vector3; relief: number } | null = null;
 

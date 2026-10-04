@@ -931,7 +931,7 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
   // along the line the vantage was chosen for (gauntlet round 1).
   const look = I.forces.battle.vantageLook(P.pos) ?? I.forces.battle.info().hot ?? hot;
   const moved = I.forces.battle.relayoutAround(P, look);
-  console.warn(`[battle-shot] relayout around the tank: ${moved} figures; view along the line to ${Math.round(Math.hypot(look.x - P.pos.x, look.z - P.pos.z))} m`);
+  console.warn(`[battle-shot] relayout around the tank: ${moved} figures; vantage score ${I.forces.battle.vantageScore}; view along the line to ${Math.round(Math.hypot(look.x - P.pos.x, look.z - P.pos.z))} m`);
   await s.wait(2500);
   const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; snapTurret?(): void; setZoom?(on: boolean): void; toggleOverview?(sec?: number): boolean };
   const aimHot = () => {

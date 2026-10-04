@@ -107,7 +107,7 @@ export class TacMap {
   private cx = 0;
   private cz = 0;
   /** Tools: what the last draw put on the map. */
-  readonly stats = { roads: 0, rails: 0, towns: 0, named: 0, structures: 0, units: 0, fronts: 0, borderCells: 0, reliefMs: 0, landMs: 0 };
+  readonly stats = { roads: 0, rails: 0, towns: 0, named: 0, structures: 0, units: 0, offensives: 0, fronts: 0, borderCells: 0, reliefMs: 0, landMs: 0 };
   /** Set by the command mode: a click on the map (scene x, z), or null to clear. */
   onPick: (p: { x: number; z: number } | null) => void = () => undefined;
 
@@ -165,6 +165,7 @@ export class TacMap {
         [sw('<path d="M1 10 L17 4" stroke="#5a4a32" stroke-width="3.4"/><path d="M1 10 L17 4" stroke="#f2e6c8" stroke-width="1.8"/>'), 'command.map.road'],
         [sw('<path d="M1 10 L17 4" stroke="#2a2a2a" stroke-width="2.4" stroke-dasharray="3 2"/>'), 'command.map.rail'],
         [sw('<rect x="5" y="3" width="8" height="8" fill="#fff3d8" stroke="#3a3026" stroke-width="1.2"/>'), 'command.map.town'],
+        [sw('<path d="M1 5.5 L10 5.5 L10 2 L17 7 L10 12 L10 8.5 L1 8.5 Z" fill="#c9524a" stroke="#1a0a0a" stroke-width="0.8"/>'), 'command.map.offensiveKey'],
       ];
       lg.innerHTML = items.map(([svg, k]) => `<span>${svg}${t(k)}</span>`).join('');
     };
@@ -310,7 +311,7 @@ export class TacMap {
       if (!inMap(x, y)) continue;
       st.towns++;
       // Villages read as small light blocks with a dark rim (a dark dot vanished on the brown relief).
-      const r = tw.level < 0 ? 2.4 : Math.max(3, Math.min(9, (tw.r / (2 * half)) * S * 0.9));
+      const r = tw.level < 0 ? 3 : Math.max(3, Math.min(9, (tw.r / (2 * half)) * S * 0.9));
       g.fillStyle = tw.level < 0 ? 'rgba(236,226,206,0.92)' : '#fff3d8';
       g.fillRect(x - r, y - r, r * 2, r * 2);
       g.strokeStyle = tw.level < 0 ? 'rgba(40,30,20,0.75)' : 'rgba(40,30,20,0.9)';
@@ -383,6 +384,54 @@ export class TacMap {
       if (!inMap(x, y, -8)) continue;
       this.symbol(x, y, 9.5, unitGlyph(u.type), view.players[u.owner]?.color ?? 0x888888, rel(u.owner), u.hp < 0.999 ? u.hp : -1);
       st.units++;
+    }
+    // Known forces on the fronts: each land offensive as an attack arrow in its army's colour, ending where it fights
+    // now, with the troops it has committed (the masses of men the line is made of: no division symbol stands for them).
+    st.offensives = 0;
+    const kmPerPx = (2 * half) / 1000 / S;
+    for (const at of view.attacks) {
+      if (at.naval || at.contactX < 0 || at.defender <= 0) continue;
+      if (view.pairState(at.attacker, at.defender) !== 'war') continue;
+      frame.sceneOfTile(at.contactX, at.contactY, p0);
+      frame.sceneOfTile(at.originX, at.originY, p1);
+      const [cx, cy] = toPx(p0.x, p0.z);
+      if (!inMap(cx, cy, -6)) continue;
+      const [ox, oy] = toPx(p1.x, p1.z);
+      let dx = cx - ox, dy = cy - oy;
+      const dl = Math.hypot(dx, dy);
+      if (dl < 1) continue;
+      dx /= dl;
+      dy /= dl;
+      // The arrow covers the last ~9 km of the axis (or all of it if shorter), at least 26 px.
+      const len = Math.max(26, Math.min(dl, 9 / kmPerPx));
+      const bx = cx - dx * len, by = cy - dy * len;
+      const col = '#' + (view.players[at.attacker]?.color ?? 0x888888).toString(16).padStart(6, '0');
+      const nx = -dy, ny = dx, w = 5, hw = 10, hl = 13;
+      const hx = cx - dx * hl, hy = cy - dy * hl;
+      g.beginPath();
+      g.moveTo(bx + nx * w * 0.6, by + ny * w * 0.6);
+      g.lineTo(hx + nx * w, hy + ny * w);
+      g.lineTo(hx + nx * hw, hy + ny * hw);
+      g.lineTo(cx, cy);
+      g.lineTo(hx - nx * hw, hy - ny * hw);
+      g.lineTo(hx - nx * w, hy - ny * w);
+      g.lineTo(bx - nx * w * 0.6, by - ny * w * 0.6);
+      g.closePath();
+      g.globalAlpha = 0.85;
+      g.fillStyle = col;
+      g.fill();
+      g.globalAlpha = 1;
+      g.strokeStyle = at.attacker === HUMAN_ID ? 'rgba(255,255,255,0.95)' : 'rgba(20,10,10,0.9)';
+      g.lineWidth = 1.4;
+      g.stroke();
+      g.font = '700 11px "Barlow Condensed", "Barlow", sans-serif';
+      const lbl = t('command.map.offensive', { n: formatNumber(Math.round(at.troops)) });
+      const lx = bx - dx * 4, ly = by - dy * 4 + 4;
+      if (free(lx, ly - 4, g.measureText(lbl).width + 6, 15)) {
+        taken.push({ x: lx, y: ly - 4, w: g.measureText(lbl).width + 6, h: 15 });
+        this.halo(lbl, lx, ly, at.attacker === HUMAN_ID ? '#cfe6ff' : '#ffd0c0');
+      }
+      st.offensives++;
     }
     for (const f of fronts) this.tag(f.label, f.x, f.y - 16, '#ffc8a8', 'rgba(44,14,0,0.85)');
     // The destination: dashed line, marker, distance and march time.
