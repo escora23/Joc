@@ -855,8 +855,13 @@ export class BattleLine {
    * the figures of both sides out of its sight (behind a crest, more than 150 m off) are laid out again around it on
    * ground it sees, as the initial layout does: the battle you are taken to is a battle you see. Returns how many.
    */
-  relayoutAround(player: Ent): number {
+  relayoutAround(player: Ent, toward?: THREE.Vector3 | null): number {
     if (!this.active || !this.centre) return 0;
+    // In front of the tank first (toward the fighting: what its view and its gun look at).
+    if (toward) {
+      const dx = toward.x - player.pos.x, dz = toward.z - player.pos.z, l = Math.hypot(dx, dz);
+      this.ahead = l > 1 ? { x: dx / l, z: dz / l } : null;
+    }
     this.playerS = this.alongOf(player.pos.x - this.centre.x, player.pos.z - this.centre.z);
     {
       const nrm = { x: 0, z: 0 };
@@ -875,8 +880,11 @@ export class BattleLine {
       moved += n;
       if (n) this.reconcileSide(st, player, true, true);
     }
+    this.ahead = null;
     return moved;
   }
+  /** While laying the fight out around the tank: the direction it looks (new spots within ~75° of it). */
+  private ahead: { x: number; z: number } | null = null;
 
   /** The ground point (x, z) + 1 m is in the player's sight from 3 m up, within 1.6 km (no crest between). */
   private sees(player: Ent, px: number, pz: number): boolean {
@@ -902,6 +910,10 @@ export class BattleLine {
     const p = this.at(s, d, V2);
     const px = p.x, pz = p.z;
     if (g.heightAt(px, pz) < 0.8 || g.normalAt(px, pz, V3, 6).y < 0.8) return false;
+    if (this.ahead) {
+      const dx = px - player.pos.x, dz = pz - player.pos.z, l = Math.hypot(dx, dz) || 1;
+      if ((dx * this.ahead.x + dz * this.ahead.z) / l < 0.26) return false;
+    }
     return this.sees(player, px, pz);
   }
 

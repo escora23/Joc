@@ -913,7 +913,7 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
     await s.waitFrames(4);
   }
   // As on arriving through «Ir al combate» (index.ts onDriveEnd): the fight laid out where the tank sees it.
-  const moved = I.forces.battle.relayoutAround(P);
+  const moved = I.forces.battle.relayoutAround(P, I.forces.battle.info().hot);
   console.warn(`[battle-shot] relayout around the tank: ${moved} figures`);
   await s.wait(2500);
   const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; snapTurret?(): void; setZoom?(on: boolean): void };

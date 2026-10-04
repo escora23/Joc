@@ -1598,3 +1598,49 @@ Before this pass's fixes, the same entry measured **72 ours + 2 enemy in sight**
   shot; the row now prints the gate's counters). The same section on the code before this pass could not stage the
   neighbour's patrol within 240 s, so the A/B was inconclusive: T3 looks timing-sensitive under SwiftShader rather
   than broken, but naval-verify, f3c-verify and w5-verify should be re-run on a machine with a GPU.
+
+## Owner item 32, pass 2 (2026-10-04) — a battle at a battle's density, laid out where the tank sees it; soldiers in field gear
+
+Pass 2 started from FEEDBACK-1 «Item 32: review of the first-pass shots»: the run16 shots read as scattered dots on an
+empty hillside («59 enemigos y 650 nuestros … cada figura son 25» was the "two guys" again), the enemy line sat behind
+a crest, and the soldier close-up at 20 m was a dark, blocky figure. A first look with the new `command-battle` shot
+(the same staged Pyrenean offensive, the tank where «Ir al combate» puts it) confirmed it: 97 of ours and 4 enemies in
+sight, a hillside in front of the tank, nothing that read as soldiers.
+
+### What changed
+
+* **Density near the player, decoupled from «1 figura = 25».** Per side the figures are max(a floor by role, the sim's
+  soldiers) up to a cap: floors 480 attacking / 340 defending / 260 on a quiet line (half that when the side has fewer
+  than 20 troops there), caps 900 ours / 1,000 theirs. 72 % of a side stands within 380 m along the line of the player
+  (`spread` around `playerS`), and when the player has moved on (or been driven to the hot stretch) the far sleepers
+  are laid out again near him. Each figure stands for the sim's troops in the stretch ÷ the figures (at most 25):
+  that is what killing it takes from the sim (`src.troops`, `flushCasualties` carries fractions). The chip and the
+  arrival line give the sim's troops in two significant figures («unos 77.000 nuestros y 270 enemigos en este
+  tramo»), not figure counts; the help text says the figures are the picture of the troops there.
+* **The battle you are taken to is a battle you see.** New figures stand on walkable ground in the player's sight
+  (`goodSpot`: a few tries per squad or man); a third of our assault squads advance around the tank (60-250 m, most
+  ahead of it); defenders that find no spot in sight in the trench take a foxhole up to 60 m before or 40 m behind
+  it. When the drive to the hot stretch arrives, `relayoutAround` lays the figures out of the tank's sight out again
+  where it sees them, ahead of it first. The drive's vantage search is wider (±450 m along, 150-480 m deep) and weighs
+  the enemy in sight most; the tank now stops within 14 m of it (45 m left it below the crest it had chosen), and while
+  it stays there the chip does not offer «Ir al combate» again (the vantage can be a few hundred metres from the plain
+  stand-off level with the hot point).
+* **The enemy line in sight and alive.** The hostile defenders' forward trench is sited per 10 m of line at 55-160 m
+  where our side sees it from 240 and 420 m back (the forward slope), with barbed wire 25 m before it; men holding a
+  position stay in it facing the enemy (they used to shuffle along the parapet, drawn walking); most men kneel to fire
+  (lying men are invisible in the grass beyond ~100 m); figures small on screen (under 15 px) take their nation's colour
+  and far ones darken a little, so the two armies read apart from the tank or from above; every figure keeps ≥ 6.5 px (up to 4× life size).
+* **The ground of a battle and a long front.** 420 shell holes over no man's land and the trenches (densest near the
+  player), the grass trodden down to a third along the lines, and beyond the 2.4 km stretch the front goes on to
+  ±4.5 km as shell bursts, dust and smoke along the real line.
+* **Soldiers in field gear.** Thick, tapering limbs in loose trousers and sleeves, broad round shoulders, gloves and
+  boots, a plate carrier with magazine pouches, canteen and pack, a helmet that sits on the head with a rim over the
+  brow (the face shows), goggles on the cover; a camouflage drawn by the shader (nation-coloured, dark and light
+  blotches, different per man, fading beyond ~140 m) on the uniform, helmet cover and gear; the uniform's base takes
+  less of the nation's hue (a red nation's men had read pink); a sky fill lights the side away from the sun (the
+  dark cut-out of run16). Lab: `tools/model-lab/soldier.html?one=<pose>&v=<variant>&team=&nation=&d=` (single man,
+  the game's daylight and tone mapping).
+* **Smaller fixes.** An AT team per three attacking squads and per ~30 defenders (one per two squads made the tank's
+  arrival a rain of missiles at the new density); assault-wave men without a target advance bent low at a jog (they
+  strolled upright); the grass a few metres ahead of the gunner's sight shrinks away (the sight looked into a wall of
+  grass); `f32-verify` counts only trench parapets for S6 and soldiers within 600 m.

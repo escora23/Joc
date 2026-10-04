@@ -1342,6 +1342,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     brokenFences.clear();
     fenceSide.clear();
     if (!relocating) battleNoticed.clear();
+    hotArrived = null;
     ramCd.clear();
     world.rng = new Rng((p.seed >>> 0) || 1);
     world.kind = kind;
@@ -2186,6 +2187,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         // Far from the hottest stretch (and not already driving there): the chip's button drives there (as G does).
         go: (() => {
           if (controller instanceof TankController && controller.driveTo) return '';
+          if (atHotSpot(P)) return '';
           const so = hotStandOff();
           return so && Math.hypot(so.x - P.pos.x, so.z - P.pos.z) > 350 ? t('command.go.combat') : '';
         })(),
@@ -2279,11 +2281,23 @@ export function createCommandMode(ctx: GameContext): CommandApi {
    * behind the contact line on our side, level with it. Returns the distance (m) to it (no drive under 150 m), or -1
    * without a battle.
    */
+  /**
+   * Where the last drive to the hot stretch arrived and the hot point it was going to (the vantage it chose can be a few
+   * hundred metres from the plain stand-off level with the hot point): while the tank stays there and the fighting does
+   * not move away, it is at the hot stretch (no «Ir al combate» on the chip, G says so).
+   */
+  let hotArrived: { pos: THREE.Vector3; hot: THREE.Vector3 } | null = null;
+  function atHotSpot(P: Ent): boolean {
+    const hb = forces?.battle.info().hot;
+    return !!hotArrived && !!hb && Math.hypot(P.pos.x - hotArrived.pos.x, P.pos.z - hotArrived.pos.z) < 200
+      && Math.hypot(hb.x - hotArrived.hot.x, hb.z - hotArrived.hot.z) < 400;
+  }
   function driveToHot(): number {
     const P = player();
     const so = hotStandOff();
     if (!P || !so || !(controller instanceof TankController)) return -1;
     // Already at the hot stretch: nowhere to go.
+    if (atHotSpot(P)) return 0;
     if (Math.hypot(so.x - P.pos.x, so.z - P.pos.z) < 150) return Math.hypot(so.x - P.pos.x, so.z - P.pos.z);
     const dest = hotSpot() ?? so;
     const d = Math.hypot(dest.x - P.pos.x, dest.z - P.pos.z);
@@ -2299,8 +2313,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       lastDrive = why;
       if (waypoint === wp) waypoint = null;
       if (why === 'arrived') {
+        const hb0 = forces?.battle.info().hot;
+        hotArrived = hb0 ? { pos: P.pos.clone(), hot: hb0.clone() } : null;
         // The fight is laid out around the tank where it sees it (figures behind a crest come into its sight).
-        forces?.battle.relayoutAround(P);
+        forces?.battle.relayoutAround(P, hb0);
         overlay?.showNotice(t('command.go.inBattle'), 3.5);
         // The view turns to the fighting (the mouse takes it from there).
         const hb = forces?.battle.info().hot;

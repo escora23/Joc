@@ -3463,7 +3463,7 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   defending, 260 holding a quiet line (half the floor when the side has fewer than 20 troops there); caps 1,000
   hostile / 900 friendly (instanced: the near ones wake with the AI, the rest are the animated crowd). Each figure
   stands for local troops ÷ figures (≤ 25) — what killing it takes from the sim (fractions carry over to the next
-  kill). 70 % of a side's figures stand within 450 m along the line of the player, the rest out to the stretch's ends;
+  kill). 72 % of a side's figures stand within 380 m along the line of the player, the rest out to the stretch's ends;
   the stretch re-centres after 300 m. The chip and the arrival line give the sim's troops («unos 16.000 nuestros y 460
   enemigos en este tramo», two significant figures), not figure counts. Line vehicles follow the sim's soldiers (not
   the floor): one per 90 (hostile) / 110 (friendly), at most 5 / 4; each stands for its crew and squad (10 / 8 × 25).
@@ -3483,10 +3483,14 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   side at the height of an offensive (×0.3 holding). The far figures' falls between the two sides (0.15 % of exposed
   attackers a second × heat, 0.07 % defenders, 0.03 % on a quiet line) are the picture of the sim's attrition and
   are replaced while the sim has the troops; every man or vehicle the player kills goes to the sim.
-* **Readable.** Within 1 km the figures are full entities (AI, real rounds); beyond, an animated instanced crowd.
-  Every figure keeps ≥ 5 px on screen (drawn up to 3.5× life size; never in the gunner's sight), the player's rounds
-  hit the figure as drawn; far muzzle flashes keep ~3 px and tracers ~1.4 px; beyond 450 m the uniform takes up to
-  45 % of the nation's colour.
+* **Readable.** Within 1 km the figures are full entities (AI, real rounds; up to 160 per side and weapon, the rest
+  stay in the crowd); beyond, an animated instanced crowd. Every figure keeps ≥ 6.5 px on screen (pass 2; drawn up to
+  4× life size; never in the gunner's sight), the player's rounds hit the figure as drawn; far muzzle flashes keep
+  ~3 px and tracers ~1.4 px; a figure under 15 px tall on screen takes its nation's colour (60 % at 6 px and below:
+  from the chase camera beyond ~100 m, or from above) and far ones darken a little (to 75 % at 1 km), so two armies
+  read apart against the ground while the gunner's sight still shows the uniforms. Most men kneel to fire (a third of an assault's
+  men lie prone; machine gunners and one defender in seven lie at their gun); a man holding a position stays in it
+  facing the enemy. The grass is trodden down to a third of its height along the battle's lines and no man's land.
 
 ### 21.2 Finding the action
 * Map: every front of ours has «⌖ Tomar el control aquí» on its badge; a front with a running offensive pulses.
@@ -3494,9 +3498,13 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   line point's score is km ÷ heat) and stops **in** the battle: 0.35 km from the target, or as soon as a contact line
   at war with enemy soldiers on it is within 0.5 km. Arriving from such an entry or march, the tank then drives itself
   (tactical speed, any driving key takes over) to about 220 m behind the line at the battle's hottest stretch: of the
-  points ±300 m along the line and 150-380 m deep, the one on ground a tank stands on (slope ≤ ~22° over 10 m) from
-  where the enemy's forward trench there and the most of the figures ahead are in sight (12 per trench point seen, 1
-  per figure ahead, ¼ behind, −0.03 per metre off the ideal); on arrival the view turns to the fighting. Inside a battle, G does the
+  points ±450 m along the line and 150-480 m deep (pass 2), the one on ground a tank stands on (slope ≤ ~22° over 10 m)
+  from where the enemy's forward trench there and the most of the figures ahead are in sight (15 per trench point
+  seen; per figure ahead 3 for an enemy and 0.6 for one of ours, a quarter of that behind; −0.02 per metre off the
+  ideal). On arrival the fight is laid out where the tank sees it (`relayoutAround`: the figures of both sides out of
+  its sight and more than 150 m off, up to 70 % of a side, stand again on ground in its sight — waves at every stage,
+  a third of our squads around the tank, defenders in the trench or in foxholes up to 60 m before and 40 m behind it)
+  and the view turns to the fighting. Inside a battle, G does the
   same whenever the stretch is more than 150 m away. The drive's goal follows the stretch as the line moves (up to 4
   times); it gives up after 10 s without headway.
 * In command mode the chip at the top always names the battle: «Batalla en la línea contra X · Lo más duro, a 1,2 km

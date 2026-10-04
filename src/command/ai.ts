@@ -648,7 +648,9 @@ export class Brain {
       if (dist < 4) this.nextMoveTarget(e, 60);
       else {
         e.yaw += angleDelta(e.yaw, Math.atan2(-dx, -dz)) * Math.min(1, dt * 4);
-        sp = t ? 3.2 : 1.7;
+        // A man of an assault wave advances bent low at a jog (owner item 32: a wave strolling upright toward the
+        // enemy read as a parade); others walk until they have a target.
+        sp = t ? 3.2 : e.order === 'front' && e.wave >= 0 ? 2.4 : 1.7;
       }
     } else if (t) {
       e.yaw += angleDelta(e.yaw, Math.atan2(-(t.pos.x - e.pos.x), -(t.pos.z - e.pos.z))) * Math.min(1, dt * 5);

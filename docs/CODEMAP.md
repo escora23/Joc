@@ -1706,7 +1706,11 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   fighting, smoothed over ~6 s with hysteresis; false on a quiet line, where it is the line point nearest the player);
   `standOff(at, depth)` = the point `depth` m behind the line on the friendly side level with `at`; `bestStandOff`
   = where «Ir al combate» drives inside a battle (standable ground with the enemy's forward trench and the figures ahead
-  in sight, ±300 m along, 150-380 m deep).
+  in sight, the enemy's weighing most, ±450 m along, 150-480 m deep); `relayoutAround(player)` (index.ts calls it when
+  the drive to the hot stretch arrives; the `command-battle` shot too) lays the figures out of the tank's sight out
+  again where it sees them; `goodSpot` / `sees`: new figures stand on walkable ground in the player's sight (a few
+  tries per squad or man; own assault squads partly around the tank, `playerD`); `recentreMembers` re-lays up to 160
+  far sleepers near the player when the near band has thinned; `trampled(x, z)` + `groundVersion` (Grass.trample).
 * `src/command/models/soldier.ts` — soldier geometry per variant (rifleman, AT gunner, machine gunner) and level of
   detail, with `aPart` (thighs, shins, arms+weapon, upper body) and `aTint` (fixed, uniform, nation band, helmet,
   gear); `CAMO_GLSL`: the uniform's camouflage in the fragment shader (nation-coloured, dark and light blotches from
@@ -1724,6 +1728,8 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   active soldiers get the same `readableScale` (none in the gunner's sight), kept in `Ent.drawScale`, which `center()`
   and the player's bullet sphere follow; far muzzle flashes (~3 px) and tracers (≥ ~1.4 px) keep a size on screen
   (`viewPos`, `ppm1` from the last frame);
+  `distTone` / `farTint` (far figures darker; figures small on screen in their nation's colour, by pixels tall;
+  crowd and active alike);
   `updatePuppets` (dormant figures: trench holders kneel / lie and fire bursts, wave members rush and drop prone, by
   `order`, `wave`, `look`; visual-only tracers `vtrace` and AT rockets); spatial grid `buildGrid` / `forEachIn` for
   rounds, splash and ramming; splash lethal to men (×1.8, cover 0.7); player bullets hit a man within 0.78 m; pose-aware
@@ -1731,7 +1737,7 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
 * `src/command/player/tank.ts` — HE 40 dmg / 15 m splash, coax 9 dmg; `updateFocus` (target brackets, lead point for the
   loaded round → `HudState.focus` / `lead`, drawn by `hud.ts drawFocus`); collisions call `ctx.ram` /
   `ctx.ramObstacle`; `driveTo` / `onDriveEnd`: the tactical self-drive to a point (steers, slows in turns, any driving
-  key takes over, ends within 45 m or stuck 6 s).
+  key takes over, ends within 14 m — pass 2, the vantage is often a crest — or stuck 10 s).
 * `src/command/index.ts` — «Owner item 32» blocks: `ram` (men run over above 1 m/s, vehicles by mass × closing speed²
   both ways, neutrals block and `askRam` asks first), `ramObstacle` (city houses at war / confirmed come down),
   `ramScenery` (trees knocked down via `Scatter.knockTrees`, compound fences crossed → flattened section, at peace the

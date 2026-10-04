@@ -75,7 +75,7 @@ export class TankController implements Controller {
 
   /**
    * Owner item 32: «Ir al combate» inside a battle drives the tank at tactical speed to this point (the hottest stretch
-   * of the line), steering by itself; any driving key takes over. Cleared on arrival (within 45 m).
+   * of the line), steering by itself; any driving key takes over. Cleared on arrival (within 14 m).
    */
   driveTo: THREE.Vector3 | null = null;
   /** Called once when the drive ends: the point reached, a driving key pressed, or stuck for 6 s. */
@@ -154,13 +154,14 @@ export class TankController implements Controller {
           this.driveBest = dist;
           this.driveStuck = 0;
         } else this.driveStuck += dt;
-        if (dist < 45 || this.driveStuck > 10) this.endDrive(dist < 45 ? 'arrived' : 'stuck');
+        // (Pass 2: the spot is a vantage over the fight — often a crest the tank must be ON, not 45 m below it.)
+        if (dist < 14 || this.driveStuck > 10) this.endDrive(dist < 14 ? 'arrived' : 'stuck');
         else {
           const turn = angleDelta(e.yaw, Math.atan2(-dx, -dz));
           turnIn = Math.max(-1, Math.min(1, turn * 2.5));
           // Slow in tight turns and for the last stretch.
           fwdIn = 1;
-          cruise = Math.abs(turn) > 0.9 ? 4 : Math.min(14, 4 + dist * 0.08);
+          cruise = Math.abs(turn) > 0.9 ? 4 : Math.min(14, 2.5 + dist * 0.08);
         }
       }
     }
