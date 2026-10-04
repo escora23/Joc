@@ -2112,7 +2112,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           P.pos.copy(lastSafe);
           P.speed = 0;
           autopilot = false;
-          void askCross(o);
+          if (!turnBack || turnBack.owner !== o) void askCross(o);
           return;
         }
         P.pos.x = nx;
@@ -2889,7 +2889,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (!c || contact) return;
     const tp = tileOf(P.pos.x, P.pos.z);
     const dir = dirWord(tileBearing(tp.x, tp.y, c.tx, c.ty));
-    overlay.showNotice(t(c.km > FAR_KM[kind] ? 'command.go.offerFar' : 'command.go.offer', { what: targetTitle(c), km: formatNumber(c.km, c.km < 10 ? 1 : 0), dir }), 7, true);
+    const offer = c.kind === 'unit' && kind !== 'tank' ? 'command.go.offerIntercept' : c.km > FAR_KM[kind] && (c.kind === 'front' || c.kind === 'battle') ? 'command.go.offerFar' : 'command.go.offer';
+    overlay.showNotice(t(offer, { what: targetTitle(c), km: formatNumber(c.km, c.km < 10 ? 1 : 0), dir, go: t(goKey(c, c.km)).toLowerCase() }), 7, true);
   }
 
   /** Rebuild the scene where a march ended and say where the action is. */
@@ -2999,7 +3000,6 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     const look = new THREE.Vector3(P.pos.x + ux * 1000, P.pos.y + 3 + Math.tan(pitch) * 1000, P.pos.z + uz * 1000);
     if (controller instanceof TankController) controller.lookAt(look);
-    else controller.aimAt?.(look);
   }
 
   function arrivalNotice(c: CombatTarget, stopBy: string): void {
@@ -4064,7 +4064,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           chunkMsP95: +ground.p95().toFixed(2), chunksBuilt: ground.stats.built, nearBuilt: ground.stats.nearBuilt, workerMs: +ground.stats.workerMs.toFixed(1),
           chunkWorker: !ground.stats.mainThread, rate: effRate, pace: +scenePace.toFixed(2), requested, throttled, decision, clockMode: view.clock.mode, clockRate: view.clock.rate,
           localSec, simSec: view.command?.sec ?? -1, tick: view.tick, distanceM, waypointKm: waypoint ? Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z) / 1000 : -1,
-          autopilot, lastDrop, landOwner, border: borderNear, incursion: inc, integrity, formationAlive: formation.filter((m) => m.alive).length,
+          autopilot, lastDrop, landOwner, border: borderNear, incursion: inc, turnBack: turnBack ? turnBack.owner : 0, integrity, formationAlive: formation.filter((m) => m.alive).length,
           vehiclesLost, moves: view.command?.moves ?? null, rebases: rebaseN, towns: civil.stats.towns, labels: civil.labels.length, civil: civil.stats,
           notice: overlay.noticeText, radio: overlay.radioText, info: overlay.infoText, dialog: overlay.dialogOpen, offX: frame.offX, offZ: frame.offZ,
           kills: world.stats.kills, killsBy: Object.fromEntries(killsBy), unitHitN, structHitN,

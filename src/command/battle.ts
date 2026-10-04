@@ -246,6 +246,7 @@ export class BattleLine {
     this.hot = this.near = null;
     this.binsSm.fill(0);
     this.hotBin = -1;
+    this.vantage = null;
     this.clearDecor();
     this.host.world.battleHeat = 0;
   }
@@ -813,6 +814,7 @@ export class BattleLine {
     this.holesAt.set(1e9, 0, 0);
     this.centre = null;
     this.hot = this.near = null;
+    this.vantage = null;
     this.clearDecor();
   }
 

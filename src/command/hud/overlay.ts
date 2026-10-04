@@ -790,7 +790,8 @@ export class CommandOverlay {
     // Where the force under the cursor comes from.
     if (hover && hoverR) {
       g.font = '600 12px "Barlow", sans-serif';
-      if (hoverR.leader) leaderLine(g, hover.x, hover.y, hoverR, 'rgba(132,196,255,0.8)');
+      // (Under the reticle the tip names what the crosshair is on: no line across the reticle to it.)
+      if (hoverR.leader && Math.hypot(hover.x - W / 2, hover.y - H / 2) > 80) leaderLine(g, hover.x, hover.y, hoverR, 'rgba(132,196,255,0.8)');
       g.fillStyle = 'rgba(6,10,16,0.88)';
       g.fillRect(hoverR.x, hoverR.y, hoverR.w, 22);
       g.strokeStyle = 'rgba(132,196,255,0.35)';

@@ -223,6 +223,27 @@ if (ONLY.includes('border')) {
   }
   const early = await page.evaluate(() => window.__cmd.ctx.sim.view.command?.incursions?.length ?? 0);
   rec('B2 confirmation before crossing (no incursion in the sim yet)', asked && early === 0, { dialog: s.dialog, border: s.border, simIncursions: early });
+  // Gauntlet fix: Enter means «Volver» (safe default), and going back turns the tank physically (no 180° in a frame).
+  const yaw0 = await page.evaluate(() => window.__cmd.controller.ent.yaw);
+  await page.keyboard.press('Enter');
+  await wait(1200);
+  const back1 = await page.evaluate(() => ({ yaw: window.__cmd.controller.ent.yaw, dialog: window.__cmd.overlay.dialogOpen, turnBack: window.__cmdStats.turnBack, land: window.__cmdStats.landOwner, inc: window.__cmd.ctx.sim.view.command?.incursions?.length ?? 0 }));
+  const dYaw = (a, b) => Math.abs(((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  rec('B2b Enter at the border means «Volver»: no crossing, no incursion', !back1.dialog && back1.inc === 0 && back1.turnBack > 0, back1);
+  rec('B2c going back turns the tank physically (no instant 180°)', dYaw(yaw0, back1.yaw) < 2.6, { yaw0: +yaw0.toFixed(2), after: +back1.yaw.toFixed(2), turnedDeg: Math.round((dYaw(yaw0, back1.yaw) * 180) / Math.PI) });
+  // Wait for the turn to finish (facing home, on our side), then drive at the line again: the question comes back.
+  for (let i = 0; i < 60; i++) {
+    await wait(1000);
+    if (!(await page.evaluate(() => window.__cmdStats.turnBack))) break;
+  }
+  asked = false;
+  for (let i = 0; i < 200 && !asked; i++) {
+    await push(15);
+    await wait(1000);
+    s = await stats(page);
+    asked = !!s.dialog;
+  }
+  rec('B2d driving at the line again asks again', asked, { dialog: s.dialog });
   // Accept: the first button of the command dialog.
   const clicked = await page.evaluate(() => {
     const btn = document.querySelector('.fu-cmdx-dialog.show button.danger');
