@@ -14,7 +14,7 @@
 //   B  near a border at peace: the warning, the confirmation when the autopilot reaches it, after crossing the
 //      sim's borderIncursion, the radio warning with its countdown, the interception when the grace ends, the escort's
 //      driving (speeds, distance, no ramming) and, ignoring the last warning, fire or war (owner feedback #19/#20);
-//   F  at a front: the forces equal deriveLocalForces (infantry shown = min(40, pool)), a kill of an enemy soldier
+//   F  at a front: the forces equal deriveLocalForces (infantry shown = the item-32 battle at the sim's density), a kill of an enemy soldier
 //      removes 25 troops, of an enemy tank 25 % of its division; losing the own tank costs 25 % and the next
 //      vehicle takes over;
 //   J  fighter at its real altitude; S warship in own territorial waters, calm sea;
@@ -323,8 +323,14 @@ if (ONLY.includes('front')) {
   const sides = s.pools?.sides ?? [];
   const war = sides.filter((p) => p.relation === 'war');
   const near = s.pools?.frontKm >= 0 && s.pools.frontKm < 6;
-  const infOk = near && war.some((p) => p.shownInfantry > 0) && war.every((p) => p.shownInfantry === 0 || p.shownInfantry === Math.min(40, Math.round(p.front + p.offensive)));
-  rec('F1 infantry shown = min(40, front + offensive pool)', infOk, { frontKm: s.pools?.frontKm, sides: war.map((p) => ({ owner: p.owner, front: Math.round(p.front), offensive: Math.round(p.offensive), shown: p.shownInfantry })) });
+  // Owner item 32 replaced the 40-soldier token squad: a line at war stands as a battle at the sim's density
+  // (src/command/battle.ts: front pool within ~16 km of line + offensive pool, at least min(60, pool), capped 900/650).
+  const bt = s.battle?.sides ?? [];
+  const infOk = near && war.some((p) => p.shownInfantry > 0) && war.every((p) => {
+    const b = bt.find((q) => q.owner === p.owner);
+    return p.shownInfantry === 0 || (!!b && b.target >= Math.min(60, Math.round(p.front + p.offensive)) && b.target <= 900 && Math.abs(p.shownInfantry - b.target) <= Math.max(3, b.target * 0.1));
+  });
+  rec('F1 infantry shown = the battle at the sim density (≥ min(60, pool), ≤ cap)', infOk, { frontKm: s.pools?.frontKm, sides: war.map((p) => ({ owner: p.owner, front: Math.round(p.front), offensive: Math.round(p.offensive), shown: p.shownInfantry, target: bt.find((q) => q.owner === p.owner)?.target })) });
   // The same point through the shared derivation (window.__localForces = deriveLocalForces): equal pools; every real
   // enemy division within 30 km drawn with its tanks at its position.
   const same = await page.evaluate(() => {

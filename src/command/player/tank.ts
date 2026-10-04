@@ -230,7 +230,9 @@ export class TankController implements Controller {
       const mgFresh = inp.hit('Space');
       if (inp.down('Space') && this.mgCd <= 0 && this.mgAmmo > 0 && this.clear('mg', mgFresh)) {
         // The coax's real rate (~700 rounds a minute) whatever the frame rate: every round due in this step goes.
-        if (this.mgCd < -0.25) this.mgCd = 0;
+        // A fresh press fires now; a held trigger catches up with the time that passed (at most a short burst).
+        if (mgFresh) this.mgCd = Math.min(this.mgCd, 0);
+        if (this.mgCd < -0.35) this.mgCd = -0.35;
         for (let k = 0; k < 6 && this.mgCd <= 0 && this.mgAmmo > 0; k++) this.mg();
       }
       if (inp.hit('KeyC') && this.smoke > 0 && this.smokeCd <= 0) this.popSmoke();

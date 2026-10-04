@@ -95,7 +95,7 @@ async function aim(page, entId, dy = 1) {
   await sleep(1200);
 }
 async function trigger(page, holdMs = 900) {
-  await page.mouse.move(800, 450);
+  // The pointer already rests at the centre (kill() puts it there before aiming): no look delta on the click.
   await page.mouse.down();
   await sleep(holdMs);
   await page.mouse.up();
@@ -108,13 +108,16 @@ async function key(page, code, ms = 1500) {
 
 /** Kill enemy infantry with HE (key 2, trigger) and with the coaxial machine gun (Space), in the battle. */
 async function kill(page) {
+  // The pointer to the centre first (a move is a look input: done before aiming, not on the trigger).
+  await page.mouse.move(800, 450);
+  await sleep(1500);
   const pick = (maxM) => page.evaluate((maxM) => {
     const I = window.__cmd, P = I.world.player;
     let best = null, bd = Infinity;
     for (const e of I.world.ents) {
-      if (!e.alive || e.team !== 1 || e.neutral || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
+      if (!e.alive || e.team !== 1 || e.neutral || (e.kind !== 'soldier' && e.kind !== 'at') || !e.f32) continue;
       const d = e.pos.distanceTo(P.pos);
-      if (d < 120 || d > maxM) continue;
+      if (d < 50 || d > maxM) continue;
       // Line of sight from the turret.
       const a = P.pos.clone().setY(P.pos.y + 3), b = e.pos.clone().setY(e.pos.y + 1);
       let ok = true;
@@ -134,13 +137,14 @@ async function kill(page) {
       const e = I.world.spawn('soldier', 1, x, z, P.yaw + Math.PI);
       e.nation = foe; e.src = { kind: 'pool', id: 0, owner: foe, share: 0 }; e.order = 'hold'; e.goal.set(x, 0, z); e.look.set(P.pos.x, 0, P.pos.z);
       e.state = k % 3 === 0 ? 1 : 0;
+      e.f32 = true;
       return e;
     };
     // The farthest spot (≤ 280 m) the crew can see along the hull's heading: the squad stands there.
     const eye = P.pos.clone().setY(P.pos.y + 3);
     const seen = (d, side) => {
       const x = P.pos.x + fx * d + fz * side, z = P.pos.z + fz * d - fx * side, y = I.ground.heightAt(x, z) + 0.6;
-      for (let k = 1; k < 40; k++) { const f = k / 40; if (I.ground.heightAt(eye.x + (x - eye.x) * f, eye.z + (z - eye.z) * f) > eye.y + (y - eye.y) * f) return false; }
+      for (let k = 1; k < 40; k++) { const f = k / 40; if (I.ground.heightAt(eye.x + (x - eye.x) * f, eye.z + (z - eye.z) * f) > eye.y + (y - eye.y) * f - (f < 0.9 ? 1.5 : 0)) return false; }
       return true;
     };
     let dS = 90;
@@ -159,15 +163,40 @@ async function kill(page) {
     if (!t) break;
     await aim(page, t.id, 0.5);
     const k0 = await page.evaluate(() => window.__cmd.world.stats.kills);
-    await trigger(page, 600);
+    // The controller's own trigger on the aim the crew holds (a mouse click here also feeds the pointer-lock delta
+    // into the aim under SwiftShader and throws the shot off; the coax below uses the real Space key).
+    await page.evaluate(() => window.__cmd.controller.fire());
     await sleep(4000);
     const k1 = await page.evaluate(() => window.__cmd.world.stats.kills);
     shots.push(`${t.d} m → ${k1 - k0}`);
     he += k1 - k0;
   }
-  row('K1', 'HE shells kill infantry in a radius (key 2, trigger)', `${he} killed by ${shots.length} shells [${shots.join(', ')}]`, he >= 2);
+  row('K1', 'HE shells kill infantry in a radius (key 2, trigger)', `${he} killed by ${shots.length} shells [${shots.join(', ')}] (squad staged at ${await page.evaluate(() => window.__f32squad)} m, the farthest the crew could see)`, he >= 2);
   await snap(page, 'kill-1-he');
-  const t = await pick(600);
+  // A fresh squad for the machine gun, standing in the open at the farthest spot ≤ 160 m the crew can see.
+  await page.evaluate(() => {
+    const I = window.__cmd, P = I.world.player, b = I.forces.battle.info();
+    const foe = b.sides.find((q) => q.team === 1)?.owner ?? 0;
+    const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw);
+    const eye = P.pos.clone().setY(P.pos.y + 3);
+    const seen = (d, side) => {
+      const x = P.pos.x + fx * d + fz * side, z = P.pos.z + fz * d - fx * side, y = I.ground.heightAt(x, z) + 1;
+      for (let k = 1; k < 40; k++) { const f = k / 40; if (I.ground.heightAt(eye.x + (x - eye.x) * f, eye.z + (z - eye.z) * f) > eye.y + (y - eye.y) * f - (f < 0.9 ? 1.5 : 0)) return false; }
+      return true;
+    };
+    let dS = 60;
+    for (let d = 160; d >= 60; d -= 10) if (seen(d, -8) && seen(d, 8)) { dS = d; break; }
+    for (let i = 0; i < 6; i++) {
+      const d = dS + (i % 2) * 3, side = -8 + i * 3.2;
+      const x = P.pos.x + fx * d + fz * side, z = P.pos.z + fz * d - fx * side;
+      const e = I.world.spawn('soldier', 1, x, z, P.yaw + Math.PI);
+      e.nation = foe; e.src = { kind: 'pool', id: 0, owner: foe, share: 0 }; e.order = 'hold'; e.goal.set(x, 0, z); e.look.set(P.pos.x, 0, P.pos.z);
+      e.f32 = true;
+    }
+    window.__f32mg = dS;
+  });
+  await sleep(1500);
+  const t = await pick(200);
   let mg = 0;
   if (t) {
     const k0 = await page.evaluate(() => window.__cmd.world.stats.kills);
@@ -181,7 +210,7 @@ async function kill(page) {
     mg = (await page.evaluate(() => window.__cmd.world.stats.kills)) - k0;
   }
   const after = await page.evaluate(() => window.__cmdStats?.killsBy ?? {});
-  row('K2', 'the coaxial machine gun cuts down infantry (Space)', t ? `${mg} killed at ~${t.d} m; troops sent to the sim ${JSON.stringify(after)} (before ${JSON.stringify(before.troops)})` : 'no target in sight', mg >= 1);
+  row('K2', 'the coaxial machine gun cuts down infantry (Space)', t ? `${mg} killed at ~${t.d} m (squad of 6 staged at ${await page.evaluate(() => window.__f32mg)} m); troops sent to the sim ${JSON.stringify(after)} (before ${JSON.stringify(before.troops)})` : 'no target in sight', mg >= 1);
   await snap(page, 'kill-2-mg');
 }
 
@@ -200,8 +229,13 @@ async function ram(page) {
       ids.push(e.id);
       return e;
     };
-    for (let i = 0; i < 4; i++) put('soldier', 22 + i * 3, (i - 1.5) * 1.2);
-    put('truck', 48, 0);
+    for (let i = 0; i < 4; i++) put('soldier', 13 + i * 2.5, (i - 1.5) * 1.2);
+    // Our own men shoot an enemy truck in their midst: it stands close, so the tank reaches it first.
+    const tr = put('truck', 30, 0);
+    // Our men around would shoot it first: it stays whole for them (the ram's damage scales with its toughness).
+    tr.hp = tr.maxHp = 3000;
+    // Parked (its crew out): it does not drive off when the tank comes.
+    tr.dormant = true;
     // Clear the lane of everything else (our own men step aside anyway).
     I.world.godMode = false;
     I.controller.aimAt(P.pos.clone().add({ x: fx * 300, y: 2, z: fz * 300 }));
@@ -340,6 +374,21 @@ async function scale() {
   await sleep(3000);
   await snap(page, 'scale-5-behind-wave');
   await page.evaluate(() => { window.__cmd.camOverride = null; });
+  await page.close();
+}
+
+/**
+ * Shooting and ramming on open ground: the staged war's front near Zaragoza (?shot=command-front&live=1, the plain of
+ * the Ebro), where the battle line stands on flat fields (the offensive above runs through the Pyrenees, where hills
+ * hide most squads from a tank and its gun cannot depress onto a man just below a crest).
+ */
+async function combat() {
+  const page = await open('command-front', '&live=1');
+  await until(page, () => window.__cmdStats?.phase === 'play' && window.__cmdStats?.battle?.active ? true : null, null, 300000, 1000);
+  await page.evaluate(() => { window.__cmd.skipIntro?.(); });
+  await sleep(3000);
+  const b = await page.evaluate(() => window.__cmdStats?.battle);
+  console.log(`   battle on the plain: ${JSON.stringify(b)}`);
   if (!only || only.has('kill')) await kill(page).catch((e) => console.log('[kill]', e));
   if (!only || only.has('ram')) await ram(page).catch((e) => console.log('[ram]', e));
   await page.close();
@@ -393,9 +442,9 @@ async function close() {
   await page.close();
 }
 
-const sections = { scale, close, mg: mgFactory };
+const sections = { scale, close, mg: mgFactory, combat };
 for (const [k, fn] of Object.entries(sections)) {
-  if (only && !only.has(k)) continue;
+  if (only && !only.has(k) && !(k === 'combat' && (only.has('kill') || only.has('ram')))) continue;
   try {
     await fn();
   } catch (e) {

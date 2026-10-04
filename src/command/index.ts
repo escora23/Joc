@@ -31,6 +31,7 @@ import { unitLabel } from '../ui/hud/news';
 import { ShipIntercept } from './intercept';
 import { registerCommandStrings } from './strings';
 import { registerCommandStrings32 } from './strings32';
+import { HALF_WINDOW_M } from './battle';
 import { GeoBuilder } from './models/builder';
 import { makeDecalAtlas, makeNoiseTexture, makeParticleAtlas } from './env/textures';
 import { computeAtmos, Sky, type Atmos } from './env/sky';
@@ -931,6 +932,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   const ramCd = new Map<Ent, number>();
   const ramStats = { men: 0, vehicles: 0, vehicleKills: 0, selfDmg: 0, houses: 0, trees: 0, fences: 0, asked: 0, last: '' };
   let ramAskWall = 0;
+  let ramLog = 0;
   const ramTmp = new THREE.Vector3();
 
   function ramFeed(text: string): void {
@@ -989,6 +991,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       ramFeed(t('command.ram.soldier'));
       return 'pass';
     }
+    if (ramLog++ < 30) console.info(`[command] ram ${o.kind} closing ${closing.toFixed(1)} m/s, speed ${speed.toFixed(1)}, team ${o.team}, alive ${o.alive}`);
     if (!o.alive || o.team === 0 || closing < 2.2) return 'block';
     const now = world.time;
     if ((ramCd.get(o) ?? -1) > now) return 'block';
@@ -2144,7 +2147,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         battleNoticed.add(bi.frontKey);
         const own = bi.sides.find((q) => q.team === 0);
         const role = own?.role === 'attack' ? 'attack' : own?.role === 'defend' ? 'defend' : 'hold';
-        overlay.showNotice(t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(theirs), ours: formatNumber(ours), km: formatNumber(3.2, 1), role: t(`command.battle.role.${role}`) }), 8);
+        overlay.showNotice(t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(theirs), ours: formatNumber(ours), km: formatNumber((HALF_WINDOW_M * 2) / 1000, 1), role: t(`command.battle.role.${role}`) }), 8);
       }
       return;
     }

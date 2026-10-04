@@ -1422,3 +1422,60 @@ counts as a new, deliberate shot, and the question correctly came back (M3 now k
   belongs to the item-32 work: `World.damage()` simply ignores neutrals now; collisions can call the same question.
 * The jet cannon and the anti-ship missile at peace were exercised through the shared gate (same `clearToFire`), not
   with a dedicated jet scenario in the verifier.
+
+## Owner item 32 (2026-10-02, pass 1 of 2) — command-mode combat at the real scale of the front, readable and physical
+
+### What changed
+
+* **Battles at the real scale of the front (top priority).** `src/command/battle.ts` (new, `Forces.battle`): near a
+  contact line at war (within 6 km, our side against a nation at war with us) both sides' front and offensive pools
+  stand along a 2.4 km stretch of the real contact line centred on the player, re-centred as the player drives along
+  it. Figures per side follow the sim's density (1 figure = 25 troops: the front garrison within ~16 km of line drawn
+  into the stretch, plus the offensive's pool), at least 60 when the side has troops there, capped at 900 hostile / 650
+  friendly; they thicken toward the player. The side with an offensive attacks in **waves** (squads of 8-12 rush bent
+  low, drop prone and fire, rush again, from 260-700 m behind the line to a halt line 75 m short of the enemy trench,
+  fresh waves from behind as men fall); the other side **holds trenches** (a winding forward trench with sandbag
+  parapets, a second trench, reserves that run up, machine gunners, AT teams); a quiet front is two trench lines
+  trading fire. Plus **line vehicles** (tanks / IFVs by density, real AI, killed = their crew and squad to the sim),
+  **artillery** on the other side's positions (real rounds with splash, ~1/s per side at the height of an offensive,
+  rumble and battery flashes on the horizon), **smoke screens** ahead of the waves, **tracers and muzzle flashes**
+  from the whole line, wrecks burning in no man's land and craters. The far figures are the instanced crowd, animated
+  and firing (visual tracers); within 1 km they wake with the full AI and real rounds. The sim stays the source of
+  truth: the counts follow its pools, falls between the two sides are the picture of its attrition (replaced while the
+  sim has the troops), and every man or vehicle the player kills goes to the sim (`commandCasualties`).
+* **Finding the action.** «Ir al combate» / the take-control march goes to the **hottest point**: on a front with an
+  offensive, the biggest offensive's live contact (`liveContact`), and `combatTargets` weighs an offensive's contact by
+  its troops and a line point by the front's intensity (quiet lines count as farther). The march now ends **among our
+  own line** (stop 0.6 km, contact line 1.0 km; it used to stop 1.2-1.5 km short, behind a ridge). In command mode the
+  chip on top is always about the battle: «Batalla en la línea contra Suiza · Lo más duro, a 1,2 km · intensidad muy
+  alta · 650 nuestros, 59 enemigos a la vista» with distance and compass direction, and a world marker on the hot point
+  (where the assault ranks, the shells and the falls of the last seconds are). On arrival one line says what is there:
+  «Frente contra Suiza: 59 soldados enemigos y 650 nuestros en 2,4 km de línea (cada figura son 25). Nuestra ofensiva
+  avanza en oleadas: apóyala con el cañón.» On the strategic map every front of ours carries **«⌖ Tomar el control
+  aquí»** on its badge (a button, not only the double click) and a front with a running offensive **pulses**.
+* **Soldier models.** `src/command/models/soldier.ts` (new): real proportions (capsule limbs, plate carrier, pouches,
+  pack, face, chin strap), helmets, rifle / AT launcher / machine gun, the uniform in field colours with the nation's
+  cast and the **nation's band** on the helmet and sleeve; a lighter level of detail for the far crowd. **Animated in
+  the vertex shader** (hips, knees, arms, torso, whole body): idle, walk, run, rush bent low, kneel to fire, stand to
+  aim, prone to fire, recoil on every shot, and **the fall when hit** (knees give, the body falls back or forward and
+  lies still; no blood, a puff of dust). Far figures keep ~4 px on screen (at most 3.5× size) and take more of the
+  nation's colour beyond ~500 m. Lab: `tools/model-lab/soldier.html`.
+* **Shooting.** HE is a fragmentation round (40 dmg, 15 m splash, ×1.8 on men in the open, ×0.7 in cover: lethal to
+  ~11 m); the coax does 9 per round (a man has 12: two hits) and fires at its real rate whatever the frame rate; the
+  player's rounds hit a man within 0.78 m of his middle, the middle follows his pose (prone men are hit low). **Target
+  brackets** with «BLANCO · tipo · distancia» on the enemy under (or nearest to) the reticle, and a **lead diamond**
+  «apunta aquí» for a moving target (the loaded round's flight time). Hit and kill markers as before; sparks on
+  vehicles, dust on men.
+* **Physical damage.** The player's machine-gun rounds now hit buildings: chips, dust and broken glass, and **small real
+  damage** in the sim (0.015 % of a structure per round; a city takes a sliver, no house comes down); the HUD says
+  «Ametralladora contra Fábrica: casi no le hace nada (99,7 % en pie). Usa el cañón con explosivo (2) o pide
+  bombarderos.» Heavier weapons keep their larger shares (HE 8 %, AP 2 %, bombs 30 %…).
+* **Collisions and ramming.** A tank running over men above 1 m/s kills them (credited, sent to the sim; our own men
+  step aside); ramming a vehicle does kinetic damage by mass and closing speed both ways (a truck at 50 km/h is
+  wrecked, the tank loses ~5 %; another tank takes as much as it gives); small city houses at war (city confirmed)
+  come down with debris; trees are knocked down in the direction of travel; driving through a compound's fence
+  flattens a section of it (and nicks the structure at war). Against a nation at peace it is item 31's rule: the tank
+  stops against the force / before the fence and the question «¿Embestir a X?» opens (Declarar la guerra · Frenar).
+* In-game help (`help.command.body`) explains the battle, the weapons against men and buildings and ramming.
+
+### Verified in real play

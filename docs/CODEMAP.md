@@ -1686,7 +1686,7 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
 
 * `src/command/battle.ts` — `BattleLine` (owned by `Forces.battle`, its group under `world.group`): near a contact line
   at war (`lf.fronts[0]` within 6 km, one side own/allied and the other hostile) it stands both sides' front and
-  offensive pools along a 3.2 km stretch of the real line centred on the player (`HALF_WINDOW_M`, re-centred after
+  offensive pools along a 2.4 km stretch of the real line centred on the player (`HALF_WINDOW_M`, re-centred after
   `RECENTRE_M` along the line; the line is resampled every refresh from `LocalFront.lineKm`). Figures per side =
   front pool × min(1, `CONCENTRATION_KM` / window km) + offensive pool, at least `SIDE_MIN` (60) when the side has
   troops, capped `SIDE_CAP_HOSTILE` 900 / `SIDE_CAP_FRIENDLY` 650 (1 figure = 25 troops). Roles: a side with an

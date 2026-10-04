@@ -2,7 +2,7 @@
 //
 // Near a contact line at war, this stands the front's troops along it around the player, at the density the sim
 // says they are there (src/shared/localForces.ts: the side's front and offensive pools per km of front), with a
-// believable cap: hundreds of soldiers per side in a 3.2 km stretch of line centred on the player, plus vehicles,
+// believable cap: hundreds of soldiers per side in a 2.4 km stretch of line centred on the player, plus vehicles,
 // trenches, artillery, smoke and tracers. The stretch follows the player along the line.
 //
 //   Defenders hold trenches (a forward trench, a second trench, reserves) behind sandbag parapets, with machine
@@ -26,7 +26,7 @@ import { POSE } from './models/soldier';
 import { WAKE_M, type Ent, type EntKind, type World } from './world';
 
 /** Half the stretch of line shown around the player (m). */
-export const HALF_WINDOW_M = 1600;
+export const HALF_WINDOW_M = 1200;
 /** The stretch is re-centred when the player is this far along the line from its centre (m). */
 const RECENTRE_M = 450;
 /** Visible figures per side at most (a believable cap; the density below it is the sim's). */
@@ -455,7 +455,7 @@ export class BattleLine {
 
   /**
    * Where along the stretch a new figure stands (u uniform 0..1): denser around its centre (the player), so the fight
-   * is thickest where the player is and thins out toward the ends of the 3.2 km.
+   * is thickest where the player is and thins out toward the ends of the 2.4 km.
    */
   private spread(u: number): number {
     const v = u * 2 - 1;
@@ -520,14 +520,15 @@ export class BattleLine {
       const s = this.spread(rng.next());
       let d: number, order: 'hold' | 'front' = 'hold';
       const goal = new THREE.Vector3();
-      if (initial ? r < 0.55 : r < 0.15) d = TRENCH_D + (rng.next() - 0.5) * 6;
-      else if (initial ? r < 0.8 : r < 0.4) d = TRENCH2_D + (rng.next() - 0.5) * 6;
+      if (initial ? r < 0.55 : r < 0.15) d = trenchAt(TRENCH_D, s) + 0.5 + rng.next() * 0.6;
+      else if (initial ? r < 0.8 : r < 0.4) d = trenchAt(TRENCH2_D, s) + 0.5 + rng.next() * 0.6;
       else d = RESERVE_D0 + rng.next() * (RESERVE_D1 - RESERVE_D0);
       const pos = this.at(s, st.sign * d, V1);
       if (!initial && d > TRENCH2_D + 50) {
         // A draft from the reserves runs up to the forward trench.
         order = 'front';
-        this.at(s + (rng.next() - 0.5) * 20, st.sign * (TRENCH_D + (rng.next() - 0.5) * 6), goal);
+        const sg = s + (rng.next() - 0.5) * 20;
+        this.at(sg, st.sign * (trenchAt(TRENCH_D, sg) + 0.7), goal);
       } else goal.copy(pos);
       const look = this.at(s, -st.sign * (st.role === 'hold' ? TRENCH_D : 300), new THREE.Vector3());
       const variant: 0 | 1 | 2 = k % 14 === 3 ? 2 : k % 9 === 5 ? 1 : 0;
@@ -624,17 +625,30 @@ export class BattleLine {
     const nrm = { x: 0, z: 0 };
     for (const ln of lines) {
       for (let s = -HALF_WINDOW_M; s <= HALF_WINDOW_M && nn + nf < TRENCH_CAP; s += SEG_M) {
-        // A fire-trench zigzag: bays and traverses every ~24 m.
-        const zig = Math.sin(s / 24 * Math.PI) > 0 ? 4 : -4;
-        const p = this.at(s + SEG_M / 2, ln.sign * (ln.depth + zig), V1, nrm);
+        // A fire trench winds a little (bays every ~30 m); each segment lies along the trench's own course.
+        const zig = (s2: number): number => trenchAt(ln.depth, s2);
+        const p = this.at(s + SEG_M / 2, ln.sign * zig(s + SEG_M / 2), V1, nrm);
+        const q0 = this.at(s, ln.sign * zig(s), V2);
+        const q0x = q0.x, q0z = q0.z;
+        const q1 = this.at(s + SEG_M, ln.sign * zig(s + SEG_M), V2);
         const h = g.heightAt(p.x, p.z);
         if (h < 0.8) continue;
-        // Parapet faces the enemy: local -Z toward -sign × normal.
-        const fx = -ln.sign * nrm.x, fz = -ln.sign * nrm.z;
-        const yaw = Math.atan2(-fx, -fz);
-        E.set(0, yaw, 0, 'YXZ');
+        // Local X along the trench, -Z (the parapet) toward the enemy (-sign × normal).
+        let tx = q1.x - q0x, tz = q1.z - q0z;
+        const tl = Math.hypot(tx, tz) || 1;
+        tx /= tl;
+        tz /= tl;
+        // -Z of the model = (-sin yaw, -cos yaw); X = (cos yaw, -sin yaw) must follow the tangent.
+        let yaw = Math.atan2(-tz, tx);
+        const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+        if (fx * -ln.sign * nrm.x + fz * -ln.sign * nrm.z < 0) yaw += Math.PI;
+        // Lie on the slope: tilt along the trench (local X) and across it (local Z), from the ground at its ends.
+        const cx = Math.cos(yaw), sx = -Math.sin(yaw), fwx = -Math.sin(yaw), fwz = -Math.cos(yaw);
+        const hR = g.heightAt(p.x + cx * 1.6, p.z + sx * 1.6), hL = g.heightAt(p.x - cx * 1.6, p.z - sx * 1.6);
+        const hF = g.heightAt(p.x + fwx * 1.2, p.z + fwz * 1.2), hB = g.heightAt(p.x - fwx * 0.8, p.z - fwz * 0.8);
+        E.set(Math.atan2(hF - hB, 2.0), yaw, Math.atan2(hR - hL, 3.2), 'YXZ');
         Q.setFromEuler(E);
-        M4.compose(V2.set(p.x, h - 0.05, p.z), Q, S1);
+        M4.compose(V2.set(p.x, h - 0.08, p.z), Q, S1);
         const close = Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < 450;
         if (close) this.trenchNear.setMatrixAt(nn++, M4);
         else this.trenchFar.setMatrixAt(nf++, M4);
@@ -841,23 +855,29 @@ export class BattleLine {
   }
 }
 
+/** Depth of a trench line at arc s: it winds a little (bays every ~30 m). */
+function trenchAt(depth: number, s: number): number {
+  return depth + 3.5 * Math.sin((s / 30) * Math.PI);
+}
+
 /** Sandbag parapet with the trench behind it (3.2 m segment along X; the enemy is toward -Z). */
 function parapetGeometry(detail: boolean): THREE.BufferGeometry {
   const b = new GeoBuilder();
-  // Spoil mound and the dark trench floor behind it.
-  b.planY([[0.2, -SEG_M / 2], [0.2, SEG_M / 2], [-1.0, SEG_M / 2], [-1.0, -SEG_M / 2]], 0.05, 0x2e271f, 0, 0.0, 0);
-  b.box(SEG_M + 0.05, 0.45, 1.3, 0x6b5a42, 0, 0.12, -0.75, -0.18, 0, 0);
+  const L = SEG_M + 0.3;
+  // The dark trench floor behind the parapet, then the spoil berm in front of it (a low trapezoid, toward -Z).
+  b.planY([[0.25, -L / 2], [0.25, L / 2], [-1.05, L / 2], [-1.05, -L / 2]], 0.04, 0x2b241c, 0, 0.0, 0);
+  b.profileX([[0.2, 0], [0.55, 0.42], [1.15, 0.38], [1.9, 0]], L, 0x6e5d44, 0, -0.02, 0);
   if (detail) {
-    // Two courses of sandbags on the lip.
+    // Two courses of sandbags on the crest, each bag a little turned.
     for (let row = 0; row < 2; row++) {
-      for (let i = 0; i < 5; i++) {
-        const x = -SEG_M / 2 + 0.34 + i * 0.64 + (row % 2) * 0.3;
-        if (x > SEG_M / 2 - 0.2) continue;
-        b.box(0.6, 0.22, 0.38, row ? 0x9a8a68 : 0x8c7d5c, x, 0.42 + row * 0.21, -0.32 + row * 0.04, 0, ((i * 37 + row * 11) % 7 - 3) * 0.03, 0);
+      for (let i = 0; i < 6; i++) {
+        const x = -L / 2 + 0.3 + i * 0.6 + (row % 2) * 0.3;
+        if (x > L / 2 - 0.2) continue;
+        b.box(0.58, 0.2, 0.36, row ? 0x9a8a68 : 0x8a7b5a, x, 0.5 + row * 0.19, -0.62 - row * 0.05, 0, ((i * 37 + row * 11) % 7 - 3) * 0.03, 0);
       }
     }
   } else {
-    b.box(SEG_M, 0.42, 0.42, 0x8c7d5c, 0, 0.52, -0.3);
+    b.box(L, 0.36, 0.4, 0x8a7b5a, 0, 0.58, -0.62);
   }
   return b.build();
 }

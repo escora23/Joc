@@ -700,7 +700,7 @@ export class World {
           // Readable far away: beyond ~500 m the uniform takes on more of the nation's colour (as the battle view's
           // masses do), so a line of men a kilometre off still reads as theirs or ours against the ground.
           this.uniformOf(e, this.tmpColor);
-          const far = Math.max(0, Math.min(1, (d - 300) / 900)) * 0.6;
+          const far = Math.max(0, Math.min(1, (d - 450) / 1200)) * 0.45;
           if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
           if (!e.alive) this.tmpColor.multiplyScalar(0.7);
           im.setColorAt(i, this.tmpColor);
@@ -1451,7 +1451,7 @@ export class World {
     const fx = this.fx;
     TMP.copy(p.vel).normalize();
     if (p.kind === 'bullet') {
-      if (e.kind === 'soldier' || e.kind === 'at') fx.particles.emit(4, p.pos.x, p.pos.y, p.pos.z, 0, 1, 0, 0.4, 0.15, 0.1, 0.12, 0.05, 0.04, 1);
+      if (e.kind === 'soldier' || e.kind === 'at') fx.particles.emit(2, p.pos.x, p.pos.y, p.pos.z, 0, 0.8, 0, 0.7, 0.25, 0.7, 0.5, 0.46, 0.4, 0.7);
       else fx.impact(p.pos, TMP2.copy(TMP).negate(), false, true);
       // Small arms barely scratch armor; autocannons chew light armor but not MBTs.
       const heavy = e.kind === 'tank' || e.kind === 'battery' || e.kind === 'ship';
