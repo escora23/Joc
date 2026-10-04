@@ -3492,7 +3492,7 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
 ### 21.3 Soldiers
 Real proportions, helmet, plate carrier, pack, rifle / AT launcher / machine gun; poses animated in the vertex shader
 (idle, walk, run, rush, kneel, aim, prone, the fall when hit; recoil on every shot). Uniform = the side's field shade
-(olive ours, khaki theirs) blended 42 % with the nation's hue at saturation ≤ 0.38 and lightness 0.34 (a red nation
+(olive ours, khaki theirs) blended 42 % with the nation's hue at saturation ≤ 0.4 and lightness 0.39 (a red nation
 wears brown-red, a blue one blue-grey); the nation's full colour on the helmet band and the arm band.
 
 ### 21.4 Shooting, damage, ramming

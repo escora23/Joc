@@ -1566,6 +1566,14 @@ Before this pass's fixes, the same entry measured **72 ours + 2 enemy in sight**
 
 ### Still open (for pass 2)
 
+* **The review of the run16 shots (FEEDBACK-1, «Item 32: review of the first-pass shots») says scale and the soldier
+  close-ups do not meet item 32 yet**: the battle reads as scattered figures on a hillside, the enemy line is not
+  visible, and the close-up figure is dark and blocky. Its direction for pass 2: density near the player decoupled from
+  «1 figure = 25» (hundreds of figures within ~600 m, still instanced, kills still credited to the sim by its own
+  numbers), an enemy line that is always visible and alive (never 600 m away over a ridge), and soldiers that read in
+  close-up (silhouette, nation colour, lighting). After that review the field uniforms were lightened a little (base
+  shades and the nation hue at lightness 0.39); not re-verified in the game.
+
 * **Mountain fronts stay sparse to the eye.** On the staged Pyrenean offensive the counts are right (650 ours, 172 in
   sight around after arriving, 117 toward the fight) but a slope or a crest hides most of any single view, and the
   enemy's thin garrison (58 figures for 19 troops/km) sits in trenches behind the crest: from our side the enemy line

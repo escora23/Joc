@@ -255,7 +255,7 @@ export function buildSoldierGeometry(variant: 0 | 1 | 2, hi: boolean, skin = 0):
 // Uniform colours
 // =================================================================================================
 
-const UNI_BASE = [new THREE.Color(0x737b58), new THREE.Color(0x8b7d5c)];
+const UNI_BASE = [new THREE.Color(0x7f8862), new THREE.Color(0x998a66)];
 const UNI_HSL = { h: 0, s: 0, l: 0 };
 const UNI_TMP = new THREE.Color();
 
@@ -268,7 +268,7 @@ const UNI_TMP = new THREE.Color();
 export function fieldUniform(team: 0 | 1, nationHex: number, seed: number, out: THREE.Color): THREE.Color {
   out.copy(UNI_BASE[team]);
   UNI_TMP.setHex(nationHex).getHSL(UNI_HSL, THREE.SRGBColorSpace);
-  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.38, UNI_HSL.s * 0.5), 0.34, THREE.SRGBColorSpace);
+  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.4, UNI_HSL.s * 0.55), 0.39, THREE.SRGBColorSpace);
   out.lerp(UNI_TMP, 0.42);
   return out.multiplyScalar(0.9 + ((seed * 997) % 1) * 0.18);
 }
