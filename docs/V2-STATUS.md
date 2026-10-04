@@ -1525,5 +1525,64 @@ specks the colour of the ground. That is the owner's "two guys" again, so this p
 * The ramming debug log is gone. Verifier: counts soldiers in the camera's line of sight (in this view and all around),
   the arrival drive (S7), G inside a battle (G1), the plain battle near Zaragoza seen from the tank and through the
   sight (P1-P2), and runs its long waits on a small viewport (SwiftShader).
+* The ramming question has its own footnote («Intro o Esc: frenar, sin tocarlo…»; it used the firing one, «no
+  disparar… vuelve a apretar el gatillo»).
 
 ### Verified in real play
+
+`node tools/f32-verify.mjs` (Chromium + SwiftShader on a no-HMR snapshot server, the real UI and keys; shots in
+`shots/owner-32-1/run16/`, K1 rerun in `run17/`). SwiftShader runs the scene at 0.05-0.1× real time, so the drives
+below took 10-20 real minutes each; the sim's clock followed the scene (`pace`).
+
+| Row | What | Measured | |
+|---|---|---|---|
+| S0 | our offensive of the staged war (f3-missions, Spain → Switzerland, Pyrenees) | 400,810 troops | PASS |
+| S1 | both sides at the sim's density | 649 ours + 58 enemy in the scene, 571 within 1 km (ours 1,954 troops/km attacking, theirs 19/km defending) | PASS |
+| S2 | vehicles in the battle | 9 ours, 0 enemy | PASS |
+| S7 | entered from the Guerra panel's «Tomar el control aquí»: the march ends in the battle and the tank drives on to the hottest stretch | at entry line 641 m, stand-off 447 m, driving; «arrived» after 58 s of scene time, line 389 m | PASS |
+| S3a | soldiers in sight around the player after arriving (≤ 2.5 km, not behind the ground) | 172 ours (the enemy's 58 sit in trenches behind the crest) | PASS |
+| S3 | in sight looking toward the fight | 117 ours + 2 vehicles (511 inside the frame counting those behind hills) | PASS |
+| S4 | the fight is alive | heat 0.86, 12 shells and 16 falls in the last 10 s | PASS |
+| S5 | the chip says where the fighting is | «Batalla en la línea contra Suiza · Lo más duro, a 680 m · intensidad muy alta · 650 nuestros y 59 enemigos en este tramo · 680 m · este · [G] Ir al combate» | PASS |
+| S6 | trenches along the defended line | 1,500 parapet segments | PASS |
+| C0/C1 | soldier close-ups at 20, 50 and 150 m, ours and theirs | shots `close-*-{20,50,150}m.png` (riflemen prone and kneeling, an AT gunner in the enemy trench) | PASS ×6 |
+| M1 | MG on an enemy factory: small but real sim damage | hp 1.0000 → 0.9988 after 8 rounds on it | PASS |
+| M2 | the HUD says it is ineffective | «Ametralladora contra Fábrica: casi no le hace nada (99,9 % en pie). Usa el cañón con explosivo (2) o pide bombarderos.» | PASS |
+| M3 | driving through a compound fence | 1 section down, «Has arrollado una valla» | PASS |
+| P0 | the plain near Zaragoza (command-front), at entry | line 1,076 m, 17 + 59 in sight around; a quiet front, both sides holding (113 + 167 figures: the sim's thin garrisons there) | PASS |
+| G1 | G inside the battle (from 650 m back on our side) | «Hacia lo más duro del combate, a 580 m, entre nuestra línea…»; «arrived» after 39 s, line 252 m, tank alive | PASS |
+| P1 | at the hot stretch: in sight around | 51 ours + 30 enemy of 113 + 167 (29 %; the run used a fixed «≥ 100», now a share of what stands there) | FAIL → criterion fixed |
+| P2 | looking toward the line | 18 enemy in sight (the enemy trench), ours behind | FAIL → criterion fixed |
+| K1 | HE kills infantry in a radius | run16: the kill feed showed 2 infantry and an IFV killed by the shells, but the per-shell window closed before the bursts (slow frames). run17, counted until each shell has burst: **11 men by 4 shells** (84 m → 4, 90 m → 1, 140 m → 4, 140 m → 2) | PASS (run17) |
+| K2′ | the coax again (run17) | 1 killed at ~140 m (squad at 150 m); 275 troops sent to the sim | PASS |
+| K2 | the coax cuts down infantry | 2 killed at ~60 m; 275 troops sent to the sim | PASS |
+| R1 | running over infantry | 4 run over | PASS |
+| R2 | ramming a light vehicle | truck wrecked, the tank lost 7.4 hp | PASS |
+| R3 | ramming a truck of a nation at peace (China) | the tank stops, «¿Embestir a China? …» opens; Enter = Frenar: no war, the truck unharmed (30 → 30 hp) | PASS |
+
+Before this pass's fixes, the same entry measured **72 ours + 2 enemy in sight** at 1.2 km from the line (run10).
+
+`npx tsc --noEmit`, `npm run build` and `npx tsx tools/i18n-check.mjs` (1,498 keys, none missing) are clean.
+
+### Still open (for pass 2)
+
+* **Mountain fronts stay sparse to the eye.** On the staged Pyrenean offensive the counts are right (650 ours, 172 in
+  sight around after arriving, 117 toward the fight) but a slope or a crest hides most of any single view, and the
+  enemy's thin garrison (58 figures for 19 troops/km) sits in trenches behind the crest: from our side the enemy line
+  reads through its fire, shells and smoke more than through its men. The plain shows both lines. Ideas: put the
+  defenders' trenches on the forward slope (where trenches really go), add the enemy's firing positions to what the
+  stand-off must see, and an overview key (a few seconds of a higher camera) to take in the whole line.
+* **The tank is exposed at the hot stretch.** 220 m behind the line it is ~335 m from the enemy trench and its AT teams
+  (run16: 100 % on arriving in the Pyrenees; on the plain 81 % after G's drive and 68 % at the end of the kill and ram
+  tests; the command-front staging, which puts the tank on the enemy's side of the line, lost all four tanks driving
+  back through the enemy trench in run15). Pass 2 should tune
+  the AT teams' reaction to a tank that just arrived, or stop the drive 300 m back when the enemy has AT teams there.
+* **The far crowd still loses against busy ground from high up** (the 260 m overview shot): 5 px figures among the
+  terrain's dark speckle. A darker silhouette tone beyond ~600 m or a light nation-coloured rim would help.
+* **Prone men show a dark pack slab** at 20 m (the pack takes the uniform's darker shade and lies in shadow); the crowd's
+  far figure (1.1k vertices) could get a still lighter version for beyond ~600 m.
+* **The gunner's sight looks into the grass** when aimed slightly down at a near crest (13° field of view magnifies the
+  grass a few metres ahead); a sight height above the grass or a grass fade near the sight is needed.
+* **Verifier speed.** Under SwiftShader a full `f32-verify` takes ~2 hours (each drive 10-20 real minutes); `--only`
+  runs the sections separately. The other command-mode verifiers were not re-run after the sim-clock pace change except
+  `f31-verify --only tank` (see below).

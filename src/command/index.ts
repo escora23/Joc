@@ -968,7 +968,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     ramAskWall = performance.now();
     ramStats.asked++;
     const name = nationName(owner);
-    const i = await decide(t('command.ram.peaceTitle', { nation: name }), t('command.ram.peaceBody', { nation: name, what }), t('command.fire.extra'), [
+    const i = await decide(t('command.ram.peaceTitle', { nation: name }), t('command.ram.peaceBody', { nation: name, what }), t('command.ram.extra'), [
       { label: t('command.fire.declare', { nation: name }), cls: 'danger', key: 'G', code: 'KeyG' },
       { label: t('command.ram.stop'), cls: 'pri', key: t('command.fire.safeKeys'), safe: true },
     ]);
