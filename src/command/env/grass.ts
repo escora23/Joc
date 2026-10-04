@@ -215,7 +215,9 @@ export class Grass {
         if (y < 0.6) continue;
         // Fade out at the edge by shrinking.
         const edge = 1 - Math.max(0, (Math.sqrt(d2) - R * 0.7) / (R * 0.3));
-        const sc = (0.55 + h1 * 0.6) * (0.55 + 0.45 * edge) * (dirt > grass ? 0.7 : 1) * (this.trample ? this.trample.at(x, z) : 1);
+        const trod = this.trample ? this.trample.at(x, z) : 1;
+        if (trod < 0.05) continue;
+        const sc = (0.55 + h1 * 0.6) * (0.55 + 0.45 * edge) * (dirt > grass ? 0.7 : 1) * trod;
         this.q.setFromAxisAngle(this.up, h2 * Math.PI * 2);
         this.s.set(sc * (0.9 + h3 * 0.4), sc * (0.8 + h2 * 0.6), sc * (0.9 + h3 * 0.4));
         this.p.set(x, y - 0.05, z);

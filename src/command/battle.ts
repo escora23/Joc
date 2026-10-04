@@ -352,7 +352,8 @@ export class BattleLine {
 
   /**
    * Owner item 32 (pass 2): the grass is trodden down where the battle is fought (both sides' lines and no man's land,
-   * along the stretch): clumps there are a third of their height, so men kneeling or lying in the open stay in sight.
+   * along the stretch): no clumps there (short dark tufts read as men lying in the field), so men kneeling or lying in
+   * the open stay in sight.
    */
   trampled(x: number, z: number): number {
     if (!this.active || !this.centre) return 1;
@@ -361,7 +362,8 @@ export class BattleLine {
     const nrm = { x: 0, z: 0 };
     const q = this.at(s, 0, V3, nrm);
     const d = Math.abs((x - q.x) * nrm.x + (z - q.z) * nrm.z);
-    return d < WAVE_D1 + 150 ? 0.35 : d < WAVE_D1 + 250 ? 0.35 + ((d - WAVE_D1 - 150) / 100) * 0.65 : 1;
+    // Trodden flat between the lines (no tufts to read as men lying there), thinning out behind them.
+    return d < WAVE_D1 + 150 ? 0 : d < WAVE_D1 + 250 ? ((d - WAVE_D1 - 150) / 100) : 1;
   }
 
   /** Owners whose infantry this battle stands (forces.ts then leaves their front pools to it). */
@@ -869,8 +871,12 @@ export class BattleLine {
       this.playerD = (player.pos.x - q.x) * nrm.x + (player.pos.z - q.z) * nrm.z;
     }
     let moved = 0;
+    const ahead = this.ahead;
+    // Behind the tank (looking toward the fight): our men there are out of the view and the gun's way too.
+    const behind = (e: Ent): boolean => !!ahead && ((e.pos.x - player.pos.x) * ahead.x + (e.pos.z - player.pos.z) * ahead.z) < -60;
     for (const st of this.sides.values()) {
-      const out = st.members.filter((m) => m.e.alive && m.e.pos.distanceTo(player.pos) > 150 && !this.sees(player, m.e.pos.x, m.e.pos.z))
+      const out = st.members.filter((m) => m.e.alive && m.e.pos.distanceTo(player.pos) > 150
+        && (!this.sees(player, m.e.pos.x, m.e.pos.z) || (st.team === 0 && behind(m.e))))
         .sort((a, b) => b.e.pos.distanceToSquared(player.pos) - a.e.pos.distanceToSquared(player.pos));
       const n = Math.min(out.length, Math.round(st.target * 0.7));
       for (let i = 0; i < n; i++) {
