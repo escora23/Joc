@@ -190,6 +190,8 @@ export class Scatter {
         }
         if (type < 0 || j.counts[type] >= this.caps[type]) continue;
         if (this.keepOut && this.keepOut(sx, sz)) continue;
+        // (No boulder where the tank stands at the battle's vantage: the chase camera 14 m behind it ended up inside one.)
+        if (type === 3 && this.shelled?.clear?.(sx, sz)) continue;
         if ((type === 0 || type === 1) && this.shelled) {
           const v = this.shelled.at(sx, sz);
           if (v === 2) continue;
@@ -216,7 +218,7 @@ export class Scatter {
    * the ground, 2 it is gone. Consulted as trees are laid out, and re-applied to the standing ones whenever its version
    * changes (the battle moved): a fight is not fought in a forest the tank cannot see out of.
    */
-  shelled: { at(x: number, z: number): number; version(): number } | null = null;
+  shelled: { at(x: number, z: number): number; version(): number; clear?(x: number, z: number): boolean } | null = null;
   private shelledV = -1;
   private readonly tilt = new THREE.Quaternion();
 

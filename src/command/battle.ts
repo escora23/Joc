@@ -313,13 +313,13 @@ export class BattleLine {
     const lo = this.sMin + 260, hi = this.sMin + (this.nPts - 1) * STEP_M - 260;
     // 1. The flattest stretches within ±1.5 km, flattest first (the steepest Pyrenean valleys can leave the flattest
     // one without a single spot a tank stands on: the next flattest is tried, up to four).
-    const stretches: { s: number; r: number }[] = [];
+    const stretches: { s: number; r: number; key: number }[] = [];
     for (let k = -15; k <= 15; k++) {
       const s = s0 + k * 100;
       if (s < lo || s > hi) continue;
-      stretches.push({ s, r: this.relief(s, own.sign) + Math.abs(k) * 0.9 });
+      stretches.push({ s, r: this.relief(s, own.sign) + Math.abs(k) * 0.9, key: 0 });
     }
-    if (!stretches.length) stretches.push({ s: Math.max(lo, Math.min(hi, s0)), r: 0 });
+    if (!stretches.length) stretches.push({ s: Math.max(lo, Math.min(hi, s0)), r: 0, key: 0 });
     stretches.sort((p, q) => p.r - q.r);
     const sees = (x: number, y0: number, z: number, tx: number, ty: number, tz: number): boolean => {
       const dx = tx - x, dz = tz - z;
@@ -381,6 +381,26 @@ export class BattleLine {
     };
     // 2. The spot: the enemy's forward trench 250-350 m ahead, on standable ground, scored by what the player sees from
     // the default chase camera along each side of the line (the trench three times a field point), on flat ground.
+    // 1b. Flat is not enough in the mountains (a flat valley floor between two ridges sees nothing): every stretch is
+    // also tried coarsely, level with it at the stand-off depth, by what the chase camera would see there; the four best
+    // by view and flatness are searched in full below.
+    for (const st of stretches) {
+      const ft = this.foeTrench(own, st.s);
+      const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
+      let vb = -40;
+      for (const dd of [D, D + 60]) {
+        this.at(st.s, own.sign * dd, cand);
+        const h = g.heightAt(cand.x, cand.z);
+        if (h < 0.8 || g.normalAt(cand.x, cand.z, n, 10).y < 0.85) continue;
+        for (const side of [1, -1] as const) {
+          mark(st.s + side * 0.7 * (dd + ft), lk);
+          const v = view(st.s, cand.x, h, cand.z, lk);
+          vb = Math.max(vb, v.trench * 3 + v.field - clamp * 4);
+        }
+      }
+      st.key = st.r * 0.6 - vb;
+    }
+    stretches.sort((p, q) => p.key - q.key);
     for (let si = 0; si < Math.min(4, stretches.length) && !(found && si >= 2); si++) {
       const sF = stretches[si].s, rF = stretches[si].r;
       const ft = this.foeTrench(own, sF);
@@ -521,6 +541,12 @@ export class BattleLine {
     if (over > 0) k *= 1 - over / 80;
     if (fract(u * 7.31 + 0.17) >= k) return 0;
     return u < 0.3 ? 1 : 2;
+  }
+
+  /** Ground kept clear of boulders around the tank's vantage (the tank and the chase camera behind it stand there). */
+  vantageClear(x: number, z: number): boolean {
+    const v = this.active ? this.vantage : null;
+    return !!v && Math.hypot(x - v.pos.x, z - v.pos.z) < 40;
   }
 
   /** Signed depth of (x, z) from the line at arc s (m toward side b). */

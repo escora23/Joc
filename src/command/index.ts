@@ -1396,7 +1396,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     civil.begin(frame, ground, kind);
     scatter.keepOut = civil.keepOut;
     // Owner item 32 (gauntlet round 1): a battle's ground is shelled bare of trees (the crew sees its battle).
-    scatter.shelled = kind === 'tank' && forces ? { at: (x, z) => forces!.battle.shelledAt(x, z), version: () => forces!.battle.groundVersion } : null;
+    scatter.shelled = kind === 'tank' && forces ? { at: (x, z) => forces!.battle.shelledAt(x, z), version: () => forces!.battle.groundVersion, clear: (x, z) => forces!.battle.vantageClear(x, z) } : null;
     if (grass) {
       grass.keepOut = civil.keepOut;
       // Owner item 32: a battle treads the grass down along its lines (men in the open stay in sight).
@@ -3934,7 +3934,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         camera.position.copy(outroPos).lerp(tmp, easeInOutCubic(k) * 0.9);
         tmp.copy(e.pos).addScaledVector(tmp2, kind === 'jet' ? 1400 : 260);
         camera.lookAt(tmp.lerp(outroLook, 1 - easeInOutCubic(k)));
-      } else if (travel && effRate >= 300 && P) {
+      } else if (travel && requested >= 300 && P) {
+        // (By the rate asked, not the throttled one: a terrain-throttle dip on slow hardware no longer drops the view
+        // into the chase camera, where a village roof could fill the frame for a second.)
         // High compression: the camera rises to ~1 km behind the column and looks ahead, pitched so the column stands
         // in the lower third of the frame (about 18° under the centre) with the country ahead to the horizon above it.
         const fw = forwardOf(P.yaw, tmp2);
