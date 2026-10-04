@@ -336,19 +336,52 @@ export class BattleLine {
       return o;
     };
     const n = new THREE.Vector3(), cand = new THREE.Vector3(), m = new THREE.Vector3(), lk = new THREE.Vector3();
-    let best = -Infinity, bestSide: 1 | -1 = 1, bestR = Infinity;
+    const bestLook = new THREE.Vector3();
+    let best = -Infinity, bestR = Infinity;
     let found = false;
-    // 2. The spot: the enemy's forward trench 250-350 m ahead, in sight, on standable ground. Scored by what the crew
-    // sees from the commander's eye (3 m up) and — gauntlet round 1 — by what the player sees from the default chase
-    // camera, 14 m behind the tank and 5 m up, clamped over the ground: a tank on a reverse slope sees the fight from
-    // its hatch while the camera behind it looks into the grass.
+    // What the default chase camera sees from a spot looking at `look` (gauntlet round 1, owner item 32: the old score
+    // counted the trench from the commander's eye, and on a summit or a convex brow the camera 14 m behind the tank saw
+    // the grass in front of it and mountainsides far off). The camera stands where tank.ts puts it (14 m back, ~5 m up,
+    // never under 1.4 m over the ground); in a ±35° cone around the view it counts, in its line of sight:
+    //   the enemy's forward trench 200-480 m off (its line, where its men stand: three points each),
+    //   the ground of the fight 100-450 m off — our waves behind the line, no man's land up to their halt line — where
+    //   the squads are laid out on arrival (one point each).
+    let clamp = 0;
+    const view = (s: number, x: number, h: number, z: number, look: THREE.Vector3): { trench: number; field: number; near: number } => {
+      const lx = look.x - x, lz = look.z - z, ll = Math.hypot(lx, lz) || 1;
+      const ax = lx / ll, az = lz / ll;
+      const cx = x - ax * 14, cz = z - az * 14;
+      // (Ground rising behind the tank pushes the camera up against it: it looks at the fight from the grass with the
+      // tank below the frame — counted as `clamp`, the metres the camera is pushed off its place.)
+      const gc = g.surfaceAt(cx, cz) + 1.4;
+      const cy = Math.max(gc, h + 5);
+      clamp = Math.max(0, gc - (h + 5));
+      const inCone = (px: number, pz: number, lo: number, hi: number): boolean => {
+        const dx = px - x, dz = pz - z, l = Math.hypot(dx, dz);
+        return l >= lo && l <= hi && (dx * ax + dz * az) / l > 0.82;
+      };
+      let trench = 0, field = 0, near = Infinity;
+      for (let t = -600; t <= 600; t += 40) {
+        mark(s + t, m);
+        if (inCone(m.x, m.z, 200, 480) && sees(cx, cy, cz, m.x, m.y, m.z)) {
+          trench++;
+          near = Math.min(near, Math.hypot(m.x - x, m.z - z));
+        }
+        for (const d of [240, 160, 90, 30, -40]) {
+          const q = this.at(s + t, own.sign * d, m);
+          if (!inCone(q.x, q.z, 100, 450)) continue;
+          q.y = g.heightAt(q.x, q.z) + 1;
+          if (sees(cx, cy, cz, q.x, q.y, q.z)) field++;
+        }
+      }
+      return { trench, field, near };
+    };
+    // 2. The spot: the enemy's forward trench 250-350 m ahead, on standable ground, scored by what the player sees from
+    // the default chase camera along each side of the line (the trench three times a field point), on flat ground.
     for (let si = 0; si < Math.min(4, stretches.length) && !(found && si >= 2); si++) {
       const sF = stretches[si].s, rF = stretches[si].r;
       const ft = this.foeTrench(own, sF);
       const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
-      // No man's land's mean height (a spot a little above it sees over it).
-      let mean = 0;
-      for (let j = -2; j <= 2; j++) mean += g.heightAt(this.at(sF + j * 100, 0, V1).x, V1.z) / 5;
       for (const minNy of [0.93, 0.9]) {
         if (found && minNy < 0.93) break;
         for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
@@ -358,39 +391,18 @@ export class BattleLine {
             const h = g.heightAt(cand.x, cand.z);
             const ny = g.normalAt(cand.x, cand.z, n, 10).y;
             if (h < 0.8 || ny < minNy) continue;
-            const y0 = h + 3;
-            // The trench on each side of the spot (oblique views), and straight ahead.
-            let left = 0, right = 0, ahead = 0;
-            for (const off of [60, 130, 200, 270, 340]) {
-              if (sees(cand.x, y0, cand.z, ...mark(s + off, m).toArray() as [number, number, number])) right++;
-              if (sees(cand.x, y0, cand.z, ...mark(s - off, m).toArray() as [number, number, number])) left++;
-            }
-            if (sees(cand.x, y0, cand.z, ...mark(s, m).toArray() as [number, number, number])) ahead++;
-            const dist = Math.hypot(m.x - cand.x, m.z - cand.z);
-            // The chase camera, for the view along each side: the trench points it sees.
-            const camSees = (side: 1 | -1): number => {
+            for (const side of [1, -1] as const) {
               mark(s + side * 0.7 * (dd + this.foeTrench(own, s)), lk);
-              const lx = lk.x - cand.x, lz = lk.z - cand.z, ll = Math.hypot(lx, lz) || 1;
-              const cx = cand.x - (lx / ll) * 14, cz = cand.z - (lz / ll) * 14;
-              const cy = Math.max(g.heightAt(cx, cz) + 1.4, h + 5);
-              let k = 0;
-              for (const off of [0, 80, 160, 240, 320, 400, 480]) {
-                if (sees(cx, cy, cz, ...mark(s + side * off, m).toArray() as [number, number, number])) k++;
+              const v = view(s, cand.x, h, cand.z, lk);
+              const score = v.trench * 3 + v.field + (ny - 0.93) * 60 - Math.abs(ds) * 0.02 - clamp * 4
+                - (v.near < Infinity ? Math.max(0, Math.abs(v.near - 300) - 50) * 0.05 : 15) - rF * 0.6 - (minNy < 0.93 ? 6 : 0);
+              if (score > best) {
+                best = score;
+                bestR = rF;
+                out.copy(cand).setY(h);
+                bestLook.copy(lk);
+                found = true;
               }
-              return k;
-            };
-            const camR = camSees(1), camL = camSees(-1);
-            const side: 1 | -1 = camR * 2 + right > camL * 2 + left ? 1 : -1;
-            const cam = side > 0 ? camR : camL;
-            const score = Math.max(left, right) * 3 + Math.min(left, right) + ahead * 4 + cam * 4 + (ny - 0.93) * 60
-              + Math.max(0, Math.min(12, h - mean)) * 0.4 - Math.abs(ds) * 0.02 - Math.max(0, Math.abs(dist - 300) - 50) * 0.08
-              - rF * 0.6 - (minNy < 0.93 ? 6 : 0);
-            if (score > best) {
-              best = score;
-              bestSide = side;
-              bestR = rF;
-              out.copy(cand).setY(h);
-              found = true;
             }
           }
         }
@@ -401,10 +413,8 @@ export class BattleLine {
       this.vantage = null;
       return out;
     }
-    // 3. The view along the line: the enemy trench ~35° off the normal, on the side the crew sees more of.
-    const sOut = this.alongOf(out.x - c.x, out.z - c.z);
-    const dOut = Math.abs(this.depthOf(out.x, out.z, sOut));
-    const look = mark(sOut + bestSide * 0.7 * (dOut + this.foeTrench(own, sOut)), new THREE.Vector3());
+    // 3. The view along the line: the enemy trench ~35° off the normal, on the side the chase camera sees more of.
+    const look = bestLook.clone();
     // (A new vantage: the trees around it go down too — scatter `shelled` — so the crew's view is the battle.)
     if (!this.vantage || this.vantage.pos.distanceTo(out) > 30) this.groundVersion++;
     this.vantage = { pos: out.clone(), look, relief: bestR };
@@ -1084,7 +1094,11 @@ export class BattleLine {
   private sees(player: Ent, px: number, pz: number): boolean {
     const g = this.host.ground;
     const ty = g.heightAt(px, pz);
-    const ex = player.pos.x, ez = player.pos.z, ey = player.pos.y + 3;
+    // (Laying the fight out on arrival: from the default chase camera, 14 m behind the tank and ~5 m up, which is what
+    // the player sees — from the hatch a convex brow in front hides less than it does from the camera.)
+    const a = this.ahead;
+    const ex = a ? player.pos.x - a.x * 14 : player.pos.x, ez = a ? player.pos.z - a.z * 14 : player.pos.z;
+    const ey = a ? Math.max(g.surfaceAt(ex, ez) + 1.4, player.pos.y + 5) : player.pos.y + 3;
     const dx = px - ex, dz = pz - ez, L = Math.hypot(dx, dz);
     if (L > 1600) return false;
     const k = Math.max(6, Math.min(40, Math.round(L / 25)));

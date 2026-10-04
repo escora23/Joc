@@ -76,6 +76,8 @@ const diag = await page.evaluate(() => {
 for (const [k, v] of Object.entries(diag)) console.log(ts(), 'diag', k.padEnd(12), JSON.stringify(v));
 await page.setViewportSize({ width: 1600, height: 900 });
 await new Promise((r) => setTimeout(r, 8000));
+// The census again at the picture's size (figures' pixel heights depend on the viewport).
+console.log(ts(), 'census 1600x900', await page.evaluate(() => { window.__battleCensus?.(); const b = window.__battleShot; return b ? JSON.stringify({ seen: b.seen, big6: b.big6, line: b.line, camUp: b.camUp }) : 'none'; }).catch((e) => String(e)));
 const file = path.join(out, `battle-${name}.png`);
 await page.screenshot({ path: file, timeout: 300000 });
 console.log(ts(), 'saved', file);
@@ -97,6 +99,12 @@ for (const v of (args.extra && args.extra !== 'true' ? args.extra.split(',') : [
       // The sight's camera moves only while the scene runs.
       I.freeze = false;
       return foe ? `aim at enemy ${Math.round(foe.pos.distanceTo(P.pos))} m` : 'no enemy';
+    }
+    if (v === 'V') {
+      // The overview key as the player presses it (held for the capture; the camera eases up while the scene runs).
+      c.toggleOverview?.(60);
+      I.freeze = false;
+      return 'V overview';
     }
     if (v === 'overview') {
       const back = new V().subVectors(P.pos, h).setY(0).normalize();

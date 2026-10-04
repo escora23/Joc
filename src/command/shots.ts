@@ -980,6 +980,7 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
   if (view === 'V') await s.wait(2500);
   // Census: soldiers of each side in the camera's line of sight (on screen and not behind the ground), how many of them
   // are drawn at least 6 px tall (their pose's height × the readable scale), and the enemy's line in sight.
+  const census = (): void => {
   const cam = I.camera;
   cam.updateMatrixWorld();
   const v = new THREE.Vector3();
@@ -1027,5 +1028,9 @@ registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\
   const camUp = Math.round(cam.position.y - I.ground.heightAt(cam.position.x, cam.position.z));
   (window as unknown as { __battleShot?: unknown }).__battleShot = { seen, frame, within600, all, big6, line, camUp, info: { ...b, hot: null, near: null } };
   console.warn(`[battle-shot] in sight ${seen[0]} ours + ${seen[1]} enemy (≥ 6 px: ${big6[0]} + ${big6[1]}); in frame ${frame[0]} + ${frame[1]}; within 600 m ${within600[0]} + ${within600[1]}; all ${all[0]} + ${all[1]}; enemy line ${line.seen}/${line.pts} points in sight, nearest ${line.nearest} m; camera ${camUp} m over the ground; sides ${JSON.stringify(b.sides)}`);
+  };
+  // (Tools call it again after resizing the page to the picture's size: pixel sizes depend on the viewport.)
+  (window as unknown as { __battleCensus?: () => void }).__battleCensus = census;
+  census();
   await freezeAndWait(s, I);
 }, 10);
