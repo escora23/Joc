@@ -1720,7 +1720,8 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   prone, dead, aim, rush) animated in the vertex shader from `aAnim` (pose, gait phase, last shot → recoil, pose time →
   the fall) and `aBand` (nation colour, seed). `fieldUniform(team, nationHex, seed)`: the side's field shade (olive
   ours, khaki theirs) blended 42 % with the nation's hue at low saturation and lightness (a red nation wears brown-red,
-  never pink). Lab: `tools/model-lab/soldier.html` (`?d=&az=&t=&lod=far`, the game's own uniforms).
+  never pink). Lab: `tools/model-lab/soldier.html` (`?d=&az=&t=&lod=far`, the game's own uniforms, ACES and daylight;
+  `&one=<pose>&v=&team=&nation=&fill=r,g,b`: one man from the front at d m).
 * `src/command/world.ts` — soldier meshes per team × variant for the active men, in two levels packed every frame
   by `updateSoldierInstances` (the full figure, with shadows, while a man is ≥ `SOLDIER_HI_PX` 13 px tall on screen;
   the light one otherwise: 1.1k instead of 5.6k vertices), and per team for the crowd (light detail); `uniformOf` (→ `fieldUniform`), `bandOf`, `setPose`, `shotFired`; `updateCrowd(camera, viewH, …)`

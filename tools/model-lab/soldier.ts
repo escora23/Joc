@@ -28,6 +28,8 @@ g.receiveShadow = true;
 scene.add(g);
 const mats = makeSoldierMaterials();
 mats.time.value = T;
+// &fill=r,g,b: the sky fill as command mode sets it (the game's daylight: ~0.16,0.22,0.33).
+if (q.get('fill')) mats.fill.value.setRGB(...(q.get('fill')!.split(',').map(Number) as [number, number, number]));
 const one = q.get('one');
 const poses = one !== null ? [Number(one)] : [POSE.idle, POSE.walk, POSE.run, POSE.rush, POSE.aim, POSE.kneel, POSE.prone, POSE.dead];
 const nations = one !== null ? [Number(q.get('nation') ?? '0x3f8fd8')] : [0x3f8fd8, 0xd84a3a, 0x2a9a4a];

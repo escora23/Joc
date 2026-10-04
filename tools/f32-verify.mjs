@@ -307,9 +307,9 @@ async function ram(page) {
     await sleep(3000);
     const after = await page.evaluate((pz) => {
       const I = window.__cmd, e = I.world.ents.find((x) => x.id === pz.id);
-      return { war: __front.ctx.sim.view.pairState(1, pz.nation) === 'war', alive: !!e?.alive, hp: e?.hp ?? 0, dialog: I.overlay.dialogOpen, asked: window.__cmdStats?.ram?.asked ?? 0 };
+      return { war: __front.ctx.sim.view.pairState(1, pz.nation) === 'war', alive: !!e?.alive, hp: e?.hp ?? 0, dialog: I.overlay.dialogOpen, dialogText: I.overlay.dialogText.slice(0, 120), asked: window.__cmdStats?.ram?.asked ?? 0, answers: I.fire().answers };
     }, pz);
-    row('R3', 'running into a vehicle of a nation at peace: the tank stops and asks first (item 31); Enter = «Frenar»', `«${(asked ?? 'no dialog').slice(0, 200)}»; after Enter: war ${after.war}, truck alive ${after.alive} hp ${pz.hp} → ${after.hp}, asked ${pz.asked} → ${after.asked}, dialog open ${after.dialog}`, !!asked && /frenar/i.test(asked) && !after.war && after.alive && after.hp >= pz.hp && !after.dialog);
+    row('R3', 'running into a vehicle of a nation at peace: the tank stops and asks first (item 31); Enter = «Frenar»', `«${(asked ?? 'no dialog').slice(0, 200)}»; after Enter: war ${after.war}, truck alive ${after.alive} hp ${pz.hp} → ${after.hp}, asked ${pz.asked} → ${after.asked}, answers ${after.answers.join('/')}, dialog open ${after.dialog}${after.dialog ? ` («${after.dialogText}»)` : ''}`, !!asked && /frenar/i.test(asked) && !after.war && after.alive && after.hp >= pz.hp && !after.dialog);
   } else row('R3', 'a nation at peace for the ramming incident', 'none', false);
 }
 

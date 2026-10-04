@@ -1644,3 +1644,59 @@ sight, a hillside in front of the tank, nothing that read as soldiers.
   arrival a rain of missiles at the new density); assault-wave men without a target advance bent low at a jog (they
   strolled upright); the grass a few metres ahead of the gunner's sight shrinks away (the sight looked into a wall of
   grass); `f32-verify` counts only trench parapets for S6 and soldiers within 600 m.
+
+### Verified in real play
+
+`node tools/f32-verify.mjs` (Chromium + SwiftShader on a no-HMR server, the real UI and keys; the same staged war as
+pass 1: our 400,000-troop offensive across the Pyrenees taken from the Guerra panel's «Tomar el control aquí», and the
+quiet line near Zaragoza). Run 2 (`shots/owner-32-2/verify/`) ran every section; run 3 (`verify2/`) re-ran scale,
+close-ups and ramming after the arrival relayout took our men behind the tank ahead of it; run 4 (`verify3/`) re-ran
+scale and ramming on the final code (the vantage within 380 m of the line). The rows are stricter than pass 1's (S1
+≥ 900 figures with ≥ 300 enemy and ≥ 300 within 600 m; S3a ≥ 300 in sight around with ≥ 40 enemy; S3 ≥ 150 in sight
+toward the fight with ≥ 30 enemy). SwiftShader ran the scene at 0.05-0.09× real time (pass 1: 0.05-0.1).
+
+| Row | What | Pass 1 (run16) | Pass 2 | |
+|---|---|---|---|---|
+| S1 | figures of both sides around the player | 649 + 58, 571 within 1 km | run 4: 900 ours + 340 enemy, 810 within 600 m and 1,059 within 1 km at entry (the sim: ~77,000 of ours and 240-290 of theirs in the stretch, 15-17 troops/km) | PASS |
+| S2 | vehicles in the battle | 9 + 0 | 9 + 0 | PASS |
+| S7 | the tank drives itself to the hottest stretch on arrival | «arrived», line 389 m | run 4: «arrived» after 48 s, line 394 m, the hot point 494 m (run 2: line 157 m; run 3: 484 m, which failed the 450 m row — the vantage search then went 480 m deep, now 380 m) | PASS |
+| S3a | soldiers in sight around the player after arriving | 172 + 0 | run 4: **538 ours + 266 enemy** (run 2: 641 + 223; run 3: 719 + 213) | PASS |
+| S3 | in sight toward the fighting (in the frame, not behind the ground) | 117 + 0 (row was ≥ 100) | run 4: **288 ours + 266 enemy** (785 in the frame); run 3: 385 + 206; run 2, before our men behind the tank were laid out ahead of it: 14 + 11 (FAIL) | PASS |
+| S4 | the fight is alive | 12 shells, 16 falls / 10 s | 15-17 shells, 74-85 falls / 10 s | PASS |
+| S5 | the chip says where and how hard, and how many (the sim's troops) | «650 nuestros y 59 enemigos» (figures) | «Lo más duro, a 390 m · intensidad muy alta · unos 77.000 nuestros y 240 enemigos en este tramo · noreste» | PASS |
+| S6 | trenches along the defended line | 1,500 segments | 1,500 parapet segments, plus wire and shell holes | PASS |
+| C0/C1 | soldier close-ups at 20, 50, 150 m, ours and theirs | a dark, blocky figure | `verify2/close-*-{20,50,150}m.png`: an assault wave around the tank (helmets with the nation's band, packs, rifles, camouflage), a wave of ~40 men up a slope at 150 m, the enemy kneeling in its line | PASS ×6 |
+| M1-M3 | MG on a factory, the HUD hint, a fence | hp −0.0012 after 8 rounds | hp 1.0000 → 0.9982 after 10 rounds; «casi no le hace nada (99,9 % en pie). Usa el cañón con explosivo (2) o pide bombarderos.»; a fence section down | PASS |
+| P0-P2, G1 | the plain near Zaragoza (a quiet line: 260 + 260 figures for ~2,800 and ~4,200 troops) | 17 + 59 around; P1/P2 failed | P0 196 + 231 in sight around at entry; G1 «arrived» at line 161 m, tank alive; P1 236 + 259 of 260 + 260 in sight around; P2 143 ours + 106 enemy in the view toward the line | PASS |
+| K1 | HE kills infantry in a radius | 11 men / 4 shells | 5 men / 4 shells (74 m → 0, 74 m → 2, 77 m → 3, 90 m → 0) | PASS |
+| K2 | the coax cuts down infantry | 2 at ~60 m | 1 at ~60 m, 125 troops more sent to the sim | PASS |
+| R1-R2 | running over infantry, ramming a light vehicle | 4 run over; truck wrecked, −7.4 hp | 4 run over; truck wrecked, −7.9 / −9.3 / −9.1 hp (runs 2-4) | PASS |
+| R3 | ramming a truck of a nation at peace asks first | PASS | the question opens and nothing happens to the truck (no war, hp 30 → 30, asked once), but after Enter a dialog is open again (runs 3-4) — see «Still open» | FAIL |
+
+The `command-battle` probe (`tools/battle-probe.mjs`, the same war, the tank placed where «Ir al combate» takes it) was
+the loop for this pass: the first look gave **97 ours + 4 enemy** in sight and a hillside in front of the tank; after
+the changes `shots/owner-32-2/probe/battle-chase8.png` and `battle-chase9*.png` show our assault waves running past and
+ahead of the tank, the enemy line on the ridge with its wire, trenches and shell holes, and from above two armies in
+their colours (orange ours, pink the Swiss). `npx tsc --noEmit`, `npm run build` and `npx tsx tools/i18n-check.mjs`
+(1,498 keys, none missing) are clean.
+
+### Still open
+
+* **R3 (ramming at peace) after Enter.** The question opens, Enter answers «Frenar» (no war, the truck untouched,
+  asked once), but in runs 3 and 4 a dialog was open again a few seconds later; the row now logs which one and the
+  answers given (`f32-verify --only ram`). Pass 1 passed it before the ramming footnote changed; nothing in this pass
+  touched the dialogs.
+* **Terrain still decides a lot.** In the Pyrenees the picture depends on where the march ends (a forested valley
+  hides more than a bare slope); the arrival relayout and the vantage search make the battle you are taken to the one
+  you see, but a player who drives off along the line meets figures laid out for where he was until the band follows
+  him (300 m). Trees and scrub are not cleared in the battle zone (only the grass is trodden).
+* **A thin enemy garrison is drawn at a battle's density.** On this staged front the sim has 15-17 Swiss troops per km
+  (240-290 in the stretch): they stand as 340 figures (0.7-0.8 troops each, which is what a kill takes from the sim) and
+  the chip says «unos 270 enemigos». The owner asked for a battle that looks like one; the numbers stay the sim's. If
+  he wants figures and troops to match one to one, only the floor goes, and with it the "two guys" come back.
+* **Formation losses on the plain.** The player's tank stays whole, but in run 2 two of its four tanks were lost
+  during the plain section (G's drive and the kill test); AT teams are now one per three attacking squads and one per ~30 defenders (were one per two squads and one per nine). The
+  defend case (`command-battle&side=defend`, the neighbour's offensive on us) was staged but not looked at in this pass.
+* **Performance on a real GPU is not measured.** Up to 1,900 figures (at most 160 awake per side and weapon), 700 wire
+  sections (~420k triangles), 420 shell holes, the far front's bursts; under SwiftShader the scene pace did not drop
+  against pass 1. The other command-mode verifiers (f31, naval, f3c, w5) were not re-run in this pass.
