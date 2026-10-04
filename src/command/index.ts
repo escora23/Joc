@@ -2253,6 +2253,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const wp = new THREE.Vector3(dest.x, dest.y + 20, dest.z);
     waypoint = wp;
     hotDrive = true;
+    hotRetargets = 0;
     tc.onDriveEnd = (why) => {
       hotDrive = false;
       lastDrive = why;
@@ -2264,12 +2265,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   /** A drive to the hot stretch is running (its goal follows the stretch as the line moves); how the last one ended. */
   let hotDrive = false;
   let lastDrive = '';
-  /** While driving to the hot stretch: the goal follows it (the line moves as the fighting goes on). */
+  let hotRetargets = 0;
+  /** While driving to the hot stretch: the goal follows it (the line moves as the fighting goes on), a few times. */
   function followHot(): void {
-    if (!hotDrive || !(controller instanceof TankController) || !controller.driveTo) return;
+    if (!hotDrive || hotRetargets >= 4 || !(controller instanceof TankController) || !controller.driveTo) return;
     const so = hotStandOff();
-    if (!so || Math.hypot(so.x - controller.driveTo.x, so.z - controller.driveTo.z) < 80) return;
-    controller.driveTo.copy(so);
+    if (!so || Math.hypot(so.x - controller.driveTo.x, so.z - controller.driveTo.z) < 120) return;
+    hotRetargets++;
+    controller.retarget(so);
     waypoint?.set(so.x, so.y + 20, so.z);
   }
   /** Taken to an action (an entry with a goal, a march): on reaching the battle, drive on to its hottest stretch. */

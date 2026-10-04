@@ -74,6 +74,7 @@ export class TankController implements Controller {
   /** Called once when the drive ends: the point reached, a driving key pressed, or stuck for 6 s. */
   onDriveEnd: ((why: 'arrived' | 'manual' | 'stuck') => void) | null = null;
   private driveStuck = 0;
+  private driveBest = Infinity;
 
   /** Gunner's sight on/off (staging; players hold the right mouse button). */
   setZoom(on: boolean): void {
@@ -100,9 +101,18 @@ export class TankController implements Controller {
     this.shoot();
   }
 
+  /** Move the drive's goal (the hot stretch moved): headway is measured afresh. */
+  retarget(p: THREE.Vector3): void {
+    if (!this.driveTo) return;
+    this.driveTo.copy(p);
+    this.driveBest = Infinity;
+    this.driveStuck = 0;
+  }
+
   private endDrive(why: 'arrived' | 'manual' | 'stuck'): void {
     this.driveTo = null;
     this.driveStuck = 0;
+    this.driveBest = Infinity;
     const cb = this.onDriveEnd;
     this.onDriveEnd = null;
     cb?.(why);
@@ -132,9 +142,12 @@ export class TankController implements Controller {
       else {
         const dx = this.driveTo.x - e.pos.x, dz = this.driveTo.z - e.pos.z;
         const dist = Math.hypot(dx, dz);
-        // Stuck against something for 6 s (a house, a cliff): the player drives from here.
-        this.driveStuck = Math.abs(e.speed) < 0.8 ? this.driveStuck + dt : 0;
-        if (dist < 45 || this.driveStuck > 6) this.endDrive(dist < 45 ? 'arrived' : 'stuck');
+        // No headway for 10 s (a house, a cliff, a slope too steep, circling): the player drives from here.
+        if (dist < this.driveBest - 8) {
+          this.driveBest = dist;
+          this.driveStuck = 0;
+        } else this.driveStuck += dt;
+        if (dist < 45 || this.driveStuck > 10) this.endDrive(dist < 45 ? 'arrived' : 'stuck');
         else {
           const turn = angleDelta(e.yaw, Math.atan2(-dx, -dz));
           turnIn = Math.max(-1, Math.min(1, turn * 2.5));

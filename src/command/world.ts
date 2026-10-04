@@ -227,6 +227,8 @@ export const SLEEP_M = 1400;
  */
 const CROWD_MAX_SCALE = 3.5;
 const CROWD_MIN_PX = 5;
+/** An active soldier at least this tall on screen gets the full figure (capsule limbs, face, gear); smaller, the light one. */
+const SOLDIER_HI_PX = 13;
 /** Soldier variants (rifleman, AT gunner, machine gunner). */
 const VARIANTS = 3;
 /** Visual-only tracers of the far crowd's fire (no collision): ring capacity. */
@@ -277,6 +279,13 @@ export class World {
   private readonly soldierMeshes: THREE.InstancedMesh[] = [];
   private readonly soldierAnim: THREE.InstancedBufferAttribute[] = [];
   private readonly soldierBand: THREE.InstancedBufferAttribute[] = [];
+  /**
+   * Owner item 32: the same slots drawn with the light figure when a man is small on screen (< SOLDIER_HI_PX tall: beyond
+   * ~110 m in the chase view, ~900 m in the gunner's sight): a tenth of the vertices, no shadow.
+   */
+  private readonly soldierMeshesLo: THREE.InstancedMesh[] = [];
+  private readonly soldierAnimLo: THREE.InstancedBufferAttribute[] = [];
+  private readonly soldierBandLo: THREE.InstancedBufferAttribute[] = [];
   private readonly soldierSlots: (Ent | null)[][] = [[], [], [], [], [], []];
   /** The far crowd (dormant soldiers), one instanced mesh per side (crowd level of detail). */
   private readonly crowdMeshes: THREE.InstancedMesh[] = [];
@@ -295,6 +304,7 @@ export class World {
   private readonly bombGeo: THREE.BufferGeometry;
   private readonly ordPool: THREE.Mesh[] = [];
   private readonly m4 = new THREE.Matrix4();
+  private readonly m4b = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
   private readonly e = new THREE.Euler();
   private readonly sc = new THREE.Vector3();
@@ -342,6 +352,21 @@ export class World {
         this.soldierAnim.push(at.anim);
         this.soldierBand.push(at.band);
         this.group.add(im);
+        const gl = buildSoldierGeometry(v as 0 | 1 | 2, false, (t + v) % 3);
+        const atl = addSoldierInstancing(gl, SOLDIER_SLOTS);
+        const lo = new THREE.InstancedMesh(gl, this.soldierMats.standard, SOLDIER_SLOTS);
+        lo.customDepthMaterial = this.soldierMats.depth;
+        lo.count = 0;
+        lo.castShadow = false;
+        lo.receiveShadow = true;
+        lo.frustumCulled = false;
+        lo.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        lo.name = `soldiers-lo-${t}-${v}`;
+        lo.setColorAt(0, new THREE.Color(1, 1, 1));
+        this.soldierMeshesLo.push(lo);
+        this.soldierAnimLo.push(atl.anim);
+        this.soldierBandLo.push(atl.band);
+        this.group.add(lo);
       }
     }
     for (let t = 0; t < 2; t++) {
@@ -394,7 +419,7 @@ export class World {
       this.wreckRig(w);
       this.group.add(w.root);
       this.warm.push(w.root);
-      for (const im of this.soldierMeshes) {
+      for (const im of [...this.soldierMeshes, ...this.soldierMeshesLo]) {
         im.count = 1;
         im.setMatrixAt(0, this.m4.makeTranslation(0, 0, -10));
       }
@@ -402,7 +427,7 @@ export class World {
     } else {
       for (const o of this.warm) this.group.remove(o);
       this.warm.length = 0;
-      for (const im of this.soldierMeshes) im.count = 0;
+      for (const im of [...this.soldierMeshes, ...this.soldierMeshesLo]) im.count = 0;
       for (const m of this.ordPool) m.visible = false;
     }
   }
@@ -514,10 +539,8 @@ export class World {
     list[idx] = e;
     e.inst = idx;
     e.dormant = false;
-    const im = this.soldierMeshes[slot];
-    im.setColorAt(idx, this.uniformOf(e, this.tmpColor));
-    if (im.instanceColor) im.instanceColor.needsUpdate = true;
-    this.bandOf(e, this.soldierBand[slot], idx);
+    // Its colours, pose and matrix are written (packed) every frame by updateSoldierInstances.
+    e.dressed = -1;
     return true;
   }
 
@@ -880,7 +903,7 @@ export class World {
     for (const e of this.ents) if (e.rig) this.group.remove(e.rig.root);
     this.ents.length = 0;
     for (const s of this.soldierSlots) s.length = 0;
-    for (const im of this.soldierMeshes) im.count = 0;
+    for (const im of [...this.soldierMeshes, ...this.soldierMeshesLo]) im.count = 0;
     this.vtr.fill(0);
     this.battleHeat = 0;
     for (let t = 0; t < 2; t++) {
@@ -1627,21 +1650,20 @@ export class World {
   private updateSoldierInstances(): void {
     for (let sl = 0; sl < this.soldierSlots.length; sl++) {
       const list = this.soldierSlots[sl];
-      const im = this.soldierMeshes[sl];
-      const anim = this.soldierAnim[sl];
-      let count = 0;
+      const im = this.soldierMeshes[sl], lo = this.soldierMeshesLo[sl];
+      const anim = this.soldierAnim[sl], animLo = this.soldierAnimLo[sl];
+      const band = this.soldierBand[sl], bandLo = this.soldierBandLo[sl];
+      // Packed every frame: the full figures first in one mesh, the light ones in the other (a vertex shader runs for
+      // every instance up to the count, so the full mesh holds only the men big on screen).
+      let nHi = 0, nLo = 0;
       for (let i = 0; i < list.length; i++) {
         const e = list[i];
-        if (!e) {
-          this.m4.makeScale(0, 0, 0);
-          im.setMatrixAt(i, this.m4);
-          continue;
-        }
-        if (e.dressed !== e.nation) {
+        if (!e) continue;
+        let uni = this.uniCache.get(e);
+        if (!uni || e.dressed !== e.nation) {
           e.dressed = e.nation;
-          im.setColorAt(i, this.uniformOf(e, this.tmpColor));
-          if (im.instanceColor) im.instanceColor.needsUpdate = true;
-          this.bandOf(e, this.soldierBand[sl], i);
+          uni = this.uniformOf(e, uni ?? new THREE.Color());
+          this.uniCache.set(e, uni);
         }
         if (e.alive) {
           // The AI's state picks the pose: running or walking, kneeling or standing to fire, prone in a position.
@@ -1660,16 +1682,32 @@ export class World {
         e.drawScale = this.readableScale(e.pos);
         this.sc.setScalar(e.drawScale);
         this.m4.compose(TMP.set(e.pos.x, e.pos.y, e.pos.z), this.q, this.sc);
-        im.setMatrixAt(i, this.m4);
-        anim.setXYZW(i, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);
-        count = i + 1;
+        // Full figure while it is big on screen, the light one when small.
+        const hi = this.pixelsTall(e.pos) >= SOLDIER_HI_PX;
+        const m = hi ? im : lo;
+        const j = hi ? nHi++ : nLo++;
+        m.setMatrixAt(j, this.m4);
+        m.setColorAt(j, uni);
+        (hi ? anim : animLo).setXYZW(j, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);
+        this.bandOf(e, hi ? band : bandLo, j);
       }
-      im.count = count;
-      if (count > 0) {
-        im.instanceMatrix.needsUpdate = true;
-        anim.needsUpdate = true;
+      im.count = nHi;
+      lo.count = nLo;
+      for (const [mm, n, a] of [[im, nHi, anim], [lo, nLo, animLo]] as const) {
+        if (n === 0) continue;
+        mm.instanceMatrix.needsUpdate = true;
+        if (mm.instanceColor) mm.instanceColor.needsUpdate = true;
+        a.needsUpdate = true;
       }
     }
+  }
+  /** Each active soldier's uniform colour (computed when he is dressed in his nation's colours). */
+  private readonly uniCache = new WeakMap<Ent, THREE.Color>();
+
+  /** How tall (px) a man standing at p is in the last frame's view, at life size. */
+  private pixelsTall(p: THREE.Vector3): number {
+    const d = Math.max(1, Math.hypot(p.x - this.viewPos.x, p.y - this.viewPos.y, p.z - this.viewPos.z));
+    return (1.8 * this.ppm1) / d;
   }
 
   /** Sync vehicle rigs (position / orientation / turret / gun) from entity state. */

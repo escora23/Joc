@@ -43,6 +43,12 @@ async function open(shot, params = '') {
   await page.waitForTimeout(1500);
   return page;
 }
+/** SwiftShader draws a frame in about a second at 1600×900: long waits run on a small viewport (the scene's time then
+ *  moves ~4× faster in real time), and the view is restored before a shot. */
+async function small(page, on) {
+  await page.setViewportSize(on ? { width: 640, height: 360 } : { width: 1600, height: 900 });
+  await sleep(on ? 500 : 2500);
+}
 const snap = (page, name) => page.screenshot({ path: path.join(out, `${name}.png`), timeout: 300000 }).catch((e) => console.log(`   (screenshot ${name} failed: ${String(e?.message ?? e).split('\n')[0]})`));
 async function until(page, fn, arg, ms = 30000, every = 400) {
   const t0 = Date.now();
@@ -335,7 +341,9 @@ async function scale() {
   await snap(page, 'scale-1-chase');
   // Taken here to fight: the tank drives on by itself to the battle's hottest stretch (220 m behind the line).
   const d0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
-  await until(page, () => (window.__cmdStats?.battle?.driving ? null : true), null, 600000, 1000);
+  await small(page, true);
+  await until(page, () => (window.__cmdStats?.battle && !window.__cmdStats.battle.driving ? true : null), null, 1_800_000, 2000);
+  await small(page, false);
   const d1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
   const pace = await page.evaluate(() => window.__cmdStats?.pace);
   row('S7', 'arrival: the tank drives on to the hottest stretch by itself', `at entry: line ${d0.lineM} m, hot point ${d0.hotM} m, stand-off ${d0.standM} m (driving ${d0.driving}); the drive ended «${d1.lastDrive}» after ${Math.round(d1.t - d0.t)} s of scene time: line ${d1.lineM} m, hot point ${d1.hotM} m, stand-off ${d1.standM} m (scene pace ${pace}× real time, the sim's clock follows it)`, d0.driving && d1.lastDrive === 'arrived' && d1.lineM >= 0 && d1.lineM < 450);
@@ -359,7 +367,9 @@ async function scale() {
   // Activity over 20 s.
   const t0 = await page.evaluate(() => ({ kills: window.__cmd.world.stats.kills, t: window.__cmd.world.time, dead: window.__cmd.world.ents.filter((e) => !e.alive && (e.kind === 'soldier' || e.kind === 'at')).length }));
   // 15 s of the scene's own time (SwiftShader frames are slow: wall time says little).
-  await until(page, (t) => window.__cmd.world.time - t >= 15 ? true : null, t0.t, 300000, 1000);
+  await small(page, true);
+  await until(page, (t) => window.__cmd.world.time - t >= 15 ? true : null, t0.t, 600000, 1000);
+  await small(page, false);
   c = await census(page);
   const act = c.stats;
   row('S4', 'the fight is alive (artillery, falls, fire)', act ? `heat ${act.heat}, ${act.shells10} shells and ${act.fallen10} fallen in the last 10 s, ${c.dead} bodies (was ${t0.dead})` : 'no battle', !!act && act.shells10 >= 2 && act.fallen10 >= 1);
@@ -437,7 +447,9 @@ async function combat() {
     await page.keyboard.press('KeyG');
     await sleep(1500);
     const gNotice = await page.evaluate(() => window.__cmdStats?.notice ?? '');
-    await until(page, () => (window.__cmdStats?.battle?.driving ? null : true), null, 600000, 1000);
+    await small(page, true);
+    await until(page, () => (window.__cmdStats?.battle && !window.__cmdStats.battle.driving ? true : null), null, 1_800_000, 2000);
+    await small(page, false);
     const g1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
     row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: stand-off ${g0.standM} m, line ${g0.lineM} m; «${gNotice}»; the drive ended «${g1.lastDrive}» after ${Math.round(g1.t - g0.t)} s: stand-off ${g1.standM} m, line ${g1.lineM} m`, g0.standM > 400 && g1.lastDrive === 'arrived' && g1.lineM < 450);
     await snap(page, 'plain-2b-after-G');

@@ -1478,4 +1478,45 @@ counts as a new, deliberate shot, and the question correctly came back (M3 now k
   stops against the force / before the fence and the question «¿Embestir a X?» opens (Declarar la guerra · Frenar).
 * In-game help (`help.command.body`) explains the battle, the weapons against men and buildings and ramming.
 
+### Continued (2026-10-04, same pass): what looking at the real play showed, and the fixes
+
+The first verifier passed on numbers (650 ours + 59 enemy in the scene, "418 on screen") but the shots told another
+story: arriving through «Tomar el control aquí» on the staged 400,000-troop offensive, the tank stood **1.2-1.5 km**
+from the contact line in a Pyrenean valley and the screen showed bare hills. The "on screen" count was inside the frame
+only, not in sight: with the line of sight checked, **72 ours and 2 enemy** were visible, most of them prone 2-3 px
+specks the colour of the ground. That is the owner's "two guys" again, so this pass changed:
+
+* **Arrive in the battle, at its hottest stretch.** The march stops 0.35 km from the target, or as soon as a contact
+  line at war with enemy soldiers on it is within 0.5 km (was 0.6 / 1.0). Then, taken there from an entry with a goal
+  or a march, the tank **drives itself** at tactical speed to 220 m behind the line at the battle's hottest stretch
+  (`BattleLine.standOff`, `TankController.driveTo`; it steers, slows in turns, any driving key takes over, the goal
+  follows the stretch as the line moves). The arrival line says so: «… Tu carro avanza solo hasta lo más duro, a 510 m
+  (cualquier tecla de marcha toma el mando).»
+* **«Ir al combate» inside a battle** used to answer «Ya estás en contacto» (anything hostile within 4 km counted). Now
+  G (and the chip's button, shown while the hot stretch is > 450 m away) drives to the hottest stretch; under 150 m it
+  says «Estás en lo más duro del combate: la línea enemiga está justo delante.»
+* **The hot point holds still**: its 8 bins are smoothed over ~6 s and it moves only to a stretch a third hotter (it
+  jumped 300-750 m between frames, dragging the chip, its marker and the drive with it).
+* **Readable far soldiers.** Active soldiers (within 1 km, the ones in front of the tank) had no distance scaling:
+  at 600 m a man was 3 px tall and a prone one 1 px. Every figure now keeps ≥ 5 px (drawn up to 3.5× life size beyond
+  ~350 m; never in the gunner's sight), and the player's rounds hit the figure as drawn (`Ent.drawScale`). Far muzzle
+  flashes keep ~3 px and the crowd's tracers ~1.4 px (a line firing reads as a line of twinkles and streaks). Assault
+  waves spend half of each cycle running and kneel as often as they lie down.
+* **Uniforms that are not "raros".** The nation's colour was mixed raw into khaki: Switzerland's red made pink figures
+  that read as bare skin. `fieldUniform` blends the side's field shade (olive ours, khaki theirs) with a dark, muted
+  version of the nation's hue (red → brown-red, blue → blue-grey, green → olive); the full colour stays on the helmet
+  band and arm band. The pack is smaller and in the uniform's darker shade (a black box on the back read as a crate).
+* **One clock for the scene and the sim.** Under SwiftShader the scene runs at ~0.08× real time (frames of ~1 s, dt
+  clamped to 0.1 s) while the sim's tactical clock ran at 1×: the front ran away from the battle standing on it
+  (1.2 → 1.55 km in 15 scene seconds). The sim's tactical clock now follows the scene's measured pace (`scenePace`,
+  ≥ 0.05; unchanged at ≥ 9.2 frames a second). This also protects slow real machines.
+* **Lighter men where it does not show.** All active soldiers (up to ~600 within 1 km) used the full figure (5.6k
+  vertices, shadow pass included). They are now packed every frame into the full figure only while ≥ 13 px tall on
+  screen (~110 m in the chase view, ~900 m in the gunner's sight) and the light one (1.1k, no shadow) beyond; under
+  SwiftShader the scene's pace doubled (0.05 → 0.1× real time) with the same battle.
+* The chip says «N nuestros y M enemigos en este tramo» (they are the stretch's figures, not all «a la vista»).
+* The ramming debug log is gone. Verifier: counts soldiers in the camera's line of sight (in this view and all around),
+  the arrival drive (S7), G inside a battle (G1), the plain battle near Zaragoza seen from the tank and through the
+  sight (P1-P2), and runs its long waits on a small viewport (SwiftShader).
+
 ### Verified in real play

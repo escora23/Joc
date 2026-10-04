@@ -1705,8 +1705,9 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   the fall) and `aBand` (nation colour, seed). `fieldUniform(team, nationHex, seed)`: the side's field shade (olive
   ours, khaki theirs) blended 42 % with the nation's hue at low saturation and lightness (a red nation wears brown-red,
   never pink). Lab: `tools/model-lab/soldier.html` (`?d=&az=&t=&lod=far`, the game's own uniforms).
-* `src/command/world.ts` — soldier meshes per team × variant (active, full detail) and per team (crowd, light
-  detail); `uniformOf` (→ `fieldUniform`), `bandOf`, `setPose`, `shotFired`; `updateCrowd(camera, viewH, …)`
+* `src/command/world.ts` — soldier meshes per team × variant for the active men, in two levels packed every frame
+  by `updateSoldierInstances` (the full figure, with shadows, while a man is ≥ `SOLDIER_HI_PX` 13 px tall on screen;
+  the light one otherwise: 1.1k instead of 5.6k vertices), and per team for the crowd (light detail); `uniformOf` (→ `fieldUniform`), `bandOf`, `setPose`, `shotFired`; `updateCrowd(camera, viewH, …)`
   scales far figures to ~`CROWD_MIN_PX` (5 px, ≤ `CROWD_MAX_SCALE` 3.5) and tints them toward the nation beyond 450 m;
   active soldiers get the same `readableScale` (none in the gunner's sight), kept in `Ent.drawScale`, which `center()`
   and the player's bullet sphere follow; far muzzle flashes (~3 px) and tracers (≥ ~1.4 px) keep a size on screen
@@ -1727,7 +1728,9 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   offensive on the entry front), `STOP_KM.tank` 0.35 and `CONTACT_LINE_KM` 0.5 (the march ends in the battle),
   `driveToHot` / `hotStandOff` (G inside a battle, and `seekHot` on arriving from an entry goal or a march: the tank
   drives to 220 m behind the line at the hot point; the chip shows «Ir al combate» while it is > 450 m away),
-  `camOverride` for tools, `__cmdStats.battle` (with `driving`, `standM`) / `ram` / `mgHits`.
+  `camOverride` for tools, `__cmdStats.battle` (with `driving`, `lastDrive`, `standM`) / `ram` / `mgHits`;
+  `scenePace` / `measurePace`: the sim's tactical clock runs at the scene's measured pace when frames are slower than
+  10 a second (`__cmdStats.pace`).
 * `src/command/goto.ts` — `CombatTarget.heat` / `attackId`: `combatTargets` scores km ÷ heat (an offensive's contact
   1.6 + troops / 50k; a line point by intensity, quiet ×0.6).
 * `src/ui/hud/frontBadges.ts` + `src/ui/css/w6.css` — «⌖ Tomar el control aquí» button on the badge of every front of

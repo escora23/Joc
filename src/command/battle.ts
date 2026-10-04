@@ -815,7 +815,8 @@ export class BattleLine {
     for (const h of this.recent) if (w.time - h.t < 15) this.bins[binOf(h.x, h.z)] += 2;
     // Smoothed over ~6 s, and the hot stretch moves only when another is clearly hotter (a third more): the chip, its
     // marker and «Ir al combate» point at one place, not at whichever bin a shell fell in last.
-    const k = Math.min(1, dt / 6);
+    // (A fresh stretch starts from what is there now, not from nothing.)
+    const k = this.hotBin < 0 ? 1 : Math.min(1, dt / 6);
     for (let i = 0; i < 8; i++) this.binsSm[i] += (this.bins[i] - this.binsSm[i]) * k;
     let bi = -1, bv = 0;
     for (let i = 0; i < 8; i++) if (this.binsSm[i] > bv) (bv = this.binsSm[i], bi = i);
