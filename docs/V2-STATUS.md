@@ -1585,4 +1585,8 @@ Before this pass's fixes, the same entry measured **72 ours + 2 enemy in sight**
   grass a few metres ahead); a sight height above the grass or a grass fade near the sight is needed.
 * **Verifier speed.** Under SwiftShader a full `f32-verify` takes ~2 hours (each drive 10-20 real minutes); `--only`
   runs the sections separately. The other command-mode verifiers were not re-run after the sim-clock pace change except
-  `f31-verify --only tank` (see below).
+  `f31-verify --only tank`: T1 and T2 passed 3 times out of 3; T3 (after «Declarar la guerra», a new click fires)
+  failed twice with no round within its 5 s window and passed on the third run (rounds 0 → 1, the gate cleared the
+  shot; the row now prints the gate's counters). The same section on the code before this pass could not stage the
+  neighbour's patrol within 240 s, so the A/B was inconclusive: T3 looks timing-sensitive under SwiftShader rather
+  than broken, but naval-verify, f3c-verify and w5-verify should be re-run on a machine with a GPU.

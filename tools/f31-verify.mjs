@@ -318,7 +318,7 @@ async function tank() {
   await trigger(page);
   await sleep(5000);
   const s3 = await snap(page, q.id);
-  row('T3', 'a new click, G = «Declarar la guerra»: war declared; then the trigger fires', `war ${!!war}; rounds ${s3a.shots} → ${s3.shots}; asked ${s3a.fire.asked} → ${s3.fire.asked}`, !!war && s3.shots > s3a.shots && s3.fire.asked === s3a.fire.asked);
+  row('T3', 'a new click, G = «Declarar la guerra»: war declared; then the trigger fires', `war ${!!war}; rounds ${s3a.shots} → ${s3.shots}; asked ${s3a.fire.asked} → ${s3.fire.asked}; gate ${JSON.stringify({ checks: s3.fire.checks - s3a.fire.checks, cleared: s3.fire.cleared - s3a.fire.cleared, held: s3.fire.held - s3a.fire.held, silent: s3.fire.silent - s3a.fire.silent, hold: s3.fire.hold, answers: s3.fire.answers })}; target alive ${s3.alive}`, !!war && s3.shots > s3a.shots && s3.fire.asked === s3a.fire.asked);
   await shot(page, 't3-war-fire');
   await page.close();
 }
