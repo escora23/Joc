@@ -4042,6 +4042,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           sub: t('command.label.battleSub', { n: formatNumber(world.soldiersNear(bp.x, bp.z, 6000)) }), kind: 'force', tone: 'hostile', color: colorCss(f.a === HUMAN_ID ? f.b : f.a), owner: f.a,
         });
       }
+      // From the travel camera (1-2 km behind and above) the vehicle is a few pixels: name the column where it is.
+      if (travelCam && P && params) {
+        labels.push({
+          x: P.pos.x, y: P.pos.y + (kind === 'jet' ? 60 : 30), z: P.pos.z, text: t('command.label.column', { unit: unitLabel(params.unitType, unitView()?.serial ?? 0) }),
+          sub: t('command.label.columnSub'), kind: 'force', tone: 'own', color: colorCss(HUMAN_ID), owner: HUMAN_ID,
+        });
+      }
       overlay.update(realDt, camera, labels, waypoint, wpText, hover, kind);
       if (tacmap?.isOpen && now - lastMapWall > 500 && P) {
         lastMapWall = now;

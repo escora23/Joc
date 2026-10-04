@@ -3,7 +3,7 @@
 // The scene's own roads (civil.ts) are 7 m ribbons draped within a few km of the vehicle: from the travel camera
 // (1 km up, looking tens of km ahead) they vanish and the villages read as unconnected dot-clouds. This layer draws
 // every road between the towns in reach (civil.mapRoads, the same meanders) as a ribbon whose width grows with the
-// distance from the camera, so it stays about 2.2 px wide on screen at any range (never thinner than the real road).
+// distance from the camera, so it stays about 2.6 px wide (asphalt grey: it reads on dry plains and on fields alike) on screen at any range (never thinner than the real road).
 // Shown only while the camera is high (travel mode at ×300 and up, or a jet); fogged like the ground.
 
 import * as THREE from 'three';
@@ -11,7 +11,7 @@ import type { LocalFrame } from '../frame';
 import type { Ground } from '../stream';
 
 /** Target width on screen (px) and the real road's half width (m), the floor of the ribbon. */
-const PX = 2.2;
+const PX = 2.6;
 const MIN_HALF_M = 4;
 /** Points along a road for draping (m): a ribbon chord cutting through a crest hides it. */
 const STEP_M = 120;
@@ -24,11 +24,13 @@ export class FarRoads {
   private readonly uPxAngle = { value: 0.001 };
   private sig = '';
   private builtAt = { x: 0, z: 0 };
+  private chunksAt = -1;
+  private drapedAt = 0;
   /** Tools: segments drawn. */
   segments = 0;
 
   constructor() {
-    this.mat = new THREE.MeshBasicMaterial({ color: 0xd9ccb0, fog: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    this.mat = new THREE.MeshBasicMaterial({ color: 0x5a544a, fog: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     const uPx = this.uPxAngle;
     this.mat.onBeforeCompile = (sh) => {
       sh.uniforms.uPxAngle = uPx;
@@ -44,6 +46,8 @@ uniform float uPxAngle;`)
   float halfW = max(${MIN_HALF_M.toFixed(1)}, dist * uPxAngle * ${(PX / 2).toFixed(2)});
   vec2 n = normalize(vec2(-aDir.y, aDir.x));
   transformed.xz += n * aSide * halfW;
+  // A little more lift far out, where the ground under the ribbon is a coarser level than the one drawn.
+  transformed.y += dist * 0.0015;
 }`);
     };
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.mat);
@@ -69,7 +73,14 @@ uniform float uPxAngle;`)
     // Radians per screen pixel (vertical).
     this.uPxAngle.value = ((camera.fov * Math.PI) / 180) / Math.max(1, viewH);
     const sig = `${roads.length}:${roads[0]?.[0] ?? 0}:${roads[roads.length - 1]?.[1] ?? 0}`;
-    if (sig === this.sig && Math.hypot(ax - this.builtAt.x, az - this.builtAt.z) < 6000) return;
+    // The heights come from whatever terrain level is built under each point (the coarse horizon patch far out, a
+    // few hundred metres off the mid level drawn later): re-drape once a second while new chunks keep arriving, or
+    // the ribbon ends up buried under the hills (or floating) as the finer ground streams in.
+    const now = performance.now();
+    const redrape = ground.stats.built !== this.chunksAt && now - this.drapedAt > 1000;
+    if (sig === this.sig && !redrape && Math.hypot(ax - this.builtAt.x, az - this.builtAt.z) < 6000) return;
+    this.chunksAt = ground.stats.built;
+    this.drapedAt = now;
     this.sig = sig;
     this.builtAt = { x: ax, z: az };
     this.build(roads, frame, ground);
@@ -128,5 +139,6 @@ uniform float uPxAngle;`)
     this.mesh.geometry = new THREE.BufferGeometry();
     this.mesh.visible = false;
     this.sig = '';
+    this.chunksAt = -1;
   }
 }

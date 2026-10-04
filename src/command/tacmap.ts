@@ -96,6 +96,11 @@ export class TacMap {
   /** The static layers (relief, land tint, borders) for the centre they were built at. */
   private base: HTMLCanvasElement | null = null;
   private baseAt = { x: 1e12, z: 1e12, sig: '' };
+  /**
+   * The contact lines in the base: per pair of owners at war, the border cell nearest the map's centre (base pixels).
+   * The front is drawn on the smoothed border itself, so it never runs apart from the land it divides.
+   */
+  private warTags = new Map<number, { x: number; y: number }>();
   private open = false;
   private kind: CommandKind = 'tank';
   private cx = 0;
@@ -262,6 +267,14 @@ export class TacMap {
         frame.sceneOfTile(s[i], s[i + 1], p0);
         pts.push(toPx(p0.x, p0.z));
       }
+      const tag = this.warTags.get(f.a < f.b ? f.a * 4096 + f.b : f.b * 4096 + f.a);
+      const label = foe ? t('command.map.frontWith', { nation: inp.nameOf(foe) }) : t('command.map.frontOf', { a: inp.nameOf(f.a), b: inp.nameOf(f.b) });
+      if (tag && inMap(tag.x + sx, tag.y + sz, -30)) {
+        // The front is the war border already drawn in the base: only its name here.
+        st.fronts++;
+        if (!fronts.some((q) => q.label === label)) fronts.push({ label, x: tag.x + sx, y: tag.y + sz });
+        continue;
+      }
       if (!pts.some(([x, y]) => inMap(x, y))) continue;
       st.fronts++;
       g.beginPath();
@@ -281,7 +294,7 @@ export class TacMap {
           best = i;
         }
       });
-      if (best >= 0) fronts.push({ label: foe ? t('command.map.frontWith', { nation: inp.nameOf(foe) }) : t('command.map.frontOf', { a: inp.nameOf(f.a), b: inp.nameOf(f.b) }), x: pts[best][0], y: pts[best][1] });
+      if (best >= 0) fronts.push({ label, x: pts[best][0], y: pts[best][1] });
     }
     // Towns: places and the sim's cities by size with their names, villages as small squares.
     st.towns = st.named = 0;
@@ -441,7 +454,8 @@ export class TacMap {
       if (ty < 0 || ty >= MAP_H) continue;
       for (let k = 0; k <= span; k++) {
         const i = ty * MAP_W + ((x0 + k) % MAP_W);
-        h = (Math.imul(h, 31) + (view.owner[i] ?? 0) * 7 + i) | 0;
+        const o = view.owner[i] ?? 0;
+        h = (Math.imul(h, 31) + o * 7 + i + (o > 0 && o !== HUMAN_ID && view.pairState(HUMAN_ID, o) === 'war' ? 101 : 0)) | 0;
       }
     }
     return String(h);
@@ -585,6 +599,14 @@ export class TacMap {
     const lg = lc.getContext('2d')!;
     const line = lg.createImageData(M, M);
     let borderCells = 0;
+    const wc = document.createElement('canvas');
+    wc.width = wc.height = M;
+    const wgc = wc.getContext('2d')!;
+    const wline = wgc.createImageData(M, M);
+    const atWar = (a: number, b: number) => a > 0 && b > 0 && a !== b && view.pairState(a, b) === 'war';
+    const pk = (a: number, b: number) => (a < b ? a * 4096 + b : b * 4096 + a);
+    this.warTags.clear();
+    const warD = new Map<number, number>();
     for (let i = 0; i < M; i++) {
       for (let j = 0; j < M; j++) {
         const k = i * M + j, o = k * 4;
@@ -603,7 +625,26 @@ export class TacMap {
         if (i + 1 < M && win[k + M] >= 0 && win[k + M] !== w0) edge = true;
         if (j > 0 && win[k - 1] >= 0 && win[k - 1] !== w0) edge = true;
         if (i > 0 && win[k - M] >= 0 && win[k - M] !== w0) edge = true;
-        if (edge) {
+        // A border with a neighbour at war is the contact line: drawn as the front (orange, thicker), not white.
+        let foe = 0;
+        for (const n of [j + 1 < M ? k + 1 : -1, i + 1 < M ? k + M : -1, j > 0 ? k - 1 : -1, i > 0 ? k - M : -1]) {
+          if (n >= 0 && atWar(w0, win[n])) foe = win[n];
+        }
+        if (foe) {
+          wline.data[o] = 255;
+          wline.data[o + 1] = 122;
+          wline.data[o + 2] = 61;
+          wline.data[o + 3] = 255;
+          const key = pk(w0, foe);
+          // (Named off the vehicle's own mark: the nearest stretch at least ~80 px from the centre.)
+          const dc = Math.hypot(j + 0.5 - M / 2, i + 0.5 - M / 2);
+          const d = dc < (80 / S) * M ? 1e6 - dc : dc;
+          if (d < (warD.get(key) ?? Infinity)) {
+            warD.set(key, d);
+            this.warTags.set(key, { x: ((j + 0.5) / M) * S, y: ((i + 0.5) / M) * S });
+          }
+          borderCells++;
+        } else if (edge) {
           line.data[o] = line.data[o + 1] = line.data[o + 2] = 255;
           line.data[o + 3] = Math.round(255 * Math.max(0.4, Math.min(1, 1.15 - lead[k] * 2)));
           borderCells++;
@@ -620,6 +661,14 @@ export class TacMap {
     bg.drawImage(lc, 0, 0, M, M, 0, 0, S, S);
     bg.restore();
     bg.drawImage(lc, 0, 0, M, M, 0, 0, S, S);
+    // The fronts on the same border, a little thicker (drawn twice, offset by a pixel) over a dark halo.
+    wgc.putImageData(wline, 0, 0);
+    bg.save();
+    bg.filter = 'blur(2px) brightness(0)';
+    bg.globalAlpha = 0.6;
+    bg.drawImage(wc, 0, 0, M, M, 0, 0, S, S);
+    bg.restore();
+    for (const [ox, oy] of [[-0.8, 0], [0.8, 0], [0, -0.8], [0, 0.8]]) bg.drawImage(wc, 0, 0, M, M, ox, oy, S, S);
     this.stats.borderCells = borderCells;
     this.stats.reliefMs = Math.round(t1 - t0);
     this.stats.landMs = Math.round(performance.now() - t1);

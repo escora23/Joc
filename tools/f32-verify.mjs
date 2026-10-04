@@ -667,7 +667,7 @@ async function entry1x() {
   // The tactical map there.
   await page.keyboard.press('KeyM');
   await sleep(3000);
-  const map = await page.evaluate(() => ({ open: document.querySelector('.fu-cmdx-map.show') !== null }));
+  const map = await page.evaluate(() => ({ open: [...document.querySelectorAll('.fu-cmdx-map')].some((e) => e.classList.contains('show')), maps: document.querySelectorAll('.fu-cmdx-map').length }));
   await snap(page, 'entry1x-2-tacmap');
   await page.keyboard.press('KeyM');
   row('E4', 'the tactical map opens at the front', JSON.stringify(map), map.open);

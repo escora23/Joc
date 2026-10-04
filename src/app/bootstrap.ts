@@ -146,12 +146,16 @@ export async function bootstrap(): Promise<void> {
       // fade and the scene build take several; an offensive the player is going to join must not run tens of km away
       // before the march even starts. Tactical time (1 game s per real s) until command mode sets its own clock.
       const t0 = performance.now();
+      // (The observation clock watcher stays out of it until command mode runs: the dive to 3 km would otherwise
+      // put the world back on observation time, a game minute per real second, during the dive and the build.)
+      enteringCommand = true;
       ctx.sim.setClock('tactical', 1, { x: u0.x, y: u0.y });
       // v2 (§9.2): the unit stops where it is in the sim first; the local scene is then built exactly there.
       ctx.sim.send({ type: 'unitControl', unitId, controlled: true });
       await waitSimUpdate(600);
       const params = commandParams(unitId, goal);
       if (!params) {
+        enteringCommand = false;
         ctx.sim.setClock('strategic');
         ctx.sim.send({ type: 'unitControl', unitId, controlled: false });
         bus.emit('uiSound', { kind: 'error' });
@@ -166,7 +170,11 @@ export async function bootstrap(): Promise<void> {
       if (!params.battleHandoff?.camera && !far) await ctx.cameraRig.flyTo({ lat: params.lat, lon: params.lon, altitudeKm: 3, tilt: 1.2 }, isShot ? 1 : 2200);
       await ctx.post.fadeTo(1, isShot ? 1 : 350);
       console.info(`[command] entry: clock held, dive and fade in ${((performance.now() - t0) / 1000).toFixed(1)} real s`);
-      await ctx.command.enter(params);
+      try {
+        await ctx.command.enter(params);
+      } finally {
+        enteringCommand = false;
+      }
       setState('command');
       bus.emit('commandEnter', { params });
       await ctx.post.fadeTo(0, isShot ? 1 : 500);
@@ -555,6 +563,8 @@ export async function bootstrap(): Promise<void> {
   // The camera's ground point is the focus where fronts publish their sub-tile progress (§11.5).
   // ---------------------------------------------------------------------------------------------
   let observing = false;
+  /** From the take-control click until command mode runs (the world waits: no observation clock meanwhile). */
+  let enteringCommand = false;
   let focusSentAt = 0;
   let focusX = -1, focusY = -1;
   const camState = { lat: 0, lon: 0, altitudeKm: 0, tilt: 0, heading: 0 };
@@ -565,6 +575,7 @@ export async function bootstrap(): Promise<void> {
   installAutosave(ctx);
   function updateObservationClock(now: number): void {
     const view = ctx.sim.view;
+    if (enteringCommand) return;
     const eligible = state === 'playing' && view.phase === 'playing';
     if (!eligible) {
       if (observing) {
