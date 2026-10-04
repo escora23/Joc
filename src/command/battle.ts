@@ -317,9 +317,10 @@ export class BattleLine {
     const n = new THREE.Vector3();
     let best = -Infinity;
     const cand = new THREE.Vector3();
-    // (Pass 2: a wider search — in hills the place that overlooks the fight can be a few hundred metres off.)
+    // (Pass 2: a wider search along the line — in hills the place that overlooks the fight can be a few hundred
+    // metres off — but no deeper than 380 m: the tank fights among its infantry, not from the rear.)
     for (const ds of [0, -100, 100, -200, 200, -300, 300, -450, 450]) {
-      for (const dd of [depth, depth - 70, depth + 80, depth + 160, depth + 260]) {
+      for (const dd of [depth, depth - 70, depth + 80, depth + 160]) {
         const s = Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds));
         this.at(s, own.sign * dd, cand);
         const h = g.heightAt(cand.x, cand.z);
@@ -337,7 +338,8 @@ export class BattleLine {
           // The enemy in sight counts most (there are fewer of them, and they are what the crew has come to fight).
           score += ((dx * fx + dz * fz) / (d * fl) > 0.34 ? 1 : 0.25) * (e.team === 1 ? 3 : 0.6);
         }
-        score -= (Math.abs(ds) + Math.abs(dd - depth)) * 0.02;
+        // (Along the line a vantage may be well off the hot point; deeper back it is out of the fight.)
+        score -= Math.abs(ds) * 0.02 + Math.abs(dd - depth) * 0.04;
         if (score > best) {
           best = score;
           out.copy(cand).setY(h);

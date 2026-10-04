@@ -1621,7 +1621,7 @@ sight, a hillside in front of the tank, nothing that read as soldiers.
   (`goodSpot`: a few tries per squad or man); a third of our assault squads advance around the tank (60-250 m, most
   ahead of it); defenders that find no spot in sight in the trench take a foxhole up to 60 m before or 40 m behind
   it. When the drive to the hot stretch arrives, `relayoutAround` lays the figures out of the tank's sight out again
-  where it sees them, ahead of it first. The drive's vantage search is wider (±450 m along, 150-480 m deep) and weighs
+  where it sees them, ahead of it first. The drive's vantage search is wider along the line (±450 m, 150-380 m deep) and weighs
   the enemy in sight most; the tank now stops within 14 m of it (45 m left it below the crest it had chosen), and while
   it stays there the chip does not offer «Ir al combate» again (the vantage can be a few hundred metres from the plain
   stand-off level with the hot point).

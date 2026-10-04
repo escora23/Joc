@@ -1706,7 +1706,7 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   fighting, smoothed over ~6 s with hysteresis; false on a quiet line, where it is the line point nearest the player);
   `standOff(at, depth)` = the point `depth` m behind the line on the friendly side level with `at`; `bestStandOff`
   = where «Ir al combate» drives inside a battle (standable ground with the enemy's forward trench and the figures ahead
-  in sight, the enemy's weighing most, ±450 m along, 150-480 m deep); `relayoutAround(player)` (index.ts calls it when
+  in sight, the enemy's weighing most, ±450 m along, 150-380 m deep); `relayoutAround(player)` (index.ts calls it when
   the drive to the hot stretch arrives; the `command-battle` shot too) lays the figures out of the tank's sight out
   again where it sees them; `goodSpot` / `sees`: new figures stand on walkable ground in the player's sight (a few
   tries per squad or man; own assault squads partly around the tank, `playerD`); `recentreMembers` re-lays up to 160

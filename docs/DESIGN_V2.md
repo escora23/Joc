@@ -3498,10 +3498,9 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   line point's score is km ÷ heat) and stops **in** the battle: 0.35 km from the target, or as soon as a contact line
   at war with enemy soldiers on it is within 0.5 km. Arriving from such an entry or march, the tank then drives itself
   (tactical speed, any driving key takes over) to about 220 m behind the line at the battle's hottest stretch: of the
-  points ±450 m along the line and 150-480 m deep (pass 2), the one on ground a tank stands on (slope ≤ ~22° over 10 m)
+  points ±450 m along the line and 150-380 m deep (pass 2), the one on ground a tank stands on (slope ≤ ~22° over 10 m)
   from where the enemy's forward trench there and the most of the figures ahead are in sight (15 per trench point
-  seen; per figure ahead 3 for an enemy and 0.6 for one of ours, a quarter of that behind; −0.02 per metre off the
-  ideal). On arrival the fight is laid out where the tank sees it (`relayoutAround`: the figures of both sides out of
+  seen; per figure ahead 3 for an enemy and 0.6 for one of ours, a quarter of that behind; −0.02 per metre along and −0.04 per metre deeper or shallower than the ideal). On arrival the fight is laid out where the tank sees it (`relayoutAround`: the figures of both sides out of
   its sight and more than 150 m off, up to 70 % of a side, stand again on ground in its sight — waves at every stage,
   a third of our squads around the tank, defenders in the trench or in foxholes up to 60 m before and 40 m behind it)
   and the view turns to the fighting. Inside a battle, G does the

@@ -301,12 +301,15 @@ async function ram(page) {
     await page.keyboard.down('Enter');
     await sleep(1500);
     await page.keyboard.up('Enter');
+    // (SwiftShader frames at 1600×900 with the battle around take a second or two: the answer is read on the next one.)
+    const closed = await until(page, () => (window.__cmd.overlay.dialogOpen ? null : true), null, 20000, 500);
+    if (!closed) console.log(`   dialog still open after Enter: ${await page.evaluate(() => JSON.stringify({ phase: window.__cmdStats?.phase, text: window.__cmd.overlay.dialogText.slice(-80), active: document.activeElement?.tagName }))}`);
     await sleep(3000);
     const after = await page.evaluate((pz) => {
       const I = window.__cmd, e = I.world.ents.find((x) => x.id === pz.id);
       return { war: __front.ctx.sim.view.pairState(1, pz.nation) === 'war', alive: !!e?.alive, hp: e?.hp ?? 0, dialog: I.overlay.dialogOpen, asked: window.__cmdStats?.ram?.asked ?? 0 };
     }, pz);
-    row('R3', 'running into a vehicle of a nation at peace: the tank stops and asks first (item 31); Enter = «Frenar»', `«${(asked ?? 'no dialog').slice(0, 200)}»; after Enter: war ${after.war}, truck alive ${after.alive} hp ${pz.hp} → ${after.hp}, asked ${pz.asked} → ${after.asked}`, !!asked && /Frenar/.test(asked) && !after.war && after.alive && after.hp >= pz.hp && !after.dialog);
+    row('R3', 'running into a vehicle of a nation at peace: the tank stops and asks first (item 31); Enter = «Frenar»', `«${(asked ?? 'no dialog').slice(0, 200)}»; after Enter: war ${after.war}, truck alive ${after.alive} hp ${pz.hp} → ${after.hp}, asked ${pz.asked} → ${after.asked}, dialog open ${after.dialog}`, !!asked && /frenar/i.test(asked) && !after.war && after.alive && after.hp >= pz.hp && !after.dialog);
   } else row('R3', 'a nation at peace for the ramming incident', 'none', false);
 }
 
