@@ -546,17 +546,26 @@ async function close() {
         // Seen from close, a man is awake (full AI, the figure a player meets there), however far from the tank.
         I.world.setDormant(best, false);
         I.freeze = true;
-        const yaw = best.yaw + 0.9;
-        const pos = best.pos.clone();
-        pos.x += -Math.sin(yaw) * d; pos.z += -Math.cos(yaw) * d;
-        // Eye height, raised over any rise between the camera and the man (this front runs through hills).
-        let top = Math.max(pos.y, I.ground.heightAt(pos.x, pos.z)) + 1.7;
-        for (let k = 1; k < 20; k++) {
-          const f = k / 20, x = pos.x + (best.pos.x - pos.x) * f, z = pos.z + (best.pos.z - pos.z) * f;
-          const need = I.ground.heightAt(x, z) + 1.2 - (best.pos.y + 1) * f;
-          if (need / (1 - f) > top) top = need / (1 - f);
+        // Of 12 directions around him (his front first), the first from which a man's eye (1.7 m up, d metres off)
+        // sees him over the ground; else the least raised one (pass 2: raising the eye over a crest at 20 m could put
+        // the camera hundreds of metres up, and the "close-up" was a far view).
+        const target = best.pos.clone().setY(best.pos.y + 0.9);
+        let pos = null, lowest = Infinity;
+        for (let i = 0; i < 12 && !pos; i++) {
+          const yaw = best.yaw + 0.6 + (i % 2 ? -1 : 1) * Math.ceil(i / 2) * (Math.PI / 6);
+          const c = best.pos.clone();
+          c.x += -Math.sin(yaw) * d; c.z += -Math.cos(yaw) * d;
+          c.y = I.ground.heightAt(c.x, c.z) + 1.7 + d * 0.02;
+          let raise = 0;
+          for (let k = 1; k < 20; k++) {
+            const f = k / 20, x = c.x + (target.x - c.x) * f, z = c.z + (target.z - c.z) * f;
+            const over = I.ground.heightAt(x, z) + 0.3 - (c.y + (target.y - c.y) * f);
+            if (over > 0) raise = Math.max(raise, over / (1 - f));
+          }
+          if (raise === 0) pos = c;
+          else if (raise < lowest) { lowest = raise; pos = null; best.__alt = c.setY(c.y + raise); }
         }
-        pos.y = top + d * 0.02;
+        pos ??= best.__alt ?? best.pos.clone().setY(best.pos.y + 1.7 + d);
         I.camOverride = { pos, look: best.pos.clone().setY(best.pos.y + 0.9), fov: d <= 20 ? 40 : d <= 50 ? 30 : 20 };
         return `${best.kind} pose ${best.pose} at ${Math.round(bd)} m from the tank`;
       }, { team, d });

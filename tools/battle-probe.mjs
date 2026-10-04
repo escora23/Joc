@@ -112,22 +112,31 @@ for (const v of (args.extra && args.extra !== 'true' ? args.extra.split(',') : [
         .sort((p, q) => p.pos.distanceTo(P.pos) - q.pos.distanceTo(P.pos))[0];
       if (!man) return 'no man';
       I.world.setDormant(man, false);
-      const yaw = man.yaw + 0.6;
-      const pos = man.pos.clone();
-      pos.x += -Math.sin(yaw) * d; pos.z += -Math.cos(yaw) * d;
-      let top = Math.max(pos.y, I.ground.heightAt(pos.x, pos.z)) + 1.7;
-      for (let k = 1; k < 20; k++) {
-        const f = k / 20, x = pos.x + (man.pos.x - pos.x) * f, z = pos.z + (man.pos.z - pos.z) * f;
-        const need = I.ground.heightAt(x, z) + 1.2 - (man.pos.y + 1) * f;
-        if (need / (1 - f) > top) top = need / (1 - f);
+      window.__probeMan = man.id;
+      const target = man.pos.clone().setY(man.pos.y + 0.9);
+      let pos = null, alt = null, lowest = Infinity;
+      for (let i = 0; i < 12 && !pos; i++) {
+        const yaw = man.yaw + 0.6 + (i % 2 ? -1 : 1) * Math.ceil(i / 2) * (Math.PI / 6);
+        const c = man.pos.clone();
+        c.x += -Math.sin(yaw) * d; c.z += -Math.cos(yaw) * d;
+        c.y = I.ground.heightAt(c.x, c.z) + 1.7 + d * 0.02;
+        let raise = 0;
+        for (let k = 1; k < 20; k++) {
+          const f = k / 20, x = c.x + (target.x - c.x) * f, z = c.z + (target.z - c.z) * f;
+          const over = I.ground.heightAt(x, z) + 0.3 - (c.y + (target.y - c.y) * f);
+          if (over > 0) raise = Math.max(raise, over / (1 - f));
+        }
+        if (raise === 0) pos = c;
+        else if (raise < lowest) { lowest = raise; alt = c.setY(c.y + raise); }
       }
-      pos.y = top + d * 0.02;
+      pos ??= alt;
       I.camOverride = { pos, look: man.pos.clone().setY(man.pos.y + 0.9), fov: d <= 20 ? 40 : d <= 50 ? 30 : 20 };
-      return `${man.kind} pose ${man.pose} ${Math.round(man.pos.distanceTo(P.pos))} m from the tank`;
+      return `${man.kind} pose ${man.pose} ${Math.round(man.pos.distanceTo(P.pos))} m from the tank, nation ${man.nation} colour #${I.world.nationColor(man.nation).toString(16)}, dormant ${man.dormant}, instance colour ${(() => { const W = I.world; const im = man.dormant ? W.crowdMeshes[man.team] : null; const i = man.dormant ? man.cinst : -1; return im && im.instanceColor ? [im.instanceColor.getX(i), im.instanceColor.getY(i), im.instanceColor.getZ(i)].map((v) => v.toFixed(3)).join(',') : 'active'; })()}, fill ${I.world.soldierMats.fill.value.toArray().map((v) => v.toFixed(3)).join(',')}`;
     }
     return 'chase';
   }, v);
   await new Promise((r) => setTimeout(r, 7000));
+  if (/^close/.test(v)) console.log(ts(), 'after', await page.evaluate(() => { const I = window.__cmd; const W = I.world; const c = I.camera; const man = W.ents.find((e) => e.id === window.__probeMan); const col = man && man.dormant && W.crowdMeshes[man.team].instanceColor ? [0, 1, 2].map((k) => W.crowdMeshes[man.team].instanceColor.array[man.cinst * 3 + k].toFixed(3)).join(',') : 'active'; return `camera fov ${c.fov.toFixed(1)} at ${c.position.toArray().map((x) => x.toFixed(0)).join(',')}, man ${man ? Math.round(man.pos.distanceTo(c.position)) : '-'} m from it, crowd colour ${col}, drawScale ${man?.drawScale?.toFixed(2)}`; }));
   const f2 = path.join(out, `battle-${name}-${v}.png`);
   await page.screenshot({ path: f2, timeout: 300000 });
   console.log(ts(), 'saved', f2, info);

@@ -3516,7 +3516,7 @@ A soldier in field gear (pass 2): loose trousers and sleeves on thick tapering l
 and boots, a plate carrier with magazine pouches, canteen and pack, a helmet that sits on the head (a dome with a rim
 over the brow, goggles on the cover) so the face shows beneath it; rifle / AT launcher / machine gun; poses animated
 in the vertex shader (idle, walk, run, rush, kneel, aim, prone, the fall when hit; recoil on every shot). Uniform =
-the side's field shade (olive ours, khaki theirs) blended 24 % with the nation's hue at saturation ≤ 0.34 and
+the side's field shade (olive ours, khaki theirs) blended 20 % with the nation's hue at saturation ≤ 0.34 and
 lightness 0.36, with a camouflage drawn by the shader within ~140 m: blotches of the nation's colour (muted to the
 cloth's brightness), a dark and a light tone, different per man, on the uniform, helmet cover and gear. The nation's
 full colour on the helmet band and the arm band. A sky fill (0.3 × the sky light) lights the side away from the sun

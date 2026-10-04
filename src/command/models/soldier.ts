@@ -290,7 +290,7 @@ export function fieldUniform(team: 0 | 1, nationHex: number, seed: number, out: 
   out.copy(UNI_BASE[team]);
   UNI_TMP.setHex(nationHex).getHSL(UNI_HSL, THREE.SRGBColorSpace);
   UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.34, UNI_HSL.s * 0.5), 0.36, THREE.SRGBColorSpace);
-  out.lerp(UNI_TMP, 0.24);
+  out.lerp(UNI_TMP, 0.2);
   return out.multiplyScalar(0.9 + ((seed * 997) % 1) * 0.18);
 }
 
@@ -403,8 +403,8 @@ void soldierCamo(inout vec3 col, float dist) {
   float n1 = sNoise(vCamoP) * 0.7 + sNoise(vCamoP * 2.3) * 0.3;
   float n2 = sNoise(vCamoP * 1.4 + 17.3) * 0.7 + sNoise(vCamoP * 3.1 + 5.1) * 0.3;
   float lum = dot(col, vec3(0.3, 0.55, 0.15));
-  vec3 nat = mix(vec3(dot(vCamoN, vec3(0.3, 0.55, 0.15))), vCamoN, 0.36);
-  nat = mix(nat * (lum / max(1e-3, dot(nat, vec3(0.3, 0.55, 0.15)))) * 0.72, col * 0.8, 0.3);
+  vec3 nat = mix(vec3(dot(vCamoN, vec3(0.3, 0.55, 0.15))), vCamoN, 0.3);
+  nat = mix(nat * (lum / max(1e-3, dot(nat, vec3(0.3, 0.55, 0.15)))) * 0.72, col * 0.8, 0.4);
   vec3 c = col * 1.1;
   c = mix(c, nat, smoothstep(0.52, 0.56, n1));
   c = mix(c, col * 0.48, smoothstep(0.6, 0.64, n2));
