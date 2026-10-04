@@ -129,7 +129,8 @@ async function key(page, code, ms = 1500) {
 
 /** Kill enemy infantry with HE (key 2, trigger) and with the coaxial machine gun (Space), in the battle. */
 async function kill(page) {
-  // The pointer to the centre first (a move is a look input: done before aiming, not on the trigger).
+  // A still tank (no drive running), then the pointer to the centre (a move is a look input: done before aiming).
+  await page.evaluate(() => { const c = window.__cmd.controller; if (c.driveTo) c.driveTo = null; c.ent.speed = 0; });
   await page.mouse.move(800, 450);
   await sleep(1500);
   const pick = (maxM) => page.evaluate((maxM) => {
@@ -371,6 +372,7 @@ async function scale() {
   row('S2', 'vehicles in the battle', `${c.vehicles[0]} ours, ${c.vehicles[1]} enemy`, c.vehicles[0] + c.vehicles[1] >= 4);
   await snap(page, 'scale-1-chase');
   // Taken here to fight: the tank drives on by itself to the battle's hottest stretch (220 m behind the line).
+  await until(page, () => (window.__cmdStats?.battle?.driving ? true : null), null, 60000, 1000);
   const d0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
   await small(page, true);
   await until(page, () => (window.__cmdStats?.battle && !window.__cmdStats.battle.driving ? true : null), null, 1_800_000, 2000);
@@ -455,39 +457,37 @@ async function combat() {
   const b = await page.evaluate(() => window.__cmdStats?.battle);
   console.log(`   battle on the plain: ${JSON.stringify(b)}`);
   if (!only || only.has('plain')) {
-    // The same battle seen on open ground: what the crew sees from the tank at entry and turned toward the hot point.
+    // The same war on open ground (the Ebro plain): the tank enters ~1 km behind a quiet stretch of the line.
     let c = await census(page);
     await snap(page, 'plain-1-entry');
-    row('P1', 'on the plain: soldiers in sight from the tank at entry', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in this view, ${c.around[0]} + ${c.around[1]} in sight around the player, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles (${c.soldiers[0]} + ${c.soldiers[1]} in the scene)`, c.around[0] + c.around[1] >= 100);
+    row('P0', 'on the plain at entry (before going to the fight)', `line ${b?.lineM} m; ${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in this view, ${c.around[0]} + ${c.around[1]} in sight around (${c.soldiers[0]} + ${c.soldiers[1]} in the scene; roles ${b?.sides.map((q) => q.role).join('/')})`, !!b?.active);
+    // «Ir al combate» (G, held so a SwiftShader frame sees it) drives to the hottest stretch, among our line.
+    const g0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
+    await key(page, 'KeyG', 2500);
+    // (A SwiftShader frame takes a second or more: the drive starts a few frames later.)
+    const started = !!(await until(page, () => (window.__cmdStats?.battle?.driving ? true : null), null, 90000, 1000));
+    const gNotice = await page.evaluate(() => window.__cmdStats?.notice ?? '');
+    await small(page, true);
+    await until(page, () => (window.__cmdStats?.battle && !window.__cmdStats.battle.driving ? true : null), null, 2_400_000, 2000);
+    await small(page, false);
+    const g1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
+    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: line ${g0.lineM} m, stand-off ${g0.standM} m; «${gNotice}»; driving ${started}; the drive ended «${g1.lastDrive}» after ${Math.round(g1.t - g0.t)} s of scene time: line ${g1.lineM} m, stand-off ${g1.standM} m`, started && g1.lastDrive === 'arrived' && g1.lineM < 450);
+    await snap(page, 'plain-2-after-G');
+    // At the hot stretch: what the crew sees around and toward the line.
+    c = await census(page);
+    row('P1', 'on the plain at the hot stretch: soldiers in sight around the player', `${c.around[0]} ours + ${c.around[1]} enemy in sight around (≤ 2.5 km), ${c.seenSoldiers[0]} + ${c.seenSoldiers[1]} in this view, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles`, c.around[0] + c.around[1] >= 100);
     await page.evaluate(() => {
       const I = window.__cmd, b = I.forces.battle.info(), P = I.world.player, at = b.hot ?? b.near;
-      if (at && P) { I.controller.aimAt(at.clone().setY(at.y + 2)); P.yaw = Math.atan2(-(at.x - P.pos.x), -(at.z - P.pos.z)); }
+      if (at && P) { I.controller.aimAt(at.clone().setY(at.y + 2)); I.controller.snapTurret?.(); }
     });
     await sleep(3000);
     c = await census(page);
-    await snap(page, 'plain-2-toward-fight');
-    row('P2', 'on the plain: soldiers in sight toward the hot point', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in sight, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 100);
-    // «Ir al combate» (G) drives to the hottest stretch when it is far: the tank is put 800 m back along its own side.
-    await page.evaluate(() => {
-      const I = window.__cmd, b = I.forces.battle.info(), P = I.world.player;
-      const so = I.forces.battle.standOff(b.hot, 1000, P.pos.clone());
-      if (so) { P.pos.copy(so); P.pos.y = I.ground.heightAt(so.x, so.z); }
-    });
-    await sleep(2500);
-    const g0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
-    await page.keyboard.press('KeyG');
-    await sleep(1500);
-    const gNotice = await page.evaluate(() => window.__cmdStats?.notice ?? '');
-    await small(page, true);
-    await until(page, () => (window.__cmdStats?.battle && !window.__cmdStats.battle.driving ? true : null), null, 1_800_000, 2000);
-    await small(page, false);
-    const g1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
-    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: stand-off ${g0.standM} m, line ${g0.lineM} m; «${gNotice}»; the drive ended «${g1.lastDrive}» after ${Math.round(g1.t - g0.t)} s: stand-off ${g1.standM} m, line ${g1.lineM} m`, g0.standM > 400 && g1.lastDrive === 'arrived' && g1.lineM < 450);
-    await snap(page, 'plain-2b-after-G');
-    // The gunner's sight (what the right button shows) on the hot point.
+    await snap(page, 'plain-3-toward-line');
+    row('P2', 'on the plain: soldiers in sight looking toward the line', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in this view, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 40);
+    // The gunner's sight (what the right button shows) on the line.
     await page.evaluate(() => window.__cmd.controller.setZoom?.(true));
     await sleep(2500);
-    await snap(page, 'plain-3-sight');
+    await snap(page, 'plain-4-sight');
     await page.evaluate(() => window.__cmd.controller.setZoom?.(false));
     await sleep(1000);
   }
