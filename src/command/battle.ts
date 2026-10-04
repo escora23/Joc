@@ -78,6 +78,9 @@ export interface BattleInfo {
   sides: BattleSideInfo[];
   /** Where the fighting is hottest now in the stretch (scene), and the line point nearest the player. */
   hot: THREE.Vector3 | null;
+  /** The hot point comes from the fighting (assault ranks, shells, falls); false = no fighting to speak of, it is the
+   *  line point nearest the player. */
+  hotLive: boolean;
   near: THREE.Vector3 | null;
   /** Shells that landed in the last 10 s, and the figures fallen in the last 10 s. */
   shells10: number;
@@ -146,6 +149,7 @@ export class BattleLine {
   private bins = new Float32Array(8);
   private binsSm = new Float32Array(8);
   private hotBin = -1;
+  private hotLive = false;
   private hot: THREE.Vector3 | null = null;
   private near: THREE.Vector3 | null = null;
   private smokeT = 20;
@@ -205,7 +209,7 @@ export class BattleLine {
     }
     const now = this.host.world.time;
     return {
-      active: this.active, frontKey: this.frontKey, heat: this.heat, sides, hot: this.hot, near: this.near,
+      active: this.active, frontKey: this.frontKey, heat: this.heat, sides, hot: this.hot, hotLive: this.hotLive, near: this.near,
       shells10: this.shellTimes.filter((t) => now - t < 10).length, fallen10: this.fallTimes.filter((t) => now - t < 10).length,
     };
   }
@@ -886,7 +890,8 @@ export class BattleLine {
     for (let i = 0; i < 8; i++) if (this.binsSm[i] > bv) (bv = this.binsSm[i], bi = i);
     if (this.hotBin >= 0 && bi >= 0 && this.binsSm[this.hotBin] * 1.33 >= bv) bi = this.hotBin;
     this.hotBin = bi;
-    if (bi >= 0 && bv > 0.05) {
+    this.hotLive = bi >= 0 && bv > 0.05;
+    if (this.hotLive) {
       const s = -HALF_WINDOW_M + (bi + 0.5) * (HALF_WINDOW_M / 4);
       this.hot = this.at(s, 0, this.hot ?? new THREE.Vector3());
       this.hot.y = this.host.ground.heightAt(this.hot.x, this.hot.z);

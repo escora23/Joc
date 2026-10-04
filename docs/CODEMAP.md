@@ -1696,8 +1696,11 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   (two instanced meshes, near detail within 450 m), wrecks and craters, artillery (`shell()`: real projectiles of the
   firing team, splash 16 m), battery flashes, smoke screens, attrition (falls of dormant figures at the front's
   intensity), the hot point (`info().hot`, 8 bins of attackers near the enemy, shells and falls of the last 15 s).
-  `info()` for the HUD chip, the arrival notice and `__cmdStats.battle`; `standOff(at, depth)` = the point `depth` m
-  behind the line on the friendly side level with `at` (where «Ir al combate» drives inside a battle).
+  `info()` for the HUD chip, the arrival notice and `__cmdStats.battle` (`hotLive`: the hot point comes from the
+  fighting, smoothed over ~6 s with hysteresis; false on a quiet line, where it is the line point nearest the player);
+  `standOff(at, depth)` = the point `depth` m behind the line on the friendly side level with `at`; `bestStandOff`
+  = where «Ir al combate» drives inside a battle (standable ground with the enemy's forward trench and the figures ahead
+  in sight, ±300 m along, 150-380 m deep).
 * `src/command/models/soldier.ts` — soldier geometry per variant (rifleman, AT gunner, machine gunner) and level of
   detail, with `aPart` (thighs, shins, arms+weapon, upper body) and `aTint` (fixed, uniform, nation band, helmet);
   `makeSoldierMaterials()` patches MeshStandardMaterial / MeshDepthMaterial: poses (`POSE`: idle, walk, run, kneel,

@@ -310,6 +310,8 @@ async function ram(page) {
 async function mgFactory() {
   const page = await open('command-strike', '&target=factory&live=1');
   await until(page, () => window.__cmdStats?.phase === 'play' ? true : null, null, 300000, 1000);
+  await page.evaluate(() => window.__cmd.skipIntro?.());
+  await sleep(3000);
   const sid = await page.evaluate(() => window.__strikeTarget);
   const hp0 = await page.evaluate((sid) => __front.ctx.sim.view.structures.get(sid)?.hp, sid);
   await page.evaluate((sid) => {
@@ -318,7 +320,11 @@ async function mgFactory() {
     I.controller.snapTurret?.();
   }, sid);
   await sleep(1500);
-  for (let i = 0; i < 4; i++) await key(page, 'Space', 4000);
+  // Bursts until a few rounds have struck it (SwiftShader frames are a second or more apart).
+  for (let i = 0; i < 8; i++) {
+    await key(page, 'Space', 5000);
+    if ((await page.evaluate((sid) => window.__cmdStats?.mgHits?.[sid] ?? 0, sid)) >= 6) break;
+  }
   await sleep(5000);
   const r = await page.evaluate((sid) => ({ hp: __front.ctx.sim.view.structures.get(sid)?.hp, mg: window.__cmdStats?.mgHits?.[sid] ?? 0, notice: window.__cmdStats?.notice ?? '' }), sid);
   row('M1', 'machine gun on a factory: small but real damage in the sim', `hp ${hp0?.toFixed(4)} → ${r.hp?.toFixed(4)} after ${r.mg} rounds on it`, r.hp < hp0 && hp0 - r.hp < 0.1);
@@ -461,7 +467,15 @@ async function combat() {
     let c = await census(page);
     await snap(page, 'plain-1-entry');
     row('P0', 'on the plain at entry (before going to the fight)', `line ${b?.lineM} m; ${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in this view, ${c.around[0]} + ${c.around[1]} in sight around (${c.soldiers[0]} + ${c.soldiers[1]} in the scene; roles ${b?.sides.map((q) => q.role).join('/')})`, !!b?.active);
-    // «Ir al combate» (G, held so a SwiftShader frame sees it) drives to the hottest stretch, among our line.
+    // «Ir al combate» (G, held so a SwiftShader frame sees it) drives to the hottest stretch, among our line. This shot
+    // puts the tank on the enemy's side of the line: it is first set 650 m back on our own side (as if it had come up
+    // from the rear), so the drive does not cross the enemy's trenches.
+    await page.evaluate(() => {
+      const I = window.__cmd, b = I.forces.battle.info(), P = I.world.player;
+      const so = I.forces.battle.standOff(b.near ?? b.hot, 650, P.pos.clone());
+      if (so) { P.pos.copy(so); P.pos.y = I.ground.heightAt(so.x, so.z); P.speed = 0; }
+    });
+    await sleep(4000);
     const g0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
     await key(page, 'KeyG', 2500);
     // (A SwiftShader frame takes a second or more: the drive starts a few frames later.)
@@ -471,7 +485,9 @@ async function combat() {
     await until(page, () => (window.__cmdStats?.battle && !window.__cmdStats.battle.driving ? true : null), null, 2_400_000, 2000);
     await small(page, false);
     const g1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
-    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: line ${g0.lineM} m, stand-off ${g0.standM} m; «${gNotice}»; driving ${started}; the drive ended «${g1.lastDrive}» after ${Math.round(g1.t - g0.t)} s of scene time: line ${g1.lineM} m, stand-off ${g1.standM} m`, started && g1.lastDrive === 'arrived' && g1.lineM < 450);
+    const alive = await page.evaluate(() => !!window.__cmd.controller && window.__cmd.world.player?.alive);
+    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: line ${g0.lineM} m, stand-off ${g0.standM} m; «${gNotice}»; driving ${started}; the drive ended «${g1.lastDrive}» after ${Math.round(g1.t - g0.t)} s of scene time: line ${g1.lineM} m, stand-off ${g1.standM} m; tank alive ${alive}`, started && alive && g1.lastDrive === 'arrived' && g1.lineM < 450);
+    if (!alive) return;
     await snap(page, 'plain-2-after-G');
     // At the hot stretch: what the crew sees around and toward the line.
     c = await census(page);

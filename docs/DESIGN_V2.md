@@ -3480,8 +3480,9 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   line point's score is km ÷ heat) and stops **in** the battle: 0.35 km from the target, or as soon as a contact line
   at war with enemy soldiers on it is within 0.5 km. Arriving from such an entry or march, the tank then drives itself
   (tactical speed, any driving key takes over) to about 220 m behind the line at the battle's hottest stretch: of the
-  points ±150 m along the line and 150-300 m deep, the one on ground a tank stands on (slope ≤ ~26°) from where the
-  most of the battle's figures are in sight; on arrival the view turns to the fighting. Inside a battle, G does the
+  points ±300 m along the line and 150-380 m deep, the one on ground a tank stands on (slope ≤ ~22° over 10 m) from
+  where the enemy's forward trench there and the most of the figures ahead are in sight (12 per trench point seen, 1
+  per figure ahead, ¼ behind, −0.03 per metre off the ideal); on arrival the view turns to the fighting. Inside a battle, G does the
   same whenever the stretch is more than 150 m away. The drive's goal follows the stretch as the line moves (up to 4
   times); it gives up after 10 s without headway.
 * In command mode the chip at the top always names the battle: «Batalla en la línea contra X · Lo más duro, a 1,2 km

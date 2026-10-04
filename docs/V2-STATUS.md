@@ -1490,8 +1490,9 @@ specks the colour of the ground. That is the owner's "two guys" again, so this p
   line at war with enemy soldiers on it is within 0.5 km (was 0.6 / 1.0). Then, taken there from an entry with a goal
   or a march, the tank **drives itself** at tactical speed to 220 m behind the line at the battle's hottest stretch
   (`BattleLine.bestStandOff`, `TankController.driveTo`; it steers, slows in turns, any driving key takes over, the
-  goal follows the stretch as the line moves, and it stops on ground a tank can stand on with the most of the battle
-  in sight — the first try parked the tank across a 50° Pyrenean slope; on arrival the view turns to the fighting).
+  goal follows the stretch as the line moves, and it stops on ground a tank can stand on, looking at the fight: the
+  enemy's forward trench and the figures ahead in sight — the first tries parked the tank across a 50° Pyrenean slope,
+  then facing a hillside; on arrival the view turns to the fighting).
   The arrival line says so: «… Tu carro avanza solo hasta lo más duro, a 510 m
   (cualquier tecla de marcha toma el mando).»
 * **«Ir al combate» inside a battle** used to answer «Ya estás en contacto» (anything hostile within 4 km counted). Now

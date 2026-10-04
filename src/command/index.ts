@@ -1246,6 +1246,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     world.player = e;
     controller = makeController(e);
     if (internals) internals.controller = controller;
+    // A drive to the hot stretch was the old vehicle's: the new one starts still (G sends it again).
+    if (hotDrive) {
+      hotDrive = false;
+      lastDrive = 'lost';
+      waypoint = null;
+    }
     // Wingmen follow the new leader; the slots close up.
     const mates = formation.filter((m) => m.alive && m !== e);
     const slots = Forces.formationSlots(kind, mates.length + 1).slice(1);
@@ -2282,7 +2288,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   let hotRetargets = 0;
   /** While driving to the hot stretch: the goal follows it (the line moves as the fighting goes on), a few times. */
   function followHot(): void {
-    if (!hotDrive || hotRetargets >= 4 || !(controller instanceof TankController) || !controller.driveTo) return;
+    // (A quiet line has no hot stretch to follow: its "hot point" is only the line point nearest the tank.)
+    if (!hotDrive || hotRetargets >= 4 || !(controller instanceof TankController) || !controller.driveTo || !forces?.battle.info().hotLive) return;
     const so = hotStandOff();
     if (!so || Math.hypot(so.x - controller.driveTo.x, so.z - controller.driveTo.z) < 260) return;
     hotRetargets++;
