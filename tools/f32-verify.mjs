@@ -60,7 +60,7 @@ const census = (page) => page.evaluate(() => {
   const cam = I.camera, W = innerWidth, H = innerHeight;
   const v = cam.position.clone();
   const P = I.world.player;
-  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], near1km: [0, 0], dead: 0 };
+  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], around: [0, 0], near1km: [0, 0], dead: 0 };
   const cp = cam.position;
   // In the line of sight of the camera (the ground between does not hide it): what a player really sees.
   const sees = (x, y, z) => {
@@ -84,6 +84,8 @@ const census = (page) => page.evaluate(() => {
     if (P && e.pos.distanceTo(P.pos) < 1000 && man) c.near1km[t]++;
     v.copy(e.pos); v.y += man ? 0.9 : 1.5;
     if (v.distanceTo(cam.position) > 4000) continue;
+    // Around the player: in the camera's line of sight within 2.5 km, whichever way it looks (turning the turret).
+    if (man && v.distanceTo(cam.position) < 2500 && sees(e.pos.x, e.pos.y + (e.pose === 4 ? 0.35 : 0.9), e.pos.z)) c.around[t]++;
     v.project(cam);
     if (v.z > 1 || v.z < -1 || v.x < -1 || v.x > 1 || v.y < -1 || v.y > 1) continue;
     if (man) c.screenSoldiers[t]++; else c.screenVehicles[t]++;
@@ -335,9 +337,11 @@ async function scale() {
   const d0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
   await until(page, () => (window.__cmdStats?.battle?.driving ? null : true), null, 600000, 1000);
   const d1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
-  row('S7', 'arrival: the tank drives on to the hottest stretch by itself', `at entry: line ${d0.lineM} m, hot point ${d0.hotM} m, stand-off ${d0.standM} m (driving ${d0.driving}); after ${Math.round(d1.t - d0.t)} s: line ${d1.lineM} m, hot point ${d1.hotM} m, stand-off ${d1.standM} m`, d1.lineM >= 0 && d1.lineM < 500 && d1.standM < 200);
+  const pace = await page.evaluate(() => window.__cmdStats?.pace);
+  row('S7', 'arrival: the tank drives on to the hottest stretch by itself', `at entry: line ${d0.lineM} m, hot point ${d0.hotM} m, stand-off ${d0.standM} m (driving ${d0.driving}); the drive ended «${d1.lastDrive}» after ${Math.round(d1.t - d0.t)} s of scene time: line ${d1.lineM} m, hot point ${d1.hotM} m, stand-off ${d1.standM} m (scene pace ${pace}× real time, the sim's clock follows it)`, d0.driving && d1.lastDrive === 'arrived' && d1.lineM >= 0 && d1.lineM < 450);
   c = await census(page);
   await snap(page, 'scale-1b-arrived');
+  row('S3a', 'soldiers in sight around the player after arriving (any direction, ≤ 2.5 km, not behind the ground)', `${c.around[0]} ours + ${c.around[1]} enemy (in this view: ${c.seenSoldiers[0]} + ${c.seenSoldiers[1]})`, c.around[0] + c.around[1] >= 150);
   // Look at the hottest point from the tank (the turret turned there) and count what the camera shows.
   await page.evaluate(() => {
     const I = window.__cmd, b = I.forces.battle.info();
@@ -413,7 +417,7 @@ async function combat() {
     // The same battle seen on open ground: what the crew sees from the tank at entry and turned toward the hot point.
     let c = await census(page);
     await snap(page, 'plain-1-entry');
-    row('P1', 'on the plain: soldiers in sight from the tank at entry', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in sight, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles (${c.soldiers[0]} + ${c.soldiers[1]} in the scene)`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 60);
+    row('P1', 'on the plain: soldiers in sight from the tank at entry', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in this view, ${c.around[0]} + ${c.around[1]} in sight around the player, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles (${c.soldiers[0]} + ${c.soldiers[1]} in the scene)`, c.around[0] + c.around[1] >= 100);
     await page.evaluate(() => {
       const I = window.__cmd, b = I.forces.battle.info(), P = I.world.player, at = b.hot ?? b.near;
       if (at && P) { I.controller.aimAt(at.clone().setY(at.y + 2)); P.yaw = Math.atan2(-(at.x - P.pos.x), -(at.z - P.pos.z)); }
@@ -435,7 +439,7 @@ async function combat() {
     const gNotice = await page.evaluate(() => window.__cmdStats?.notice ?? '');
     await until(page, () => (window.__cmdStats?.battle?.driving ? null : true), null, 600000, 1000);
     const g1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
-    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: stand-off ${g0.standM} m, line ${g0.lineM} m; «${gNotice}»; after ${Math.round(g1.t - g0.t)} s: stand-off ${g1.standM} m, line ${g1.lineM} m`, g0.standM > 400 && g1.standM < 200);
+    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: stand-off ${g0.standM} m, line ${g0.lineM} m; «${gNotice}»; the drive ended «${g1.lastDrive}» after ${Math.round(g1.t - g0.t)} s: stand-off ${g1.standM} m, line ${g1.lineM} m`, g0.standM > 400 && g1.lastDrive === 'arrived' && g1.lineM < 450);
     await snap(page, 'plain-2b-after-G');
     // The gunner's sight (what the right button shows) on the hot point.
     await page.evaluate(() => window.__cmd.controller.setZoom?.(true));

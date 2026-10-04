@@ -582,11 +582,26 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     return P ? tileOf(P.pos.x, P.pos.z) : undefined;
   }
 
+  /**
+   * Pace of the scene: local seconds a frame can advance (its dt, clamped to 0.1 s) per real second, over ~2 s. On a
+   * machine whose frames are slower than 10 a second the scene falls behind real time; the sim's tactical clock then
+   * runs at the same pace (§9.8: one time for the scene and the sim), so a front does not run away from the battle
+   * standing on it between two frames.
+   */
+  let scenePace = 1, paceDt = 0, paceWall = 0;
+  function measurePace(realDt: number, wallDt: number): void {
+    paceDt += realDt;
+    paceWall += wallDt;
+    if (paceWall < 2) return;
+    scenePace = Math.max(0.05, Math.min(1, paceDt / paceWall));
+    paceDt = paceWall = 0;
+  }
+
   function sendClock(now: number, force = false): void {
     // A decision dialog (and a frozen shot) holds the world still.
     const hold = decision || freeze;
     const mode = hold ? 'tactical' : effRate > 1 ? 'travel' : 'tactical';
-    const rate = hold ? 0 : effRate;
+    const rate = hold ? 0 : effRate > 1 ? effRate : effRate * (scenePace > 0.92 ? 1 : scenePace);
     const changed = mode !== sentClock.mode || Math.abs(rate - sentClock.rate) > Math.max(0.5, sentClock.rate * 0.08) || throttled !== sentClock.throttled;
     if (!force && !changed && now - sentClock.at < 1000) return;
     ctx.sim.setClock(mode, rate, focusTile(), mode === 'travel' && throttled);
@@ -2146,6 +2161,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       });
       overlay.combatMarker = { pos: tmp3.set(bi.hot.x, bi.hot.y + 25, bi.hot.z), text: `${t('command.battle.level.' + (bi.heat >= 0.85 ? 3 : bi.heat >= 0.6 ? 2 : bi.heat >= 0.35 ? 1 : 0))} · ${dist}`, contact: true };
       chipAim = { x: bi.hot.x, z: bi.hot.z, km: hd / 1000 };
+      followHot();
       if (entryGoal && entryGoal.km < STOP_KM[kind] * 4) entryGoal = null;
       // Taken here to fight (an entry with a goal, a march): the tank drives on to the hottest stretch by itself (any
       // driving key takes over).
@@ -2234,12 +2250,27 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     if (d < 150) return d;
     const tc = controller;
     tc.driveTo = dest;
-    waypoint = new THREE.Vector3(dest.x, dest.y + 20, dest.z);
-    tc.onDriveEnd = (arrived) => {
-      if (waypoint && Math.hypot(waypoint.x - dest.x, waypoint.z - dest.z) < 1) waypoint = null;
-      if (arrived) overlay?.showNotice(t('command.go.inBattle'), 3.5);
+    const wp = new THREE.Vector3(dest.x, dest.y + 20, dest.z);
+    waypoint = wp;
+    hotDrive = true;
+    tc.onDriveEnd = (why) => {
+      hotDrive = false;
+      lastDrive = why;
+      if (waypoint === wp) waypoint = null;
+      if (why === 'arrived') overlay?.showNotice(t('command.go.inBattle'), 3.5);
     };
     return d;
+  }
+  /** A drive to the hot stretch is running (its goal follows the stretch as the line moves); how the last one ended. */
+  let hotDrive = false;
+  let lastDrive = '';
+  /** While driving to the hot stretch: the goal follows it (the line moves as the fighting goes on). */
+  function followHot(): void {
+    if (!hotDrive || !(controller instanceof TankController) || !controller.driveTo) return;
+    const so = hotStandOff();
+    if (!so || Math.hypot(so.x - controller.driveTo.x, so.z - controller.driveTo.z) < 80) return;
+    controller.driveTo.copy(so);
+    waypoint?.set(so.x, so.y + 20, so.z);
   }
   /** Taken to an action (an entry with a goal, a march): on reaching the battle, drive on to its hottest stretch. */
   let seekHot = false;
@@ -3432,6 +3463,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const realDt = fr.dt;
       // The intro runs on the wall clock (a slow frame never stretches the swoop into half a minute).
       const wallDt = lastUpdateWall ? Math.min(0.5, (now - lastUpdateWall) / 1000) : realDt;
+      if (lastUpdateWall) measurePace(realDt, Math.min(5, (now - lastUpdateWall) / 1000));
       lastUpdateWall = now;
       if (phase === 'transit') {
         // Marching behind the fade (marchTo drives it): only Esc (stop here) is read.
@@ -3729,7 +3761,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           hostiles: forces.log.hostiles, neutrals: forces.log.neutrals, friendlies: forces.log.friendlies, ents: world.ents.length,
           pools: forces.log, missingChunksAhead: ground.stats.missingAhead, chunkMsPerFrame: +ground.stats.chunkMsPerFrame.toFixed(2),
           chunkMsP95: +ground.p95().toFixed(2), chunksBuilt: ground.stats.built, nearBuilt: ground.stats.nearBuilt, workerMs: +ground.stats.workerMs.toFixed(1),
-          chunkWorker: !ground.stats.mainThread, rate: effRate, requested, throttled, decision, clockMode: view.clock.mode, clockRate: view.clock.rate,
+          chunkWorker: !ground.stats.mainThread, rate: effRate, pace: +scenePace.toFixed(2), requested, throttled, decision, clockMode: view.clock.mode, clockRate: view.clock.rate,
           localSec, simSec: view.command?.sec ?? -1, tick: view.tick, distanceM, waypointKm: waypoint ? Math.hypot(waypoint.x - P.pos.x, waypoint.z - P.pos.z) / 1000 : -1,
           autopilot, lastDrop, landOwner, border: borderNear, incursion: inc, integrity, formationAlive: formation.filter((m) => m.alive).length,
           vehiclesLost, moves: view.command?.moves ?? null, rebases: rebaseN, towns: civil.stats.towns, labels: civil.labels.length, civil: civil.stats,
@@ -3752,7 +3784,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
               hotM: b.hot ? Math.round(Math.hypot(b.hot.x - P.pos.x, b.hot.z - P.pos.z)) : -1,
               lineM: b.near ? Math.round(Math.hypot(b.near.x - P.pos.x, b.near.z - P.pos.z)) : -1,
               // Owner item 32: the auto-drive to the hottest stretch (G, or on arrival) and how far its stand-off is.
-              driving: controller instanceof TankController && !!controller.driveTo,
+              driving: controller instanceof TankController && !!controller.driveTo, lastDrive,
               standM: (() => { const so = hotStandOff(); return so ? Math.round(Math.hypot(so.x - P.pos.x, so.z - P.pos.z)) : -1; })(),
               sides: b.sides.map((q) => ({ owner: q.owner, team: q.team, role: q.role, shown: q.shown, target: q.target, perKm: Math.round(q.perKm), vehicles: q.vehicles })),
             };

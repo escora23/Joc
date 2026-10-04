@@ -71,8 +71,8 @@ export class TankController implements Controller {
    * of the line), steering by itself; any driving key takes over. Cleared on arrival (within 45 m).
    */
   driveTo: THREE.Vector3 | null = null;
-  /** Called once when the drive-to point is reached (or given up after being stuck). */
-  onDriveEnd: ((arrived: boolean) => void) | null = null;
+  /** Called once when the drive ends: the point reached, a driving key pressed, or stuck for 6 s. */
+  onDriveEnd: ((why: 'arrived' | 'manual' | 'stuck') => void) | null = null;
   private driveStuck = 0;
 
   /** Gunner's sight on/off (staging; players hold the right mouse button). */
@@ -100,12 +100,12 @@ export class TankController implements Controller {
     this.shoot();
   }
 
-  private endDrive(arrived: boolean): void {
+  private endDrive(why: 'arrived' | 'manual' | 'stuck'): void {
     this.driveTo = null;
     this.driveStuck = 0;
     const cb = this.onDriveEnd;
     this.onDriveEnd = null;
-    cb?.(arrived);
+    cb?.(why);
   }
 
   update(dt: number, allowInput: boolean): void {
@@ -128,13 +128,13 @@ export class TankController implements Controller {
     let turnIn = allowInput ? (inp.down('KeyA') || inp.down('ArrowLeft') ? 1 : 0) - (inp.down('KeyD') || inp.down('ArrowRight') ? 1 : 0) : 0;
     let cruise = 17;
     if (this.driveTo) {
-      if (fwdIn !== 0 || turnIn !== 0) this.endDrive(false);
+      if (fwdIn !== 0 || turnIn !== 0) this.endDrive('manual');
       else {
         const dx = this.driveTo.x - e.pos.x, dz = this.driveTo.z - e.pos.z;
         const dist = Math.hypot(dx, dz);
         // Stuck against something for 6 s (a house, a cliff): the player drives from here.
         this.driveStuck = Math.abs(e.speed) < 0.8 ? this.driveStuck + dt : 0;
-        if (dist < 45 || this.driveStuck > 6) this.endDrive(dist < 45);
+        if (dist < 45 || this.driveStuck > 6) this.endDrive(dist < 45 ? 'arrived' : 'stuck');
         else {
           const turn = angleDelta(e.yaw, Math.atan2(-dx, -dz));
           turnIn = Math.max(-1, Math.min(1, turn * 2.5));

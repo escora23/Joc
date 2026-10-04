@@ -144,6 +144,8 @@ export class BattleLine {
   private shellTimes: number[] = [];
   private fallTimes: number[] = [];
   private bins = new Float32Array(8);
+  private binsSm = new Float32Array(8);
+  private hotBin = -1;
   private hot: THREE.Vector3 | null = null;
   private near: THREE.Vector3 | null = null;
   private smokeT = 20;
@@ -179,6 +181,8 @@ export class BattleLine {
     this.shellTimes.length = 0;
     this.fallTimes.length = 0;
     this.hot = this.near = null;
+    this.binsSm.fill(0);
+    this.hotBin = -1;
     this.clearDecor();
     this.host.world.battleHeat = 0;
   }
@@ -265,7 +269,12 @@ export class BattleLine {
     // Re-centre when the player has moved along the line.
     const pp = proj(player.pos.x, player.pos.z);
     let sc = this.centre ? proj(this.centre.x, this.centre.z).s : pp.s;
-    if (Math.abs(pp.s - sc) > RECENTRE_M) sc = pp.s;
+    if (Math.abs(pp.s - sc) > RECENTRE_M) {
+      sc = pp.s;
+      // The stretch moved along the line: its bins mean other places now.
+      this.binsSm.fill(0);
+      this.hotBin = -1;
+    }
     const s0 = Math.max(0, sc - HALF_WINDOW_M - 400), s1 = Math.min(total, sc + HALF_WINDOW_M + 400);
     const n = Math.max(2, Math.floor((s1 - s0) / STEP_M) + 1);
     const pts = new Float64Array(n * 4);
@@ -804,9 +813,15 @@ export class BattleLine {
       }
     }
     for (const h of this.recent) if (w.time - h.t < 15) this.bins[binOf(h.x, h.z)] += 2;
+    // Smoothed over ~6 s, and the hot stretch moves only when another is clearly hotter (a third more): the chip, its
+    // marker and «Ir al combate» point at one place, not at whichever bin a shell fell in last.
+    const k = Math.min(1, dt / 6);
+    for (let i = 0; i < 8; i++) this.binsSm[i] += (this.bins[i] - this.binsSm[i]) * k;
     let bi = -1, bv = 0;
-    for (let i = 0; i < 8; i++) if (this.bins[i] > bv) (bv = this.bins[i], bi = i);
-    if (bi >= 0) {
+    for (let i = 0; i < 8; i++) if (this.binsSm[i] > bv) (bv = this.binsSm[i], bi = i);
+    if (this.hotBin >= 0 && bi >= 0 && this.binsSm[this.hotBin] * 1.33 >= bv) bi = this.hotBin;
+    this.hotBin = bi;
+    if (bi >= 0 && bv > 0.05) {
       const s = -HALF_WINDOW_M + (bi + 0.5) * (HALF_WINDOW_M / 4);
       this.hot = this.at(s, 0, this.hot ?? new THREE.Vector3());
       this.hot.y = this.host.ground.heightAt(this.hot.x, this.hot.z);

@@ -3446,3 +3446,58 @@ browser: `node tools/naval-verify.mjs`.
   speed ≤ 12 kn, the ship stopped, no escort: an 8 s boarding party, then it is ours or turned back), **X** «Hundir» (at
   peace the game asks first, with the costs). Shelling it until it sinks is the same «Hundir». All go to the sim as
   `navalIntercept` (validated: hail 50 km, warning shot / sink 30 km, board 2 tiles, escorts) with the consequences of §20.5.
+
+## 21. Command-mode combat at the real scale of the front (owner item 32)
+
+Owner feedback #5: soldiers looked odd, infantry was hard to hit even with a tank, offensives were hard to find and
+"when you finally get there there are two guys", machine guns did nothing to cities and factories, and running things
+over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, V2-STATUS «Owner item 32».
+
+### 21.1 The battle at the front (tank)
+* **Where.** Within 6 km of a contact line at war between our side (own or allied) and a hostile nation, a 2.4 km
+  stretch of the real line (`LocalFront.lineKm`, resampled every 10 m) is centred on the player and re-centred after
+  450 m along it. Beyond it, the front is drawn by the map and the far views, not here.
+* **How many.** 1 figure = 25 troops (§9.6). Per side: front pool × min(1, 16 km ÷ front km in the window) + the
+  offensive's pool; at least 60 when the side has troops there; at most 900 hostile / 650 friendly (instanced crowd).
+  Figures thicken toward the player (|u|^1.7 along the stretch: ~45 % within ±300 m). Line vehicles: one per 90
+  (hostile) / 110 (friendly) figures, at most 5 / 4; each stands for its crew and squad (10 / 8 figures).
+* **Who does what.** A side with an offensive attacks in waves (squads of 8-12; 50 % of a 8-12 s cycle rushing, the
+  rest down firing, half prone and half kneeling) from 260-700 m behind the line to 75 m short of the enemy trench;
+  the other side holds a forward trench 115 m behind the line (55 %), a second at 330 m (25 %) and reserves at
+  520-720 m that run up as men fall. A quiet front is two trench lines trading fire.
+* **Fire and losses.** Artillery: real rounds with a 16 m splash on the other side's positions, about one a second per
+  side at the height of an offensive (×0.3 holding). The far figures' falls between the two sides (0.45 % of exposed
+  attackers a second × heat, 0.18 % defenders, 0.07 % on a quiet line) are the picture of the sim's attrition and
+  are replaced while the sim has the troops; every man or vehicle the player kills goes to the sim.
+* **Readable.** Within 1 km the figures are full entities (AI, real rounds); beyond, an animated instanced crowd.
+  Every figure keeps ≥ 5 px on screen (drawn up to 3.5× life size; never in the gunner's sight), the player's rounds
+  hit the figure as drawn; far muzzle flashes keep ~3 px and tracers ~1.4 px; beyond 450 m the uniform takes up to
+  45 % of the nation's colour.
+
+### 21.2 Finding the action
+* Map: every front of ours has «⌖ Tomar el control aquí» on its badge; a front with a running offensive pulses.
+* «Ir al combate» / take control at a front marches to the hottest point (the biggest offensive's live contact; a
+  line point's score is km ÷ heat) and stops **in** the battle: 0.35 km from the target, or as soon as a contact line
+  at war with enemy soldiers on it is within 0.5 km. Arriving from such an entry or march, the tank then drives itself
+  (tactical speed, any driving key takes over) to 220 m behind the line at the battle's hottest stretch. Inside a
+  battle, G does the same whenever that point is more than 150 m away.
+* In command mode the chip at the top always names the battle: «Batalla en la línea contra X · Lo más duro, a 1,2 km
+  · intensidad alta · N nuestros y M enemigos en este tramo» with a compass direction and a world marker on the hot
+  point; while it is more than 450 m away the chip carries «Ir al combate».
+
+### 21.3 Soldiers
+Real proportions, helmet, plate carrier, pack, rifle / AT launcher / machine gun; poses animated in the vertex shader
+(idle, walk, run, rush, kneel, aim, prone, the fall when hit; recoil on every shot). Uniform = the side's field shade
+(olive ours, khaki theirs) blended 42 % with the nation's hue at saturation ≤ 0.38 and lightness 0.34 (a red nation
+wears brown-red, a blue one blue-grey); the nation's full colour on the helmet band and the arm band.
+
+### 21.4 Shooting, damage, ramming
+* HE: 40 damage, 15 m splash, ×1.8 on men in the open, ×0.7 in cover (lethal to ~11 m). Coax: 9 per round at ~700
+  rounds a minute (a man has 12). The player's rounds hit a man within 0.78 m (× his drawn scale) of his middle,
+  which follows his pose. Target brackets «BLANCO · tipo · distancia» and a lead diamond for a moving target.
+* Machine gun on a structure: chips, dust, glass and 0.015 % of the structure per round in the sim; the HUD says it is
+  ineffective and suggests HE or bombers. Heavier weapons keep their shares (HE 8 %, AP 2 %, bombs 30 %).
+* Ramming (tank, 60 t): men run over above 1 m/s (ours step aside); vehicles take closing speed² × 0.25 × (60 ÷ their
+  mass) × their max hp ÷ 100, the tank their mass ÷ 60 × 0.9 of the same energy; city houses at war (city confirmed)
+  come down; trees fall in the direction of travel; a compound fence crossed flattens its section. Against a nation
+  at peace the tank stops and «¿Embestir a X?» asks first (item 31's rule: Declarar la guerra · Frenar).
