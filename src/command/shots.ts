@@ -794,3 +794,193 @@ export async function strikeFire(s: ShotContext, I: CommandInternals, n: number)
     await s.waitFrames(1);
   }
 }
+
+/**
+ * Owner item 32 (pass 2): the battle of a staged offensive across the Pyrenees (Spain → its northern neighbour, 40 %
+ * of ~1M troops; the f3-missions war), with the tank where «Ir al combate» takes it: the battle's hottest stretch,
+ * about 220 m behind our line (`BattleLine.bestStandOff`). `&side=defend`: the neighbour's offensive on us instead.
+ * `&view=chase|sight|overview|close` (`&d=` metres and `&team=0|1` for the close-up, `&fov=`), `&fight=` scene seconds
+ * before the capture, `&live=1` stops after placing the tank. `window.__battleShot` holds a census of what the camera
+ * sees (soldiers in sight per side) for tools.
+ */
+registerShot('command-battle', 'command', 'Owner item 32: in a staged offensive\'s battle at its hottest stretch, where «Ir al combate» takes the tank (&side=attack|defend, &view=chase|sight|overview|close, &d=, &team=, &fight=, &live=1)', async (s) => {
+  const { ctx } = s;
+  const defend = s.params.get('side') === 'defend';
+  const hour = Number(s.params.get('hour') ?? 13);
+  await ctx.app.startScriptedGame({
+    ticks: 200, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(0.2 - (hour - 12) * 15),
+  });
+  const sim = ctx.sim;
+  const enemy = nearestNation(s, 45.5, 1.5);
+  if (!enemy) throw new Error('no neighbour to the north');
+  const at = (lat: number, lon: number) => latLonToTile(lat, lon);
+  sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(40.6, -2.5), radius: 20 });
+  sim.debug({ type: 'conquer', playerId: HUMAN_ID, centerTile: at(42.0, -0.5), radius: 9 });
+  sim.debug({ type: 'conquer', playerId: enemy, centerTile: at(44.3, 1.2), radius: 11 });
+  sim.debug({ type: 'war', a: HUMAN_ID, b: enemy, mobilizeTicks: 0 });
+  sim.debug({ type: 'escalate', by: HUMAN_ID, against: enemy, level: 2 });
+  sim.debug({ type: 'escalate', by: enemy, against: HUMAN_ID, level: 2 });
+  sim.debug({ type: 'addTroops', playerId: HUMAN_ID, amount: 900_000 });
+  sim.debug({ type: 'addTroops', playerId: enemy, amount: defend ? 900_000 : 150_000 });
+  await ctx.sim.fastForward(2);
+  const attacker = defend ? enemy : HUMAN_ID;
+  const cmd = { type: 'attack', target: defend ? HUMAN_ID : enemy, ratio: 0.4, tile: defend ? at(41.9, -0.6) : at(43.4, 0.2), intensity: 1 } as const;
+  if (defend) sim.debug({ type: 'command', playerId: enemy, cmd });
+  else sim.send(cmd);
+  sim.setSpeed(1);
+  const t0 = ctx.sim.view.tick;
+  await waitView(s, () => ctx.sim.view.tick >= t0 + Number(s.params.get('run') ?? 90)
+    && ctx.sim.view.attacks.some((a) => a.attacker === attacker && !a.naval && a.contactX >= 0), 120_000);
+  sim.setSpeed(0);
+  const off = ctx.sim.view.attacks.find((a) => a.attacker === attacker && !a.naval && a.contactX >= 0);
+  if (!off) throw new Error('the offensive has no contact');
+  // A division of ours on our side of the contact (a tile is 25 km: the nearest tile of ours to it), walked up to
+  // ~1.5 km from the live contact through the real controlled moves, as the march of «Tomar el control aquí» would.
+  let tile = -1, bd = Infinity;
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const x: number = Math.floor(off.contactX) + dx, y: number = Math.floor(off.contactY) + dy;
+      const t = y * MAP_W + ((x % MAP_W) + MAP_W) % MAP_W;
+      if (ctx.sim.view.owner[t] !== HUMAN_ID) continue;
+      const d = Math.hypot(x + 0.5 - off.contactX, y + 0.5 - off.contactY);
+      if (d < bd) {
+        bd = d;
+        tile = t;
+      }
+    }
+  }
+  if (tile < 0) throw new Error('no land of ours next to the contact');
+  sim.debug({ type: 'spawnUnit', unit: UnitType.ArmoredDivision, owner: HUMAN_ID, tile, targetTile: -1 });
+  const id = await waitUnit(s, UnitType.ArmoredDivision, HUMAN_ID, tileToLatLon(tile));
+  // Under control, its moves are the player's (controlledMove), checked against its speed.
+  sim.send({ type: 'unitControl', unitId: id, controlled: true });
+  await ctx.sim.fastForward(1);
+  await waitView(s, () => !!ctx.sim.view.command?.controlled.some((c) => c.unitId === id), 60_000);
+  for (let pass = 0; pass < 4; pass++) {
+    const u = ctx.sim.view.units.get(id);
+    if (!u) break;
+    ctx.sim.setClock('observation', undefined, { x: u.x, y: u.y });
+    await s.wait(1500);
+    const lf = deriveLocalForces(ctx.sim.view, u.x, u.y, 40, HUMAN_ID);
+    const fr = lf.fronts[0];
+    if (fr && fr.nearest.distKm <= 2.5) break;
+    // First into the offensive's corridor (its live contact on the tile frontier), then on to the real contact line
+    // (the sub-tile line runs ahead of the tile frontier as the offensive pushes): the march's own path.
+    const a = ctx.sim.view.attacks.find((q) => q.id === off.id);
+    const tx = pass > 0 && fr ? latLonToTileXY(fr.nearest.lat, fr.nearest.lon) : a && a.contactX >= 0 ? { x: a.contactX, y: a.contactY } : fr ? latLonToTileXY(fr.nearest.lat, fr.nearest.lon) : null;
+    if (!tx) break;
+    console.warn(`[battle-shot] walk ${pass}: unit ${u.x.toFixed(3)},${u.y.toFixed(3)} → ${tx.x.toFixed(3)},${tx.y.toFixed(3)} (${(Math.hypot((tx.x - u.x) * Math.cos(((90 - (u.y / MAP_H) * 180) * Math.PI) / 180), tx.y - u.y) * TILE_KM).toFixed(1)} km); front ${fr ? `${fr.a}/${fr.b} ${fr.nearest.distKm.toFixed(1)} km` : 'none'}`);
+    await walkToward(s, id, tx.x, tx.y, pass > 0 ? 1.2 : 1.5);
+  }
+  ctx.sim.setClock('strategic');
+  {
+    const u = ctx.sim.view.units.get(id);
+    const lf = u ? deriveLocalForces(ctx.sim.view, u.x, u.y, 40, HUMAN_ID) : null;
+    const fr = lf?.fronts[0];
+    console.warn(`[battle-shot] staged: offensive ${off.id} of ${attacker} (${Math.round(off.troops)} troops), our division ${id}; nearest front ${fr ? `${fr.a}/${fr.b} at ${fr.nearest.distKm.toFixed(2)} km, quiet ${fr.quiet}` : 'none'}`);
+  }
+  await ctx.app.enterCommandMode(id);
+  ctx.sim.setSpeed(0);
+  const I = internalsOrThrow();
+  I.skipIntro();
+  await waitFramesUntil(s, () => I.forces.battle.info().active, 600);
+  const b0 = I.forces.battle.info();
+  if (!b0.active) {
+    const fr = I.forces.last?.fronts[0];
+    throw new Error(`no battle at the staged front (front ${fr ? `${fr.a}/${fr.b} at ${fr.nearest.distKm.toFixed(2)} km` : 'none'})`);
+  }
+  // Where «Ir al combate» drives: the hottest stretch, 220 m behind our line on ground a tank stands on. Twice, as the
+  // drive follows the stretch: the battle re-centres on the tank (forces refresh every 2 real s) and its hot point
+  // settles where the fighting is around it.
+  const P = I.controller!.ent;
+  let hot = (b0.hot ?? b0.near)!.clone();
+  for (let pass = 0; pass < 2; pass++) {
+    const bi = I.forces.battle.info();
+    hot = (bi.hot ?? bi.near ?? hot).clone();
+    const stand = I.forces.battle.bestStandOff(hot, 220, new THREE.Vector3());
+    if (stand) {
+      const dx = stand.x - P.pos.x, dz = stand.z - P.pos.z;
+      for (const e of I.world.ents) {
+        if (!e.formation) continue;
+        e.pos.x += dx;
+        e.pos.z += dz;
+        e.pos.y = I.ground.heightAt(e.pos.x, e.pos.z);
+        e.yaw = Math.atan2(-(hot.x - e.pos.x), -(hot.z - e.pos.z));
+        e.speed = 0;
+      }
+    }
+    await s.wait(4500);
+    await s.waitFrames(4);
+  }
+  // As on arriving through «Ir al combate» (index.ts onDriveEnd): the fight laid out where the tank sees it.
+  const moved = I.forces.battle.relayoutAround(P);
+  console.warn(`[battle-shot] relayout around the tank: ${moved} figures`);
+  await s.wait(2500);
+  const c = I.controller as unknown as { aimAt(p: THREE.Vector3): void; snapTurret?(): void; setZoom?(on: boolean): void };
+  const aimHot = () => {
+    const h = I.forces.battle.info().hot ?? hot;
+    c.aimAt(h.clone().setY(h.y + 2));
+  };
+  aimHot();
+  c.snapTurret?.();
+  if (live(s)) return;
+  I.simulate(Math.round(Number(s.params.get('fight') ?? 8) * 30), 1 / 30, (i) => (i % 15 === 0 ? aimHot() : undefined));
+  await s.wait(2500);
+  const view = s.params.get('view') ?? 'chase';
+  const b = I.forces.battle.info();
+  const h = (b.hot ?? hot).clone();
+  if (view === 'sight') {
+    // The enemy's forward trench at the hot stretch through the gunner's sight.
+    const foe = I.world.ents.filter((e) => e.alive && e.team === 1 && (e.kind === 'soldier' || e.kind === 'at'))
+      .sort((p, q) => p.pos.distanceTo(h) - q.pos.distanceTo(h))[0];
+    c.aimAt(foe ? foe.pos.clone().setY(foe.pos.y + 1) : h.setY(h.y + 2));
+    c.snapTurret?.();
+    c.setZoom?.(true);
+  } else if (view === 'overview') {
+    const back = new THREE.Vector3().subVectors(P.pos, h).setY(0).normalize();
+    const pos = P.pos.clone().addScaledVector(back, Number(s.params.get('back') ?? 120));
+    pos.y = I.ground.heightAt(pos.x, pos.z) + Number(s.params.get('up') ?? 90);
+    I.camOverride = { pos, look: h.clone().setY(h.y + 5), fov: Number(s.params.get('fov') ?? 55) };
+  } else if (view === 'close') {
+    const team = Number(s.params.get('team') ?? 0);
+    const d = Number(s.params.get('d') ?? 20);
+    // The nearest man of that side to the tank who is up (not lying dead), seen from the tank's side at d metres.
+    const man = I.world.ents.filter((e) => e.alive && e.team === team && (e.kind === 'soldier' || e.kind === 'at') && !e.dormant)
+      .sort((p, q) => p.pos.distanceTo(P.pos) - q.pos.distanceTo(P.pos))[0];
+    if (man) {
+      const az = Number(s.params.get('az') ?? 0.5);
+      const fwd = new THREE.Vector3(-Math.sin(man.yaw), 0, -Math.cos(man.yaw));
+      const dir = fwd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), az);
+      const pos = man.pos.clone().addScaledVector(dir, d);
+      pos.y = Math.max(I.ground.heightAt(pos.x, pos.z) + 1.7, man.pos.y + 1.2 + d * 0.12);
+      I.camOverride = { pos, look: man.pos.clone().setY(man.pos.y + 0.8), fov: Number(s.params.get('fov') ?? 40) };
+    }
+  }
+  I.simulate(3, 1 / 30);
+  await s.waitFrames(6);
+  // Census: soldiers of each side in the camera's line of sight (on screen and not behind the ground).
+  const cam = I.camera;
+  cam.updateMatrixWorld();
+  const v = new THREE.Vector3();
+  const seen = [0, 0], frame = [0, 0], within600 = [0, 0], all = [0, 0];
+  for (const e of I.world.ents) {
+    if (!e.alive || e.player || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
+    all[e.team]++;
+    if (e.pos.distanceTo(P.pos) < 600) within600[e.team]++;
+    v.copy(e.pos).setY(e.pos.y + (e.pose === 4 ? 0.35 : 0.9));
+    const p = v.clone().project(cam);
+    if (p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1) continue;
+    frame[e.team]++;
+    let ok = true;
+    const cp = cam.position;
+    for (let k = 1; k < 40 && ok; k++) {
+      const f = k / 40;
+      if (f > 0.97) break;
+      if (I.ground.heightAt(cp.x + (v.x - cp.x) * f, cp.z + (v.z - cp.z) * f) > cp.y + (v.y - cp.y) * f) ok = false;
+    }
+    if (ok) seen[e.team]++;
+  }
+  (window as unknown as { __battleShot?: unknown }).__battleShot = { seen, frame, within600, all, info: { ...b, hot: null, near: null } };
+  console.warn(`[battle-shot] in sight ${seen[0]} ours + ${seen[1]} enemy; in frame ${frame[0]} + ${frame[1]}; within 600 m ${within600[0]} + ${within600[1]}; all ${all[0]} + ${all[1]}; sides ${JSON.stringify(b.sides)}`);
+  await freezeAndWait(s, I);
+}, 10);

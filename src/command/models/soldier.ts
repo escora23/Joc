@@ -33,17 +33,16 @@ export type Pose = (typeof POSE)[keyof typeof POSE];
 /** Body parts (aPart). */
 const P_UPPER = 0, P_THIGH_L = 1, P_SHIN_L = 2, P_THIGH_R = 3, P_SHIN_R = 4, P_ARMS = 5;
 /** Colour channels (aTint). */
-const T_FIXED = 0, T_UNIFORM = 1, T_BAND = 2, T_HELMET = 3;
+const T_FIXED = 0, T_UNIFORM = 1, T_BAND = 2, T_HELMET = 3, T_GEAR = 4;
 
 const HIP_Y = 0.93;
 const KNEE_Y = 0.51;
 const HIP_X = 0.1;
 const SHOULDER_Y = 1.41;
 
-const C_UNI = 0xc8c8c8; // multiplied by the instance's uniform colour
-const C_UNI_D = 0xaaaaaa;
+const C_UNI = 0xffffff; // multiplied by the instance's uniform colour
+const C_UNI_D = 0xd2d2d2;
 const C_SKIN = [0xc8987a, 0x9a6a4c, 0xe0b090];
-const C_GEAR = 0x4d5040;
 const C_BOOT = 0x26221e;
 const C_GUN = 0x1f2022;
 const C_GUN_W = 0x4a3a2a;
@@ -89,7 +88,7 @@ class SoldierBuilder {
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
     const e = new THREE.Euler().setFromQuaternion(q);
     if (this.hi) {
-      const g = new THREE.CapsuleGeometry((r + r2) / 2, Math.max(0.01, len - (r + r2) * 0.6), 3, 8);
+      const g = new THREE.CapsuleGeometry((r + r2) / 2, Math.max(0.01, len - (r + r2) * 0.6), 3, 10);
       // Taper: scale the top end toward r2.
       const p = g.attributes.position as THREE.BufferAttribute;
       for (let i = 0; i < p.count; i++) {
@@ -130,121 +129,143 @@ class SoldierBuilder {
  * A soldier: variant 0 rifleman, 1 anti-tank gunner (launcher on the shoulder), 2 machine gunner (belt-fed gun);
  * `hi` = the close-up level of detail (capsule limbs, rounded helmet), else the crowd's (boxes, about a third of the
  * triangles). `skin` picks one of three skin tones.
+ *
+ * Owner item 32 (pass 2): a soldier in field gear, not a mannequin: loose trousers and sleeves (thick limbs that taper
+ * to the boots and gloves), broad shoulders, a plate carrier with magazine pouches and a radio or a canteen, a helmet
+ * that sits ON the head (a dome with a rim over the brow, so the face shows under it) with goggles on the cover, and a
+ * camouflage pattern on the uniform drawn by the shader (makeSoldierMaterials).
  */
 export function buildSoldierGeometry(variant: 0 | 1 | 2, hi: boolean, skin = 0): THREE.BufferGeometry {
   const s = new SoldierBuilder(hi);
   const sk = C_SKIN[skin % C_SKIN.length];
-  // --- Legs (thigh / shin pairs) ---
+  // --- Legs (thigh / shin pairs): loose trousers, cargo pocket, knee pad, boots ---
   for (const side of [-1, 1]) {
     const x = side * HIP_X;
     s.part = side < 0 ? P_THIGH_L : P_THIGH_R;
     s.tint = T_UNIFORM;
-    s.limb([x, HIP_Y + 0.02, 0], [x, KNEE_Y, -0.01], 0.095, C_UNI, 0.075);
+    s.limb([x, HIP_Y + 0.03, 0], [x * 1.05, KNEE_Y, -0.01], 0.108, C_UNI, 0.085);
     if (hi) {
+      // Cargo pocket on the outside of the thigh.
+      s.box(0.05, 0.14, 0.12, C_UNI_D, x + side * 0.095, 0.7, 0.0);
       // Knee pad.
-      s.tint = T_FIXED;
-      s.box(0.1, 0.1, 0.05, C_GEAR, x, KNEE_Y + 0.02, -0.07);
+      s.tint = T_GEAR;
+      s.box(0.12, 0.12, 0.06, C_UNI, x * 1.05, KNEE_Y + 0.01, -0.075);
     }
     s.part = side < 0 ? P_SHIN_L : P_SHIN_R;
     s.tint = T_UNIFORM;
-    s.limb([x, KNEE_Y, -0.01], [x, 0.11, 0.02], 0.072, C_UNI_D, 0.058);
+    s.limb([x * 1.05, KNEE_Y, -0.01], [x, 0.16, 0.015], 0.082, C_UNI_D, 0.068);
     s.tint = T_FIXED;
-    s.box(0.12, 0.12, 0.27, C_BOOT, x, 0.06, -0.04);
+    // Boot: upper and a sole with a toe.
+    s.box(0.125, 0.15, 0.17, C_BOOT, x, 0.1, 0.02);
+    s.box(0.13, 0.07, 0.3, C_BOOT, x, 0.035, -0.04);
   }
   // --- Upper body ---
   s.part = P_UPPER;
   s.tint = T_UNIFORM;
-  s.box(0.36, 0.2, 0.22, C_UNI_D, 0, HIP_Y + 0.02, 0.0);
+  // Hips and seat.
+  s.box(0.38, 0.22, 0.24, C_UNI_D, 0, HIP_Y + 0.03, 0.0);
   if (hi) {
-    const torso = new THREE.CapsuleGeometry(0.16, 0.3, 3, 10);
-    torso.scale(1.18, 1, 0.74);
+    const torso = new THREE.CapsuleGeometry(0.17, 0.3, 4, 12);
+    torso.scale(1.22, 1, 0.78);
     s.pieces.push({ g: new GeoBuilder().add(torso, C_UNI, 0, 1.2, 0.0).build(), part: P_UPPER, tint: T_UNIFORM });
-  } else s.box(0.38, 0.5, 0.24, C_UNI, 0, 1.19, 0);
-  // Plate carrier with pouches, webbing belt, pack, collar.
-  s.tint = T_FIXED;
-  s.box(0.4, 0.34, 0.29, C_GEAR, 0, 1.22, -0.005);
-  if (hi) {
-    for (const px of [-0.12, 0, 0.12]) s.box(0.1, 0.12, 0.06, C_GEAR, px, 1.12, -0.165);
-    s.box(0.42, 0.06, 0.27, C_GEAR, 0, 0.99, 0);
+    // Shoulders (the sleeves' tops): a broad, round silhouette.
+    for (const side of [-1, 1]) s.sphere(0.085, C_UNI, side * 0.2, SHOULDER_Y - 0.01, 0.0, 1, 0.9, 1);
+  } else {
+    s.box(0.42, 0.52, 0.26, C_UNI, 0, 1.19, 0);
+    s.box(0.5, 0.12, 0.22, C_UNI, 0, SHOULDER_Y - 0.03, 0);
   }
-  // Assault pack in the uniform's darker shade (a black box on the back read as a crate), bedroll on top.
-  s.tint = T_HELMET;
-  s.box(0.28, 0.3, 0.15, C_UNI, 0, 1.2, 0.2);
+  // Plate carrier (its shade of the uniform's colour), magazine pouches across the front, belt, radio or canteen.
+  s.tint = T_GEAR;
+  s.box(0.43, 0.36, 0.33, C_UNI, 0, 1.22, -0.005);
   if (hi) {
-    s.box(0.22, 0.12, 0.05, C_UNI_D, 0, 1.12, 0.285);
+    s.box(0.38, 0.3, 0.02, C_UNI_D, 0, 1.23, -0.175);
+    for (const px of [-0.13, -0.045, 0.045, 0.13]) s.box(0.075, 0.13, 0.065, C_UNI_D, px, 1.13, -0.2);
+    s.box(0.12, 0.08, 0.05, C_UNI_D, -0.1, 1.3, -0.19);
+    s.box(0.45, 0.065, 0.29, C_UNI_D, 0, 0.99, 0);
+    // Canteen on the hip, a pouch on the other.
+    s.cyl(0.05, 0.05, 0.14, C_UNI_D, 0.22, 0.95, 0.06);
+    s.box(0.08, 0.12, 0.1, C_UNI_D, -0.22, 0.95, 0.04);
+  }
+  // Assault pack, in a darker shade, with the bedroll on top.
+  s.box(0.3, 0.32, 0.16, C_UNI_D, 0, 1.2, 0.22);
+  if (hi) {
+    s.box(0.24, 0.13, 0.06, C_UNI, 0, 1.1, 0.31);
     s.tint = T_FIXED;
-    s.cyl(0.055, 0.055, 0.32, 0x5a5440, 0, 1.4, 0.19, 0, 0, Math.PI / 2);
+    s.cyl(0.06, 0.06, 0.34, 0x5d5848, 0, 1.4, 0.21, 0, 0, Math.PI / 2);
   }
   s.tint = T_FIXED;
-  // Neck and head.
-  s.cyl(0.055, 0.06, 0.1, sk, 0, 1.49, -0.01);
-  s.sphere(0.1, sk, 0, 1.585, -0.02, 0.92, 1.12, 1.0);
+  // Neck and head (the face under the helmet's rim: brow, eyes, nose).
+  s.cyl(0.058, 0.064, 0.1, sk, 0, 1.49, -0.005);
+  s.sphere(0.098, sk, 0, 1.6, -0.015, 0.9, 1.12, 1.0);
   if (hi) {
-    // Nose and ears: a face that reads at 20 m.
-    s.box(0.03, 0.045, 0.03, sk, 0, 1.58, -0.115);
-    s.box(0.02, 0.04, 0.03, sk, -0.095, 1.585, -0.01);
-    s.box(0.02, 0.04, 0.03, sk, 0.095, 1.585, -0.01);
+    s.box(0.034, 0.05, 0.035, sk, 0, 1.59, -0.115);
+    s.box(0.13, 0.022, 0.02, 0x2a2420, 0, 1.628, -0.098);
+    s.box(0.022, 0.045, 0.035, sk, -0.092, 1.6, -0.01);
+    s.box(0.022, 0.045, 0.035, sk, 0.092, 1.6, -0.01);
+    // Chin strap.
+    s.box(0.012, 0.1, 0.012, 0x2a2a26, -0.085, 1.58, -0.03, 0, 0, -0.2);
+    s.box(0.012, 0.1, 0.012, 0x2a2a26, 0.085, 1.58, -0.03, 0, 0, 0.2);
   }
-  // Helmet (uniform shade, darker) with the nation's band; chin strap.
+  // Helmet: a dome sitting on the head with a rim over the brow (the face shows beneath it); the nation's band.
   s.tint = T_HELMET;
-  s.sphere(0.135, C_UNI, 0, 1.645, -0.005, 1.04, 0.74, 1.12);
-  if (hi) s.cyl(0.143, 0.15, 0.03, C_UNI, 0, 1.6, -0.005, 0, 0, 0);
+  s.push2((b) => b.add(new THREE.SphereGeometry(0.142, hi ? 14 : 8, hi ? 7 : 4, 0, Math.PI * 2, 0, Math.PI * 0.56), C_UNI, 0, 1.655, -0.005, 0, 0, 0, 1.0, 0.92, 1.1));
+  s.push2((b) => b.add(new THREE.CylinderGeometry(0.15, 0.162, 0.035, hi ? 16 : 8, 1, true), C_UNI_D, 0, 1.64, -0.005, 0, 0, 0, 1, 1, 1.1));
+  if (hi) {
+    // Goggles strapped on the cover.
+    s.tint = T_FIXED;
+    s.box(0.12, 0.035, 0.03, 0x33302a, 0, 1.73, -0.13, -0.5);
+  }
   s.tint = T_BAND;
-  // The band sits proud of the helmet's widest part (no z-fighting with the shell).
-  s.push2((b) => b.add(new THREE.CylinderGeometry(0.15, 0.152, 0.032, hi ? 14 : 8, 1, true), 0xffffff, 0, 1.635, -0.005, 0, 0, 0, 1.0, 1, 1.09));
-  if (hi) {
-    s.tint = T_FIXED;
-    s.box(0.012, 0.09, 0.012, 0x222222, -0.09, 1.55, -0.03, 0, 0, -0.25);
-    s.box(0.012, 0.09, 0.012, 0x222222, 0.09, 1.55, -0.03, 0, 0, 0.25);
-  }
+  s.push2((b) => b.add(new THREE.CylinderGeometry(0.146, 0.152, 0.03, hi ? 16 : 8, 1, true), 0xffffff, 0, 1.685, -0.005, 0, 0, 0, 1.01, 1, 1.11));
   // --- Arms and weapon (aiming pose: stock at the right shoulder, eyes along the sights) ---
   s.part = P_ARMS;
-  const shR: [number, number, number] = [0.21, SHOULDER_Y, 0.0];
-  const shL: [number, number, number] = [-0.21, SHOULDER_Y, 0.0];
+  const shR: [number, number, number] = [0.215, SHOULDER_Y, 0.0];
+  const shL: [number, number, number] = [-0.215, SHOULDER_Y, 0.0];
+  const glove = 0x3a3830;
   if (variant === 1) {
     // Anti-tank gunner: launcher tube on the right shoulder, both hands on its grips.
     s.tint = T_UNIFORM;
-    s.limb(shR, [0.24, 1.25, -0.2], 0.06, C_UNI, 0.052);
-    s.limb([0.24, 1.25, -0.2], [0.16, 1.43, -0.32], 0.05, C_UNI_D, 0.044);
-    s.limb(shL, [-0.12, 1.24, -0.28], 0.06, C_UNI, 0.052);
-    s.limb([-0.12, 1.24, -0.28], [0.1, 1.43, -0.55], 0.05, C_UNI_D, 0.044);
+    s.limb(shR, [0.25, 1.25, -0.2], 0.072, C_UNI, 0.06);
+    s.limb([0.25, 1.25, -0.2], [0.16, 1.43, -0.32], 0.058, C_UNI_D, 0.05);
+    s.limb(shL, [-0.13, 1.24, -0.28], 0.072, C_UNI, 0.06);
+    s.limb([-0.13, 1.24, -0.28], [0.1, 1.43, -0.55], 0.058, C_UNI_D, 0.05);
     s.tint = T_FIXED;
-    s.cyl(0.055, 0.055, 1.15, C_LAUNCHER, 0.16, 1.52, -0.18, Math.PI / 2);
-    s.cyl(0.085, 0.07, 0.36, 0x3b4230, 0.16, 1.52, -0.86, Math.PI / 2);
-    s.box(0.04, 0.12, 0.06, C_GUN, 0.16, 1.43, -0.33);
-    s.box(0.04, 0.12, 0.06, C_GUN, 0.16, 1.43, -0.55);
-    if (hi) s.box(0.06, 0.06, 0.1, C_GUN, 0.09, 1.57, -0.3);
+    s.cyl(0.06, 0.06, 1.15, C_LAUNCHER, 0.16, 1.52, -0.18, Math.PI / 2);
+    s.cyl(0.09, 0.075, 0.36, 0x3b4230, 0.16, 1.52, -0.86, Math.PI / 2);
+    s.box(0.05, 0.12, 0.07, glove, 0.16, 1.43, -0.33);
+    s.box(0.05, 0.12, 0.07, glove, 0.16, 1.43, -0.55);
+    if (hi) s.box(0.06, 0.07, 0.11, C_GUN, 0.09, 1.57, -0.3);
   } else {
     s.tint = T_UNIFORM;
     // Right arm: elbow out and down, hand on the grip.
-    s.limb(shR, [0.25, 1.2, -0.17], 0.062, C_UNI, 0.054);
-    s.limb([0.25, 1.2, -0.17], [0.09, 1.3, -0.29], 0.05, C_UNI_D, 0.044);
+    s.limb(shR, [0.26, 1.2, -0.17], 0.074, C_UNI, 0.062);
+    s.limb([0.26, 1.2, -0.17], [0.09, 1.3, -0.29], 0.06, C_UNI_D, 0.05);
     // Left arm: reaching forward under the handguard.
-    s.limb(shL, [-0.17, 1.2, -0.26], 0.062, C_UNI, 0.054);
-    s.limb([-0.17, 1.2, -0.26], [0.04, 1.31, -0.5], 0.05, C_UNI_D, 0.044);
+    s.limb(shL, [-0.18, 1.2, -0.26], 0.074, C_UNI, 0.062);
+    s.limb([-0.18, 1.2, -0.26], [0.04, 1.31, -0.5], 0.06, C_UNI_D, 0.05);
     // The nation's arm band on the left sleeve.
     s.tint = T_BAND;
-    s.limb([-0.205, 1.33, -0.04], [-0.198, 1.28, -0.08], 0.068, 0xffffff);
+    s.limb([-0.212, 1.34, -0.03], [-0.204, 1.28, -0.075], 0.079, 0xffffff);
     s.tint = T_FIXED;
-    // Hands.
-    s.box(0.07, 0.08, 0.09, C_SKIN[skin % C_SKIN.length], 0.09, 1.29, -0.3);
-    s.box(0.07, 0.07, 0.09, C_SKIN[skin % C_SKIN.length], 0.04, 1.31, -0.5);
+    // Gloved hands.
+    s.box(0.075, 0.085, 0.095, glove, 0.09, 1.29, -0.3);
+    s.box(0.075, 0.075, 0.095, glove, 0.04, 1.31, -0.5);
     if (variant === 2) {
       // Machine gun: thicker receiver, long barrel, belt box, bipod folded.
       s.box(0.09, 0.13, 0.62, C_GUN, 0.08, 1.37, -0.33);
-      s.cyl(0.022, 0.022, 0.62, C_GUN, 0.08, 1.38, -0.92, Math.PI / 2);
-      s.box(0.14, 0.12, 0.12, C_GEAR, 0.0, 1.27, -0.38);
+      s.cyl(0.024, 0.024, 0.62, C_GUN, 0.08, 1.38, -0.92, Math.PI / 2);
+      s.box(0.14, 0.12, 0.12, C_LAUNCHER, 0.0, 1.27, -0.38);
       s.box(0.07, 0.11, 0.22, C_GUN_W, 0.08, 1.35, 0.02);
       if (hi) s.box(0.02, 0.02, 0.3, C_GUN, 0.06, 1.32, -1.0);
     } else {
       // Assault rifle: stock, receiver, magazine, handguard, barrel, sight.
-      s.box(0.055, 0.09, 0.24, C_GUN, 0.08, 1.37, 0.0);
+      s.box(0.055, 0.1, 0.24, C_GUN, 0.08, 1.37, 0.0);
       s.box(0.06, 0.1, 0.36, C_GUN, 0.08, 1.37, -0.28);
-      s.box(0.045, 0.16, 0.07, C_GUN, 0.08, 1.27, -0.32, 0.25);
-      s.cyl(0.014, 0.014, 0.32, C_GUN, 0.08, 1.38, -0.62, Math.PI / 2);
+      s.box(0.045, 0.17, 0.07, C_GUN, 0.08, 1.27, -0.32, 0.25);
+      s.cyl(0.015, 0.015, 0.32, C_GUN, 0.08, 1.38, -0.62, Math.PI / 2);
       if (hi) {
-        s.box(0.03, 0.04, 0.08, C_GUN, 0.08, 1.44, -0.22);
-        s.box(0.05, 0.06, 0.16, 0x2c2c2a, 0.08, 1.36, -0.5);
+        s.box(0.035, 0.05, 0.09, C_GUN, 0.08, 1.445, -0.22);
+        s.box(0.05, 0.065, 0.16, 0x2c2c2a, 0.08, 1.36, -0.5);
       }
     }
   }
@@ -268,8 +289,8 @@ const UNI_TMP = new THREE.Color();
 export function fieldUniform(team: 0 | 1, nationHex: number, seed: number, out: THREE.Color): THREE.Color {
   out.copy(UNI_BASE[team]);
   UNI_TMP.setHex(nationHex).getHSL(UNI_HSL, THREE.SRGBColorSpace);
-  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.4, UNI_HSL.s * 0.55), 0.39, THREE.SRGBColorSpace);
-  out.lerp(UNI_TMP, 0.42);
+  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.36, UNI_HSL.s * 0.5), 0.4, THREE.SRGBColorSpace);
+  out.lerp(UNI_TMP, 0.3);
   return out.multiplyScalar(0.9 + ((seed * 997) % 1) * 0.18);
 }
 
@@ -358,10 +379,44 @@ void soldierAnim(inout vec3 p, inout vec3 n) {
 }
 `;
 
+/**
+ * Owner item 32 (pass 2): the uniform's camouflage, in the fragment shader. Blotches of three tones over the field
+ * shade: the nation's colour (muted to the cloth's brightness, so a red nation's men wear brown-red patches, a blue
+ * nation's blue-grey), a dark tone and a light one. It fades out with distance (beyond ~100 m a figure is a few
+ * pixels: its average, the instance colour, is what reads).
+ */
+const CAMO_GLSL = /* glsl */ `
+uniform vec3 uSoldierFill;
+varying vec3 vCamoP;
+varying float vCamoK;
+varying vec3 vCamoN;
+float sHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float sNoise(vec3 x) {
+  vec3 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(sHash(i), sHash(i + vec3(1, 0, 0)), f.x), mix(sHash(i + vec3(0, 1, 0)), sHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(sHash(i + vec3(0, 0, 1)), sHash(i + vec3(1, 0, 1)), f.x), mix(sHash(i + vec3(0, 1, 1)), sHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+void soldierCamo(inout vec3 col, float dist) {
+  float k = vCamoK * (1.0 - smoothstep(45.0, 140.0, dist));
+  if (k < 0.01) return;
+  float n1 = sNoise(vCamoP) * 0.7 + sNoise(vCamoP * 2.3) * 0.3;
+  float n2 = sNoise(vCamoP * 1.4 + 17.3) * 0.7 + sNoise(vCamoP * 3.1 + 5.1) * 0.3;
+  float lum = dot(col, vec3(0.3, 0.55, 0.15));
+  vec3 nat = mix(vec3(dot(vCamoN, vec3(0.3, 0.55, 0.15))), vCamoN, 0.36);
+  nat = mix(nat * (lum / max(1e-3, dot(nat, vec3(0.3, 0.55, 0.15)))) * 0.72, col * 0.8, 0.3);
+  vec3 c = col * 1.1;
+  c = mix(c, nat, smoothstep(0.52, 0.56, n1));
+  c = mix(c, col * 0.48, smoothstep(0.6, 0.64, n2));
+  col = mix(col, c, k);
+}
+`;
+
 /** Patch a material (standard or depth) so it animates the soldier geometry. */
-function patch(m: THREE.Material, time: { value: number }, colour: boolean): void {
+function patch(m: THREE.Material, time: { value: number }, colour: boolean, fill?: { value: THREE.Color }): void {
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = time;
+    if (fill) sh.uniforms.uSoldierFill = fill;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>\n${ANIM_GLSL}`)
       .replace('#include <begin_vertex>', 'vec3 transformed = vec3( position );\n{ vec3 nTmp = vec3(0.0, 1.0, 0.0); soldierAnim(transformed, nTmp); }');
@@ -381,11 +436,25 @@ function patch(m: THREE.Material, time: { value: number }, colour: boolean): voi
 #ifdef USE_INSTANCING_COLOR
   {
     vec3 uni = instanceColor.rgb;
-    vec3 tc = aTint < 0.5 ? vec3(1.0) : aTint < 1.5 ? uni : aTint < 2.5 ? aBand.rgb : uni * 0.72;
+    // Fixed colours, the uniform, the nation's band, the helmet cover (a darker shade), the gear (the uniform's
+    // colour toward a neutral webbing olive).
+    vec3 gear = mix(uni * 0.72, vec3(0.085, 0.088, 0.066), 0.35);
+    vec3 tc = aTint < 0.5 ? vec3(1.0) : aTint < 1.5 ? uni : aTint < 2.5 ? aBand.rgb : aTint < 3.5 ? uni * 0.78 : gear;
     vColor.rgb *= tc;
   }
 #endif
+  // The camouflage pattern follows the body (the model's own frame, before the pose) and differs per man.
+  vCamoP = position * 3.1 + vec3(aBand.w * 37.0, aBand.w * 11.0, aBand.w * 23.0);
+  vCamoK = aTint > 0.5 && aTint < 1.5 ? 1.0 : aTint > 2.5 && aTint < 3.5 ? 0.75 : aTint > 3.5 ? 0.55 : 0.0;
+  vCamoN = aBand.rgb;
 `);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCamoP;\nvarying float vCamoK;\nvarying vec3 vCamoN;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>\n${CAMO_GLSL}`)
+        .replace('#include <color_fragment>', '#include <color_fragment>\nsoldierCamo(diffuseColor.rgb, length(vViewPosition));')
+        // A soft sky fill on the side away from the sun (cloth and skin scatter the sky's light): a man seen against
+        // the light is a figure in the uniform's colours, not a black cut-out.
+        .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.indirectDiffuse += diffuseColor.rgb * uSoldierFill;');
     }
   };
   m.customProgramCacheKey = () => `soldier-anim-${colour ? 'c' : 'd'}`;
@@ -394,17 +463,20 @@ function patch(m: THREE.Material, time: { value: number }, colour: boolean): voi
 export interface SoldierMaterials {
   /** Shared clock of the animation (local world seconds; frozen with the scene). */
   time: { value: number };
+  /** Sky fill on the shaded side (linear radiance × albedo; command mode sets it from the sky light, ~0.3 by day). */
+  fill: { value: THREE.Color };
   standard: THREE.MeshStandardMaterial;
   depth: THREE.MeshDepthMaterial;
 }
 
 export function makeSoldierMaterials(): SoldierMaterials {
   const time = { value: 0 };
+  const fill = { value: new THREE.Color(0.25, 0.27, 0.3) };
   const standard = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88, metalness: 0.02, vertexColors: true });
-  patch(standard, time, true);
+  patch(standard, time, true, fill);
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   patch(depth, time, false);
-  return { time, standard, depth };
+  return { time, fill, standard, depth };
 }
 
 /** Add the per-instance animation attributes to a soldier geometry used by an InstancedMesh of `cap` instances. */

@@ -4,13 +4,13 @@ import { registerDictionary } from '../shared/i18n';
 
 const es: Record<string, string> = {
   'command.battle.title': 'Batalla en la línea contra {nation}',
-  'command.battle.sub': 'Intensidad {level} · en este tramo {ours} nuestros y {theirs} enemigos (1 figura = 25 soldados)',
-  'command.battle.hotSub': 'Lo más duro, a {d} · intensidad {level} · {ours} nuestros y {theirs} enemigos en este tramo',
+  'command.battle.sub': 'Intensidad {level} · en este tramo, unos {ours} soldados nuestros y {theirs} enemigos',
+  'command.battle.hotSub': 'Lo más duro, a {d} · intensidad {level} · unos {ours} nuestros y {theirs} enemigos en este tramo',
   'command.battle.level.0': 'baja',
   'command.battle.level.1': 'media',
   'command.battle.level.2': 'alta',
   'command.battle.level.3': 'muy alta',
-  'command.battle.notice': 'Frente contra {nation}: {theirs} soldados enemigos y {ours} nuestros en {km} km de línea (cada figura son 25). {role}',
+  'command.battle.notice': 'Frente contra {nation}: unos {theirs} soldados enemigos y {ours} nuestros en estos {km} km de línea. {role}',
   'command.battle.role.attack': 'Nuestra ofensiva avanza en oleadas: apóyala con el cañón.',
   'command.battle.role.defend': 'Defendemos las trincheras: frena sus oleadas.',
   'command.battle.role.hold': 'Frente estable: dos líneas de trincheras intercambian fuego.',
@@ -36,13 +36,13 @@ const es: Record<string, string> = {
 
 const en: Record<string, string> = {
   'command.battle.title': 'Battle on the line against {nation}',
-  'command.battle.sub': 'Intensity {level} · in this stretch {ours} ours and {theirs} enemy (1 figure = 25 troops)',
-  'command.battle.hotSub': 'Heaviest fighting {d} away · intensity {level} · {ours} ours and {theirs} enemy in this stretch',
+  'command.battle.sub': 'Intensity {level} · in this stretch, about {ours} of our soldiers and {theirs} enemy',
+  'command.battle.hotSub': 'Heaviest fighting {d} away · intensity {level} · about {ours} ours and {theirs} enemy in this stretch',
   'command.battle.level.0': 'low',
   'command.battle.level.1': 'medium',
   'command.battle.level.2': 'high',
   'command.battle.level.3': 'very high',
-  'command.battle.notice': 'Front against {nation}: {theirs} enemy soldiers and {ours} of ours along {km} km of line (each figure is 25). {role}',
+  'command.battle.notice': 'Front against {nation}: about {theirs} enemy soldiers and {ours} of ours along these {km} km of line. {role}',
   'command.battle.role.attack': 'Our offensive advances in waves: support it with the cannon.',
   'command.battle.role.defend': 'We hold the trenches: stop their waves.',
   'command.battle.role.hold': 'Stable front: two trench lines trade fire.',

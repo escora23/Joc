@@ -3457,10 +3457,24 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
 * **Where.** Within 6 km of a contact line at war between our side (own or allied) and a hostile nation, a 2.4 km
   stretch of the real line (`LocalFront.lineKm`, resampled every 10 m) is centred on the player and re-centred after
   450 m along it. Beyond it, the front is drawn by the map and the far views, not here.
-* **How many.** 1 figure = 25 troops (§9.6). Per side: front pool × min(1, 16 km ÷ front km in the window) + the
-  offensive's pool; at least 60 when the side has troops there; at most 900 hostile / 650 friendly (instanced crowd).
-  Figures thicken toward the player (|u|^2 along the stretch: half within ±300 m). Line vehicles: one per 90
-  (hostile) / 110 (friendly) figures, at most 5 / 4; each stands for its crew and squad (10 / 8 figures).
+* **How many (pass 2: the density of a battle, the sim's numbers).** The figures are the picture of the troops the sim
+  has in the stretch: per side local = front pool × min(1, 16 km ÷ front km in the window) + the offensive's pool (in
+  soldiers of 25 troops, §9.6). Figures = max(the role's floor, local) up to the cap: floors 480 attacking, 340
+  defending, 260 holding a quiet line (half the floor when the side has fewer than 20 troops there); caps 1,000
+  hostile / 900 friendly (instanced: the near ones wake with the AI, the rest are the animated crowd). Each figure
+  stands for local troops ÷ figures (≤ 25) — what killing it takes from the sim (fractions carry over to the next
+  kill). 70 % of a side's figures stand within 450 m along the line of the player, the rest out to the stretch's ends;
+  the stretch re-centres after 300 m. The chip and the arrival line give the sim's troops («unos 16.000 nuestros y 460
+  enemigos en este tramo», two significant figures), not figure counts. Line vehicles follow the sim's soldiers (not
+  the floor): one per 90 (hostile) / 110 (friendly), at most 5 / 4; each stands for its crew and squad (10 / 8 × 25).
+* **The ground of a battle.** Shell holes (420, dark bowls with a rim of thrown earth, 70 % near the player) over no
+  man's land and the trenches; barbed wire (pickets and coils) 25 m before every defended forward trench; wrecks and
+  craters. The hostile defenders' forward trench is sited per 10 m of line at 55-160 m behind it where our side sees it
+  from 240 and 420 m back (the forward slope, near the usual 115 m; smoothed over ~100 m): the enemy line is in sight,
+  not behind a crest. Beyond the 2.4 km stretch the front goes on to ±4.5 km as shell bursts, dust and smoke along the
+  real line (visual only, 2-6 a second), so from a rise the fighting reads as a long line.
+* **Weapons of the line.** An AT team with one attacking squad in three and one per ~30 defenders (a platoon's), a
+  machine gunner per squad and per ~14 defenders.
 * **Who does what.** A side with an offensive attacks in waves (squads of 8-12; 50 % of a 8-12 s cycle rushing, the
   rest down firing, half prone and half kneeling) from 180-520 m behind the line to 75 m short of the enemy trench;
   the other side holds a forward trench 115 m behind the line (55 %), a second at 330 m (25 %) and reserves at
@@ -3490,10 +3504,16 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   point; while the stand-off there is more than 350 m away the chip carries «Ir al combate».
 
 ### 21.3 Soldiers
-Real proportions, helmet, plate carrier, pack, rifle / AT launcher / machine gun; poses animated in the vertex shader
-(idle, walk, run, rush, kneel, aim, prone, the fall when hit; recoil on every shot). Uniform = the side's field shade
-(olive ours, khaki theirs) blended 42 % with the nation's hue at saturation ≤ 0.4 and lightness 0.39 (a red nation
-wears brown-red, a blue one blue-grey); the nation's full colour on the helmet band and the arm band.
+A soldier in field gear (pass 2): loose trousers and sleeves on thick tapering limbs, broad round shoulders, gloves
+and boots, a plate carrier with magazine pouches, canteen and pack, a helmet that sits on the head (a dome with a rim
+over the brow, goggles on the cover) so the face shows beneath it; rifle / AT launcher / machine gun; poses animated
+in the vertex shader (idle, walk, run, rush, kneel, aim, prone, the fall when hit; recoil on every shot). Uniform =
+the side's field shade (olive ours, khaki theirs) blended 30 % with the nation's hue at saturation ≤ 0.36 and
+lightness 0.4, with a camouflage drawn by the shader within ~140 m: blotches of the nation's colour (muted to the
+cloth's brightness), a dark and a light tone, different per man, on the uniform, helmet cover and gear. The nation's
+full colour on the helmet band and the arm band. A sky fill (0.3 × the sky light) lights the side away from the sun
+(a man against the light is not a black cut-out). Beyond ~500 m the crowd's figures darken by up to 35 % (contrast
+against sunlit ground) as they take up to 45 % of the nation's colour.
 
 ### 21.4 Shooting, damage, ramming
 * HE: 40 damage, 15 m splash, ×1.8 on men in the open, ×0.7 in cover (lethal to ~11 m). Coax: 9 per round at ~700

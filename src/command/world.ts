@@ -154,6 +154,8 @@ export interface EntSource {
   owner: number;
   /** Fraction of the unit one local entity is worth (tank 0.25, IFV 0.10, jet 1/3, launcher 0.35). */
   share: number;
+  /** Owner item 32: troops one figure of the front stands for (battle figures; default 25 = TROOPS_PER_SOLDIER). */
+  troops?: number;
 }
 
 export type ProjKind = 'shell' | 'bullet' | 'missile' | 'bomb' | 'flare';
@@ -225,8 +227,15 @@ export const SLEEP_M = 1400;
  * Far soldiers grow with distance so a figure stays about CROWD_MIN_PX tall on screen (owner item 32: readable at tank
  * distances, never giants: at most CROWD_MAX_SCALE, and nothing grows in the gunner's sight before ~2 km).
  */
-const CROWD_MAX_SCALE = 3.5;
-const CROWD_MIN_PX = 5;
+const CROWD_MAX_SCALE = 4;
+const CROWD_MIN_PX = 6.5;
+/**
+ * Owner item 32 (pass 2): a figure darkens with distance from ~120 m (to 60 % at ~700 m and beyond). Field colours are
+ * made to blend into the ground; a few pixels of man read against sunlit grass and rock by contrast, as a silhouette.
+ */
+function distTone(d: number): number {
+  return 1 - Math.max(0, Math.min(1, (d - 120) / 600)) * 0.4;
+}
 /** An active soldier at least this tall on screen gets the full figure (capsule limbs, face, gear); smaller, the light one. */
 const SOLDIER_HI_PX = 13;
 /** Soldier variants (rifleman, AT gunner, machine gunner). */
@@ -738,6 +747,7 @@ export class World {
           this.uniformOf(e, this.tmpColor);
           const far = Math.max(0, Math.min(1, (d - 450) / 1200)) * 0.45;
           if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
+          this.tmpColor.multiplyScalar(distTone(d));
           if (!e.alive) this.tmpColor.multiplyScalar(0.7);
           im.setColorAt(i, this.tmpColor);
           if (im.instanceColor) im.instanceColor.needsUpdate = true;
@@ -1688,7 +1698,7 @@ export class World {
         const m = hi ? im : lo;
         const j = hi ? nHi++ : nLo++;
         m.setMatrixAt(j, this.m4);
-        m.setColorAt(j, uni);
+        m.setColorAt(j, this.tmpColor.copy(uni).multiplyScalar(distTone(Math.hypot(e.pos.x - this.viewPos.x, e.pos.y - this.viewPos.y, e.pos.z - this.viewPos.z))));
         (hi ? anim : animLo).setXYZW(j, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);
         this.bandOf(e, hi ? band : bandLo, j);
       }

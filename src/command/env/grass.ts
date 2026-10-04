@@ -75,6 +75,11 @@ function clumpGeometry(): THREE.BufferGeometry {
 export class Grass {
   readonly mesh: THREE.InstancedMesh;
   private readonly time = { value: 0 };
+  /**
+   * Owner item 32: the camera (mesh-local x, y, z) and a radius within which the clumps shrink away: the gunner's sight
+   * (13° and low) would otherwise look into a wall of grass a few metres ahead. Radius 0 = off.
+   */
+  private readonly camFade = { value: new THREE.Vector4(0, 0, 0, 0) };
   private cx = 1e9;
   private cz = 1e9;
   /** Absolute anchor of the scene (frame offset): the jittered grid is world-anchored. */
@@ -99,10 +104,12 @@ export class Grass {
       map: bladeTexture(), alphaTest: 0.45, side: THREE.DoubleSide, vertexColors: true, roughness: 0.95, metalness: 0,
     });
     const time = this.time;
+    const camFade = this.camFade;
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = time;
+      sh.uniforms.uCamFade = camFade;
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float uTime;')
+        .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform vec4 uCamFade;')
         .replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
@@ -111,6 +118,7 @@ export class Grass {
           float sway = sin(uTime * 1.7 + ip.x * 0.21 + ip.z * 0.17) * 0.5 + sin(uTime * 3.1 + ip.x * 0.7) * 0.2;
           transformed.x += sway * 0.12 * uv.y;
           transformed.z += sway * 0.07 * uv.y;
+          if (uCamFade.w > 0.0) transformed *= smoothstep(uCamFade.w * 0.45, uCamFade.w, distance(ip.xz, uCamFade.xz));
           #endif`,
         );
     };
@@ -122,6 +130,11 @@ export class Grass {
     this.mesh.frustumCulled = false;
     this.mesh.name = 'grass';
     this.mesh.setColorAt(0, new THREE.Color(1, 1, 1));
+  }
+
+  /** Shrink the clumps within `radius` m of the camera (the gunner's sight), 0 = off. */
+  fadeNear(cam: THREE.Vector3, radius: number): void {
+    this.camFade.value.set(cam.x - this.mesh.position.x, cam.y, cam.z - this.mesh.position.z, radius);
   }
 
   warmup(on: boolean): void {

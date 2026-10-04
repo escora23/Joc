@@ -1687,13 +1687,19 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
 * `src/command/battle.ts` — `BattleLine` (owned by `Forces.battle`, its group under `world.group`): near a contact line
   at war (`lf.fronts[0]` within 6 km, one side own/allied and the other hostile) it stands both sides' front and
   offensive pools along a 2.4 km stretch of the real line centred on the player (`HALF_WINDOW_M`, re-centred after
-  `RECENTRE_M` along the line; the line is resampled every refresh from `LocalFront.lineKm`). Figures per side =
-  front pool × min(1, `CONCENTRATION_KM` / window km) + offensive pool, at least `SIDE_MIN` (60) when the side has
-  troops, capped `SIDE_CAP_HOSTILE` 900 / `SIDE_CAP_FRIENDLY` 650 (1 figure = 25 troops). Roles: a side with an
+  `RECENTRE_M` 300 m along the line; the line is resampled every refresh from `LocalFront.lineKm`, out to `FAR_M`
+  4.5 km each way for the far shell bursts along the front). Figures per side (pass 2) = max(`SIDE_FLOOR` by role:
+  attack 480 / defend 340 / hold 260, local soldiers = front pool × min(1, `CONCENTRATION_KM` / window km) + offensive
+  pool), capped `SIDE_CAP_HOSTILE` 1000 / `SIDE_CAP_FRIENDLY` 900; `troopsPerFig` = local troops ÷ figures goes into
+  each figure's `src.troops` (what index.ts onKill credits; `flushCasualties` carries fractions); `spread` puts
+  `NEAR_SHARE` 70 % within `NEAR_M` 450 m of the player's place along the line (`playerS`). Roles: a side with an
   offensive pool attacks (squads of 8-12 in waves from `WAVE_D0..WAVE_D1` behind the line to `HALT_SHORT` before the
   enemy trench); the other defends (forward trench `TRENCH_D`, second trench, reserves; drafts run up); a quiet front is
   two trench lines. Line vehicles (tanks / IFVs, `src.kind 'pool'`, share = soldier-equivalents), sandbag parapets
-  (two instanced meshes, near detail within 450 m), wrecks and craters, artillery (`shell()`: real projectiles of the
+  (two instanced meshes `trench-near` / `trench-far`, near detail within 450 m; the hostile defenders' forward trench
+  depth per 10 m from `siteTrenches` (where our side sees it), read through `trenchDepth` / `foeTrench`), barbed wire
+  (`battle-wire`, 25 m before a defended forward trench), shell holes (`battle-holes`, `buildHoles`, re-laid after
+  600 m), wrecks and craters, artillery (`shell()`: real projectiles of the
   firing team, splash 16 m), battery flashes, smoke screens, attrition (falls of dormant figures at the front's
   intensity), the hot point (`info().hot`, 8 bins of attackers near the enemy, shells and falls of the last 15 s).
   `info()` for the HUD chip, the arrival notice and `__cmdStats.battle` (`hotLive`: the hot point comes from the
@@ -1702,7 +1708,10 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   = where «Ir al combate» drives inside a battle (standable ground with the enemy's forward trench and the figures ahead
   in sight, ±300 m along, 150-380 m deep).
 * `src/command/models/soldier.ts` — soldier geometry per variant (rifleman, AT gunner, machine gunner) and level of
-  detail, with `aPart` (thighs, shins, arms+weapon, upper body) and `aTint` (fixed, uniform, nation band, helmet);
+  detail, with `aPart` (thighs, shins, arms+weapon, upper body) and `aTint` (fixed, uniform, nation band, helmet,
+  gear); `CAMO_GLSL`: the uniform's camouflage in the fragment shader (nation-coloured, dark and light blotches from
+  the model-frame position and the man's seed, faded beyond ~140 m) and the sky fill `uSoldierFill`
+  (`SoldierMaterials.fill`, set by index.ts `applyAtmosphere`);
   `makeSoldierMaterials()` patches MeshStandardMaterial / MeshDepthMaterial: poses (`POSE`: idle, walk, run, kneel,
   prone, dead, aim, rush) animated in the vertex shader from `aAnim` (pose, gait phase, last shot → recoil, pose time →
   the fall) and `aBand` (nation colour, seed). `fieldUniform(team, nationHex, seed)`: the side's field shade (olive
@@ -1731,7 +1740,9 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   offensive on the entry front), `STOP_KM.tank` 0.35 and `CONTACT_LINE_KM` 0.5 (the march ends in the battle),
   `driveToHot` / `hotStandOff` (G inside a battle, and `seekHot` on arriving from an entry goal or a march: the tank
   drives to 220 m behind the line at the hot point; the chip shows «Ir al combate» while that is > 350 m away),
-  `camOverride` for tools, `__cmdStats.battle` (with `driving`, `lastDrive`, `standM`) / `ram` / `mgHits`;
+  `camOverride` for tools, `__cmdStats.battle` (with `driving`, `lastDrive`, `standM`) / `ram` / `mgHits`; the battle
+  chip counts the sim's troops in the stretch (`localTroops`, `roundTroops`); `grass.fadeNear` clears the grass a few
+  metres ahead of the gunner's sight;
   `scenePace` / `measurePace`: the sim's tactical clock runs at the scene's measured pace when frames are slower than
   10 a second (`__cmdStats.pace`).
 * `src/command/goto.ts` — `CombatTarget.heat` / `attackId`: `combatTargets` scores km ÷ heat (an offensive's contact
@@ -1740,6 +1751,9 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   the human; `is-battle` pulse when an offensive runs.
 * Strings: `src/command/strings32.ts` (`COMMAND_STRINGS_32`, also read by `tools/i18n-check.mjs`); help text
   `help.command.body` (w3.ts).
+* Shot `command-battle` (src/command/shots.ts: a staged offensive across the Pyrenees, the tank at the battle's hot
+  stand-off; `&side=defend`, `&view=chase|sight|overview|close`, census in `window.__battleShot`) and
+  `tools/battle-probe.mjs` (stages it on a small viewport, prints the census, shoots at 1600×900).
 * Verifier: `node tools/f32-verify.mjs [--only scale,plain,kill,ram,close,mg]` (counts soldiers in the camera's line
   of sight, not only in the frame; no-HMR server:
   `npx vite --config tools/vite.nowatch.config.mjs`), shots in `shots/owner-32-1/verify/`.

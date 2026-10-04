@@ -264,7 +264,7 @@ export class CommandHud {
     const e = el('div', `e ${who === 'you' ? 'you' : ''} ${who === 'enemy' ? 'bad' : ''}`);
     e.style.setProperty('--c', colorHex);
     const whoTxt = who === 'you' ? t('command.feed.you') : who === 'ally' ? t('command.feed.allies') : t('command.feed.enemy');
-    e.innerHTML = `<span class="who">${esc(whoTxt)}</span><span class="arr">▸</span><span>${t(`command.type.${victim}`)}</span>${who === 'you' ? `<span class="pts">+${formatNumber(troops)}</span>` : ''}`;
+    e.innerHTML = `<span class="who">${esc(whoTxt)}</span><span class="arr">▸</span><span>${t(`command.type.${victim}`)}</span>${who === 'you' && troops >= 0.5 ? `<span class="pts">+${formatNumber(troops)}</span>` : ''}`;
     this.feed.prepend(e);
     this.feedList.unshift({ el: e, t: this.time });
     while (this.feedList.length > 7) this.feedList.pop()!.el.remove();

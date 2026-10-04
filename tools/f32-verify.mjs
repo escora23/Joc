@@ -66,7 +66,7 @@ const census = (page) => page.evaluate(() => {
   const cam = I.camera, W = innerWidth, H = innerHeight;
   const v = cam.position.clone();
   const P = I.world.player;
-  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], around: [0, 0], near1km: [0, 0], dead: 0 };
+  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], around: [0, 0], near1km: [0, 0], near600: [0, 0], dead: 0 };
   const cp = cam.position;
   // In the line of sight of the camera (the ground between does not hide it): what a player really sees.
   const sees = (x, y, z) => {
@@ -88,6 +88,7 @@ const census = (page) => page.evaluate(() => {
     const t = e.team;
     if (man) c.soldiers[t]++; else c.vehicles[t]++;
     if (P && e.pos.distanceTo(P.pos) < 1000 && man) c.near1km[t]++;
+    if (P && e.pos.distanceTo(P.pos) < 600 && man) c.near600[t]++;
     v.copy(e.pos); v.y += man ? 0.9 : 1.5;
     if (v.distanceTo(cam.position) > 4000) continue;
     // Around the player: in the camera's line of sight within 2.5 km, whichever way it looks (turning the turret).
@@ -416,7 +417,7 @@ async function scale() {
   const act = c.stats;
   row('S4', 'the fight is alive (artillery, falls, fire)', act ? `heat ${act.heat}, ${act.shells10} shells and ${act.fallen10} fallen in the last 10 s, ${c.dead} bodies (was ${t0.dead})` : 'no battle', !!act && act.shells10 >= 2 && act.fallen10 >= 1);
   row('S5', 'HUD says where the fighting is (direction, distance, intensity)', `«${c.combat}»; hot point ${act?.hotM} m, line ${act?.lineM} m`, /\d/.test(c.combat) && /intens/i.test(c.combat));
-  const tr = await page.evaluate(() => window.__cmd.world.group.parent?.getObjectByName('cmd-battle')?.children.filter((m) => m.isInstancedMesh).reduce((n, m) => n + m.count, 0) ?? 0);
+  const tr = await page.evaluate(() => window.__cmd.world.group.parent?.getObjectByName('cmd-battle')?.children.filter((m) => m.isInstancedMesh && m.name.startsWith('trench')).reduce((n, m) => n + m.count, 0) ?? 0);
   row('S6', 'trenches along the defended line', `${tr} parapet segments`, tr > 100);
   await snap(page, 'scale-3-after-20s');
   // An overview from 150 m up behind the tank: the line and its two sides.

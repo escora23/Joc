@@ -9,10 +9,14 @@
 //   gunners; attackers advance in waves (squads rush, drop prone, fire, rush again) from 180-520 m behind the line to a
 //   halt line short of the enemy trench, under the defenders' fire and both sides' artillery. A quiet front (no
 //   offensive) is two trench lines trading fire.
-//   Numbers: 1 figure = 25 troops (TROOPS_PER_SOLDIER). Every figure the player kills goes back to the sim through
-//   index.ts onKill (25 troops each; a line vehicle its crew and squad). Local attrition between the two sides is only
-//   the picture of the sim's own casualties: the sim stays the source of truth, and the counts here follow its pools
-//   (the fallen are replaced by new waves and reserves from behind while the sim still has the troops).
+//   Numbers (owner item 32, pass 2): the figures are a picture of the troops the sim has here, drawn at a density that
+//   reads as a battle near the player: per side the sim's soldiers (1 = 25 troops) when there are more, never fewer than
+//   a floor by role (an assault 480, a defended line 340, a quiet line 260) while the side has troops on this line, and
+//   at most a cap; 70 % of them within 450 m along the line of the player. Each figure then stands for the side's local
+//   troops ÷ its figures (`troopsPerFig`), and that is what killing it takes from the sim (index.ts onKill; a line
+//   vehicle its crew and squad). Local attrition between the two sides is only the picture of the sim's own casualties:
+//   the sim stays the source of truth, and the counts here follow its pools (the fallen are replaced by new waves and
+//   reserves from behind while the sim still has the troops).
 //   Far figures are the world's crowd (world.ts puppets, instanced and animated in the shader); within 1 km of the
 //   player they wake up with the full AI and real bullets.
 
@@ -27,15 +31,23 @@ import { WAKE_M, type Ent, type EntKind, type World } from './world';
 
 /** Half the stretch of line shown around the player (m). */
 export const HALF_WINDOW_M = 1200;
+/** The line is followed this far each way for the far fighting (shell bursts and dust along the front, no figures). */
+const FAR_M = 4500;
 /** The stretch is re-centred when the player is this far along the line from its centre (m). */
-const RECENTRE_M = 450;
-/** Visible figures per side at most (a believable cap; the density below it is the sim's). */
-export const SIDE_CAP_HOSTILE = 900;
-export const SIDE_CAP_FRIENDLY = 650;
+const RECENTRE_M = 300;
+/** Figures per side at most (instanced: the near ones wake with the AI, the rest are the animated crowd). */
+export const SIDE_CAP_HOSTILE = 1000;
+export const SIDE_CAP_FRIENDLY = 900;
 /** The front garrison within this length of line around the player is drawn into the stretch (km). */
 const CONCENTRATION_KM = 16;
-/** A side with troops on this front shows at least this many (a platoon's line, never "two little guys"). */
-const SIDE_MIN = 60;
+/**
+ * The fewest figures a side with troops on this line shows, by role (owner item 32, pass 2: hundreds of men in sight
+ * around the player, never "two little guys"; each figure then stands for fewer troops, see `troopsPerFig`).
+ */
+const SIDE_FLOOR = { attack: 480, defend: 340, hold: 260 } as const;
+/** Share of a side's figures placed within NEAR_M along the line of the player (the rest out to the stretch's ends). */
+const NEAR_SHARE = 0.72;
+const NEAR_M = 380;
 /** Defender's forward trench, second trench and reserves (m behind the contact line on its side). */
 const TRENCH_D = 115;
 const TRENCH2_D = 330;
@@ -55,6 +67,11 @@ const BODIES_MAX = 320;
 /** Trench parapet segment length (m). */
 const SEG_M = 3.2;
 const TRENCH_CAP = 2400;
+/** Barbed wire: one section per WIRE_SEG m in front of a defended forward trench. */
+const WIRE_SEG = 4;
+const WIRE_CAP = 700;
+/** Shell holes in the battle's stretch. */
+const HOLES_CAP = 420;
 const STEP_M = 10;
 
 export interface BattleSideInfo {
@@ -64,9 +81,12 @@ export interface BattleSideInfo {
   /** Figures standing now (alive) and the target from the sim's density. */
   shown: number;
   target: number;
-  /** Troops the figures stand for and the sim's troops per km of this front. */
+  /** Troops the standing figures stand for, the sim's troops in this stretch and per km of this front. */
   troops: number;
+  localTroops: number;
   perKm: number;
+  /** Troops one figure stands for (the sim's troops here ÷ the figures drawn). */
+  troopsPerFig: number;
   vehicles: number;
 }
 
@@ -112,6 +132,8 @@ interface SideState {
   role: 'attack' | 'defend' | 'hold';
   target: number;
   troops: number;
+  localTroops: number;
+  troopsPerFig: number;
   perKm: number;
   members: Member[];
   vehicles: Ent[];
@@ -123,6 +145,7 @@ interface SideState {
 
 const V1 = new THREE.Vector3();
 const V2 = new THREE.Vector3();
+const V3 = new THREE.Vector3();
 const M4 = new THREE.Matrix4();
 const Q = new THREE.Quaternion();
 const E = new THREE.Euler();
@@ -142,6 +165,11 @@ export class BattleLine {
   private lineShift = 0;
   private trenchNear: THREE.InstancedMesh;
   private trenchFar: THREE.InstancedMesh;
+  /** Owner item 32 (pass 2): barbed wire in front of the defenders' forward trench, and the shell holes of a fight
+   *  that has been going on (no man's land and the trenches, densest around the player). */
+  private wire: THREE.InstancedMesh;
+  private holes: THREE.InstancedMesh;
+  private readonly holesAt = new THREE.Vector3(1e9, 0, 0);
   private trenchDirty = true;
   private trenchSides: { sign: 1 | -1; depth: number }[] = [];
   private shellTimes: number[] = [];
@@ -154,16 +182,36 @@ export class BattleLine {
   private near: THREE.Vector3 | null = null;
   private smokeT = 20;
   private flashT = 0;
+  private farT = 0;
   private attrAcc = 0;
   private wrecks: THREE.Object3D[] = [];
   private wreckFires: { x: number; y: number; z: number; heat: number }[] = [];
   private decorated = false;
+  /** The player's place along the stretch (m from its centre): new figures gather around it. And its depth from the
+   *  line (m toward side b, signed). */
+  private playerS = 0;
+  private playerD = 0;
+  /** Absolute arc of the stretch centre along the front's line (m). */
+  private scAbs = 0;
+  /**
+   * The hostile defenders' forward trench depth per STEP_M of line (absolute arc from fwdS0), chosen where our side can
+   * see it (a forward slope, not behind a crest), and the side it is on. Null: the plain TRENCH_D.
+   */
+  private fwd: Float32Array | null = null;
+  private fwdS0 = 0;
+  private fwdSign: 1 | -1 = 1;
 
   constructor(private readonly host: BattleHost) {
     this.group.name = 'cmd-battle';
     this.trenchNear = new THREE.InstancedMesh(parapetGeometry(true), host.world.mats.prop, TRENCH_CAP);
     this.trenchFar = new THREE.InstancedMesh(parapetGeometry(false), host.world.mats.prop, TRENCH_CAP);
-    for (const m of [this.trenchNear, this.trenchFar]) {
+    this.wire = new THREE.InstancedMesh(wireGeometry(), host.world.mats.prop, WIRE_CAP);
+    this.holes = new THREE.InstancedMesh(holeGeometry(), host.world.mats.prop, HOLES_CAP);
+    this.trenchNear.name = 'trench-near';
+    this.trenchFar.name = 'trench-far';
+    this.wire.name = 'battle-wire';
+    this.holes.name = 'battle-holes';
+    for (const m of [this.trenchNear, this.trenchFar, this.wire, this.holes]) {
       m.count = 0;
       m.frustumCulled = false;
       m.receiveShadow = true;
@@ -180,7 +228,8 @@ export class BattleLine {
     this.heat = 0;
     this.centre = null;
     this.nPts = 0;
-    this.trenchNear.count = this.trenchFar.count = 0;
+    this.trenchNear.count = this.trenchFar.count = this.wire.count = this.holes.count = 0;
+    this.holesAt.set(1e9, 0, 0);
     this.trenchSides = [];
     this.shellTimes.length = 0;
     this.fallTimes.length = 0;
@@ -203,7 +252,8 @@ export class BattleLine {
     for (const s of this.sides.values()) {
       const shown = s.members.reduce((n, m) => n + (m.e.alive ? 1 : 0), 0);
       sides.push({
-        owner: s.owner, team: s.team, role: s.role, shown, target: s.target, troops: shown * TROOPS_PER_SOLDIER, perKm: s.perKm,
+        owner: s.owner, team: s.team, role: s.role, shown, target: s.target, troops: Math.round(shown * s.troopsPerFig), localTroops: Math.round(s.localTroops),
+        perKm: s.perKm, troopsPerFig: s.troopsPerFig,
         vehicles: s.vehicles.filter((v) => v.alive).length,
       });
     }
@@ -243,11 +293,15 @@ export class BattleLine {
     const c = this.centre!;
     const s0 = this.alongOf(at.x - c.x, at.z - c.z);
     const figs: Ent[] = [];
-    for (const st of this.sides.values()) for (let i = 0; i < st.members.length; i += 3) if (st.members[i].e.alive) figs.push(st.members[i].e);
+    // A sample of the figures (about 250: the score is a share, and each one costs a line-of-sight walk).
+    const total = [...this.sides.values()].reduce((n, q) => n + q.members.length, 0);
+    const stride = Math.max(3, Math.ceil(total / 250));
+    for (const st of this.sides.values()) for (let i = 0; i < st.members.length; i += stride) if (st.members[i].e.alive) figs.push(st.members[i].e);
     // The enemy's forward trench around the hot stretch (what the crew must see).
     const marks: THREE.Vector3[] = [];
     for (const ds of [-200, -100, 0, 100, 200]) {
-      const m = this.at(Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds)), -own.sign * TRENCH_D, new THREE.Vector3());
+      const sm = Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds));
+      const m = this.at(sm, -own.sign * this.trenchDepth((-own.sign) as 1 | -1, TRENCH_D, sm), new THREE.Vector3());
       m.y = g.heightAt(m.x, m.z) + 1;
       marks.push(m);
     }
@@ -263,8 +317,9 @@ export class BattleLine {
     const n = new THREE.Vector3();
     let best = -Infinity;
     const cand = new THREE.Vector3();
-    for (const ds of [0, -100, 100, -200, 200, -300, 300]) {
-      for (const dd of [depth, depth - 70, depth + 80, depth + 160]) {
+    // (Pass 2: a wider search — in hills the place that overlooks the fight can be a few hundred metres off.)
+    for (const ds of [0, -100, 100, -200, 200, -300, 300, -450, 450]) {
+      for (const dd of [depth, depth - 70, depth + 80, depth + 160, depth + 260]) {
         const s = Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s0 + ds));
         this.at(s, own.sign * dd, cand);
         const h = g.heightAt(cand.x, cand.z);
@@ -281,7 +336,7 @@ export class BattleLine {
           if (!sees(cand.x, y0, cand.z, e.pos.x, e.pos.y + 1, e.pos.z)) continue;
           score += (dx * fx + dz * fz) / (d * fl) > 0.34 ? 1 : 0.25;
         }
-        score -= (Math.abs(ds) + Math.abs(dd - depth)) * 0.03;
+        score -= (Math.abs(ds) + Math.abs(dd - depth)) * 0.02;
         if (score > best) {
           best = score;
           out.copy(cand).setY(h);
@@ -341,7 +396,7 @@ export class BattleLine {
       this.binsSm.fill(0);
       this.hotBin = -1;
     }
-    const s0 = Math.max(0, sc - HALF_WINDOW_M - 400), s1 = Math.min(total, sc + HALF_WINDOW_M + 400);
+    const s0 = Math.max(0, sc - FAR_M), s1 = Math.min(total, sc + FAR_M);
     const n = Math.max(2, Math.floor((s1 - s0) / STEP_M) + 1);
     const pts = new Float64Array(n * 4);
     let seg = 0, acc = 0;
@@ -384,7 +439,14 @@ export class BattleLine {
       this.lineShift = 0;
     }
     this.centre.set(c.x, 0, c.z);
+    this.scAbs = sc;
     const np = proj(player.pos.x, player.pos.z);
+    this.playerS = np.s - sc;
+    {
+      const nrm = { x: 0, z: 0 };
+      const q = this.at(this.playerS, 0, V2, nrm);
+      this.playerD = (player.pos.x - q.x) * nrm.x + (player.pos.z - q.z) * nrm.z;
+    }
     this.near = this.at(np.s - sc, 0, new THREE.Vector3());
     return true;
   }
@@ -406,6 +468,82 @@ export class BattleLine {
       nOut.z = nz;
     }
     return out.set(x + nx * d, 0, z + nz * d);
+  }
+
+  /**
+   * Depth of a trench line of the side on `sign` at arc s (it winds a little): the hostile defenders' forward trench
+   * follows the ground our side can see (`fwd`), the rest stand at their base depth.
+   */
+  private trenchDepth(sign: 1 | -1, base: number, s: number): number {
+    let d = base;
+    if (base === TRENCH_D && this.fwd && sign === this.fwdSign) {
+      const f = Math.max(0, Math.min(this.fwd.length - 1.001, (s + this.scAbs - this.fwdS0) / STEP_M));
+      const k = Math.floor(f), t = f - k;
+      d = this.fwd[k] + (this.fwd[k + 1] - this.fwd[k]) * t;
+    }
+    return trenchAt(d, s);
+  }
+
+  /** The forward trench of the side opposite `st` at arc s (where an assault halts and aims). */
+  private foeTrench(st: SideState, s: number): number {
+    return this.trenchDepth((-st.sign) as 1 | -1, TRENCH_D, s);
+  }
+
+  /**
+   * Owner item 32 (pass 2): where the hostile defenders dig their forward trench along the stretch. Of 55-160 m behind
+   * the line, the depth our side sees from 240 and 420 m back on its own side (eye 3 m up: a tank commander, a man on
+   * a rise) — the forward slope, where trenches really go — near the usual 115 m; smoothed over ~100 m.
+   */
+  private siteTrenches(): void {
+    this.fwd = null;
+    const own = [...this.sides.values()].find((q) => q.team === 0);
+    const foe = [...this.sides.values()].find((q) => q.team === 1 && q.role !== 'attack');
+    if (!own || !foe || !this.centre) return;
+    const g = this.host.ground;
+    const n = this.nPts;
+    const raw = new Float32Array(n);
+    const sees = (ax: number, ay: number, az: number, bx: number, by: number, bz: number): boolean => {
+      const k = Math.max(6, Math.min(24, Math.round(Math.hypot(bx - ax, bz - az) / 25)));
+      for (let j = 1; j < k; j++) {
+        const f = j / k;
+        if (g.heightAt(ax + (bx - ax) * f, az + (bz - az) * f) > ay + (by - ay) * f) return false;
+      }
+      return true;
+    };
+    const cand = [55, 75, 95, 115, 135, 160];
+    const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), q = new THREE.Vector3();
+    for (let k = 0; k < n; k++) {
+      const s = this.sMin + k * STEP_M;
+      raw[k] = TRENCH_D;
+      if (Math.abs(s) > HALF_WINDOW_M + 120) continue;
+      this.at(s, own.sign * 240, e1);
+      this.at(s, own.sign * 420, e2);
+      e1.y = g.heightAt(e1.x, e1.z) + 3;
+      e2.y = g.heightAt(e2.x, e2.z) + 3;
+      let best = TRENCH_D, bv = -Infinity;
+      for (const d of cand) {
+        this.at(s, foe.sign * d, q);
+        const qy = g.heightAt(q.x, q.z) + 0.9;
+        const v = (sees(e1.x, e1.y, e1.z, q.x, qy, q.z) ? 1 : 0) + (sees(e2.x, e2.y, e2.z, q.x, qy, q.z) ? 0.6 : 0) - (Math.abs(d - TRENCH_D) / 150) * 0.5;
+        if (v > bv) {
+          bv = v;
+          best = d;
+        }
+      }
+      raw[k] = best;
+    }
+    const out = new Float32Array(n);
+    for (let k = 0; k < n; k++) {
+      let a = 0, w = 0;
+      for (let j = Math.max(0, k - 5); j <= Math.min(n - 1, k + 5); j++) {
+        a += raw[j];
+        w++;
+      }
+      out[k] = a / w;
+    }
+    this.fwd = out;
+    this.fwdS0 = this.sMin + this.scAbs;
+    this.fwdSign = foe.sign;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -456,37 +594,48 @@ export class BattleLine {
       const pool = sd.pools.front + sd.pools.offensive;
       const perKm = pool / winKm;
       const cap = hostile ? SIDE_CAP_HOSTILE : SIDE_CAP_FRIENDLY;
+      const role: SideState['role'] = !attacker ? 'hold' : sd.owner === attacker ? 'attack' : 'defend';
       // The garrison within ±CONCENTRATION_KM / 2 of the player stands in the stretch (troops gather where the line
       // is fought over); an offensive's pool is already its corridor's troops, all of it in the fight.
       const local = sd.pools.front * Math.min(1, CONCENTRATION_KM / winKm) + sd.pools.offensive;
-      const want = pool < 1 ? 0 : Math.min(cap, Math.max(Math.min(SIDE_MIN, Math.round(pool)), Math.round(local)));
+      // Drawn at the density of a battle (the role's floor) whenever the side has troops on this line; above the
+      // floor, the sim's own numbers (1 figure = 25 troops) up to the cap.
+      // (A line held by a handful — under 20 troops in the stretch — shows half the floor.)
+      const floor = SIDE_FLOOR[role] * (local * TROOPS_PER_SOLDIER < 20 ? 0.5 : 1);
+      const want = pool * TROOPS_PER_SOLDIER < 1 ? 0 : Math.min(cap, Math.max(floor, Math.round(local)));
       let st = this.sides.get(sd.owner);
       if (!st) {
         st = {
-          owner: sd.owner, team: friendly ? 0 : 1, rel, hostile, sign: sideOf(sd.owner), role: 'hold', target: 0, troops: 0, perKm: 0,
-          members: [], vehicles: [], vehTarget: 0, vehRespawnAt: 0, arty: 0.3 + Math.random() * 1.2, waveN: 0,
+          owner: sd.owner, team: friendly ? 0 : 1, rel, hostile, sign: sideOf(sd.owner), role: 'hold', target: 0, troops: 0, localTroops: 0,
+          troopsPerFig: TROOPS_PER_SOLDIER, perKm: 0, members: [], vehicles: [], vehTarget: 0, vehRespawnAt: 0, arty: 0.3 + Math.random() * 1.2, waveN: 0,
         };
         this.sides.set(sd.owner, st);
       }
       st.rel = rel;
       st.hostile = hostile;
       st.sign = sideOf(sd.owner);
-      st.role = !attacker ? 'hold' : sd.owner === attacker ? 'attack' : 'defend';
+      st.role = role;
       // A side handed over by the ground battle view keeps its own soldiers (forces.ts hand-off).
       st.target = skipInfantry?.has(sd.owner) ? 0 : want;
       st.troops = pool * TROOPS_PER_SOLDIER;
+      st.localTroops = local * TROOPS_PER_SOLDIER;
+      // What one figure stands for: the sim's troops in the stretch over the figures drawn (what a kill takes).
+      st.troopsPerFig = want > 0 ? Math.min(TROOPS_PER_SOLDIER, st.localTroops / want) : TROOPS_PER_SOLDIER;
       st.perKm = perKm * TROOPS_PER_SOLDIER;
-      st.vehTarget = Math.min(hostile ? VEHICLES_HOSTILE : VEHICLES_FRIENDLY, Math.floor(want / (hostile ? FIGS_PER_VEHICLE_HOSTILE : FIGS_PER_VEHICLE_FRIENDLY)));
+      // Line vehicles follow the sim's soldiers (not the drawn floor): a thin garrison has no armour to show.
+      st.vehTarget = Math.min(hostile ? VEHICLES_HOSTILE : VEHICLES_FRIENDLY, Math.floor(Math.min(want, local) / (hostile ? FIGS_PER_VEHICLE_HOSTILE : FIGS_PER_VEHICLE_FRIENDLY)));
       live.add(sd.owner);
     }
     for (const [o, st] of this.sides) if (!live.has(o)) this.withdraw(st, player), this.sides.delete(o);
     if (!this.decorated) this.decorate();
+    if (this.trenchDirty || !this.fwd) this.siteTrenches();
     for (const st of this.sides.values()) {
-      this.recentreMembers(st, player);
-      this.reconcileSide(st, player, initial);
+      const relayout = this.recentreMembers(st, player);
+      this.reconcileSide(st, player, initial, relayout);
       this.reconcileVehicles(st, player, initial);
     }
     if (this.trenchDirty) this.buildTrenches(player);
+    if (this.holesAt.distanceTo(player.pos) > 600) this.buildHoles(player);
     this.clearBodies(player);
   }
 
@@ -499,7 +648,8 @@ export class BattleLine {
     this.frontKey = 0;
     this.heat = 0;
     this.host.world.battleHeat = 0;
-    this.trenchNear.count = this.trenchFar.count = 0;
+    this.trenchNear.count = this.trenchFar.count = this.wire.count = this.holes.count = 0;
+    this.holesAt.set(1e9, 0, 0);
     this.centre = null;
     this.hot = this.near = null;
     this.clearDecor();
@@ -526,10 +676,16 @@ export class BattleLine {
     st.vehicles.length = 0;
   }
 
-  /** The stretch moved along the line: members left far behind it leave (if out of the player's way). */
-  private recentreMembers(st: SideState, player: Ent): void {
+  /**
+   * The stretch moved along the line: members left far behind it leave (if out of the player's way). And the fight
+   * follows the player (pass 2): when fewer than ~85 % of NEAR_SHARE stand within NEAR_M of the player's place along
+   * the line (the player drove on, or was taken to the hot stretch), up to 160 of the farthest — asleep in the crowd,
+   * more than 900 m off — leave, and the side lays them out again around the player (returns true: a re-layout).
+   */
+  private recentreMembers(st: SideState, player: Ent): boolean {
     const w = this.host.world;
     const c = this.centre!;
+    let near = 0;
     for (let i = st.members.length - 1; i >= 0; i--) {
       const m = st.members[i];
       const e = m.e;
@@ -539,17 +695,36 @@ export class BattleLine {
       if (Math.abs(along) > HALF_WINDOW_M + 300 && (e.dormant || !e.alive) && e.pos.distanceTo(player.pos) > 700) {
         w.despawn(e);
         st.members.splice(i, 1);
+        continue;
       }
+      if (e.alive && Math.abs(along - this.playerS) < NEAR_M) near++;
     }
+    const want = st.target * NEAR_SHARE;
+    if (near >= want * 0.85 || st.target === 0) return false;
+    const far = st.members.filter((m) => m.e.alive && m.e.dormant && m.e.pos.distanceTo(player.pos) > 900)
+      .sort((a, b) => b.e.pos.distanceToSquared(player.pos) - a.e.pos.distanceToSquared(player.pos));
+    const n = Math.min(far.length, 160, Math.ceil(want - near));
+    for (let i = 0; i < n; i++) {
+      w.despawn(far[i].e);
+      st.members.splice(st.members.indexOf(far[i]), 1);
+    }
+    return n > 0;
   }
 
   /**
-   * Where along the stretch a new figure stands (u uniform 0..1): denser around its centre (the player), so the fight
-   * is thickest where the player is and thins out toward the ends of the 2.4 km.
+   * Where along the stretch a new figure stands (u uniform 0..1): NEAR_SHARE of them within NEAR_M of the player's
+   * place along the line (the fight is thickest where the player is), the rest spread out to the stretch's ends.
    */
   private spread(u: number): number {
-    const v = u * 2 - 1;
-    return Math.sign(v) * Math.pow(Math.abs(v), 2) * HALF_WINDOW_M;
+    const c = Math.max(-HALF_WINDOW_M + NEAR_M, Math.min(HALF_WINDOW_M - NEAR_M, this.playerS));
+    if (u < NEAR_SHARE) {
+      const v = (u / NEAR_SHARE) * 2 - 1;
+      // A little denser at the middle of the near band.
+      return c + Math.sign(v) * Math.pow(Math.abs(v), 1.25) * NEAR_M;
+    }
+    const left = c - NEAR_M + HALF_WINDOW_M, right = HALF_WINDOW_M - (c + NEAR_M);
+    const x = ((u - NEAR_SHARE) / (1 - NEAR_SHARE)) * (left + right);
+    return x < left ? -HALF_WINDOW_M + x : c + NEAR_M + (x - left);
   }
 
   /** Distance along the stretch's tangent at its centre. */
@@ -560,7 +735,7 @@ export class BattleLine {
     return dx * nC.z - dz * nC.x;
   }
 
-  private reconcileSide(st: SideState, player: Ent, initial: boolean): void {
+  private reconcileSide(st: SideState, player: Ent, initial: boolean, relayout = false): void {
     const w = this.host.world;
     const alive = st.members.filter((m) => m.e.alive);
     if (alive.length > st.target * 1.1 + 4) {
@@ -576,26 +751,47 @@ export class BattleLine {
     }
     let missing = st.target - alive.length;
     if (missing <= 0) return;
-    // Initial: the whole layout at once. Afterwards a wave or a draft of reserves per refresh.
-    if (!initial) missing = Math.min(missing, st.role === 'attack' ? 48 : 30);
+    // Initial: the whole layout at once. Afterwards a wave or a draft of reserves per refresh; a re-layout around the
+    // player (recentreMembers) puts back what it took, as the initial layout does (waves at every stage, trenches manned).
+    if (relayout) initial = true;
+    else if (!initial) missing = Math.min(missing, st.role === 'attack' ? 48 : 30);
     const rng = w.rng;
     if (st.role === 'attack') {
       // Squads of 8-12 in waves.
       while (missing > 0) {
         const size = Math.min(missing, 8 + Math.floor(rng.next() * 5));
-        const s = this.spread(rng.next());
-        const startD = initial ? WAVE_D0 + rng.next() * (WAVE_D1 - WAVE_D0) : WAVE_D1 + rng.next() * 250;
-        // Initial waves are caught at every stage of the assault: some already half way across.
-        const start = initial && rng.next() < 0.45 ? -HALT_SHORT + rng.next() * (TRENCH_D + 120) : startD;
+        // Where the squad starts: along the stretch (near the player), at its stage of the assault; of a few tries the
+        // first on walkable ground in the player's sight (troops that fight around you are troops you see; in hills a
+        // crest would otherwise hide most of them).
+        let s = 0, start = 0;
+        // Our own assault moves with the tank: a third of its squads advance around it (60-250 m, most of them ahead),
+        // the infantry a tank supports — hundreds of men in the view, not specks on the far slopes.
+        const own = st.team === 0 ? this.playerD * st.sign : -1;
+        const escort = initial && own > 40 && own < WAVE_D1 + 200 && rng.next() < 0.34;
+        for (let tr = 0; tr < 4; tr++) {
+          if (escort) {
+            s = this.playerS + (rng.next() - 0.5) * 420;
+            start = Math.max(-HALT_SHORT + 10, own + (rng.next() - 0.68) * 300);
+          } else {
+            s = this.spread(rng.next());
+            const startD = initial ? WAVE_D0 + rng.next() * (WAVE_D1 - WAVE_D0) : WAVE_D1 + rng.next() * 250;
+            // Initial waves are caught at every stage of the assault: some already half way across.
+            start = initial && rng.next() < 0.45 ? -HALT_SHORT + rng.next() * (TRENCH_D + 120) : startD;
+          }
+          if (this.goodSpot(player, s, st.sign * start)) break;
+        }
         const wave = st.waveN++;
         for (let i = 0; i < size; i++) {
           const si = s + (rng.next() - 0.5) * 40;
           const d0 = start + (rng.next() - 0.5) * 30;
-          const halt = -(TRENCH_D - HALT_SHORT) - rng.next() * 25;
+          const ft = this.foeTrench(st, si);
+          const halt = -(ft - HALT_SHORT) - rng.next() * 25;
           const pos = this.at(si, st.sign * d0, V1);
           const goal = this.at(si + (rng.next() - 0.5) * 20, st.sign * Math.min(d0, halt), new THREE.Vector3());
-          const look = this.at(si, -st.sign * TRENCH_D, new THREE.Vector3());
-          const variant: 0 | 1 | 2 = i === 0 && wave % 2 === 0 ? 1 : i === 1 ? 2 : 0;
+          const look = this.at(si, -st.sign * ft, new THREE.Vector3());
+          // An AT team with one squad in three, a machine gunner in every squad (a platoon's weapons, pass 2: at the
+          // battle's density one AT team per two squads made the tank's arrival a rain of missiles).
+          const variant: 0 | 1 | 2 = i === 0 && wave % 3 === 0 ? 1 : i === 1 ? 2 : 0;
           const e = this.soldier(st, pos.x, pos.z, 'front', goal, look, wave, variant, player);
           if (e) st.members.push({ e, owner: st.owner, s: si });
         }
@@ -607,26 +803,86 @@ export class BattleLine {
     let k = 0;
     while (missing > 0) {
       const r = rng.next();
-      const s = this.spread(rng.next());
-      let d: number, order: 'hold' | 'front' = 'hold';
+      let s = 0, d = 0, order: 'hold' | 'front' = 'hold';
       const goal = new THREE.Vector3();
-      if (initial ? r < 0.55 : r < 0.15) d = trenchAt(TRENCH_D, s) + 0.5 + rng.next() * 0.6;
-      else if (initial ? r < 0.8 : r < 0.4) d = trenchAt(TRENCH2_D, s) + 0.5 + rng.next() * 0.6;
-      else d = RESERVE_D0 + rng.next() * (RESERVE_D1 - RESERVE_D0);
+      // Of a few places along the line, the first in the player's sight (see the attack above).
+      for (let tr = 0; tr < 3; tr++) {
+        s = this.spread(rng.next());
+        if (initial ? r < 0.55 : r < 0.15) d = this.trenchDepth(st.sign, TRENCH_D, s) + 0.5 + rng.next() * 0.6;
+        else if (initial ? r < 0.8 : r < 0.4) d = this.trenchDepth(st.sign, TRENCH2_D, s) + 0.5 + rng.next() * 0.6;
+        else d = RESERVE_D0 + rng.next() * (RESERVE_D1 - RESERVE_D0);
+        if (this.goodSpot(player, s, st.sign * d)) break;
+      }
       const pos = this.at(s, st.sign * d, V1);
       if (!initial && d > TRENCH2_D + 50) {
         // A draft from the reserves runs up to the forward trench.
         order = 'front';
         const sg = s + (rng.next() - 0.5) * 20;
-        this.at(sg, st.sign * (trenchAt(TRENCH_D, sg) + 0.7), goal);
+        this.at(sg, st.sign * (this.trenchDepth(st.sign, TRENCH_D, sg) + 0.7), goal);
       } else goal.copy(pos);
-      const look = this.at(s, -st.sign * (st.role === 'hold' ? TRENCH_D : 300), new THREE.Vector3());
-      const variant: 0 | 1 | 2 = k % 14 === 3 ? 2 : k % 9 === 5 ? 1 : 0;
+      const look = this.at(s, -st.sign * (st.role === 'hold' ? this.foeTrench(st, s) : 300), new THREE.Vector3());
+      // A machine gun every ~14 men, an AT team every ~30 (one per platoon).
+      const variant: 0 | 1 | 2 = k % 14 === 3 ? 2 : k % 30 === 5 ? 1 : 0;
       const e = this.soldier(st, pos.x, pos.z, order, goal, look, order === 'front' ? 10_000 + st.waveN++ : -1, variant, player);
       if (e) st.members.push({ e, owner: st.owner, s });
       k++;
       missing--;
     }
+  }
+
+  /**
+   * Owner item 32 (pass 2): the tank has arrived where it will fight (the hot stretch's stand-off, «Ir al combate»):
+   * the figures of both sides out of its sight (behind a crest, more than 150 m off) are laid out again around it on
+   * ground it sees, as the initial layout does: the battle you are taken to is a battle you see. Returns how many.
+   */
+  relayoutAround(player: Ent): number {
+    if (!this.active || !this.centre) return 0;
+    this.playerS = this.alongOf(player.pos.x - this.centre.x, player.pos.z - this.centre.z);
+    {
+      const nrm = { x: 0, z: 0 };
+      const q = this.at(this.playerS, 0, V2, nrm);
+      this.playerD = (player.pos.x - q.x) * nrm.x + (player.pos.z - q.z) * nrm.z;
+    }
+    let moved = 0;
+    for (const st of this.sides.values()) {
+      const out = st.members.filter((m) => m.e.alive && m.e.pos.distanceTo(player.pos) > 150 && !this.sees(player, m.e.pos.x, m.e.pos.z))
+        .sort((a, b) => b.e.pos.distanceToSquared(player.pos) - a.e.pos.distanceToSquared(player.pos));
+      const n = Math.min(out.length, Math.round(st.target * 0.7));
+      for (let i = 0; i < n; i++) {
+        this.host.world.despawn(out[i].e);
+        st.members.splice(st.members.indexOf(out[i]), 1);
+      }
+      moved += n;
+      if (n) this.reconcileSide(st, player, true, true);
+    }
+    return moved;
+  }
+
+  /** The ground point (x, z) + 1 m is in the player's sight from 3 m up, within 1.6 km (no crest between). */
+  private sees(player: Ent, px: number, pz: number): boolean {
+    const g = this.host.ground;
+    const ty = g.heightAt(px, pz);
+    const ex = player.pos.x, ez = player.pos.z, ey = player.pos.y + 3;
+    const dx = px - ex, dz = pz - ez, L = Math.hypot(dx, dz);
+    if (L > 1600) return false;
+    const k = Math.max(6, Math.min(40, Math.round(L / 25)));
+    for (let j = 1; j < k; j++) {
+      const f = j / k;
+      if (g.heightAt(ex + dx * f, ez + dz * f) > ey + (ty + 1 - ey) * f) return false;
+    }
+    return true;
+  }
+
+  /**
+   * A place for figures (arc s, depth d): walkable ground (slope under ~37°) that the player sees from 3 m up within
+   * 1.6 km (not behind a crest).
+   */
+  private goodSpot(player: Ent, s: number, d: number): boolean {
+    const g = this.host.ground;
+    const p = this.at(s, d, V2);
+    const px = p.x, pz = p.z;
+    if (g.heightAt(px, pz) < 0.8 || g.normalAt(px, pz, V3, 6).y < 0.8) return false;
+    return this.sees(player, px, pz);
   }
 
   private soldier(st: SideState, x: number, z: number, order: 'hold' | 'front', goal: THREE.Vector3, look: THREE.Vector3, wave: number, variant: 0 | 1 | 2, player: Ent): Ent | null {
@@ -639,7 +895,7 @@ export class BattleLine {
     if (!e.alive) return null;
     e.nation = st.owner;
     e.neutral = st.team === 1 && !st.hostile;
-    e.src = { kind: 'pool', id: 0, owner: st.owner, share: 0 };
+    e.src = { kind: 'pool', id: 0, owner: st.owner, share: 0, troops: st.troopsPerFig };
     e.order = order;
     e.goal.copy(goal);
     e.look.copy(look);
@@ -674,7 +930,7 @@ export class BattleLine {
       e.src = { kind: 'pool', id: 0, owner: st.owner, share: kind === 'tank' ? 10 : 8 };
       if (st.role === 'attack') {
         e.order = 'front';
-        this.at(s, -st.sign * (TRENCH_D - HALT_SHORT - 40), e.goal);
+        this.at(s, -st.sign * (this.foeTrench(st, s) - HALT_SHORT - 40), e.goal);
       } else {
         e.order = 'hold';
         e.goal.copy(pos);
@@ -716,7 +972,7 @@ export class BattleLine {
     for (const ln of lines) {
       for (let s = -HALF_WINDOW_M; s <= HALF_WINDOW_M && nn + nf < TRENCH_CAP; s += SEG_M) {
         // A fire trench winds a little (bays every ~30 m); each segment lies along the trench's own course.
-        const zig = (s2: number): number => trenchAt(ln.depth, s2);
+        const zig = (s2: number): number => this.trenchDepth(ln.sign, ln.depth, s2);
         const p = this.at(s + SEG_M / 2, ln.sign * zig(s + SEG_M / 2), V1, nrm);
         const q0 = this.at(s, ln.sign * zig(s), V2);
         const q0x = q0.x, q0z = q0.z;
@@ -748,6 +1004,25 @@ export class BattleLine {
     this.trenchFar.count = nf;
     this.trenchNear.instanceMatrix.needsUpdate = true;
     this.trenchFar.instanceMatrix.needsUpdate = true;
+    // Barbed wire 25 m in front of every defended forward trench (pickets and coils, a dark line before the parapet).
+    let nw = 0;
+    for (const ln of lines) {
+      if (ln.depth !== TRENCH_D) continue;
+      for (let s = -HALF_WINDOW_M; s <= HALF_WINDOW_M && nw < WIRE_CAP; s += WIRE_SEG) {
+        const d0 = this.trenchDepth(ln.sign, TRENCH_D, s) - 25, d1 = this.trenchDepth(ln.sign, TRENCH_D, s + WIRE_SEG) - 25;
+        const a = this.at(s, ln.sign * d0, V1);
+        const ax = a.x, az = a.z;
+        const b = this.at(s + WIRE_SEG, ln.sign * d1, V2);
+        const h0 = g.heightAt(ax, az), h1 = g.heightAt(b.x, b.z);
+        if (h0 < 0.8 || h1 < 0.8) continue;
+        const yaw = Math.atan2(-(b.z - az), b.x - ax);
+        E.set(0, yaw, Math.atan2(h1 - h0, WIRE_SEG), 'YXZ');
+        Q.setFromEuler(E);
+        this.wire.setMatrixAt(nw++, M4.compose(V2.set((ax + b.x) / 2, (h0 + h1) / 2 - 0.05, (az + b.z) / 2), Q, S1));
+      }
+    }
+    this.wire.count = nw;
+    this.wire.instanceMatrix.needsUpdate = true;
     this.trenchBuiltAt.copy(player.pos);
   }
   private readonly trenchBuiltAt = new THREE.Vector3();
@@ -778,6 +1053,36 @@ export class BattleLine {
       this.wrecks.push(rig.root);
       if (rng.next() < 0.6) this.wreckFires.push({ x: p.x, y: h + 1.5, z: p.z, heat: 0.35 + rng.next() * 0.5 });
     }
+  }
+
+  /**
+   * Shell holes over no man's land, the trenches and the ground the waves cross: HOLES_CAP of them, 70 % within
+   * NEAR_M along the line of the player (re-laid when the player has moved 600 m). They lie on the slope.
+   */
+  private buildHoles(player: Ent): void {
+    if (!this.centre) return;
+    this.holesAt.copy(player.pos);
+    const g = this.host.ground;
+    const rng = this.host.world.rng;
+    const n = new THREE.Vector3();
+    let k = 0;
+    for (let i = 0; i < HOLES_CAP * 2 && k < HOLES_CAP; i++) {
+      const s = this.spread(rng.next());
+      // Deepest where the fighting is (no man's land and the defended trench), thinning behind the lines.
+      const u = rng.next();
+      const d = u < 0.65 ? (rng.next() - 0.5) * 2 * (TRENCH_D + 40) : (rng.next() - 0.5) * 2 * (TRENCH2_D + 120);
+      const p = this.at(s, d, V1);
+      const h = g.heightAt(p.x, p.z);
+      if (h < 0.8) continue;
+      g.normalAt(p.x, p.z, n, 4);
+      if (n.y < 0.8) continue;
+      Q.setFromUnitVectors(V2.set(0, 1, 0), n);
+      const sc = 0.5 + Math.pow(rng.next(), 2) * 1.6;
+      M4.compose(V2.set(p.x, h - 0.06 * sc, p.z), Q.multiply(new THREE.Quaternion().setFromAxisAngle(V2.set(0, 1, 0), rng.next() * 6.28)), V2.set(sc, sc * (0.8 + rng.next() * 0.4), sc));
+      this.holes.setMatrixAt(k++, M4);
+    }
+    this.holes.count = k;
+    this.holes.instanceMatrix.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -822,6 +1127,26 @@ export class BattleLine {
         // The rumble reaches you a few seconds later, faint.
         V2.subVectors(p, player.pos).setY(0).setLength(220).add(player.pos);
         fx.playAt('artillery', V2, 0.12);
+      }
+    }
+    // The front goes on beyond the stretch: shell bursts and dust along the line out to FAR_M each way (visual only),
+    // so from a rise the fighting reads as a long line, not a lit patch around the tank.
+    this.farT -= dt * (0.5 + this.heat);
+    if (this.farT <= 0) {
+      this.farT = 0.15 + rng.next() * 0.35;
+      const sMin = this.sMin, sMax = this.sMin + (this.nPts - 1) * STEP_M;
+      const sg = rng.next() < 0.5 ? -1 : 1;
+      const sf = sg * (HALF_WINDOW_M + rng.next() * (FAR_M - HALF_WINDOW_M - 100));
+      if (sf > sMin + 50 && sf < sMax - 50) {
+        const p = this.at(sf, (rng.next() - 0.5) * 2 * 260, V1);
+        const y = this.host.ground.surfaceAt(p.x, p.z);
+        if (y > 0.5) {
+          const big = 0.7 + rng.next() * 0.8;
+          fx.particles.emit(6, p.x, y + 2, p.z, 0, 0, 0, 0.18, 14 * big, 30 * big, 5, 3.4, 1.8, 1);
+          fx.particles.emit(2, p.x, y + 3, p.z, 0, 4 + rng.next() * 3, 0, 4 + rng.next() * 3, 10 * big, 38 * big, 0.36, 0.31, 0.25, 0.75);
+          fx.particles.emit(0, p.x, y + 6, p.z, 0, 2.5, 0, 7, 14 * big, 55 * big, 0.2, 0.2, 0.2, 0.4);
+          if (rng.next() < 0.08) fx.playAt('artillery', V2.subVectors(p, player.pos).setY(0).setLength(260).add(player.pos), 0.08);
+        }
       }
     }
     // Attrition: the sim's casualties at this front, seen as figures falling (exposed attackers first).
@@ -980,6 +1305,35 @@ function parapetGeometry(detail: boolean): THREE.BufferGeometry {
     }
   } else {
     b.box(L, 0.36, 0.4, 0x8a7b5a, 0, 0.58, -0.62);
+  }
+  return b.build();
+}
+
+/** A section of barbed wire (4 m along X): crossed pickets at both ends and a coil between them, dark steel and wood. */
+function wireGeometry(): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  const L = WIRE_SEG;
+  for (const x of [-L / 2 + 0.1, L / 2 - 0.1]) {
+    b.box(0.06, 1.25, 0.06, 0x4a3b2a, x, 0.55, -0.25, 0.45, 0, 0);
+    b.box(0.06, 1.25, 0.06, 0x4a3b2a, x, 0.55, 0.25, -0.45, 0, 0);
+  }
+  // The coil: rings of wire read as a dark, open band at a distance.
+  for (let i = 0; i < 9; i++) {
+    const x = -L / 2 + 0.25 + i * ((L - 0.5) / 8);
+    b.add(new THREE.TorusGeometry(0.42, 0.012, 3, 10), 0x2e2c28, x, 0.45, 0, 0, Math.PI / 2 + (i % 2 ? 0.25 : -0.25), 0);
+  }
+  for (const [y, z] of [[0.86, 0], [0.2, 0.3], [0.2, -0.3]] as const) b.box(L, 0.015, 0.015, 0x2e2c28, 0, y, z);
+  return b.build();
+}
+
+/** A shell hole: a dark, churned bowl with a ragged rim of thrown-up earth (about 5 m across at scale 1). */
+function holeGeometry(): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  b.cyl(2.0, 1.4, 0.06, 12, 0x2f261d, 0, 0.09, 0);
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const r = 2.25 + ((i * 37) % 5) * 0.08;
+    b.box(1.3, 0.28 + ((i * 13) % 3) * 0.06, 0.7, i % 2 ? 0x5e4a35 : 0x6b5640, Math.cos(a) * r, 0.08, Math.sin(a) * r, 0, -a, 0);
   }
   return b.build();
 }

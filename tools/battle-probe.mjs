@@ -1,0 +1,112 @@
+// Owner item 32 (pass 2) probe: stage ?shot=command-battle on a small viewport (SwiftShader draws small frames
+// quickly), print the staging's progress and the census of what the camera sees, then take the picture at 1600×900.
+//   node tools/battle-probe.mjs [--url http://127.0.0.1:5464/] [--out shots/owner-32-2/probe] [--params "&view=sight"]
+//        [--name chase]
+// Use a no-HMR server (tools/vite.nowatch.config.mjs): an edit mid-run would reload the page.
+import fs from 'node:fs';
+import path from 'node:path';
+import { chromium } from 'playwright';
+
+const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, arr) => {
+  if (a.startsWith('--')) acc.push([a.slice(2), arr[i + 1] && !arr[i + 1].startsWith('--') ? arr[i + 1] : 'true']);
+  return acc;
+}, []));
+const url = args.url || 'http://127.0.0.1:5464/';
+const out = args.out || 'shots/owner-32-2/probe';
+const name = args.name || 'chase';
+fs.mkdirSync(out, { recursive: true });
+const browser = await chromium.launch({
+  executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+});
+const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+const t0 = Date.now();
+const ts = () => `${Math.round((Date.now() - t0) / 1000)}s`;
+page.on('console', (m) => {
+  const x = m.text();
+  if (m.type() === 'error' || /battle-shot|\[shots\]/.test(x)) console.log(ts(), m.type(), x.slice(0, 900));
+});
+page.on('pageerror', (e) => console.log(ts(), 'pageerror', e.message));
+await page.goto(`${url}?shot=command-battle${args.params && args.params !== 'true' ? args.params : ''}`, { waitUntil: 'load', timeout: 180000 });
+let last = '';
+for (;;) {
+  const st = await page.evaluate(() => {
+    const b = window.__cmdStats?.battle;
+    return {
+      ready: window.__shotReady === true, err: window.__shotError ?? null, phase: window.__cmdStats?.phase ?? null,
+      battle: b ? `${b.active} ${(b.sides ?? []).map((s) => `${s.team}:${s.shown}/${s.target}`).join(' ')}` : null,
+      chip: String(window.__cmdStats?.combat ?? '').slice(0, 140),
+    };
+  }).catch((e) => ({ err: String(e) }));
+  const s = JSON.stringify(st);
+  if (s !== last) {
+    console.log(ts(), s);
+    last = s;
+  }
+  if (st.ready || st.err) break;
+  if (Date.now() - t0 > 2_400_000) {
+    console.log('timeout');
+    break;
+  }
+  await new Promise((r) => setTimeout(r, 3000));
+}
+const bs = await page.evaluate(() => window.__battleShot ?? null).catch(() => null);
+console.log(ts(), 'census', JSON.stringify(bs));
+await page.setViewportSize({ width: 1600, height: 900 });
+await new Promise((r) => setTimeout(r, 8000));
+const file = path.join(out, `battle-${name}.png`);
+await page.screenshot({ path: file, timeout: 300000 });
+console.log(ts(), 'saved', file);
+// More views of the same frozen moment: --extra sight,overview,close20,close50,close150,closeE20,...
+for (const v of (args.extra && args.extra !== 'true' ? args.extra.split(',') : [])) {
+  const info = await page.evaluate((v) => {
+    const I = window.__cmd, P = I.world.player, c = I.controller, b = I.forces.battle.info();
+    const V = P.pos.constructor;
+    I.camOverride = null;
+    c.setZoom?.(false);
+    I.freeze = true;
+    const h = b.hot ?? b.near ?? P.pos;
+    if (v === 'sight') {
+      const foe = I.world.ents.filter((e) => e.alive && e.team === 1 && (e.kind === 'soldier' || e.kind === 'at')).sort((p, q) => p.pos.distanceTo(h) - q.pos.distanceTo(h))[0];
+      c.aimAt(foe ? foe.pos.clone().setY(foe.pos.y + 1) : h.clone().setY(h.y + 2));
+      c.snapTurret?.();
+      c.setZoom?.(true);
+      // The sight's camera moves only while the scene runs.
+      I.freeze = false;
+      return foe ? `aim at enemy ${Math.round(foe.pos.distanceTo(P.pos))} m` : 'no enemy';
+    }
+    if (v === 'overview') {
+      const back = new V().subVectors(P.pos, h).setY(0).normalize();
+      const pos = P.pos.clone().addScaledVector(back, 140);
+      pos.y = I.ground.heightAt(pos.x, pos.z) + 110;
+      I.camOverride = { pos, look: h.clone().setY(h.y + 5).lerp(P.pos, 0.3), fov: 55 };
+      return 'overview';
+    }
+    const m = /^close(E?)(\d+)$/.exec(v);
+    if (m) {
+      const team = m[1] ? 1 : 0, d = Number(m[2]);
+      const man = I.world.ents.filter((e) => e.alive && e.team === team && (e.kind === 'soldier' || e.kind === 'at') && e.pos.distanceTo(P.pos) > 20)
+        .sort((p, q) => p.pos.distanceTo(P.pos) - q.pos.distanceTo(P.pos))[0];
+      if (!man) return 'no man';
+      I.world.setDormant(man, false);
+      const yaw = man.yaw + 0.6;
+      const pos = man.pos.clone();
+      pos.x += -Math.sin(yaw) * d; pos.z += -Math.cos(yaw) * d;
+      let top = Math.max(pos.y, I.ground.heightAt(pos.x, pos.z)) + 1.7;
+      for (let k = 1; k < 20; k++) {
+        const f = k / 20, x = pos.x + (man.pos.x - pos.x) * f, z = pos.z + (man.pos.z - pos.z) * f;
+        const need = I.ground.heightAt(x, z) + 1.2 - (man.pos.y + 1) * f;
+        if (need / (1 - f) > top) top = need / (1 - f);
+      }
+      pos.y = top + d * 0.02;
+      I.camOverride = { pos, look: man.pos.clone().setY(man.pos.y + 0.9), fov: d <= 20 ? 40 : d <= 50 ? 30 : 20 };
+      return `${man.kind} pose ${man.pose} ${Math.round(man.pos.distanceTo(P.pos))} m from the tank`;
+    }
+    return 'chase';
+  }, v);
+  await new Promise((r) => setTimeout(r, 7000));
+  const f2 = path.join(out, `battle-${name}-${v}.png`);
+  await page.screenshot({ path: f2, timeout: 300000 });
+  console.log(ts(), 'saved', f2, info);
+}
+await browser.close();

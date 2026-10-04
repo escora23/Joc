@@ -418,6 +418,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     hemi.color.copy(a.skyAmbient);
     hemi.groundColor.copy(a.groundAmbient);
     hemi.intensity = a.ambientIntensity;
+    // Owner item 32: the soldiers' sky fill follows the sky light (a figure against the sun is not a black cut-out).
+    world?.soldierMats.fill.value.copy(a.skyAmbient).multiplyScalar(a.ambientIntensity * 0.3);
     sun.color.copy(a.lightColor);
     sun.intensity = a.lightIntensity;
     fog.color.copy(a.fog);
@@ -744,15 +746,21 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   function flushCasualties(now: number, force = false): void {
     if (!params || (!force && now - lastCasWall < 2000)) return;
     lastCasWall = now;
+    // Whole troops go to the sim; a fraction (a battle figure can stand for less than one, owner item 32) waits for
+    // the next kills, and the last flush rounds it.
+    const carry: [number, number][] = [];
     for (const [victim, c] of cas) {
-      if (c.troops <= 0 && c.unitHits.size === 0 && c.structureHits.size === 0) continue;
+      const whole = force ? Math.round(c.troops) : Math.floor(c.troops + 1e-6);
+      if (!force && c.troops - whole > 1e-3) carry.push([victim, c.troops - whole]);
+      if (whole <= 0 && c.unitHits.size === 0 && c.structureHits.size === 0) continue;
       ctx.sim.send({
-        type: 'commandCasualties', unitId: params.unitId, victim, troops: Math.round(c.troops),
+        type: 'commandCasualties', unitId: params.unitId, victim, troops: Math.max(0, whole),
         unitHits: [...c.unitHits].map(([unitId, dmg]) => ({ unitId, dmg })),
         structureHits: [...c.structureHits].map(([structureId, dmg]) => ({ structureId, dmg })),
       });
     }
     cas.clear();
+    for (const [victim, rest] of carry) addCas(victim).troops = rest;
     // Structures and city blocks hit (#27): through the sim's one damage rule (level loss, rubble, losses, diplomacy).
     for (const [structureId, sp] of structPending) {
       let left = sp.dmg;
@@ -1175,8 +1183,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const s = victim.src;
       const c = addCas(s.owner);
       if (victim.kind === 'soldier' || victim.kind === 'at') {
-        c.troops += 25;
-        killsBy.set(s.owner, (killsBy.get(s.owner) ?? 0) + 25);
+        // Owner item 32: a figure of the battle stands for the sim's troops there ÷ the figures drawn.
+        const tr = s.troops ?? 25;
+        c.troops += tr;
+        killsBy.set(s.owner, (killsBy.get(s.owner) ?? 0) + tr);
       } else if (s.kind === 'pool') {
         // Owner item 32: a line vehicle of the front takes its crew and the squad it carries.
         const troops = Math.max(1, Math.round(s.share)) * 25;
@@ -1201,7 +1211,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         unitHitN++;
         unitHitShare += 1 - sent;
       }
-      const troops = victim.kind === 'soldier' || victim.kind === 'at' ? 25 : s.kind === 'qrf' || s.kind === 'pool' ? Math.max(1, Math.round(s.share)) * 25 : Math.round(s.share * 100);
+      const troops = victim.kind === 'soldier' || victim.kind === 'at' ? s.troops ?? 25 : s.kind === 'qrf' || s.kind === 'pool' ? Math.max(1, Math.round(s.share)) * 25 : Math.round(s.share * 100);
       hud.feedEntry('you', victim.kind, troops, '#ffb53d');
       if (victim.kind !== 'soldier' && victim.kind !== 'at') hud.killConfirm(victim.kind, troops);
       ctx.bus.emit('uiSound', { kind: 'notify' });
@@ -2139,6 +2149,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   }
 
   const dirWord = (brg: number): string => t(`command.dir.${Math.round(brg / 45) % 8}`);
+  /** «unos N» soldiers: two significant figures (16.250 → 16.000, 463 → 460, 46 → 46). */
+  const roundTroops = (n: number): number => {
+    if (n < 100) return Math.round(n);
+    const p = Math.pow(10, Math.floor(Math.log10(n)) - 1);
+    return Math.round(n / p) * p;
+  };
 
   /** The chip and the world marker of the nearest action, every 250 ms. */
   function updateCombat(): void {
@@ -2151,13 +2167,14 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const bi = kind === 'tank' ? forces.battle.info() : null;
     if (bi?.active && bi.hot) {
       const foe = bi.sides.find((q) => q.team === 1);
-      const ours = bi.sides.filter((q) => q.team === 0).reduce((n, q) => n + q.shown, 0);
-      const theirs = bi.sides.filter((q) => q.team === 1).reduce((n, q) => n + q.shown, 0);
+      // The sim's troops in this stretch (the figures are their picture, drawn at a battle's density).
+      const ours = bi.sides.filter((q) => q.team === 0).reduce((n, q) => n + q.localTroops, 0);
+      const theirs = bi.sides.filter((q) => q.team === 1).reduce((n, q) => n + q.localTroops, 0);
       const level = t(`command.battle.level.${bi.heat >= 0.85 ? 3 : bi.heat >= 0.6 ? 2 : bi.heat >= 0.35 ? 1 : 0}`);
       const hd = Math.hypot(bi.hot.x - P.pos.x, bi.hot.z - P.pos.z);
       const brg = (Math.atan2(bi.hot.x - P.pos.x, -(bi.hot.z - P.pos.z)) * 180 / Math.PI + 360) % 360;
       const dist = hd >= 1000 ? `${formatNumber(hd / 1000, 1)} km` : `${Math.round(hd / 10) * 10} m`;
-      const counts = { ours: formatNumber(ours), theirs: formatNumber(theirs), level };
+      const counts = { ours: formatNumber(roundTroops(ours)), theirs: formatNumber(roundTroops(theirs)), level };
       overlay.setCombat({
         title: t('command.battle.title', { nation: nationName(foe?.owner ?? 0) }),
         sub: hd > 250 ? t('command.battle.hotSub', { d: dist, ...counts }) : t('command.battle.sub', counts),
@@ -2187,7 +2204,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         battleNoticed.add(bi.frontKey);
         const own = bi.sides.find((q) => q.team === 0);
         const role = own?.role === 'attack' ? 'attack' : own?.role === 'defend' ? 'defend' : 'hold';
-        overlay.showNotice(`${t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(theirs), ours: formatNumber(ours), km: formatNumber((HALF_WINDOW_M * 2) / 1000, 1), role: t(`command.battle.role.${role}`) })}${more ? ` ${more}` : ''}`, 9);
+        overlay.showNotice(`${t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(roundTroops(theirs)), ours: formatNumber(roundTroops(ours)), km: formatNumber((HALF_WINDOW_M * 2) / 1000, 1), role: t(`command.battle.role.${role}`) })}${more ? ` ${more}` : ''}`, 9);
       } else if (more) overlay.showNotice(more, 5, true);
       return;
     }
@@ -2278,6 +2295,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       lastDrive = why;
       if (waypoint === wp) waypoint = null;
       if (why === 'arrived') {
+        // The fight is laid out around the tank where it sees it (figures behind a crest come into its sight).
+        forces?.battle.relayoutAround(P);
         overlay?.showNotice(t('command.go.inBattle'), 3.5);
         // The view turns to the fighting (the mouse takes it from there).
         const hb = forces?.battle.info().hot;
@@ -3722,6 +3741,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       if (Math.abs(fd - fog.density) > fogBase * 0.02) applyAtmosphere(atmos, fd);
       applyShake(realDt);
       camera.updateMatrixWorld();
+      // Owner item 32: through the gunner's sight (13°, low) the grass a few metres ahead would fill the view.
+      grass?.fadeNear(camera.position, controller.hud.zoom && !camOverride ? 36 : 0);
       // Night (#29b): own lights, illumination flares over the fighting.
       {
         const hN = P && kind !== 'jet' ? forces.nearestHostile(P.pos) : null;
