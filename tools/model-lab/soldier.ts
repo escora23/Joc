@@ -1,7 +1,7 @@
 // FRONT ULTRA — soldier lab (dev tool): the command-mode soldier (models/soldier.ts) in every pose and variant, in
 // the nation colours, with the game's own animated material. ?t=<world seconds>&d=<camera distance m>&az=<deg>
 import * as THREE from 'three';
-import { addSoldierInstancing, buildSoldierGeometry, makeSoldierMaterials, POSE } from '../../src/command/models/soldier';
+import { addSoldierInstancing, buildSoldierGeometry, fieldUniform, makeSoldierMaterials, POSE } from '../../src/command/models/soldier';
 
 const q = new URLSearchParams(location.search);
 const T = Number(q.get('t') ?? 0.3);
@@ -41,7 +41,8 @@ for (let v = 0; v < 3; v++) {
     m.makeTranslation((i - (poses.length - 1) / 2) * 2.2, 0, (v - 1) * 3.2);
     im.setMatrixAt(i, m);
     const n = new THREE.Color(nations[v]);
-    c.setRGB(v === 1 ? 0.5 : 0.34, v === 1 ? 0.43 : 0.38, v === 1 ? 0.3 : 0.25).lerp(n, 0.2);
+    // The game's own uniform: row 0 and 2 ours, row 1 theirs.
+    fieldUniform(v === 1 ? 1 : 0, nations[v], 0.13 * i + v * 0.31, c);
     im.setColorAt(i, c);
     at.anim.setXYZW(i, p, 0.1 * i, p === POSE.aim || p === POSE.kneel || p === POSE.prone ? T - 0.03 : -100, p === POSE.dead ? T - 0.25 - i * 0.1 : 0);
     at.band.setXYZW(i, n.r, n.g, n.b, 0.3);

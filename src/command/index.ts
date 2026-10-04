@@ -88,15 +88,19 @@ const STRUCT_KEY: Record<number, string> = { 0: 'city', 1: 'port', 2: 'factory',
  * then within the tank's gun range; an enemy unit, twice as far. Beyond HOP_KM more, the unit marches behind a fade on
  * the real clock (the whole world runs with it, like a strategic move); closer, the local autopilot drives.
  */
-// Owner item 32: a tank arrives among its own line (its waves stand 260-700 m behind the contact), not 1.2 km short.
-const STOP_KM: Record<CommandKind, number> = { tank: 0.6, jet: 12, ship: 8 };
+// Owner item 32: a tank arrives in the battle, among its own line (its waves stand 260-700 m behind the contact, the
+// forward trench 115 m), with the enemy's line in front within the coax's reach: not 1.2 km short behind a ridge.
+const STOP_KM: Record<CommandKind, number> = { tank: 0.35, jet: 12, ship: 8 };
 const HOP_KM: Record<CommandKind, number> = { tank: 0.8, jet: 20, ship: 6 };
 /** «Ir al combate» drives this last stretch (km) with the local autopilot (time compressed) instead of a march and a new scene. */
 const NEAR_DRIVE_KM: Record<CommandKind, number> = { tank: 4, jet: 20, ship: 6 };
 /** An enemy entity this close is contact: the chip says so and there is nothing to travel to. */
 const REACH_M: Record<CommandKind, number> = { tank: 4000, jet: 15000, ship: 12000 };
-/** A tank this close (km) to a contact line at war, with enemy soldiers on it, has them within REACH_M in the scene. */
-const CONTACT_LINE_KM = 1.0;
+/**
+ * A tank this close (km) to a contact line at war, with enemy soldiers on it, has them within REACH_M in the scene;
+ * the march goes on until then (owner item 32: in the battle, not a kilometre short of it).
+ */
+const CONTACT_LINE_KM = 0.5;
 /** A march to the action gives up after this many legs (each follow-on leg costs about 2.4 real s). */
 const MAX_LEGS = 8;
 /** Beyond this the chip offers «Ir al frente más cercano» (a far unit) instead of «Ir al combate». */
@@ -932,7 +936,6 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   const ramCd = new Map<Ent, number>();
   const ramStats = { men: 0, vehicles: 0, vehicleKills: 0, selfDmg: 0, houses: 0, trees: 0, fences: 0, asked: 0, last: '' };
   let ramAskWall = 0;
-  let ramLog = 0;
   const ramTmp = new THREE.Vector3();
 
   function ramFeed(text: string): void {
@@ -991,7 +994,6 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       ramFeed(t('command.ram.soldier'));
       return 'pass';
     }
-    if (ramLog++ < 30) console.info(`[command] ram ${o.kind} closing ${closing.toFixed(1)} m/s, speed ${speed.toFixed(1)}, team ${o.team}, alive ${o.alive}`);
     if (!o.alive || o.team === 0 || closing < 2.2) return 'block';
     const now = world.time;
     if ((ramCd.get(o) ?? -1) > now) return 'block';
@@ -1483,6 +1485,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     cadence.length = 0;
     lastMoveLocal = -1e9;
     localSec = startSec = ctx.sim.view.command?.sec ?? 0;
+    seekHotSec = localSec;
     startCmdSec = ctx.sim.view.command ? ctx.sim.view.command.sec : -1;
     startWall = performance.now();
     landOwner = prevLandOwner = holderOfScene(me.pos.x, me.pos.z);
@@ -2137,18 +2140,29 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       overlay.setCombat({
         title: t('command.battle.title', { nation: nationName(foe?.owner ?? 0) }),
         sub: hd > 250 ? t('command.battle.hotSub', { d: dist, ...counts }) : t('command.battle.sub', counts),
-        dist: `${dist} · ${dirWord(brg)}`, contact: !!(h.ent && h.dist < REACH_M[kind]), go: '',
+        dist: `${dist} · ${dirWord(brg)}`, contact: !!(h.ent && h.dist < REACH_M[kind]),
+        // Far from the hottest stretch (and not already driving there): the chip's button drives there (as G does).
+        go: hd > 450 && !(controller instanceof TankController && controller.driveTo) ? t('command.go.combat') : '',
       });
       overlay.combatMarker = { pos: tmp3.set(bi.hot.x, bi.hot.y + 25, bi.hot.z), text: `${t('command.battle.level.' + (bi.heat >= 0.85 ? 3 : bi.heat >= 0.6 ? 2 : bi.heat >= 0.35 ? 1 : 0))} · ${dist}`, contact: true };
       chipAim = { x: bi.hot.x, z: bi.hot.z, km: hd / 1000 };
       if (entryGoal && entryGoal.km < STOP_KM[kind] * 4) entryGoal = null;
+      // Taken here to fight (an entry with a goal, a march): the tank drives on to the hottest stretch by itself (any
+      // driving key takes over).
+      let toHot = -1;
+      if (seekHot && phase === 'play') {
+        seekHot = false;
+        // Only on arriving (a battle reached later by the player's own driving is the player's business).
+        if (localSec - seekHotSec < 90) toHot = driveToHot();
+      }
+      const more = toHot >= 150 ? t('command.go.autoHot', { m: formatNumber(Math.round(toHot / 10) * 10) }) : '';
       // The first time at this battle: what stands here and what is going on, in one line.
-      if (!battleNoticed.has(bi.frontKey) && phase === 'play' && ours + theirs > 0 && !overlay.noticeText) {
+      if (!battleNoticed.has(bi.frontKey) && phase === 'play' && ours + theirs > 0 && (!overlay.noticeText || more)) {
         battleNoticed.add(bi.frontKey);
         const own = bi.sides.find((q) => q.team === 0);
         const role = own?.role === 'attack' ? 'attack' : own?.role === 'defend' ? 'defend' : 'hold';
-        overlay.showNotice(t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(theirs), ours: formatNumber(ours), km: formatNumber((HALF_WINDOW_M * 2) / 1000, 1), role: t(`command.battle.role.${role}`) }), 8);
-      }
+        overlay.showNotice(`${t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(theirs), ours: formatNumber(ours), km: formatNumber((HALF_WINDOW_M * 2) / 1000, 1), role: t(`command.battle.role.${role}`) })}${more ? ` ${more}` : ''}`, 9);
+      } else if (more) overlay.showNotice(more, 5, true);
       return;
     }
     if (h.ent && h.dist < REACH_M[kind]) {
@@ -2199,6 +2213,38 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     return !(incursionOwner(o) && !confirmed.has(o));
   }
 
+  /** The battle's stand-off point at its hottest stretch (scene), or null without a battle. */
+  function hotStandOff(): THREE.Vector3 | null {
+    if (kind !== 'tank' || !forces) return null;
+    const bi = forces.battle.info();
+    return bi.active && bi.hot ? forces.battle.standOff(bi.hot, 220, new THREE.Vector3()) : null;
+  }
+
+  /**
+   * Owner item 32: in a battle at the front, «Ir al combate» drives the tank (at tactical speed, steering by itself) to
+   * the battle's hottest stretch, where the assault is and the shells and the falls of the last seconds are: 220 m
+   * behind the contact line on our side, level with it. Returns the distance (m) to it (no drive under 150 m), or -1
+   * without a battle.
+   */
+  function driveToHot(): number {
+    const P = player();
+    const dest = hotStandOff();
+    if (!P || !dest || !(controller instanceof TankController)) return -1;
+    const d = Math.hypot(dest.x - P.pos.x, dest.z - P.pos.z);
+    if (d < 150) return d;
+    const tc = controller;
+    tc.driveTo = dest;
+    waypoint = new THREE.Vector3(dest.x, dest.y + 20, dest.z);
+    tc.onDriveEnd = (arrived) => {
+      if (waypoint && Math.hypot(waypoint.x - dest.x, waypoint.z - dest.z) < 1) waypoint = null;
+      if (arrived) overlay?.showNotice(t('command.go.inBattle'), 3.5);
+    };
+    return d;
+  }
+  /** Taken to an action (an entry with a goal, a march): on reaching the battle, drive on to its hottest stretch. */
+  let seekHot = false;
+  let seekHotSec = 0;
+
   /** «Ir al combate» (G, or the chip's button). */
   async function goToCombat(): Promise<void> {
     if (marchLegs === 0) marchLegs = 1;
@@ -2206,6 +2252,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const P = player();
     if (!P || !forces) return;
     refreshTargets(true);
+    // Owner item 32: in a battle at the front, G drives to its hottest stretch (where the assault is and the shells
+    // and the falls of the last seconds are), among our own line: 220 m behind the contact line, level with it.
+    const toHot = driveToHot();
+    if (toHot >= 0) {
+      overlay.showNotice(toHot < 150 ? t('command.go.inBattle') : t('command.go.battle', { m: formatNumber(Math.round(toHot / 10) * 10) }), toHot < 150 ? 3.5 : 4.5, toHot >= 150);
+      return;
+    }
     const h = forces.nearestHostile(P.pos);
     if (h.ent && h.dist < REACH_M[kind]) {
       overlay.showNotice(t('command.go.already', { m: formatNumber(Math.round(h.dist / 10) * 10) }), 3.5);
@@ -2625,6 +2678,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       tile: Math.floor(at.y) * MAP_W + Math.floor(at.x), worldTimeSec: params.worldTimeSec,
     };
     params = p;
+    // Owner item 32: a march to a fight ends in its battle: the tank drives on to the hottest stretch.
+    seekHot = kind === 'tank';
     try {
       await build(p, true);
     } catch (err) {
@@ -2638,6 +2693,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     phaseT = 0;
     // The march took game hours: the local clock catches up with the sim's.
     localSec = ctx.sim.view.command?.sec ?? localSec;
+    seekHotSec = localSec;
     hud?.setCinematic(false);
     updateInfo(performance.now());
     refreshTargets(true);
@@ -3245,6 +3301,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
           }
         }
         entryGoal = { kind: 'battle', tx: gx, ty: gy, km: tileKm(ux, uy, gx, gy), owner: gfoe, frontKey: entryFrontKey || undefined };
+        // Owner item 32: taken to a battle, the tank drives on to its hottest stretch once the battle stands up.
+        seekHot = kind === 'tank';
         const inContact = kind === 'tank' && (entryFrontKey || entryAttackId) ? simContact(ux, uy) : entryGoal.km - stop < HOP_KM[kind];
         if (!inContact) {
           const route = planRoute(ux, uy, gx, gy, stop, passableTile, kind === 'jet' ? 4000 : 2500);
@@ -3693,6 +3751,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
               active: b.active, frontKey: b.frontKey, heat: +b.heat.toFixed(2), shells10: b.shells10, fallen10: b.fallen10,
               hotM: b.hot ? Math.round(Math.hypot(b.hot.x - P.pos.x, b.hot.z - P.pos.z)) : -1,
               lineM: b.near ? Math.round(Math.hypot(b.near.x - P.pos.x, b.near.z - P.pos.z)) : -1,
+              // Owner item 32: the auto-drive to the hottest stretch (G, or on arrival) and how far its stand-off is.
+              driving: controller instanceof TankController && !!controller.driveTo,
+              standM: (() => { const so = hotStandOff(); return so ? Math.round(Math.hypot(so.x - P.pos.x, so.z - P.pos.z)) : -1; })(),
               sides: b.sides.map((q) => ({ owner: q.owner, team: q.team, role: q.role, shown: q.shown, target: q.target, perKm: Math.round(q.perKm), vehicles: q.vehicles })),
             };
           })(),

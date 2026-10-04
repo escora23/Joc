@@ -206,6 +206,21 @@ export class BattleLine {
     };
   }
 
+  /**
+   * Owner item 32 («Ir al combate» inside a battle): the point `depth` m behind the line on the friendly side, level
+   * with `at` along the line (null without a battle or a friendly side). With an assault of ours, that is among our
+   * waves with the enemy trench in front; holding, just behind our forward trench.
+   */
+  standOff(at: THREE.Vector3, depth: number, out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.active || !this.centre) return null;
+    const own = [...this.sides.values()].find((q) => q.team === 0);
+    if (!own) return null;
+    const s = this.alongOf(at.x - this.centre.x, at.z - this.centre.z);
+    this.at(Math.max(-HALF_WINDOW_M, Math.min(HALF_WINDOW_M, s)), own.sign * depth, out);
+    out.y = this.host.ground.heightAt(out.x, out.z);
+    return out;
+  }
+
   /** Owners whose infantry this battle stands (forces.ts then leaves their front pools to it). */
   owners(): Set<number> {
     return new Set(this.active ? [...this.sides.keys()] : []);

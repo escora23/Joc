@@ -43,7 +43,7 @@ const SHOULDER_Y = 1.41;
 const C_UNI = 0xc8c8c8; // multiplied by the instance's uniform colour
 const C_UNI_D = 0xaaaaaa;
 const C_SKIN = [0xc8987a, 0x9a6a4c, 0xe0b090];
-const C_GEAR = 0x45463a;
+const C_GEAR = 0x4d5040;
 const C_BOOT = 0x26221e;
 const C_GUN = 0x1f2022;
 const C_GUN_W = 0x4a3a2a;
@@ -167,8 +167,15 @@ export function buildSoldierGeometry(variant: 0 | 1 | 2, hi: boolean, skin = 0):
     for (const px of [-0.12, 0, 0.12]) s.box(0.1, 0.12, 0.06, C_GEAR, px, 1.12, -0.165);
     s.box(0.42, 0.06, 0.27, C_GEAR, 0, 0.99, 0);
   }
-  s.box(0.32, 0.36, 0.17, C_GEAR, 0, 1.24, 0.22);
-  if (hi) s.box(0.34, 0.1, 0.14, 0x3a3a30, 0, 1.46, 0.2);
+  // Assault pack in the uniform's darker shade (a black box on the back read as a crate), bedroll on top.
+  s.tint = T_HELMET;
+  s.box(0.28, 0.3, 0.15, C_UNI, 0, 1.2, 0.2);
+  if (hi) {
+    s.box(0.22, 0.12, 0.05, C_UNI_D, 0, 1.12, 0.285);
+    s.tint = T_FIXED;
+    s.cyl(0.055, 0.055, 0.32, 0x5a5440, 0, 1.4, 0.19, 0, 0, Math.PI / 2);
+  }
+  s.tint = T_FIXED;
   // Neck and head.
   s.cyl(0.055, 0.06, 0.1, sk, 0, 1.49, -0.01);
   s.sphere(0.1, sk, 0, 1.585, -0.02, 0.92, 1.12, 1.0);
@@ -242,6 +249,28 @@ export function buildSoldierGeometry(variant: 0 | 1 | 2, hi: boolean, skin = 0):
     }
   }
   return s.build();
+}
+
+// =================================================================================================
+// Uniform colours
+// =================================================================================================
+
+const UNI_BASE = [new THREE.Color(0x737b58), new THREE.Color(0x8b7d5c)];
+const UNI_HSL = { h: 0, s: 0, l: 0 };
+const UNI_TMP = new THREE.Color();
+
+/**
+ * A soldier's field uniform (linear, multiplied by the model's vertex colours): the side's field shade (olive for
+ * ours, khaki for theirs) blended with a muted, dark version of the nation's colour, so a red nation wears a brown-red
+ * field dress and a blue one a blue-grey (never a pink or bright suit that reads as bare skin), plus a little variety
+ * per man. The nation's full colour is on the helmet band and the arm band.
+ */
+export function fieldUniform(team: 0 | 1, nationHex: number, seed: number, out: THREE.Color): THREE.Color {
+  out.copy(UNI_BASE[team]);
+  UNI_TMP.setHex(nationHex).getHSL(UNI_HSL, THREE.SRGBColorSpace);
+  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.38, UNI_HSL.s * 0.5), 0.34, THREE.SRGBColorSpace);
+  out.lerp(UNI_TMP, 0.42);
+  return out.multiplyScalar(0.9 + ((seed * 997) % 1) * 0.18);
 }
 
 // =================================================================================================

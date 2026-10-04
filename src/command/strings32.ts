@@ -4,8 +4,8 @@ import { registerDictionary } from '../shared/i18n';
 
 const es: Record<string, string> = {
   'command.battle.title': 'Batalla en la línea contra {nation}',
-  'command.battle.sub': 'Intensidad {level} · a la vista {ours} nuestros y {theirs} enemigos (1 figura = 25 soldados)',
-  'command.battle.hotSub': 'Lo más duro, a {d} · intensidad {level} · {ours} nuestros, {theirs} enemigos a la vista',
+  'command.battle.sub': 'Intensidad {level} · en este tramo {ours} nuestros y {theirs} enemigos (1 figura = 25 soldados)',
+  'command.battle.hotSub': 'Lo más duro, a {d} · intensidad {level} · {ours} nuestros y {theirs} enemigos en este tramo',
   'command.battle.level.0': 'baja',
   'command.battle.level.1': 'media',
   'command.battle.level.2': 'alta',
@@ -28,12 +28,15 @@ const es: Record<string, string> = {
   'command.ram.stop': 'Frenar',
   'command.target.lock': 'BLANCO',
   'command.lead.he': 'apunta aquí',
+  'command.go.battle': 'Hacia lo más duro del combate, a {m} m, entre nuestra línea. Conduce solo: cualquier tecla de marcha toma el mando.',
+  'command.go.autoHot': 'Tu carro avanza solo hasta lo más duro, a {m} m (cualquier tecla de marcha toma el mando).',
+  'command.go.inBattle': 'Estás en lo más duro del combate: la línea enemiga está justo delante.',
 };
 
 const en: Record<string, string> = {
   'command.battle.title': 'Battle on the line against {nation}',
-  'command.battle.sub': 'Intensity {level} · in view {ours} ours and {theirs} enemy (1 figure = 25 troops)',
-  'command.battle.hotSub': 'Heaviest fighting {d} away · intensity {level} · {ours} ours, {theirs} enemy in view',
+  'command.battle.sub': 'Intensity {level} · in this stretch {ours} ours and {theirs} enemy (1 figure = 25 troops)',
+  'command.battle.hotSub': 'Heaviest fighting {d} away · intensity {level} · {ours} ours and {theirs} enemy in this stretch',
   'command.battle.level.0': 'low',
   'command.battle.level.1': 'medium',
   'command.battle.level.2': 'high',
@@ -56,6 +59,9 @@ const en: Record<string, string> = {
   'command.ram.stop': 'Brake',
   'command.target.lock': 'TARGET',
   'command.lead.he': 'aim here',
+  'command.go.battle': 'Heading for the heaviest fighting, {m} m away, among our line. It drives itself: any driving key takes over.',
+  'command.go.autoHot': 'Your tank drives itself to the heaviest fighting, {m} m away (any driving key takes over).',
+  'command.go.inBattle': 'You are where the fighting is heaviest: the enemy line is right ahead.',
 };
 
 export const COMMAND_STRINGS_32 = { es, en };

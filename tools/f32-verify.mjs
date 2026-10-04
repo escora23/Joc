@@ -60,7 +60,19 @@ const census = (page) => page.evaluate(() => {
   const cam = I.camera, W = innerWidth, H = innerHeight;
   const v = cam.position.clone();
   const P = I.world.player;
-  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], near1km: [0, 0], dead: 0 };
+  const c = { soldiers: [0, 0], vehicles: [0, 0], screenSoldiers: [0, 0], screenVehicles: [0, 0], seenSoldiers: [0, 0], seenVehicles: [0, 0], near1km: [0, 0], dead: 0 };
+  const cp = cam.position;
+  // In the line of sight of the camera (the ground between does not hide it): what a player really sees.
+  const sees = (x, y, z) => {
+    const n = Math.max(8, Math.min(48, Math.round(Math.hypot(x - cp.x, z - cp.z) / 25)));
+    for (let k = 1; k < n; k++) {
+      const f = k / n;
+      if (f > 0.97) break;
+      const qx = cp.x + (x - cp.x) * f, qz = cp.z + (z - cp.z) * f, qy = cp.y + (y - cp.y) * f;
+      if (I.ground.heightAt(qx, qz) > qy) return false;
+    }
+    return true;
+  };
   for (const e of I.world.ents) {
     if (e.player) continue;
     const man = e.kind === 'soldier' || e.kind === 'at';
@@ -75,6 +87,7 @@ const census = (page) => page.evaluate(() => {
     v.project(cam);
     if (v.z > 1 || v.z < -1 || v.x < -1 || v.x > 1 || v.y < -1 || v.y > 1) continue;
     if (man) c.screenSoldiers[t]++; else c.screenVehicles[t]++;
+    if (sees(e.pos.x, e.pos.y + (man ? (e.pose === 4 ? 0.35 : 0.9) : 1.5), e.pos.z)) { if (man) c.seenSoldiers[t]++; else c.seenVehicles[t]++; }
   }
   return { ...c, stats: window.__cmdStats?.battle ?? null, combat: window.__cmdStats?.combat ?? '', phase: window.__cmdStats?.phase };
 });
@@ -318,6 +331,13 @@ async function scale() {
   row('S1', 'soldiers of both sides around the player (sim density, believable cap)', `${c.soldiers[0]} ours + ${c.soldiers[1]} enemy alive in the scene, ${c.near1km[0] + c.near1km[1]} within 1 km; ${shown}`, !!play && c.soldiers[0] + c.soldiers[1] >= 300 && c.soldiers[1] >= Math.min(40, b?.sides.find((q) => q.team === 1)?.target ?? 0));
   row('S2', 'vehicles in the battle', `${c.vehicles[0]} ours, ${c.vehicles[1]} enemy`, c.vehicles[0] + c.vehicles[1] >= 4);
   await snap(page, 'scale-1-chase');
+  // Taken here to fight: the tank drives on by itself to the battle's hottest stretch (220 m behind the line).
+  const d0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
+  await until(page, () => (window.__cmdStats?.battle?.driving ? null : true), null, 600000, 1000);
+  const d1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
+  row('S7', 'arrival: the tank drives on to the hottest stretch by itself', `at entry: line ${d0.lineM} m, hot point ${d0.hotM} m, stand-off ${d0.standM} m (driving ${d0.driving}); after ${Math.round(d1.t - d0.t)} s: line ${d1.lineM} m, hot point ${d1.hotM} m, stand-off ${d1.standM} m`, d1.lineM >= 0 && d1.lineM < 500 && d1.standM < 200);
+  c = await census(page);
+  await snap(page, 'scale-1b-arrived');
   // Look at the hottest point from the tank (the turret turned there) and count what the camera shows.
   await page.evaluate(() => {
     const I = window.__cmd, b = I.forces.battle.info();
@@ -330,7 +350,7 @@ async function scale() {
   });
   await sleep(2500);
   c = await census(page);
-  row('S3', 'visible on screen from the tank toward the fighting', `${c.screenSoldiers[0]} ours + ${c.screenSoldiers[1]} enemy soldiers, ${c.screenVehicles[0] + c.screenVehicles[1]} vehicles in the view`, c.screenSoldiers[0] + c.screenSoldiers[1] >= 100);
+  row('S3', 'visible on screen from the tank toward the fighting (in the frame and not behind the ground)', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy soldiers and ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles in sight (${c.screenSoldiers[0] + c.screenSoldiers[1]} soldiers inside the frame counting those behind hills)`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 100);
   await snap(page, 'scale-2-toward-fight');
   // Activity over 20 s.
   const t0 = await page.evaluate(() => ({ kills: window.__cmd.world.stats.kills, t: window.__cmd.world.time, dead: window.__cmd.world.ents.filter((e) => !e.alive && (e.kind === 'soldier' || e.kind === 'at')).length }));
@@ -389,6 +409,41 @@ async function combat() {
   await sleep(3000);
   const b = await page.evaluate(() => window.__cmdStats?.battle);
   console.log(`   battle on the plain: ${JSON.stringify(b)}`);
+  if (!only || only.has('plain')) {
+    // The same battle seen on open ground: what the crew sees from the tank at entry and turned toward the hot point.
+    let c = await census(page);
+    await snap(page, 'plain-1-entry');
+    row('P1', 'on the plain: soldiers in sight from the tank at entry', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in sight, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles (${c.soldiers[0]} + ${c.soldiers[1]} in the scene)`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 60);
+    await page.evaluate(() => {
+      const I = window.__cmd, b = I.forces.battle.info(), P = I.world.player, at = b.hot ?? b.near;
+      if (at && P) { I.controller.aimAt(at.clone().setY(at.y + 2)); P.yaw = Math.atan2(-(at.x - P.pos.x), -(at.z - P.pos.z)); }
+    });
+    await sleep(3000);
+    c = await census(page);
+    await snap(page, 'plain-2-toward-fight');
+    row('P2', 'on the plain: soldiers in sight toward the hot point', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy in sight, ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 100);
+    // «Ir al combate» (G) drives to the hottest stretch when it is far: the tank is put 800 m back along its own side.
+    await page.evaluate(() => {
+      const I = window.__cmd, b = I.forces.battle.info(), P = I.world.player;
+      const so = I.forces.battle.standOff(b.hot, 1000, P.pos.clone());
+      if (so) { P.pos.copy(so); P.pos.y = I.ground.heightAt(so.x, so.z); }
+    });
+    await sleep(2500);
+    const g0 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
+    await page.keyboard.press('KeyG');
+    await sleep(1500);
+    const gNotice = await page.evaluate(() => window.__cmdStats?.notice ?? '');
+    await until(page, () => (window.__cmdStats?.battle?.driving ? null : true), null, 600000, 1000);
+    const g1 = await page.evaluate(() => ({ ...window.__cmdStats.battle, t: window.__cmd.world.time }));
+    row('G1', '«Ir al combate» (G) inside the battle drives to its hottest stretch', `before: stand-off ${g0.standM} m, line ${g0.lineM} m; «${gNotice}»; after ${Math.round(g1.t - g0.t)} s: stand-off ${g1.standM} m, line ${g1.lineM} m`, g0.standM > 400 && g1.standM < 200);
+    await snap(page, 'plain-2b-after-G');
+    // The gunner's sight (what the right button shows) on the hot point.
+    await page.evaluate(() => window.__cmd.controller.setZoom?.(true));
+    await sleep(2500);
+    await snap(page, 'plain-3-sight');
+    await page.evaluate(() => window.__cmd.controller.setZoom?.(false));
+    await sleep(1000);
+  }
   if (!only || only.has('kill')) await kill(page).catch((e) => console.log('[kill]', e));
   if (!only || only.has('ram')) await ram(page).catch((e) => console.log('[ram]', e));
   await page.close();
@@ -444,7 +499,7 @@ async function close() {
 
 const sections = { scale, close, mg: mgFactory, combat };
 for (const [k, fn] of Object.entries(sections)) {
-  if (only && !only.has(k) && !(k === 'combat' && (only.has('kill') || only.has('ram')))) continue;
+  if (only && !only.has(k) && !(k === 'combat' && (only.has('kill') || only.has('ram') || only.has('plain')))) continue;
   try {
     await fn();
   } catch (e) {

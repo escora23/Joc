@@ -66,6 +66,15 @@ export class TankController implements Controller {
     this.aimPitch = Math.atan2(p.y - this.ent.pos.y - 3, Math.hypot(dx, dz)) + 0.03;
   }
 
+  /**
+   * Owner item 32: «Ir al combate» inside a battle drives the tank at tactical speed to this point (the hottest stretch
+   * of the line), steering by itself; any driving key takes over. Cleared on arrival (within 45 m).
+   */
+  driveTo: THREE.Vector3 | null = null;
+  /** Called once when the drive-to point is reached (or given up after being stuck). */
+  onDriveEnd: ((arrived: boolean) => void) | null = null;
+  private driveStuck = 0;
+
   /** Gunner's sight on/off (staging; players hold the right mouse button). */
   setZoom(on: boolean): void {
     this.zoom = on;
@@ -91,6 +100,14 @@ export class TankController implements Controller {
     this.shoot();
   }
 
+  private endDrive(arrived: boolean): void {
+    this.driveTo = null;
+    this.driveStuck = 0;
+    const cb = this.onDriveEnd;
+    this.onDriveEnd = null;
+    cb?.(arrived);
+  }
+
   update(dt: number, allowInput: boolean): void {
     const c = this.c;
     const e = this.ent;
@@ -107,9 +124,27 @@ export class TankController implements Controller {
       this.zoom = inp.rmb || this.forceZoom;
     }
     // --- Drive ------------------------------------------------------------------------------
-    const fwdIn = allowInput ? (inp.down('KeyW') || inp.down('ArrowUp') ? 1 : 0) - (inp.down('KeyS') || inp.down('ArrowDown') ? 1 : 0) : 0;
-    const turnIn = allowInput ? (inp.down('KeyA') || inp.down('ArrowLeft') ? 1 : 0) - (inp.down('KeyD') || inp.down('ArrowRight') ? 1 : 0) : 0;
-    this.speedTarget = fwdIn > 0 ? Math.min(17, c.speedCap) : fwdIn < 0 ? -Math.min(6.5, c.speedCap) : 0;
+    let fwdIn = allowInput ? (inp.down('KeyW') || inp.down('ArrowUp') ? 1 : 0) - (inp.down('KeyS') || inp.down('ArrowDown') ? 1 : 0) : 0;
+    let turnIn = allowInput ? (inp.down('KeyA') || inp.down('ArrowLeft') ? 1 : 0) - (inp.down('KeyD') || inp.down('ArrowRight') ? 1 : 0) : 0;
+    let cruise = 17;
+    if (this.driveTo) {
+      if (fwdIn !== 0 || turnIn !== 0) this.endDrive(false);
+      else {
+        const dx = this.driveTo.x - e.pos.x, dz = this.driveTo.z - e.pos.z;
+        const dist = Math.hypot(dx, dz);
+        // Stuck against something for 6 s (a house, a cliff): the player drives from here.
+        this.driveStuck = Math.abs(e.speed) < 0.8 ? this.driveStuck + dt : 0;
+        if (dist < 45 || this.driveStuck > 6) this.endDrive(dist < 45);
+        else {
+          const turn = angleDelta(e.yaw, Math.atan2(-dx, -dz));
+          turnIn = Math.max(-1, Math.min(1, turn * 2.5));
+          // Slow in tight turns and for the last stretch.
+          fwdIn = 1;
+          cruise = Math.abs(turn) > 0.9 ? 4 : Math.min(14, 4 + dist * 0.08);
+        }
+      }
+    }
+    this.speedTarget = fwdIn > 0 ? Math.min(cruise, c.speedCap) : fwdIn < 0 ? -Math.min(6.5, c.speedCap) : 0;
     forwardOf(e.yaw, DIR);
     c.ground.normalAt(e.pos.x, e.pos.z, N, 2.5);
     const slopeAlong = -(N.x * DIR.x + N.z * DIR.z); // >0 uphill
