@@ -234,7 +234,11 @@ const CROWD_MIN_PX = 6.5;
  * made to blend into the ground; a few pixels of man read against sunlit grass and rock by contrast, as a silhouette.
  */
 function distTone(d: number): number {
-  return 1 - Math.max(0, Math.min(1, (d - 120) / 600)) * 0.4;
+  return 1 - Math.max(0, Math.min(1, (d - 200) / 800)) * 0.25;
+}
+/** How much of the nation's colour a figure takes at distance d (none within 250 m, 55 % from ~950 m). */
+function farTint(d: number): number {
+  return Math.max(0, Math.min(1, (d - 250) / 700)) * 0.55;
 }
 /** An active soldier at least this tall on screen gets the full figure (capsule limbs, face, gear); smaller, the light one. */
 const SOLDIER_HI_PX = 13;
@@ -745,7 +749,7 @@ export class World {
           // Readable far away: beyond ~500 m the uniform takes on more of the nation's colour (as the battle view's
           // masses do), so a line of men a kilometre off still reads as theirs or ours against the ground.
           this.uniformOf(e, this.tmpColor);
-          const far = Math.max(0, Math.min(1, (d - 450) / 1200)) * 0.45;
+          const far = farTint(d);
           if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
           this.tmpColor.multiplyScalar(distTone(d));
           if (!e.alive) this.tmpColor.multiplyScalar(0.7);
@@ -810,10 +814,12 @@ export class World {
           }
           e.speed = 0;
           e.vel.set(0, 0, 0);
-          this.setPose(e, e.variant === 1 || e.seed > 0.5 ? POSE.kneel : POSE.prone);
+          // Down to fire: most kneel (a man lying in the grass is invisible beyond a hundred metres), a third lie prone.
+          this.setPose(e, e.variant === 1 || e.seed > 0.33 ? POSE.kneel : POSE.prone);
         } else if (e.order === 'hold') {
           e.speed = 0;
-          this.setPose(e, e.variant === 2 || e.seed < 0.3 ? POSE.prone : POSE.kneel);
+          // A position: kneeling behind the parapet (head and shoulders over it), machine gunners lying at their gun.
+          this.setPose(e, e.variant === 2 || e.seed < 0.15 ? POSE.prone : POSE.kneel);
         } else {
           continue;
         }
@@ -1682,8 +1688,8 @@ export class World {
           const pose = e.neutral ? (e.speed > 0.3 ? POSE.walk : POSE.idle)
             : e.speed > 2.2 ? (e.seed < 0.5 ? POSE.rush : POSE.run)
               : e.speed > 0.3 ? POSE.walk
-                : fighting ? (e.variant === 2 || (e.order === 'hold' && e.seed < 0.3) ? POSE.prone : e.seed < 0.65 ? POSE.kneel : POSE.aim)
-                  : e.order === 'hold' ? (e.seed < 0.3 ? POSE.prone : POSE.kneel) : POSE.idle;
+                : fighting ? (e.variant === 2 || (e.order === 'hold' && e.seed < 0.15) ? POSE.prone : e.seed < 0.6 ? POSE.kneel : POSE.aim)
+                  : e.order === 'hold' ? (e.seed < 0.15 ? POSE.prone : POSE.kneel) : POSE.idle;
           this.setPose(e, pose);
         }
         this.e.set(0, e.yaw, 0, 'YXZ');
@@ -1698,7 +1704,14 @@ export class World {
         const m = hi ? im : lo;
         const j = hi ? nHi++ : nLo++;
         m.setMatrixAt(j, this.m4);
-        m.setColorAt(j, this.tmpColor.copy(uni).multiplyScalar(distTone(Math.hypot(e.pos.x - this.viewPos.x, e.pos.y - this.viewPos.y, e.pos.z - this.viewPos.z))));
+        {
+          // Far men take on their nation's colour and a darker tone, as the crowd does (two armies read apart).
+          const dv = Math.hypot(e.pos.x - this.viewPos.x, e.pos.y - this.viewPos.y, e.pos.z - this.viewPos.z);
+          this.tmpColor.copy(uni);
+          const far = farTint(dv);
+          if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
+          m.setColorAt(j, this.tmpColor.multiplyScalar(distTone(dv)));
+        }
         (hi ? anim : animLo).setXYZW(j, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);
         this.bandOf(e, hi ? band : bandLo, j);
       }

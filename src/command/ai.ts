@@ -641,7 +641,10 @@ export class Brain {
     const dx = e.moveT.x - e.pos.x, dz = e.moveT.z - e.pos.z;
     const dist = Math.hypot(dx, dz);
     let sp = 0;
-    if (e.state === 0) {
+    // A man holding a trench or a firing position stays in it (owner item 32, pass 2: he used to shuffle about it,
+    // drawn walking along the parapet).
+    const inPlace = e.order === 'hold' && Math.hypot(e.goal.x - e.pos.x, e.goal.z - e.pos.z) < 5;
+    if (e.state === 0 && !inPlace) {
       if (dist < 4) this.nextMoveTarget(e, 60);
       else {
         e.yaw += angleDelta(e.yaw, Math.atan2(-dx, -dz)) * Math.min(1, dt * 4);
@@ -649,6 +652,9 @@ export class Brain {
       }
     } else if (t) {
       e.yaw += angleDelta(e.yaw, Math.atan2(-(t.pos.x - e.pos.x), -(t.pos.z - e.pos.z))) * Math.min(1, dt * 5);
+    } else if (inPlace && (e.look.x !== 0 || e.look.z !== 0)) {
+      // In position, facing the other side's line.
+      e.yaw += angleDelta(e.yaw, Math.atan2(-(e.look.x - e.pos.x), -(e.look.z - e.pos.z))) * Math.min(1, dt * 3);
     }
     e.speed += (sp - e.speed) * Math.min(1, dt * 4);
     forwardOf(e.yaw, T1);

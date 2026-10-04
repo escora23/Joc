@@ -328,13 +328,14 @@ export class BattleLine {
         // Toward the fight: the direction to `at`.
         const fx = at.x - cand.x, fz = at.z - cand.z, fl = Math.hypot(fx, fz) || 1;
         let score = 0;
-        for (const m of marks) if (sees(cand.x, y0, cand.z, m.x, m.y, m.z)) score += 12;
+        for (const m of marks) if (sees(cand.x, y0, cand.z, m.x, m.y, m.z)) score += 15;
         for (const e of figs) {
           const dx = e.pos.x - cand.x, dz = e.pos.z - cand.z;
           const d = Math.hypot(dx, dz);
           if (d > 1200 || d < 1) continue;
           if (!sees(cand.x, y0, cand.z, e.pos.x, e.pos.y + 1, e.pos.z)) continue;
-          score += (dx * fx + dz * fz) / (d * fl) > 0.34 ? 1 : 0.25;
+          // The enemy in sight counts most (there are fewer of them, and they are what the crew has come to fight).
+          score += ((dx * fx + dz * fz) / (d * fl) > 0.34 ? 1 : 0.25) * (e.team === 1 ? 3 : 0.6);
         }
         score -= (Math.abs(ds) + Math.abs(dd - depth)) * 0.02;
         if (score > best) {
@@ -344,6 +345,23 @@ export class BattleLine {
       }
     }
     return out;
+  }
+
+  /** Changes whenever the battle's ground does (the grass is trodden down again: index.ts → Grass.trample). */
+  groundVersion = 0;
+
+  /**
+   * Owner item 32 (pass 2): the grass is trodden down where the battle is fought (both sides' lines and no man's land,
+   * along the stretch): clumps there are a third of their height, so men kneeling or lying in the open stay in sight.
+   */
+  trampled(x: number, z: number): number {
+    if (!this.active || !this.centre) return 1;
+    const s = this.alongOf(x - this.centre.x, z - this.centre.z);
+    if (Math.abs(s) > HALF_WINDOW_M + 150) return 1;
+    const nrm = { x: 0, z: 0 };
+    const q = this.at(s, 0, V3, nrm);
+    const d = Math.abs((x - q.x) * nrm.x + (z - q.z) * nrm.z);
+    return d < WAVE_D1 + 150 ? 0.35 : d < WAVE_D1 + 250 ? 0.35 + ((d - WAVE_D1 - 150) / 100) * 0.65 : 1;
   }
 
   /** Owners whose infantry this battle stands (forces.ts then leaves their front pools to it). */
@@ -645,6 +663,7 @@ export class BattleLine {
     for (const st of this.sides.values()) this.withdraw(st, player);
     this.sides.clear();
     this.active = false;
+    this.groundVersion++;
     this.frontKey = 0;
     this.heat = 0;
     this.host.world.battleHeat = 0;
@@ -805,11 +824,12 @@ export class BattleLine {
       const r = rng.next();
       let s = 0, d = 0, order: 'hold' | 'front' = 'hold';
       const goal = new THREE.Vector3();
-      // Of a few places along the line, the first in the player's sight (see the attack above).
-      for (let tr = 0; tr < 3; tr++) {
+      // Of a few places along the line, the first in the player's sight (see the attack above); after two tries in
+      // the trench itself, a firing position (a foxhole) up to 60 m before it or 40 m behind it.
+      for (let tr = 0; tr < 5; tr++) {
         s = this.spread(rng.next());
-        if (initial ? r < 0.55 : r < 0.15) d = this.trenchDepth(st.sign, TRENCH_D, s) + 0.5 + rng.next() * 0.6;
-        else if (initial ? r < 0.8 : r < 0.4) d = this.trenchDepth(st.sign, TRENCH2_D, s) + 0.5 + rng.next() * 0.6;
+        if (initial ? r < 0.55 : r < 0.15) d = this.trenchDepth(st.sign, TRENCH_D, s) + 0.5 + rng.next() * 0.6 + (tr >= 2 ? -60 + rng.next() * 100 : 0);
+        else if (initial ? r < 0.8 : r < 0.4) d = this.trenchDepth(st.sign, TRENCH2_D, s) + 0.5 + rng.next() * 0.6 + (tr >= 2 ? -60 + rng.next() * 100 : 0);
         else d = RESERVE_D0 + rng.next() * (RESERVE_D1 - RESERVE_D0);
         if (this.goodSpot(player, s, st.sign * d)) break;
       }
@@ -901,7 +921,7 @@ export class BattleLine {
     e.look.copy(look);
     e.wave = wave;
     e.fireCd = host.world.rng.next() * 5;
-    e.pose = order === 'hold' ? (variant === 2 || e.seed < 0.3 ? POSE.prone : POSE.kneel) : POSE.prone;
+    e.pose = order === 'hold' ? (variant === 2 || e.seed < 0.15 ? POSE.prone : POSE.kneel) : e.seed > 0.33 ? POSE.kneel : POSE.prone;
     return e;
   }
 
@@ -960,6 +980,7 @@ export class BattleLine {
   // ---------------------------------------------------------------------------------------------
   private buildTrenches(player: Ent): void {
     this.trenchDirty = false;
+    this.groundVersion++;
     const g = this.host.ground;
     const lines: { sign: 1 | -1; depth: number }[] = [];
     for (const st of this.sides.values()) {

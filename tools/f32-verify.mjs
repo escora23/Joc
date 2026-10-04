@@ -378,7 +378,8 @@ async function scale() {
   const b = c.stats;
   const shown = b ? b.sides.map((q) => `${q.team ? 'enemy' : 'ours'} ${q.shown}/${q.target} (${q.perKm} troops/km, ${q.vehicles} vehicles, ${q.role})`).join('; ') : 'no battle';
   // Both sides at the sim's density (the enemy may really be thin on this stretch: its figures follow its troops per km).
-  row('S1', 'soldiers of both sides around the player (sim density, believable cap)', `${c.soldiers[0]} ours + ${c.soldiers[1]} enemy alive in the scene, ${c.near1km[0] + c.near1km[1]} within 1 km; ${shown}`, !!play && c.soldiers[0] + c.soldiers[1] >= 300 && c.soldiers[1] >= Math.min(40, b?.sides.find((q) => q.team === 1)?.target ?? 0));
+  // Pass 2: a battle's density near the player (the figures are the picture of the sim's troops there).
+  row('S1', 'soldiers of both sides around the player (a battle\'s density, the sim\'s troops)', `${c.soldiers[0]} ours + ${c.soldiers[1]} enemy alive in the scene, ${c.near600[0]} + ${c.near600[1]} within 600 m, ${c.near1km[0] + c.near1km[1]} within 1 km; ${shown}`, !!play && c.soldiers[0] + c.soldiers[1] >= 900 && c.soldiers[1] >= 300 && c.near600[0] + c.near600[1] >= 300);
   row('S2', 'vehicles in the battle', `${c.vehicles[0]} ours, ${c.vehicles[1]} enemy`, c.vehicles[0] + c.vehicles[1] >= 4);
   await snap(page, 'scale-1-chase');
   // Taken here to fight: the tank drives on by itself to the battle's hottest stretch (220 m behind the line).
@@ -392,7 +393,7 @@ async function scale() {
   row('S7', 'arrival: the tank drives on to the hottest stretch by itself', `at entry: line ${d0.lineM} m, hot point ${d0.hotM} m, stand-off ${d0.standM} m (driving ${d0.driving}); the drive ended «${d1.lastDrive}» after ${Math.round(d1.t - d0.t)} s of scene time: line ${d1.lineM} m, hot point ${d1.hotM} m, stand-off ${d1.standM} m (scene pace ${pace}× real time, the sim's clock follows it)`, d0.driving && d1.lastDrive === 'arrived' && d1.lineM >= 0 && d1.lineM < 450);
   c = await census(page);
   await snap(page, 'scale-1b-arrived');
-  row('S3a', 'soldiers in sight around the player after arriving (any direction, ≤ 2.5 km, not behind the ground)', `${c.around[0]} ours + ${c.around[1]} enemy (in this view: ${c.seenSoldiers[0]} + ${c.seenSoldiers[1]})`, c.around[0] + c.around[1] >= 150);
+  row('S3a', 'soldiers in sight around the player after arriving (any direction, ≤ 2.5 km, not behind the ground)', `${c.around[0]} ours + ${c.around[1]} enemy (in this view: ${c.seenSoldiers[0]} + ${c.seenSoldiers[1]})`, c.around[0] + c.around[1] >= 300 && c.around[1] >= 40);
   // Look at the hottest point from the tank (the turret turned there) and count what the camera shows.
   await page.evaluate(() => {
     const I = window.__cmd, b = I.forces.battle.info();
@@ -405,7 +406,7 @@ async function scale() {
   });
   await sleep(2500);
   c = await census(page);
-  row('S3', 'visible on screen from the tank toward the fighting (in the frame and not behind the ground)', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy soldiers and ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles in sight (${c.screenSoldiers[0] + c.screenSoldiers[1]} soldiers inside the frame counting those behind hills)`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 100);
+  row('S3', 'visible on screen from the tank toward the fighting (in the frame and not behind the ground)', `${c.seenSoldiers[0]} ours + ${c.seenSoldiers[1]} enemy soldiers and ${c.seenVehicles[0] + c.seenVehicles[1]} vehicles in sight (${c.screenSoldiers[0] + c.screenSoldiers[1]} soldiers inside the frame counting those behind hills)`, c.seenSoldiers[0] + c.seenSoldiers[1] >= 150 && c.seenSoldiers[1] >= 30);
   await snap(page, 'scale-2-toward-fight');
   // Activity over 20 s.
   const t0 = await page.evaluate(() => ({ kills: window.__cmd.world.stats.kills, t: window.__cmd.world.time, dead: window.__cmd.world.ents.filter((e) => !e.alive && (e.kind === 'soldier' || e.kind === 'at')).length }));

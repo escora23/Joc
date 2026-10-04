@@ -289,8 +289,8 @@ const UNI_TMP = new THREE.Color();
 export function fieldUniform(team: 0 | 1, nationHex: number, seed: number, out: THREE.Color): THREE.Color {
   out.copy(UNI_BASE[team]);
   UNI_TMP.setHex(nationHex).getHSL(UNI_HSL, THREE.SRGBColorSpace);
-  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.36, UNI_HSL.s * 0.5), 0.4, THREE.SRGBColorSpace);
-  out.lerp(UNI_TMP, 0.3);
+  UNI_TMP.setHSL(UNI_HSL.h, Math.min(0.34, UNI_HSL.s * 0.5), 0.36, THREE.SRGBColorSpace);
+  out.lerp(UNI_TMP, 0.24);
   return out.multiplyScalar(0.9 + ((seed * 997) % 1) * 0.18);
 }
 

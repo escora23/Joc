@@ -98,6 +98,12 @@ export class Grass {
   enabled = false;
   /** Optional keep-out test (roads, town squares). */
   keepOut: ((x: number, z: number) => boolean) | null = null;
+  /**
+   * Owner item 32: trodden ground (a battle's lines and no man's land): the clumps' height factor there (1 = untouched),
+   * and a version that changes when that ground does (the clumps are laid out again).
+   */
+  trample: { at(x: number, z: number): number; version(): number } | null = null;
+  private trampleV = -1;
 
   constructor() {
     const mat = new THREE.MeshStandardMaterial({
@@ -167,7 +173,9 @@ export class Grass {
       this.offZ = offZ;
       this.cx = this.cz = 1e9;
     }
-    if (Math.hypot(focus.x - this.cx, focus.z - this.cz) < 14) return;
+    const tv = this.trample ? this.trample.version() : -1;
+    if (Math.hypot(focus.x - this.cx, focus.z - this.cz) < 14 && tv === this.trampleV) return;
+    this.trampleV = tv;
     this.cx = focus.x;
     this.cz = focus.z;
     this.layout();
@@ -207,7 +215,7 @@ export class Grass {
         if (y < 0.6) continue;
         // Fade out at the edge by shrinking.
         const edge = 1 - Math.max(0, (Math.sqrt(d2) - R * 0.7) / (R * 0.3));
-        const sc = (0.55 + h1 * 0.6) * (0.55 + 0.45 * edge) * (dirt > grass ? 0.7 : 1);
+        const sc = (0.55 + h1 * 0.6) * (0.55 + 0.45 * edge) * (dirt > grass ? 0.7 : 1) * (this.trample ? this.trample.at(x, z) : 1);
         this.q.setFromAxisAngle(this.up, h2 * Math.PI * 2);
         this.s.set(sc * (0.9 + h3 * 0.4), sc * (0.8 + h2 * 0.6), sc * (0.9 + h3 * 0.4));
         this.p.set(x, y - 0.05, z);

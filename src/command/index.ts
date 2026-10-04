@@ -1360,7 +1360,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     grass?.configure(ground, kind === 'tank' ? q.commandDetail : 0);
     civil.begin(frame, ground, kind);
     scatter.keepOut = civil.keepOut;
-    if (grass) grass.keepOut = civil.keepOut;
+    if (grass) {
+      grass.keepOut = civil.keepOut;
+      // Owner item 32: a battle treads the grass down along its lines (men in the open stay in sight).
+      grass.trample = kind === 'tank' && forces ? { at: (x, z) => forces!.battle.trampled(x, z), version: () => forces!.battle.groundVersion } : null;
+    }
     forces.reset(kind, p.unitId);
     forces.setHandoff(p.battleHandoff);
     world.nationColor = (o) => ctx.sim.view.players[o]?.color ?? 0x888888;

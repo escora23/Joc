@@ -52,6 +52,28 @@ for (;;) {
 }
 const bs = await page.evaluate(() => window.__battleShot ?? null).catch(() => null);
 console.log(ts(), 'census', JSON.stringify(bs));
+// Where the figures are: per side, by distance band from the tank, how many, how many the camera's eye sees (no
+// ground between), poses (0 idle 1 walk 2 run 3 kneel 4 prone 5 dead 6 aim 7 rush) and how many are awake.
+const diag = await page.evaluate(() => {
+  const I = window.__cmd, P = I.world.player, cp = I.camera.position;
+  const out = {};
+  for (const e of I.world.ents) {
+    if (!e.alive || e.player || (e.kind !== 'soldier' && e.kind !== 'at')) continue;
+    const d = e.pos.distanceTo(P.pos);
+    if (d > 1500) continue;
+    const band = `${e.team ? 'enemy' : 'ours'} ${Math.min(14, Math.floor(d / 100)) * 100}`;
+    const o = (out[band] ??= { n: 0, seen: 0, awake: 0, poses: {} });
+    o.n++;
+    if (!e.dormant) o.awake++;
+    o.poses[e.pose] = (o.poses[e.pose] ?? 0) + 1;
+    let ok = true;
+    const ty = e.pos.y + (e.pose === 4 ? 0.35 : 0.9);
+    for (let k = 1; k < 40 && ok; k++) { const f = k / 40; if (f > 0.97) break; if (I.ground.heightAt(cp.x + (e.pos.x - cp.x) * f, cp.z + (e.pos.z - cp.z) * f) > cp.y + (ty - cp.y) * f) ok = false; }
+    if (ok) o.seen++;
+  }
+  return out;
+}).catch((e) => String(e));
+for (const [k, v] of Object.entries(diag)) console.log(ts(), 'diag', k.padEnd(12), JSON.stringify(v));
 await page.setViewportSize({ width: 1600, height: 900 });
 await new Promise((r) => setTimeout(r, 8000));
 const file = path.join(out, `battle-${name}.png`);
@@ -59,11 +81,12 @@ await page.screenshot({ path: file, timeout: 300000 });
 console.log(ts(), 'saved', file);
 // More views of the same frozen moment: --extra sight,overview,close20,close50,close150,closeE20,...
 for (const v of (args.extra && args.extra !== 'true' ? args.extra.split(',') : [])) {
+  // Out of the sight first (its camera moves only while the scene runs), then freeze for the view.
+  await page.evaluate(() => { const I = window.__cmd; I.camOverride = null; I.controller.setZoom?.(false); I.freeze = false; });
+  await new Promise((r) => setTimeout(r, 2500));
   const info = await page.evaluate((v) => {
     const I = window.__cmd, P = I.world.player, c = I.controller, b = I.forces.battle.info();
     const V = P.pos.constructor;
-    I.camOverride = null;
-    c.setZoom?.(false);
     I.freeze = true;
     const h = b.hot ?? b.near ?? P.pos;
     if (v === 'sight') {
