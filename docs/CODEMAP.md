@@ -1730,7 +1730,7 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   battle chip in `updateCombat` and the arrival notice (`battleNoticed`), hottest-point `liveContact` (biggest
   offensive on the entry front), `STOP_KM.tank` 0.35 and `CONTACT_LINE_KM` 0.5 (the march ends in the battle),
   `driveToHot` / `hotStandOff` (G inside a battle, and `seekHot` on arriving from an entry goal or a march: the tank
-  drives to 220 m behind the line at the hot point; the chip shows «Ir al combate» while it is > 450 m away),
+  drives to 220 m behind the line at the hot point; the chip shows «Ir al combate» while that is > 350 m away),
   `camOverride` for tools, `__cmdStats.battle` (with `driving`, `lastDrive`, `standM`) / `ram` / `mgHits`;
   `scenePace` / `measurePace`: the sim's tactical clock runs at the scene's measured pace when frames are slower than
   10 a second (`__cmdStats.pace`).

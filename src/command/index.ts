@@ -2163,7 +2163,11 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         sub: hd > 250 ? t('command.battle.hotSub', { d: dist, ...counts }) : t('command.battle.sub', counts),
         dist: `${dist} · ${dirWord(brg)}`, contact: !!(h.ent && h.dist < REACH_M[kind]),
         // Far from the hottest stretch (and not already driving there): the chip's button drives there (as G does).
-        go: hd > 450 && !(controller instanceof TankController && controller.driveTo) ? t('command.go.combat') : '',
+        go: (() => {
+          if (controller instanceof TankController && controller.driveTo) return '';
+          const so = hotStandOff();
+          return so && Math.hypot(so.x - P.pos.x, so.z - P.pos.z) > 350 ? t('command.go.combat') : '';
+        })(),
       });
       overlay.combatMarker = { pos: tmp3.set(bi.hot.x, bi.hot.y + 25, bi.hot.z), text: `${t('command.battle.level.' + (bi.heat >= 0.85 ? 3 : bi.heat >= 0.6 ? 2 : bi.heat >= 0.35 ? 1 : 0))} · ${dist}`, contact: true };
       chipAim = { x: bi.hot.x, z: bi.hot.z, km: hd / 1000 };

@@ -3487,7 +3487,7 @@ over did nothing. Code map: CODEMAP §30. Verification: `tools/f32-verify.mjs`, 
   times); it gives up after 10 s without headway.
 * In command mode the chip at the top always names the battle: «Batalla en la línea contra X · Lo más duro, a 1,2 km
   · intensidad alta · N nuestros y M enemigos en este tramo» with a compass direction and a world marker on the hot
-  point; while it is more than 450 m away the chip carries «Ir al combate».
+  point; while the stand-off there is more than 350 m away the chip carries «Ir al combate».
 
 ### 21.3 Soldiers
 Real proportions, helmet, plate carrier, pack, rifle / AT launcher / machine gun; poses animated in the vertex shader

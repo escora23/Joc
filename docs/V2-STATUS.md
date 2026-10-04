@@ -1496,7 +1496,7 @@ specks the colour of the ground. That is the owner's "two guys" again, so this p
   The arrival line says so: «… Tu carro avanza solo hasta lo más duro, a 510 m
   (cualquier tecla de marcha toma el mando).»
 * **«Ir al combate» inside a battle** used to answer «Ya estás en contacto» (anything hostile within 4 km counted). Now
-  G (and the chip's button, shown while the hot stretch is > 450 m away) drives to the hottest stretch; under 150 m it
+  G (and the chip's button, shown while the stand-off there is > 350 m away) drives to the hottest stretch; under 150 m it
   says «Estás en lo más duro del combate: la línea enemiga está justo delante.»
 * **The hot point holds still**: its 8 bins are smoothed over ~6 s and it moves only to a stretch a third hotter (it
   jumped 300-750 m between frames, dragging the chip, its marker and the drive with it).
