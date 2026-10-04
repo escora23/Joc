@@ -318,3 +318,16 @@ Verbatim (Spanish):
       - Machine-gun a factory and watch its hp go down a little.
       - Run over a fence, a light vehicle and infantry.
       - Look at shots of the new soldier models at 20, 50 and 150 m.
+
+### Item 32: review of the first-pass shots (shots/owner-32-1/run16), for pass 2 and the critics
+
+These shots do **not** meet item 32 yet:
+- **Scale.** The text says "59 soldados enemigos y 650 nuestros en 2,4 km de línea (cada figura son 25)". On screen this
+  is scattered dots on an empty hillside: no mass of troops, no visible enemy line. "Cada figura son 25" plus a few dozen
+  figures is exactly the "two guys" the owner complained about. Represent troops by visual density near the player
+  (hundreds of figures within ~600 m, rendered with instancing and LOD), not by 1 figure = 25 men. The enemy line must
+  be visible and alive (trenches manned, muzzle flashes, tracers, impacts) and must never sit 600+ m away over a ridge.
+- **Soldier close-up.** The close-up at 20 m shows a dark, blocky figure. It needs a proper silhouette, a uniform in the
+  nation's colour, a helmet and a weapon, and lighting that reads.
+- **Good, keep it:** HE and MG kills, ramming a truck with the destruction feedback, the peace question before ramming,
+  and the MG-against-factory hint.
