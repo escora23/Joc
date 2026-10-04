@@ -1643,7 +1643,9 @@ sight, a hillside in front of the tank, nothing that read as soldiers.
 * **Smaller fixes.** An AT team per three attacking squads and per ~30 defenders (one per two squads made the tank's
   arrival a rain of missiles at the new density); assault-wave men without a target advance bent low at a jog (they
   strolled upright); the grass a few metres ahead of the gunner's sight shrinks away (the sight looked into a wall of
-  grass); `f32-verify` counts only trench parapets for S6 and soldiers within 600 m.
+  grass); «Frenar» in the ramming question at peace brakes the tank (its momentum pushed on and asked again);
+  `f32-verify` counts only trench parapets for S6 and soldiers within 600 m, and frames the close-ups from a
+  direction that sees the man at eye height.
 
 ### Verified in real play
 
@@ -1671,7 +1673,7 @@ toward the fight with ≥ 30 enemy). SwiftShader ran the scene at 0.05-0.09× re
 | K1 | HE kills infantry in a radius | 11 men / 4 shells | 5 men / 4 shells (74 m → 0, 74 m → 2, 77 m → 3, 90 m → 0) | PASS |
 | K2 | the coax cuts down infantry | 2 at ~60 m | 1 at ~60 m, 125 troops more sent to the sim | PASS |
 | R1-R2 | running over infantry, ramming a light vehicle | 4 run over; truck wrecked, −7.4 hp | 4 run over; truck wrecked, −7.9 / −9.3 / −9.1 hp (runs 2-4) | PASS |
-| R3 | ramming a truck of a nation at peace asks first | PASS | the question opens and nothing happens to the truck (no war, hp 30 → 30, asked once), but after Enter a dialog is open again (runs 3-4) — see «Still open» | FAIL |
+| R3 | ramming a truck of a nation at peace asks first; Enter = «Frenar» | PASS (before its footnote changed) | runs 3-4 found the question open again after Enter: «Frenar» did not brake, the tank's momentum pushed on and asked again. Fixed («Frenar» stops the tank; the question waits 4 s from the answer); run 5 (`verify5/`, `--only ram`): the question opens, Enter closes it, no war, the truck untouched (hp 30 → 30), asked once | PASS |
 
 The `command-battle` probe (`tools/battle-probe.mjs`, the same war, the tank placed where «Ir al combate» takes it) was
 the loop for this pass: the first look gave **97 ours + 4 enemy** in sight and a hillside in front of the tank; after
@@ -1682,10 +1684,6 @@ their colours (orange ours, pink the Swiss). `npx tsc --noEmit`, `npm run build`
 
 ### Still open
 
-* **R3 (ramming at peace) after Enter.** The question opens, Enter answers «Frenar» (no war, the truck untouched,
-  asked once), but in runs 3 and 4 a dialog was open again a few seconds later; the row now logs which one and the
-  answers given (`f32-verify --only ram`). Pass 1 passed it before the ramming footnote changed; nothing in this pass
-  touched the dialogs.
 * **Terrain still decides a lot.** In the Pyrenees the picture depends on where the march ends (a forested valley
   hides more than a bare slope); the arrival relayout and the vantage search make the battle you are taken to the one
   you see, but a player who drives off along the line meets figures laid out for where he was until the band follows

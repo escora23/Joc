@@ -982,6 +982,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     ]);
     fireStats.answers.push(i === 0 ? 'ram-war' : 'ram-hold');
     if (i === 0) declareFromCommand(owner);
+    else {
+      // «Frenar» brakes: the tank stops against it (its momentum would push on and ask again at once), and the question
+      // waits 4 s from the answer before it can come back (driving into it again asks again).
+      const P = player();
+      if (P) P.speed = 0;
+      ramAskWall = performance.now();
+    }
   }
 
   function ram(self: Ent, o: Ent, closing: number): 'pass' | 'block' {

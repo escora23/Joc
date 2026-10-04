@@ -3531,4 +3531,5 @@ against sunlit ground) as they take up to 45 % of the nation's colour.
 * Ramming (tank, 60 t): men run over above 1 m/s (ours step aside); vehicles take closing speed² × 0.25 × (60 ÷ their
   mass) × their max hp ÷ 100, the tank their mass ÷ 60 × 0.9 of the same energy; city houses at war (city confirmed)
   come down; trees fall in the direction of travel; a compound fence crossed flattens its section. Against a nation
-  at peace the tank stops and «¿Embestir a X?» asks first (item 31's rule: Declarar la guerra · Frenar).
+  at peace the tank stops and «¿Embestir a X?» asks first (item 31's rule: Declarar la guerra · Frenar; «Frenar»
+  brakes the tank and the question waits 4 s from the answer).
