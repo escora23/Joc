@@ -20,6 +20,8 @@ export interface EndScreen {
 }
 
 const MAX_LINES = 8;
+/** A share of the land in the UI language's number format; a sliver of land never reads «0,0 %». */
+const pctText = (pct: number): string => (pct > 0 && pct < 0.1 ? `< ${formatNumber(0.1, 1)} %` : `${formatNumber(Math.round(pct * 10) / 10, 1)} %`);
 
 export function createEndScreen(ctx: GameContext, sound: (k: UiSoundKind) => void, reason: GameOverReason | null): EndScreen {
   const view = ctx.sim.view;
@@ -49,7 +51,7 @@ export function createEndScreen(ctx: GameContext, sound: (k: UiSoundKind) => voi
   const peakPct = st ? (Math.max(st.peakTiles, me?.tiles ?? 0) / land) * 100 : 0;
   const statCards: [string, string, string][] = [
     ['clock', 'end.stat.time', formatDuration(view.simTime)],
-    ['territory', 'end.stat.peak', `${peakPct.toFixed(1)}%`],
+    ['territory', 'end.stat.peak', pctText(peakPct)],
     ['flag', 'end.stat.conquered', formatNumber(st?.tilesConquered ?? 0)],
     ['swords', 'end.stat.killed', formatCompact(st?.troopsKilled ?? 0)],
     ['skull', 'end.stat.eliminated', formatNumber(st?.nationsEliminated ?? 0)],
@@ -79,7 +81,7 @@ export function createEndScreen(ctx: GameContext, sound: (k: UiSoundKind) => voi
       h('span', { class: 'fu-mono fu-end-rank-n' }, String(rank)),
       flag(p.color, p.id, 'fu-flag'),
       h('span', { class: 'fu-end-rank-name' }, name(p)),
-      h('span', { class: 'fu-mono fu-end-rank-v' }, p.alive ? `${((p.tiles / land) * 100).toFixed(1)}%` : '✝'),
+      h('span', { class: 'fu-mono fu-end-rank-v' }, p.alive ? pctText((p.tiles / land) * 100) : '✝'),
     ));
   }
 

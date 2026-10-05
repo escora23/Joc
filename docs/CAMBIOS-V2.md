@@ -505,10 +505,13 @@ mando.
   de donde se dejó), invasión naval, propuesta desde el menú radial, paz con tributo, una propuesta de la IA aceptada en
   la bandeja y la pantalla final con vuelta al menú. Cada paso pasó en al menos una de las dos ejecuciones; los fallos
   sueltos fueron de la puesta en escena de la prueba (ver «Limitaciones»).
-- **Una partida entera** jugada por un guion a través de la interfaz (`tools/fullgame.mjs`: duración Corta, Fácil, los
-  primeros días a 1× y el resto a 4×, sin ayudas de depuración): 48.000 ticks (200 días de juego) en unos 25 minutos
-  reales, con la pantalla final («Derrota · se ha alcanzado el límite de días: Estados Unidos es la nación más
-  extensa») y la vuelta al menú principal, sin errores.
+- **Dos partidas enteras** jugadas por un guion a través de la interfaz (`tools/fullgame.mjs`: duración Corta, Fácil,
+  los primeros días a 1× y el resto a 4×, sin ayudas de depuración), cada una hasta que la simulación declaró el final
+  por sí misma, con la pantalla final y la vuelta al menú principal, sin errores:
+  - la primera terminó por el límite de 200 días (48.000 ticks, unos 25 minutos reales): ganó Estados Unidos, la nación
+    más extensa;
+  - la segunda terminó por **hegemonía** de China el día 139 (33.220 ticks, dentro de lo previsto para una partida
+    Corta), con «Derrota · Otra potencia se impone · China ha alcanzado la hegemonía mundial».
 - Auditorías sin interfaz de las rondas anteriores: ritmo (conquista, profundidad, desgaste, imperios, partidas
   completas), diplomacia, modo mando, aire, ejércitos, batallas y guerra naval.
 
@@ -535,10 +538,10 @@ mando.
   más amplia (unos 90 km) que el indicador de batalla (16 km).
 - **Un carro y una ciudad.** Con sus 20 proyectiles explosivos, un carro solo derriba unas pocas casas de una ciudad:
   las ciudades están pensadas para la artillería y los bombarderos; el trabajo del carro son las estructuras.
-- **Una partida Corta puede acabar por el límite de días.** En la partida completa de prueba el jugador del guion apenas
-  hizo nada (se expandió y esperó) y ninguna IA llegó a la hegemonía: a los 200 días ganó la nación más extensa
-  (Estados Unidos, 15,8 % de la tierra). Con un jugador activo y en las pruebas sin interfaz, las partidas Cortas
-  terminan antes por hegemonía, pero no está garantizado.
+- **Una partida Corta puede acabar por el límite de días.** En una de las dos partidas completas de prueba (con un
+  jugador del guion que apenas hacía nada) ninguna IA llegó a la hegemonía y a los 200 días ganó la nación más extensa
+  (Estados Unidos, 15,8 % de la tierra); en la otra, China ganó por hegemonía el día 139. El final por hegemonía o
+  dominio es lo habitual, pero no está garantizado.
 - **Pruebas automáticas sensibles a la puesta en escena.** En el recorrido completo, algunos pasos que preparan una
   situación (una ofensiva de la IA contra tu capital para oír la sirena, el orden en que aparecen los consejos del
   asesor, un clic que el renderizado por software lee como «mantener pulsado») fallan en una ejecución y pasan en otra.

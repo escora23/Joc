@@ -2003,8 +2003,11 @@ asset paths are proven), Chromium + SwiftShader, real UI.
     (the script acts — division, move, command — before the advisor reaches those tips).
 * `tools/fullgame.mjs` (new): one Short/Easy game through the UI, days 1-5 at 1x then 4x, the scripted player resumes
   auto-pause banners and pushes into free land, no debug actions. Ended by itself at tick 48,000 (time limit; United
-  States 15.8 %, the passive human 11th), end screen and «Menú principal» back to the menu, 0 errors, 24.7 min.
+  States 15.8 %, the passive human 11th), end screen and «Menú principal» back to the menu, 0 errors, 24.7 min. A second
+  game (after the end-screen fix) ended by **hegemony** (China) at tick 33,220 (inside T14's Corta window), «Derrota ·
+  Otra potencia se impone», back to the menu, 0 errors, 17.4 min.
 * Fixed: the end screen said «Tu nación ha caído» for a time-limit or hegemony defeat of a living nation; it now reads
-  «Otra potencia se impone» / «Another power prevails» (`end.kicker.outlasted`).
+  «Otra potencia se impone» / «Another power prevails» (`end.kicker.outlasted`); the land shares on the end screen use
+  the UI language's number format and a sliver of land reads «< 0,1 %», not «0.0%».
 * README.md (Spanish, gallery in docs/screenshots/, each < 300 KB) and docs/CAMBIOS-V2.md (all 32 items for the owner)
   written.
