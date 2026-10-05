@@ -421,7 +421,7 @@ export function buildSoldierGeometry(variant: 0 | 1 | 2, hi: boolean, skin = 0):
 // Uniform colours
 // =================================================================================================
 
-const UNI_BASE = [new THREE.Color(0x56603f), new THREE.Color(0x7c6e4e)];
+const UNI_BASE = [new THREE.Color(0x56603f), new THREE.Color(0x857048)];
 
 /**
  * A soldier's field uniform (linear, multiplied by the model's vertex colours): the side's field shade (a dark olive
@@ -564,8 +564,10 @@ void soldierCamo(inout vec3 col, float dist) {
   float n1 = sNoise(vCamoP) * 0.7 + sNoise(vCamoP * 2.3) * 0.3;
   float n2 = sNoise(vCamoP * 1.4 + 17.3) * 0.7 + sNoise(vCamoP * 3.1 + 5.1) * 0.3;
   float lum = dot(col, vec3(0.3, 0.55, 0.15));
-  vec3 nat = mix(vec3(dot(vCamoN, vec3(0.3, 0.55, 0.15))), vCamoN, 0.3);
-  nat = mix(nat * (lum / max(1e-3, dot(nat, vec3(0.3, 0.55, 0.15)))) * 0.72, col * 0.8, 0.4);
+  // The nation's hue at a fifth of its saturation and the cloth's brightness, half blended into the field shade:
+  // a hint in the patches (a purple nation's men are not purple men, gauntlet round 1).
+  vec3 nat = mix(vec3(dot(vCamoN, vec3(0.3, 0.55, 0.15))), vCamoN, 0.2);
+  nat = mix(nat * (lum / max(1e-3, dot(nat, vec3(0.3, 0.55, 0.15)))) * 0.72, col * 0.8, 0.5);
   vec3 c = col * 1.1;
   c = mix(c, nat, smoothstep(0.52, 0.56, n1));
   c = mix(c, col * 0.48, smoothstep(0.6, 0.64, n2));

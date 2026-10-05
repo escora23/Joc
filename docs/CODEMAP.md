@@ -919,6 +919,11 @@ Everything is in `src/sim/units.ts` unless noted. `step` L599-L632 dispatches pe
   L68-L71).
 * City skylines: `citySpec` L732-L787 (10 + 7·level buildings, spires). Radar dishes rotate (L859-L874). Factories
   smoke, damaged structures smoulder (L876-L902).
+* City ground (gauntlet round 1): `models.ts cityBase` is a street grid of blocks (`CITY_CELL` 0.064, paved core
+  inside the wandering `cityCoreR(angle)`, then garden blocks with pitched-roof houses thinning out to ~0.6) with a
+  foundation skirt per block (no round `padRound` under cities); the outer blocks dissolve into the land through
+  `PaintOpts.fade` → `aFade` (a world-space value-noise alpha test in `material.ts`). `citySpec` snaps towers onto
+  the blocks (`snapToCityBlock`, `inCityCore`).
 * Models are in `models.ts` (conventions L1-L6: ground at y = 0, footprint normalised to 1, front toward −Z).
 
 **Why structures look sideways, half-sunk or floating** (owner's report)
@@ -1724,14 +1729,18 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
   far sleepers near the player when the near band has thinned; `trampled(x, z)` + `groundVersion` (Grass.trample).
 * `src/command/models/soldier.ts` — soldier geometry per variant (rifleman, AT gunner, machine gunner) and level of
   detail, with `aPart` (thighs, shins, arms+weapon, upper body) and `aTint` (fixed, uniform, nation band, helmet,
-  gear); `CAMO_GLSL`: the uniform's camouflage in the fragment shader (nation-coloured, dark and light blotches from
+  gear); body lofted (`loftGeometry`: elliptical or squared rings with their own front and back depth), limbs through
+  radius profiles (knee and elbow bulges), gloved hands, neck gaiter, eyes, small muted nation patches on the helmet
+  and left sleeve; `bakeOcclusion` darkens creases (other pieces close in front of a vertex), undersides and the legs
+  in the vertex colours; gait poses drop the hips by `legIK` (the planted foot on the ground); `mutedNation(hex)`:
+  the far tint's colour; `CAMO_GLSL`: the uniform's camouflage in the fragment shader (nation-hinted, dark and light blotches from
   the model-frame position and the man's seed, faded beyond ~140 m) and the sky fill `uSoldierFill`
   (`SoldierMaterials.fill`, set by index.ts `applyAtmosphere`);
   `makeSoldierMaterials()` patches MeshStandardMaterial / MeshDepthMaterial: poses (`POSE`: idle, walk, run, kneel,
   prone, dead, aim, rush) animated in the vertex shader from `aAnim` (pose, gait phase, last shot → recoil, pose time →
   the fall) and `aBand` (nation colour, seed). `fieldUniform(team, nationHex, seed)`: the side's field shade (olive
-  ours, khaki theirs) blended 42 % with the nation's hue at low saturation and lightness (a red nation wears brown-red,
-  never pink). Lab: `tools/model-lab/soldier.html` (`?d=&az=&t=&lod=far`, the game's own uniforms, ACES and daylight;
+  ours, khaki theirs), a little variety per man, no nation blend (gauntlet round 1). Lab: `tools/model-lab/soldier.html`
+  (`?d=&az=&t=&lod=far`, the game's own uniforms, ACES and daylight; captured by `tools/model-lab/shoot-soldier.mjs`;
   `&one=<pose>&v=&team=&nation=&fill=r,g,b`: one man from the front at d m).
 * `src/command/world.ts` — soldier meshes per team × variant for the active men, in two levels packed every frame
   by `updateSoldierInstances` (the full figure, with shadows, while a man is ≥ `SOLDIER_HI_PX` 13 px tall on screen;

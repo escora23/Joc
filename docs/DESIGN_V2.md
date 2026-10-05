@@ -1153,7 +1153,7 @@ squadron **3 jets**. Command mode uses the same formation (§9.9).
 
 | Type | Icon glyph (in a frame, §10.7) | 3D model (below the LOD threshold) and per-level change |
 |---|---|---|
-| City | three-building skyline | Existing `citySpec` skyline; footprint 2.5 km + 0.35 km per level; +7 buildings and taller spires per level |
+| City | three-building skyline | `citySpec` skyline on the blocks of a street grid; footprint 2.5 km + 0.35 km per level; +7 buildings and taller spires per level; an irregular outline that follows the grid, low-rise suburbs thinning outward and dissolving into the land (no round pad) |
 | Port | anchor | Quay with 1/2/3 berths and cranes by level |
 | Factory | gear with a chimney | 1/2/3 halls and smoking stacks |
 | Defense post | bastion chevron | Bunker ring and trenches; L2 adds artillery pits; L3 a concrete fort |
@@ -1173,7 +1173,10 @@ squadron **3 jets**. Command mode uses the same formation (§9.9).
 | Missiles | arrow (cruise), trefoil (nuclear) | Existing models and arcs |
 
 Structures are **grounded** (§10.7): their up vector is the local terrain normal, their base vertices snap to the
-relief, and they stand on a foundation pad whose skirt reaches the lowest ground point of the footprint.
+relief, and they stand on a foundation pad whose skirt reaches the lowest ground point of the footprint. A city has
+no pad: each block of its street grid carries its own skirt and its outer blocks fade into the terrain. In command
+mode, ground vehicles stand on the mean ground under their tracks with pitch and roll from a plane fit (never perched
+on a crest by their centre).
 
 ### 6.6 Names
 

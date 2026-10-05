@@ -25,6 +25,9 @@ import { buildChunkMesh } from './terrain/mesh';
 /** Samples of border around every chunk: keeps the 4× noise lattice aligned between neighbours (see file header). */
 const PAD = 4;
 /** Main-thread budget per frame (ms). */
+/** Scratch: ground heights under a hull's tracks (Ground.footprint). */
+const FOOT_H = new Float64Array(10);
+
 export const FRAME_BUDGET_MS = 6;
 
 interface LodSpec {
@@ -583,11 +586,13 @@ export class Ground {
     const cy = Math.cos(yaw), sy = Math.sin(yaw);
     const fx = -sy, fz = -cy, rx = cy, rz = -sy;
     let sum = 0, sa = 0, sb = 0, saa = 0, sbb = 0;
+    const H = FOOT_H;
     for (let i = 0; i < 5; i++) {
       const a = (i / 4 - 0.5) * len;
-      for (const side of [-0.5, 0.5]) {
-        const b = side * width;
+      for (let k = 0; k < 2; k++) {
+        const b = (k - 0.5) * width;
         const h = this.heightAt(x + fx * a + rx * b, z + fz * a + rz * b);
+        H[i * 2 + k] = h;
         sum += h;
         sa += a * h;
         sb += b * h;
@@ -595,9 +600,22 @@ export class Ground {
         sbb += b * b;
       }
     }
-    out.y = sum / 10;
     // Least-squares slopes along the hull (up toward the front) and across it (up toward the right).
     const along = sa / saa, across = sb / sbb;
+    let y = sum / 10;
+    // Over a sharp crest the fitted plane leaves the track ends in the air and the middle in the ground: the hull is
+    // lowered until the worst gap is at most 40 % of the spread (sunk tracks read as soft ground; air reads as a toy).
+    let air = 0, sink = 0;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 4 - 0.5) * len;
+      for (let k = 0; k < 2; k++) {
+        const r = H[i * 2 + k] - (y + along * a + across * (k - 0.5) * width);
+        air = Math.max(air, -r);
+        sink = Math.max(sink, r);
+      }
+    }
+    y += Math.min(0, 0.4 * (air + sink) - air);
+    out.y = y;
     out.tiltP = Math.atan(along);
     out.tiltR = Math.atan(across);
   }

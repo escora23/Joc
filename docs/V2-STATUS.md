@@ -1729,3 +1729,38 @@ their colours (orange ours, pink the Swiss). `npx tsc --noEmit`, `npm run build`
    its nation's colour at 0.2 (less with the camera high, where the territory fill takes over), split on the sim's
    sub-tile contact line, and a two-colour ribbon with a dark hairline marks the line itself, a few pixels wide at any
    height (gone below ~150 m camera height, where the trenches tell it). shots/fix-battle/final/front-ground-real.png.
+
+## Gauntlet round 1 — units, icons, structures and models fixer (2026-10-05)
+
+Shots: `shots/fix-units-icons-structures-models/` (lab before/after, `f32/close-*` from real play on a built copy,
+`closeups/city1-3`, `unit-closeup-*`, `structures.png`).
+
+1. **[major] Soldiers no longer toy figures** (`src/command/models/soldier.ts`). Rebuilt from lofted shapes: hips, a
+   tapered waist, a chest that bulges forward and shoulders that slope into round deltoids; slim limbs through radius
+   profiles with knee and elbow bulges; trousers bloused into shaped boots (toe, heel, sole); gloved hands with a
+   thumb; a thin plate carrier with small pouches (not a crate) and a pack about 60 % of the torso; eyes, brow, nose,
+   ears and a neck gaiter, so the face is shaded skin under the helmet's rim; goggles pushed up on the helmet.
+   `bakeOcclusion` darkens creases (armpits, collar, vest and belt seams, between the legs), undersides and the lower
+   legs in the vertex colours. Uniforms are a dark olive (ours) and dark khaki (theirs) with no nation blend; the
+   nation shows only as a hint in the camouflage patches (20 % saturation, half blended) and on small muted patches on
+   the helmet's side and the left sleeve (no bright band). The far tint (`farTint`, figures a few px tall) goes toward
+   `mutedNation` (cloth saturation and lightness) and is measured on the drawn size: no magenta men. Sky fill lowered
+   (0.3 → 0.17 of the sky ambient) for shading contrast. Gait poses drop the hips by `legIK` (the planted foot stays
+   on the ground); run and rush swing the thighs under the body and crouch by bending the knees (the rush no longer
+   throws the legs forward and folds). Verified: f32-verify `close` C0/C1 × 20/50/150 m PASS ×6 on a built copy; lab
+   shots `lab-before*.png` vs `lab-after*.png`.
+2. **Tank on a crest** (`Ground.footprint` in `src/command/stream.ts`): every ground vehicle (player tank, AI settle,
+   spawn, travel formation) stands on the mean ground under its tracks (5 points per track, plane fit for pitch and
+   roll), lowered over sharp crests until the worst gap is ≤ 40 % of the spread. `tools/_probe-footprint.mjs` (400
+   random spots and headings, track-end gap): worst 0.89 → 0.54 m, 95th percentile 0.37 → 0.20 m.
+3. **unit-closeup framed an empty sea** (`src/render/units/shots.ts`): the stager pauses, runs a fixed number of
+   ticks (`fastForward`, `&run=` ticks, default 6) and frames the unit at its drawn (interpolated) track position.
+   Warship and ArmoredDivision at 100 km now centred (`unit-closeup-*.png`).
+4. **City "coaster" pads** (`models.ts cityBase`, `geom.ts`/`material.ts` `aFade`): a street grid of blocks inside a
+   wandering outline, paved core with mid-rise fill and parks, then garden blocks with pitched-roof houses thinning
+   out to ~0.6 of the footprint; the outer blocks dissolve into the land (world-space noise alpha test), each block
+   carries its own earth-toned skirt, and no round pad or nation ring road is drawn. Towers snap onto the blocks
+   (`snapToCityBlock`, `inCityCore`); the skyline stays level-driven. `closeups/city1-3.png` at 40 and 8 km.
+
+Not changed: the AT gunner and machine gunner keep their box weapons (they read at 20 m); the low level of detail
+(crowd) keeps tapered boxes for the limbs (cost) with the new proportions and colours.

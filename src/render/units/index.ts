@@ -1422,13 +1422,9 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     const right = new THREE.Vector3().copy(R).addScaledVector(up, -R.dot(up)).normalize();
     const back = new THREE.Vector3().crossVectors(right, up).normalize();
     // Base on the plane at the centre, raised by the highest bump; the pad reaches the lowest hollow + 5 % of the range.
-    // Gauntlet round 1: a city spreads over the land: its street grid lies near the fitted plane (a third of the
-    // highest bump), so the ground between its outer blocks meets the terrain instead of standing on a plinth; a
-    // knoll may show between blocks, and every block's own skirt covers the hollows.
-    const city = st.type === StructureType.City;
-    const lift = Math.max(0, maxE) * (city ? 0.3 : 1);
+    const lift = Math.max(0, maxE);
     // + 0.4 % of the footprint of clearance for relief between the 5 x 5 samples (the pad hides the gap below).
-    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U))).addScaledVector(up, (city ? 0.001 : 0.004) * S);
+    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U))).addScaledVector(up, 0.004 * S);
     const range = Math.max(0, maxE - minE);
     const pad = range * 1.05 + 0.02 * S;
     g = { key, anchor, up, right, back, pad, S, maxE, minE, devDeg: (Math.acos(Math.min(1, up.dot(gN))) * 180) / Math.PI, tiltDeg: (tilt * 180) / Math.PI };
