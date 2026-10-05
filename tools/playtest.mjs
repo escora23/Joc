@@ -45,6 +45,16 @@ page.on('console', (m) => {
   else if (m.type() === 'warning') warnings.push(m.text());
 });
 page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}\n${e.stack ?? ''}`));
+// Release check: the game must not touch the network beyond its own origin (no CDN, no fonts, no telemetry).
+const baseOrigin = new URL(base).origin;
+const foreignRequests = [];
+page.on('request', (r) => {
+  const u = r.url();
+  if (u.startsWith('data:') || u.startsWith('blob:')) return;
+  try { if (new URL(u).origin !== baseOrigin) foreignRequests.push(u); } catch { foreignRequests.push(u); }
+});
+const failedRequests = [];
+page.on('response', (r) => { if (r.status() >= 400 && !/favicon/i.test(r.url())) failedRequests.push(`${r.status()} ${r.url()}`); });
 
 const t0 = Date.now();
 const results = [];
@@ -1741,10 +1751,12 @@ if (messages.length) console.log(`sim messages to the human: ${[...new Set(messa
 const realErrors = errors.filter((e) => !/favicon/i.test(e));
 console.log(`emergency land grants: ${landGrants}`);
 console.log(`console errors: ${realErrors.length}`);
+console.log(`requests outside ${baseOrigin}: ${foreignRequests.length}${foreignRequests.length ? ' (' + foreignRequests.slice(0, 5).join(', ') + ')' : ''}`);
+console.log(`failed requests (HTTP >= 400): ${failedRequests.length}${failedRequests.length ? ' (' + failedRequests.slice(0, 5).join(', ') + ')' : ''}`);
 for (const e of realErrors.slice(0, 40)) console.log('   ', e.slice(0, 600));
 if (warnings.length) console.log(`console warnings: ${warnings.length} (first: ${warnings.slice(0, 3).map((w) => w.slice(0, 160)).join(' | ')})`);
 const failed2 = results.filter((r) => !r.ok && r.stage === 'stage2').length;
 const n2 = results.filter((r) => r.stage === 'stage2').length;
 const failedX = results.filter((r) => !r.ok && r.stage !== 'stage2').length;
 console.log(`\nstage 2: ${n2 - failed2}/${n2} steps passed; extended: ${results.length - n2 - failedX}/${results.length - n2}; total ${((Date.now() - t0) / 1000).toFixed(0)}s`);
-process.exit(failed2 || failedX || realErrors.length ? 1 : 0);
+process.exit(failed2 || failedX || realErrors.length || foreignRequests.length || failedRequests.length ? 1 : 0);
