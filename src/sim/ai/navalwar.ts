@@ -62,7 +62,11 @@ export function thinkNavalWar(ctx: AiContext, b: Brain, p: SimPlayer): void {
 function answerPiracy(ctx: AiContext, b: Brain, p: SimPlayer, O: SimPlayer, gr: NavalGrievance): void {
   const g = ctx.g;
   const op = g.diplomacy.opinion(p.id, O.id);
-  if (g.tick - gr.protested >= PROTEST_EVERY) {
+  // Once angry enough for war, no fresh protest: each protest is a public warning and restarts the warning clock a
+  // declaration on the human must wait out (TENSION_LEAD_TICKS, 48-72 h), so repeating it every 480 ticks would hold
+  // the war off forever (gauntlet round 1 regression, naval-audit N10b).
+  const decided = gr.protested >= 0 && op <= PIRACY_WAR_OPINION;
+  if (!decided && g.tick - gr.protested >= PROTEST_EVERY) {
     gr.protested = g.tick;
     g.diplomacy.issueTension(p.id, O.id, 'tension.piracy', { n: gr.stops });
   }

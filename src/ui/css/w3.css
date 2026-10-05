@@ -121,7 +121,7 @@ body.fu-ap-open .fu-tut, body.fu-ap-open .fu-ticker { display: none !important; 
 
 /* Leaderboard: the independent territories, one collapsed line under the nations. */
 .fu-lb-tribes { color: var(--fu-text-dim); border-top: 1px solid var(--fu-line); cursor: pointer; }
-.fu-lb-tribes .fu-lb-name { color: var(--fu-text-dim); font-style: italic; }
+.fu-lb-tribes .fu-lb-name { color: var(--fu-text-dim); font-style: italic; padding-right: 3px; }
 .fu-lb-tribes-chev { display: inline-flex; width: 0.8rem; transition: transform 0.2s; }
 .fu-lb-tribes-chev .fu-ico { width: 0.7rem; height: 0.7rem; }
 .fu-lb-tribes.is-open .fu-lb-tribes-chev { transform: rotate(90deg); }
