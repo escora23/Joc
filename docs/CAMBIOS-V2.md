@@ -493,15 +493,24 @@ mando.
 
 ## Pruebas de esta versión
 
-- `npx tsc --noEmit` y `npm run build` sin errores; las 1.535 claves de texto existen en español e inglés.
-- Recorrido completo automático (`tools/playtest.mjs`) sobre la versión de producción servida desde una subcarpeta,
-  manejando la interfaz real: menú, partida, despliegue, expansión, diplomacia, declaración de guerra, guerra recibida
-  con pausa automática, guardar y continuar, estructuras, arsenal, ejército, armas nucleares, ofensivas, modo mando,
-  invasión naval, paz y pantalla final. Ver «Limitaciones» para lo que no pasó en esa ejecución.
-- Una **partida entera** jugada por un guion a través de la interfaz (`tools/fullgame.mjs`, duración Corta, Fácil, a 1×
-  y 4×) hasta que la simulación declara el final por sí misma, con la pantalla final y la vuelta al menú.
-- Auditorías sin interfaz: ritmo (conquista, profundidad, desgaste, imperios, partidas completas), diplomacia, modo
-  mando, aire, ejércitos, batallas y guerra naval.
+- `npx tsc --noEmit` y `npm run build` sin errores; todas las claves de texto existen en español e inglés.
+- **Versión de producción servida desde una subcarpeta** (`/juegos/front-ultra/`): carga con rutas relativas, **0 errores
+  en la consola, 0 peticiones fuera de su propio servidor y 0 archivos que fallen**, en todas las ejecuciones.
+- **Recorrido completo automático** (`tools/playtest.mjs`, la interfaz real con ratón y teclado, dos ejecuciones de unos
+  40 minutos): menú, despliegue, expansión, diplomacia (propuesta con contraoferta razonada, pacto aceptado, paz blanca
+  rechazada con su motivo), declaración de guerra con su diálogo, guerra recibida con pausa automática, clic en el aviso
+  que lleva la cámara al lugar, guardar y continuar (estado idéntico), las diez estructuras, el arsenal, una división
+  movida desde Fuerzas, una fábrica mejorada (220 → 440 oro/h y un modelo mayor), prioridad de un frente, armas
+  nucleares (rechazadas en paz, con confirmación en guerra), ofensivas, modo mando (al salir, la división queda a 0,0 km
+  de donde se dejó), invasión naval, propuesta desde el menú radial, paz con tributo, una propuesta de la IA aceptada en
+  la bandeja y la pantalla final con vuelta al menú. Cada paso pasó en al menos una de las dos ejecuciones; los fallos
+  sueltos fueron de la puesta en escena de la prueba (ver «Limitaciones»).
+- **Una partida entera** jugada por un guion a través de la interfaz (`tools/fullgame.mjs`: duración Corta, Fácil, los
+  primeros días a 1× y el resto a 4×, sin ayudas de depuración): 48.000 ticks (200 días de juego) en unos 25 minutos
+  reales, con la pantalla final («Derrota · se ha alcanzado el límite de días: Estados Unidos es la nación más
+  extensa») y la vuelta al menú principal, sin errores.
+- Auditorías sin interfaz de las rondas anteriores: ritmo (conquista, profundidad, desgaste, imperios, partidas
+  completas), diplomacia, modo mando, aire, ejércitos, batallas y guerra naval.
 
 ## Limitaciones conocidas (con franqueza)
 
@@ -526,4 +535,14 @@ mando.
   más amplia (unos 90 km) que el indicador de batalla (16 km).
 - **Un carro y una ciudad.** Con sus 20 proyectiles explosivos, un carro solo derriba unas pocas casas de una ciudad:
   las ciudades están pensadas para la artillería y los bombarderos; el trabajo del carro son las estructuras.
+- **Una partida Corta puede acabar por el límite de días.** En la partida completa de prueba el jugador del guion apenas
+  hizo nada (se expandió y esperó) y ninguna IA llegó a la hegemonía: a los 200 días ganó la nación más extensa
+  (Estados Unidos, 15,8 % de la tierra). Con un jugador activo y en las pruebas sin interfaz, las partidas Cortas
+  terminan antes por hegemonía, pero no está garantizado.
+- **Pruebas automáticas sensibles a la puesta en escena.** En el recorrido completo, algunos pasos que preparan una
+  situación (una ofensiva de la IA contra tu capital para oír la sirena, el orden en que aparecen los consejos del
+  asesor, un clic que el renderizado por software lee como «mantener pulsado») fallan en una ejecución y pasan en otra.
+  No son fallos del juego, pero tampoco son pruebas deterministas.
+- **El asesor insiste con la bandeja.** Mientras tengas una propuesta pendiente, el consejo de la bandeja diplomática
+  vuelve a aparecer cada vez que llega una nueva, hasta que respondes a una.
 - **Las partidas se guardan en el navegador** (almacenamiento local): borrar los datos del sitio borra las partidas.

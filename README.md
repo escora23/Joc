@@ -178,7 +178,7 @@ tu capital o te lanzan un arma nuclear, y un aviso dice por qué y qué puedes h
 
 ### Todo explicado
 
-Tutorial del Asesor militar en diez pasos que esperan al jugador, ayuda (`F1`), enciclopedia con las tablas reales del
+Tutorial del Asesor militar, paso a paso y esperando siempre al jugador, ayuda (`F1`), enciclopedia con las tablas reales del
 juego, tooltips con cifras en todos los controles, desgloses en la barra superior, avisos situados en el mapa y un
 registro de todo lo ocurrido.
 

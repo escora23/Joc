@@ -1984,3 +1984,27 @@ noted.
   launch odds and the scenario gives the human 400K troops). The scenario needs a robust staging, not an AI change.
 * Shots checked by eye (shots/round-check): hud, readability-europe, zoom-40, zoom-8, front, command-tank, midgame,
   declare-war-dialog; under load the default 90 s capture timeout returns unstaged frames, use `--timeout 400000`.
+
+## Release QA (2026-10-05) — FRONT ULTRA v2
+
+Production build (`npm run build`) served from a subpath by a plain static server (`/juegos/front-ultra/`, so relative
+asset paths are proven), Chromium + SwiftShader, real UI.
+
+* `tools/playtest.mjs` now also fails on any request outside the page's origin and on any HTTP ≥ 400. Two full runs
+  (stage 2 + extended, ~40 min each): **0 console errors, 0 foreign requests, 0 failed requests** in both.
+  * Run 1: stage 2 20/21, extended 28/30. Run 2 (after the harness fixes below): stage 2 19/21, extended 29/30. Every
+    step passed in at least one run.
+  * Harness fixes: the command-mode exit step checked `commandResultApplied`, which v2 no longer emits (kills are synced
+    while driving; exit sends `unitControl false`): it now checks the unit is released and holds where it was left
+    (run 2: 0.0 km). The advisor-progress check waits for the advisor's next 0.5 s pass after the inbox answer. The
+    spawn-refusal click retries (one of two runs read the click as a press-and-hold under SwiftShader: no worldClick).
+  * Still flaky (staging, not game): the capital-threat cue step (run 2: the staged Libyan offensive engaged the
+    Toulouse front instead of heading for the capital, so no capitalSiren), and the advisor's «steps never shown»
+    (the script acts — division, move, command — before the advisor reaches those tips).
+* `tools/fullgame.mjs` (new): one Short/Easy game through the UI, days 1-5 at 1x then 4x, the scripted player resumes
+  auto-pause banners and pushes into free land, no debug actions. Ended by itself at tick 48,000 (time limit; United
+  States 15.8 %, the passive human 11th), end screen and «Menú principal» back to the menu, 0 errors, 24.7 min.
+* Fixed: the end screen said «Tu nación ha caído» for a time-limit or hegemony defeat of a living nation; it now reads
+  «Otra potencia se impone» / «Another power prevails» (`end.kicker.outlasted`).
+* README.md (Spanish, gallery in docs/screenshots/, each < 300 KB) and docs/CAMBIOS-V2.md (all 32 items for the owner)
+  written.
