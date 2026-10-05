@@ -54,8 +54,21 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
       const text = t('place.besideCapital', { from });
       return { text, name: from, named: true };
     }
+    // Far from the capital («4360 km al N de Madrid» tells nothing): the bearing from the nearest place within 800 km,
+    // else the country or open sea (round 1 integration).
+    if (rawKm > 800) {
+      const far = nearestPlace(lat, lon, 800);
+      if (far) {
+        const b = bearing(far.lat, far.lon, lat, lon);
+        const text = t('place.bearing', { km: formatNumber(roundKm(b.km)), dir: b.dir, from: placeName(far) });
+        return { text, name: t('place.area', { where: text }), named: false };
+      }
+      const country = countryAt(view, lat, lon);
+      const text = country ? t('place.inCountry', { country }) : t('place.atSea');
+      return { text, name: t('place.area', { where: text }), named: false };
+    }
     const km = Math.round(rawKm / 10) * 10;
-    const y = Math.sin((lon - c.lon) * Math.PI / 180) * Math.cos(lat * Math.PI / 180);
+    const y =Math.sin((lon - c.lon) * Math.PI / 180) * Math.cos(lat * Math.PI / 180);
     const x = Math.cos(c.lat * Math.PI / 180) * Math.sin(lat * Math.PI / 180) - Math.sin(c.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.cos((lon - c.lon) * Math.PI / 180);
     const brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
     const dir = t(`place.dir.${DIRS[Math.round(brg / 45) % 8]}`);

@@ -33,6 +33,7 @@
 .fu-alert-flags .fu-flag { width: 1.3rem; height: 1.3rem; }
 .fu-alert-body { font-size: 0.78rem; line-height: 1.32; color: var(--fu-text-2); }
 .fu-alert-meta { display: flex; gap: 0.6rem; font-size: 0.64rem; color: var(--fu-text-dim); align-items: center; }
+.fu-alert-age { white-space: nowrap; flex-shrink: 0; }
 .fu-alert-go { display: inline-flex; align-items: center; gap: 0.2rem; color: var(--ac); text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--fu-font-cond); font-weight: 600; }
 .fu-alert-go .fu-ico { width: 0.8rem; height: 0.8rem; }
 /* «Prioridad alta» on an entry about one of our fronts (and on the auto-pause banner): the remedy, one click away. */

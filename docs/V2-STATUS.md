@@ -1965,3 +1965,22 @@ noted.
 5. **Icons over the player's label** (minor). Structure and unit icons (`units/icons.ts clearOfLabels`) and the alert
    map markers (`ui/hud/alerts.ts clearOfNationLabels`, the red capital/attack pins that were the culprits in
    front-orbit) step just above or below a placed nation label's rectangle: front-orbit reads «COMANDANTE 260K» clear.
+
+## Gauntlet v2 round 1: integration check (2026-10-05)
+
+* `npx tsc --noEmit` and `npm run build` pass; `npx tsx tools/i18n-check.mjs`: 1535 keys, none missing in es/en.
+* `node tools/playtest.mjs --stage2` (no-HMR server): **21/21**, 0 console errors (1235 s).
+* Headless: harness 0 errors; arsenal all pass; diplomacy-audit 21/21; command-audit 35/35; air-audit 25/25;
+  w4-audit 43/43; w6-audit 20/20; naval-audit **22/22** after a fix (below).
+* Fixed: an AI angry enough for war over piracy kept re-protesting every 480 ticks, and each protest restarted the
+  48-72 h warning (TENSION_LEAD_TICKS, raised this round) that a declaration on the player must wait out, so the war never
+  came (naval-audit N10b). Once decided it no longer re-protests. UI: alert age never wraps («hace 24 / h»), the
+  leaderboard's italic militia line keeps its closing parenthesis, the declaration dialog writes the opinion with a
+  typographic minus like the other figures, and a place more than 800 km from the capital is located from the nearest
+  place within 800 km (or the country / open sea) instead of «a 4360 km al N de Madrid».
+* Open: f3-audit `aihuman` M9 (divisions join / assault in an AI-started offensive on the human) fails 1/3. Not a
+  regression of a mechanic: ae31b3a (spawn phase no longer advances the tick) perturbs the seed-11 trajectory, and seeds
+  7, 12 and 13 already failed before this round (0 offensives in 300 h: the restrained AI only attacks the human at the
+  launch odds and the scenario gives the human 400K troops). The scenario needs a robust staging, not an AI change.
+* Shots checked by eye (shots/round-check): hud, readability-europe, zoom-40, zoom-8, front, command-tank, midgame,
+  declare-war-dialog; under load the default 90 s capture timeout returns unstaged frames, use `--timeout 400000`.

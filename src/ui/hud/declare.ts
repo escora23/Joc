@@ -67,7 +67,7 @@ export function openDeclareWar(hs: HudShared, target: number, tile: number, nava
   const line = (ico: string, el: HTMLElement, cls = '') => h('div', { class: `fu-declare-line ${cls}` }, h('span', { class: 'fu-declare-ico' }, icon(ico)), el);
   const lines: HTMLElement[] = [
     line('news', tx('war.declare.news', { name }, 'p')),
-    line('users', tx(provoked ? 'war.declare.relationsHostile' : 'war.declare.relationsFull', { name, op: opinion }, 'p')),
+    line('users', tx(provoked ? 'war.declare.relationsHostile' : 'war.declare.relationsFull', { name, op: opinion < 0 ? `−${-opinion}` : opinion }, 'p')),
   ];
   if (defenders.length) {
     const names = h('div', { class: 'fu-declare-allies' }, ...defenders.map((a) => h('span', { class: 'fu-declare-ally' }, flag(view.players[a]!.color, a), h('b', null, hs.name(a)))));
