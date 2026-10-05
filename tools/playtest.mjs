@@ -465,9 +465,16 @@ try {
     const ll = await tileLL(ai.tile);
     await lookAt(ll.lat, ll.lon, 2500);
     await sleep(1500);
-    const n0 = await countEvents('toast');
-    await clickTile(ai.tile);
-    const toast = await lastEvent('toast', null, n0, 8000);
+    // Up to three clicks, like a player whose first click the slow software renderer read as a press-and-hold (a
+    // release more than 450 ms after the press is a pan, not a click); each attempt is logged.
+    let toast = null;
+    for (let i = 0; i < 3 && !toast; i++) {
+      const n0 = await countEvents('toast');
+      const c0 = await countEvents('worldClick');
+      await clickTile(ai.tile);
+      toast = await lastEvent('toast', null, n0, 8000);
+      if (!toast) log(`    click ${i + 1}: no toast (worldClick events: ${(await countEvents('worldClick')) - c0})`);
+    }
     check(toast && /\S/.test(toast.text ?? ''), 'no explanatory toast after clicking AI land');
     check(await page.evaluate(() => !window.__front.ctx.sim.view.human?.spawned), 'the human spawned on AI land');
     await shot('03a-spawn-refused');
@@ -1515,8 +1522,13 @@ try {
       return 'in command mode';
     });
 
-    await step('exit command mode (Esc) -> result applied', async () => {
-      const n0 = await countEvents('commandResultApplied');
+    await step('exit command mode (Esc) -> released where it was left', async () => {
+      // v2 (§9.8, owner item 18): kills and losses are synced while driving (no end-of-mission result); on exit the
+      // unit is released (unitControl false) and holds where the player left it, the camera looks at that place.
+      const before = await page.evaluate(() => {
+        const c = window.__front.ctx.sim.view.command?.controlled?.[0];
+        return c ? { id: c.unitId, x: c.x, y: c.y } : null;
+      });
       // Esc asks «¿Volver al mapa estratégico?» (Enter = back to the map, Esc = keep commanding); confirming shows
       // the combat report, and a last Esc leaves right away.
       await page.keyboard.press('Escape');
@@ -1526,13 +1538,17 @@ try {
       await shot('12b-command-debrief');
       if ((await state()) === 'command') await page.keyboard.press('Escape');
       await waitState('playing', 120000);
-      const ev = await lastEvent('commandResultApplied', null, n0, 20000);
-      check(ev, 'no commandResultApplied');
+      check(before, 'no controlled unit in the sim while in command mode');
+      const released = await until(() => !(window.__front.ctx.sim.view.command?.controlled?.length), null, 30000, 500);
+      check(released, 'the unit is still controlled after leaving command mode');
+      const after = await page.evaluate((id) => { const u = window.__front.ctx.sim.view.units.get(id); return u ? { x: u.x, y: u.y, alive: true } : { alive: false }; }, before.id);
+      const moved = after.alive ? Math.hypot(after.x - before.x, after.y - before.y) * 25 : -1;
       // Cinematic climb back to orbit.
       await until(() => window.__front.ctx.cameraRig.getState().altitudeKm > 2000, null, 90000, 500);
       await sleep(3000);
       await shot('13-back-to-orbit');
-      return `killed ${ev.troopsKilled} troops, unitLost=${ev.unitLost}`;
+      check(!after.alive || moved < 30, `the unit moved ${moved.toFixed(0)} km after release (it must hold where it was left)`);
+      return after.alive ? `released, ${moved.toFixed(1)} km from where it was left` : 'released (unit lost)';
     });
 
     // ---------------------------------------------------------------------------------------------- invasion
@@ -1710,10 +1726,13 @@ try {
         await page.locator('.fu-tut .fu-btn--primary').click({ force: true }).catch(() => {});
         await until((c) => window.__fuTutorial?.()?.step !== c, cur, 10000, 250);
       }
-      const seen = await page.evaluate(() => window.__pt.tut.map((x) => x.step));
-      const prog = await page.evaluate(() => window.__front.ctx.settings.get().tutorialProgress ?? 0);
       const need = ['spawn', 'expand', 'city', 'neighbours', 'clock', 'army', 'move', 'command', 'fronts', 'inbox'];
       const bits = [1, 2, 3, 4, 7, 5, 6, 9, 8, 10];
+      // The advisor marks a step done on its next 0.5 s check, which the software renderer reaches a frame or two
+      // after the action (the inbox answer of the previous step): wait for it like a player would.
+      await until((bits) => { const pr = window.__front.ctx.settings.get().tutorialProgress ?? 0; return bits.every((b) => pr & (1 << b)); }, bits, 20000, 500);
+      const seen = await page.evaluate(() => window.__pt.tut.map((x) => x.step));
+      const prog = await page.evaluate(() => window.__front.ctx.settings.get().tutorialProgress ?? 0);
       const notSeen = need.filter((k) => !seen.includes(k));
       const notDone = need.filter((k, i) => !(prog & (1 << bits[i])));
       check(!notDone.length, `steps not completed: ${notDone.join(', ')} (progress ${prog.toString(2)})`);

@@ -24,8 +24,8 @@ real, diplomacia de verdad y todo explicado dentro del juego. El detalle de qué
 | **Soldados con equipo de campaña** y camuflaje en los tonos de su nación, animados (corren, se agachan, disparan, caen). | **Mapa táctico (M)** al estilo de un plano de estado mayor: relieve, fronteras, frente, carreteras, símbolos OTAN y destino con tiempo de marcha. |
 | ![Bloqueo de un estrecho](docs/screenshots/08-bloqueo-naval.jpg) | ![Ciudad en 3D](docs/screenshots/09-ciudad.jpg) |
 | **Guerra en el mar.** Bloqueos selectivos de puertos, rutas y estrechos (Gibraltar, Suez, Ormuz…), con ganancias y costes diplomáticos mostrados antes de confirmar. | **Modelos 3D de cerca, iconos de lejos.** Cada estructura se asienta en el terreno y cambia de forma al subir de nivel. |
-| ![Bombardeo](docs/screenshots/10-bombardeo.jpg) | ![Pantalla final](docs/screenshots/11-final.jpg) |
-| **Daños reales.** Ciudades y estructuras se dañan, pierden función y nivel, arden y quedan en ruinas; se reparan con oro. | **Fin de la partida** por dominio, hegemonía o límite de tiempo, con el resumen de la campaña. |
+| ![Ciudad dañada](docs/screenshots/10-bombardeo.jpg) | ![Pantalla final](docs/screenshots/11-final.jpg) |
+| **Daños reales.** La misma ciudad intacta y con daños graves: manzanas derrumbadas, humo y fuego, y funciona al 25 %. Las estructuras pierden nivel, quedan en ruinas y se reparan con oro. | **Fin de la partida** por dominio, hegemonía o límite de tiempo, con el resumen de la campaña. |
 
 ## Cómo ejecutarlo
 

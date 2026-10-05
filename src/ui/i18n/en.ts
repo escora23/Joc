@@ -400,6 +400,7 @@ export const en: Dictionary = {
   'end.defeat': 'Defeat',
   'end.kicker.win': 'War over · The world is yours',
   'end.kicker.lose': 'War over · Your nation has fallen',
+  'end.kicker.outlasted': 'War over · Another power prevails',
   'end.reason.win.domination': 'You control most of the planet\'s land. No one dares to challenge you.',
   'end.reason.win.lastStanding': 'You are the last nation standing.',
   'end.reason.win.eliminated': 'Your enemies have been annihilated.',

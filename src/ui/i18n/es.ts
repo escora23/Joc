@@ -402,6 +402,7 @@ export const es: Dictionary = {
   'end.defeat': 'Derrota',
   'end.kicker.win': 'Guerra terminada · El mundo es tuyo',
   'end.kicker.lose': 'Guerra terminada · Tu nación ha caído',
+  'end.kicker.outlasted': 'Guerra terminada · Otra potencia se impone',
   'end.reason.win.domination': 'Controlas la mayor parte de la tierra del planeta. Nadie se atreve a desafiarte.',
   'end.reason.win.lastStanding': 'Eres la última nación en pie.',
   'end.reason.win.eliminated': 'Tus enemigos han sido aniquilados.',
