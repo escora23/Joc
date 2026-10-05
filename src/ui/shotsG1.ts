@@ -117,3 +117,46 @@ registerShot('g1-war-alerts', 'ui', 'Gauntlet items 3 and 7: auto-pause banner, 
   o.leaderboard = [...document.querySelectorAll('.fu-lb-row')].filter((e) => (e as HTMLElement).style.display !== 'none').map((e) => (e as HTMLElement).innerText.replace(/\n/g, ' '));
   o.rank = text('.fu-tb-rank') || text('[class*="rank"]');
 });
+
+/**
+ * App-integration gauntlet (29a in real play): the critic's case, the staged Spain–Switzerland war (f3-missions'
+ * stage) run on for `&run=` ticks at 1x, then at ONE moment the hover across our offensive's contact, the Guerra
+ * panel row and the reinforcement dialog are read. All three must name the same ratio, width and speed.
+ */
+registerShot('g1-offensive-swiss', 'ui', 'Gauntlet 29a: one forecast for hover, Guerra panel and dialog on the staged Swiss war after it ran at 1x', async (s) => {
+  const { ctx, wait, params } = s;
+  const { stageWar } = await import('./shotsF3');
+  const enemy = await stageWar(s, Number(params.get('run') ?? 120));
+  const hud = getHud();
+  if (!hud) return;
+  const view = ctx.sim.view;
+  const a = view.attacks.find((q) => q.attacker === HUMAN_ID && q.defender === enemy && q.id > 0 && !q.naval);
+  const o = out();
+  o.attack = a ? { troops: Math.round(a.troops), ratio: a.ratio, kmh: a.advanceKmh, state: a.state, frontage: a.frontageTiles, breakthrough: (a as unknown as { breakthrough?: boolean }).breakthrough ?? null } : null;
+  // The enemy tile just across our offensive's contact (where a player would point to reinforce it).
+  let tile = -1;
+  if (a && a.contactX >= 0) {
+    for (let r = 1; r <= 5 && tile < 0; r++) {
+      for (let dy = -r; dy <= r && tile < 0; dy++) {
+        for (let dx = -r; dx <= r && tile < 0; dx++) {
+          const tt = Math.floor(a.contactY + dy) * MAP_W + ((Math.floor(a.contactX + dx) % MAP_W) + MAP_W) % MAP_W;
+          if (view.owner[tt] === enemy) tile = tt;
+        }
+      }
+    }
+  }
+  if (tile < 0) tile = acrossFront(s, enemy, -1);
+  const lat = 90 - ((Math.floor(tile / MAP_W) + 0.5) / (MAP_W / 2)) * 180, lon = (((tile % MAP_W) + 0.5) / MAP_W) * 360 - 180;
+  ctx.cameraRig.setState({ lat, lon, altitudeKm: 1400, tilt: 0.2, heading: 0 });
+  await s.waitFrames(8);
+  hud.shared.setAttackRatio(0.5);
+  hud.shared.setHover({ button: -1, tile, lat, lon, unitId: -1, structureId: -1, clientX: window.innerWidth * 0.5, clientY: window.innerHeight * 0.5, shift: false, ctrl: false, alt: false });
+  await wait(900);
+  o.hover = text('.fu-tt-action');
+  if (a) ctx.bus.emit('frontSelected', { key: a.frontKey, fly: false });
+  await wait(1200);
+  o.panel = [...document.querySelectorAll('.fu-war-own')].map((e) => (e as HTMLElement).innerText).filter((x) => x.includes(':')).slice(0, 3);
+  openOffensiveDialog(hud.shared, enemy, tile, { sendTroops: true });
+  await wait(1200);
+  o.dialog = text('.fu-offdlg');
+});

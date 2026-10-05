@@ -1850,9 +1850,9 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     intercept.update(0, view, P, { hit: () => false }, false);
     const ship = t(e.kind === 'transport' ? 'naval.cmd.convoy' : 'naval.cmd.merchant', { name });
     const o = intercept.options(view, e, P);
-    const w = Math.abs(PIRACY_OPINION.warningShot), v = Math.abs(PIRACY_OPINION.seize);
+    const w = Math.abs(PIRACY_OPINION.warningShot), v = Math.abs(e.kind === 'transport' ? PIRACY_OPINION.turnBack : PIRACY_OPINION.seize);
     const vs = Math.abs(e.kind === 'transport' ? PIRACY_OPINION.sinkTroops : PIRACY_OPINION.sink);
-    const i = await decide(t('command.piracy.title', { ship }), t('command.piracy.body', { name }),
+    const i = await decide(t('command.piracy.title', { ship }), t(e.kind === 'transport' ? 'command.piracy.bodyConvoy' : 'command.piracy.body', { name }),
       t('command.piracy.costs', { name, va: Math.abs(PIRACY_OPINION.ally), vw: Math.abs(PIRACY_OPINION.world) }), [
         { label: t('naval.cmd.warn'), key: 'R', code: 'KeyR', disabled: !o.warn.ok, note: o.warn.ok ? t('command.piracy.warnNote', { w }) : o.warn.why },
         { label: t('naval.cmd.board'), key: 'F', code: 'KeyF', disabled: !o.board.ok, note: o.board.ok ? t(e.kind === 'transport' ? 'command.piracy.boardNoteConvoy' : 'command.piracy.boardNote', { v }) : o.board.why },

@@ -228,11 +228,11 @@ export function aerialHazeK(altKm: number, lowAir = true): number {
 
 /**
  * Base fill strength by camera altitude (DESIGN_V2 §10.1), log-interpolated: ≥ 6,000 km 0.55; 1,500 km 0.45;
- * 300 km 0.35; then lighter below 100 km so the ground detail reads through (§10.11): 100 km 0.27, 40 km 0.19,
- * ≤ 10 km 0.13 (owned land stays ≥ 8 ΔE from the bare ground). Add 0.05 for the human's land and 0.08 under the hover.
+ * 300 km 0.35; then lighter below 100 km so the ground detail reads through (§10.11): 100 km 0.27, 40 km 0.21,
+ * ≤ 10 km 0.17 (plus a band of the owner's colour along each side of a border up close, earth.ts) (owned land stays ≥ 8 ΔE from the bare ground). Add 0.05 for the human's land and 0.08 under the hover.
  */
 export function territoryFillAmount(altKm: number): number {
-  const K: readonly [number, number][] = [[10, 0.13], [40, 0.19], [100, 0.27], [300, 0.35], [1500, 0.45], [6000, 0.55]];
+  const K: readonly [number, number][] = [[10, 0.17], [40, 0.21], [100, 0.27], [300, 0.35], [1500, 0.45], [6000, 0.55]];
   if (altKm <= K[0][0]) return K[0][1];
   for (let i = 1; i < K.length; i++) {
     if (altKm <= K[i][0]) {

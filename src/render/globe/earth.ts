@@ -665,7 +665,15 @@ void main() {
       fillA *= mix(1.0, 0.7, occ);
       // Every nation reads against its ground (§16.3: ΔE >= 15 from orbit); up close (uCloseK) the ground detail must
       // read through the fill, so the floor drops.
-      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.23, 0.07, uCloseK)) * (alive ? 1.0 : 0.6));
+      fillA = max(fillA, territoryMinFill(albedo, natO, mix(0.23, 0.11, uCloseK)) * (alive ? 1.0 : 0.6));
+      // FEEDBACK-1 #10 up close: the light fill lets the ground read, but two neighbours of similar hue over the same
+      // ground then looked alike at 8-40 km. Each side of a border carries a band of its owner's colour (~22 px,
+      // fading inward), so who holds which side reads at once at any close zoom while the interior keeps its relief.
+      if (Q >= 0 && uCloseK > 0.0 && distPx < 40.0) {
+        float bandW = mix(10.0, 22.0, uCloseK);
+        float band = 1.0 - smoothstep(0.0, bandW, max(distPx, 0.0));
+        fillA = max(fillA, 0.62 * band * uCloseK * (alive ? 1.0 : 0.6));
+      }
 #if ATM_Q >= 1
       // Toward the limb the air washes colours out (col * vTrans + inscatter): compensate so a nation near the horizon
       // reads as clearly as one under the camera.

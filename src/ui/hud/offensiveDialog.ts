@@ -120,8 +120,11 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number, 
     table.replaceChildren(
       row(t('off.row.troops'), cur ? `${troopsText(cur.troops)} + ${troopsText(send)}` : troopsText(send)),
       row(t('off.row.garrison', { name: hs.name(enemy) }), troopsText(p.garrison)),
-      row(t('off.row.ratio'), `${formatNumber(p.ratio, 1)} : 1`, p.ratio >= 1.7 ? 'is-go' : p.ratio >= 1 ? 'is-risky' : 'is-bad'),
-      row(t('off.row.corridor'), t('g1.off.corridor', { km: formatNumber(Math.round(p.corridorKm)), front: formatNumber(Math.round(p.frontTiles * TILE_KM)) })),
+      // A reinforcement shows the offensive now (the Guerra panel's figures) and after the change.
+      row(t('off.row.ratio'), p.ratioNow > 0 && p.send > 0 ? `${formatNumber(p.ratioNow, 1)} : 1 → ${formatNumber(p.ratio, 1)} : 1` : `${formatNumber(p.ratio, 1)} : 1`, p.ratio >= 1.7 ? 'is-go' : p.ratio >= 1 ? 'is-risky' : 'is-bad'),
+      row(t('off.row.corridor'), p.corridorKmNow > 0 && p.send > 0 && Math.round(p.corridorKmNow) !== Math.round(p.corridorKm)
+        ? t('g1.off.corridorNow', { km0: formatNumber(Math.round(p.corridorKmNow)), km: formatNumber(Math.round(p.corridorKm)), front: formatNumber(Math.round(p.frontTiles * TILE_KM)) })
+        : t('g1.off.corridor', { km: formatNumber(Math.round(p.corridorKm)), front: formatNumber(Math.round(p.frontTiles * TILE_KM)) })),
       ...speedRows(cur, p, send, distKm),
       row(t('off.row.lossOwn'), `≈ ${troopsText(p.ownLossDay)}`),
       row(t('off.row.lossEnemy'), `≈ ${troopsText(p.enemyLossDay)}`),

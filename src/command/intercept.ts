@@ -392,6 +392,7 @@ export class ShipIntercept {
       if (input.hit('KeyX')) this.tryAct('sink', e, can.sink, war);
     }
     // Panel.
+    const convoy = e.kind === 'transport';
     const what = t(e.kind === 'transport' ? 'naval.cmd.convoy' : 'naval.cmd.merchant', { name: this.d.nameOf(owner) });
     const status = !u ? '' : u.mode === UnitMode.HoveTo ? t('naval.cmd.st.hove') : u.mode === UnitMode.Detour ? t('naval.cmd.st.detour') : t('naval.cmd.st.sailing');
     const km = dist >= 1000 ? `${formatNumber(dist / 1000, 1)} km` : `${Math.round(dist)} m`;
@@ -404,7 +405,7 @@ export class ShipIntercept {
       ${li('F', 'naval.cmd.board', can.board, whyBoard)}
       ${li('X', 'naval.cmd.sink', can.sink, dist > SINK_M ? t('naval.cmd.why.range', { km: 8 }) : '')}
       ${li('B', 'command.blockade.key', true, t('command.blockade.keyNote'))}</ul>
-      ${war ? `<div class="w" style="color:#b3c4d6">${esc(t('naval.cmd.warNote'))}</div>` : `<div class="w">${esc(t('naval.cmd.peaceNote', { name: this.d.nameOf(owner), v: Math.abs(PIRACY_OPINION.seize), vs: Math.abs(PIRACY_OPINION.sink) }))}</div>`}
+      ${war ? `<div class="w" style="color:#b3c4d6">${esc(t(convoy ? 'naval.cmd.warNoteConvoy' : 'naval.cmd.warNote'))}</div>` : `<div class="w">${esc(t(convoy ? 'naval.cmd.peaceNoteConvoy' : 'naval.cmd.peaceNote', { name: this.d.nameOf(owner), v: Math.abs(convoy ? PIRACY_OPINION.turnBack : PIRACY_OPINION.seize), vs: Math.abs(convoy ? PIRACY_OPINION.sinkTroops : PIRACY_OPINION.sink) }))}</div>`}
       ${this.boarding ? `<div class="radio">${esc(t('naval.cmd.boarding', { s: Math.max(0, Math.ceil(BOARD_S - this.boarding.t)) }))}</div><div class="bar"><i style="width:${Math.min(100, (this.boarding.t / BOARD_S) * 100).toFixed(0)}%"></i></div>` : ''}
       ${this.radioT > 0 ? `<div class="radio">${esc(this.radio)}</div>` : ''}
       ${this.others > 0 ? `<div class="w" style="color:#b3c4d6"><kbd style="font:700 0.66rem/1 monospace;padding:0.1rem 0.3rem;border:1px solid rgba(255,255,255,0.45);border-radius:2px;color:#fff">Tab</kbd> ${esc(t('naval.cmd.next', { n: this.others }))}</div>` : ''}`;
@@ -504,7 +505,7 @@ export class ShipIntercept {
     if (act !== 'board') this.d.lookAt?.(e.pos);
     switch (act) {
       case 'hail':
-        this.say(t('naval.cmd.hailText', { ship: this.d.shipName }));
+        this.say(t(e.kind === 'transport' ? 'naval.cmd.hailTextConvoy' : 'naval.cmd.hailText', { ship: this.d.shipName }));
         this.hailed.set(e.src?.id ?? 0, 0);
         this.act('hail', e);
         return;

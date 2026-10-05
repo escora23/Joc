@@ -163,7 +163,7 @@ registerShot('f3-city-damage', 'units', 'Feedback #3 item 27: a level-8 city hea
 }, 10);
 
 /** Spain at war with its northern neighbour, a human offensive north, units and structures on both sides. */
-async function stageWar(s: ShotContext, runTicks = 60): Promise<number> {
+export async function stageWar(s: ShotContext, runTicks = 60): Promise<number> {
   const { ctx } = s;
   await ctx.app.startScriptedGame({ ticks: 200, speed: 0, nukes: false, autopilot: false, worldEvents: false, worldTimeSec: worldTimeForSubsolarLon(-20) });
   const sim = ctx.sim;

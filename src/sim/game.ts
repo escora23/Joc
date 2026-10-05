@@ -176,6 +176,9 @@ export class Game implements SimGame {
   winner = 0;
   private spawnDeadline: number;
   private humanSpawnTick = -1;
+  /** Spawn-phase clock (FEEDBACK-1 #17): the game's tick and date stay at 0 while the human picks a capital, so play
+   *  starts on day 1 however long the choice takes; the spawn deadline and countdown run on this counter instead. */
+  private spawnClock = 0;
   private pendingHuman: PlayerCommand[] = [];
   /** Debug launches waiting for the next tick (applyDebugBetweenTicks; not saved). */
   private tickDebug: SimDebugAction[] = [];
@@ -1100,8 +1103,8 @@ export class Game implements SimGame {
     p.civilians = p.tiles * CIVILIANS_PER_TILE;
     p.metaDirty = true;
     if (p.id === HUMAN_ID) {
-      this.humanSpawnTick = this.tick;
-      if (!this.config.instantStart) this.spawnDeadline = Math.min(this.spawnDeadline, this.tick + SPAWN_COUNTDOWN_TICKS);
+      this.humanSpawnTick = this.spawnClock;
+      if (!this.config.instantStart) this.spawnDeadline = Math.min(this.spawnDeadline, this.spawnClock + SPAWN_COUNTDOWN_TICKS);
     }
     this.emit({ type: 'playerSpawned', tick: this.tick, playerId: p.id, tile });
     return true;
@@ -1286,7 +1289,8 @@ export class Game implements SimGame {
   // =================================================================================================
   tick1(): void {
     if (this.phase === 'ended') return;
-    this.tick++;
+    if (this.phase === 'spawn') this.spawnClock++;
+    else this.tick++;
     this.nav.beginTick();
     // 1. human commands
     this.flushHumanCommands();
@@ -1350,14 +1354,14 @@ export class Game implements SimGame {
 
   private stepSpawnPhase(): void {
     const human = this.playerById[HUMAN_ID]!;
-    if (!human.spawned && this.tick >= this.spawnDeadline) {
+    if (!human.spawned && this.spawnClock >= this.spawnDeadline) {
       this.spawn(human, this.randomFreeLand());
       this.message(HUMAN_ID, 'msg.autoSpawned', 'warning');
     }
     let start = false;
     if (human.spawned) {
-      if (this.config.instantStart) start = this.tick > this.humanSpawnTick;
-      else start = this.tick >= this.spawnDeadline;
+      if (this.config.instantStart) start = this.spawnClock > this.humanSpawnTick;
+      else start = this.spawnClock >= this.spawnDeadline;
     }
     if (start) {
       // Anyone the AI failed to place gets a random spot so every nation plays.
@@ -1495,8 +1499,10 @@ export class Game implements SimGame {
     this.forceFull = true;
   }
 
+  /** The spawn deadline on the published tick's scale (the tick stands still during the spawn phase). */
   get spawnDeadlineTick(): number {
-    return this.spawnDeadline;
+    if (this.spawnDeadline >= Number.MAX_SAFE_INTEGER) return this.spawnDeadline;
+    return this.tick + Math.max(0, this.spawnDeadline - this.spawnClock);
   }
 
   get pendingEventCount(): number {
@@ -1666,7 +1672,7 @@ export class Game implements SimGame {
       this.unitSys.productionDirty = false;
       u.production = this.unitSys.productionViews();
     }
-    if (this.phase === 'spawn' || full) u.spawnDeadlineTick = this.spawnDeadline;
+    if (this.phase === 'spawn' || full) u.spawnDeadlineTick = this.spawnDeadlineTick;
     if (this.winner) u.winner = this.winner;
     return u;
   }

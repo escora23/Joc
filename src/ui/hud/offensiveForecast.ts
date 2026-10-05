@@ -45,6 +45,10 @@ export interface OffensiveForecast {
   /** Troops of the enemy facing it on that front: its garrison (+ half of its own offensive there). */
   garrison: number;
   ratio: number;
+  /** A running offensive's ratio and attack width as they are now, before this order (-1 for a new offensive): the
+   *  hover and the dialog show «now → after», so they read the Guerra panel's number next to the forecast. */
+  ratioNow: number;
+  corridorKmNow: number;
   /** Front length (tiles) and the corridor the troops buy on it (tiles, km). */
   frontTiles: number;
   corridorTiles: number;
@@ -212,8 +216,10 @@ export function forecastOffensive(view: GameView, enemy: number, tile: number, s
   const ownLossDay = Math.min(troops, ((ownPow * troops) / Math.max(1, Pa)) * TICKS_PER_GAME_DAY);
   const enemyLossDay = Math.min(G, enemyPow * TICKS_PER_GAME_DAY);
   const verdict = int === 0 ? 'hold' : ratio >= 1.7 ? 'advance' : ratio >= 1 ? 'grind' : 'stall';
+  const ratioNow = cur && measured ? cur.ratio : -1;
+  const corridorKmNow = cur ? frontageTiles(Math.max(1, cur.troops), false, frontTiles) * TILE_KM : -1;
   return {
-    front: f, running: cur, send: Math.max(0, send), troops, garrison, ratio, frontTiles: Number.isFinite(frontTiles) ? frontTiles : corridorTiles,
+    front: f, running: cur, send: Math.max(0, send), troops, garrison, ratio, ratioNow, corridorKmNow, frontTiles: Number.isFinite(frontTiles) ? frontTiles : corridorTiles,
     corridorTiles, corridorKm: corridorTiles * TILE_KM, kmh, nowKmh, capKmh, saturated, ground: ground.kind, groundMul: ground.mul,
     ownLossDay, enemyLossDay, verdict, startsInTicks: cur ? (cur.state === 'mobilizing' || cur.state === 'contact' ? Math.max(0, cur.etaTicks) : 0) : pr.startsInTicks || OFFENSIVE_CONTACT_TICKS, air, casOwn, casTheir,
   };
