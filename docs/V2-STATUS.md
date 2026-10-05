@@ -1811,3 +1811,26 @@ Shots and readings: `shots/fix-ui-hud-diplomacy/` from `node tools/g1-verify.mjs
 
 Not verified in a long real game: the capital-loss and objective texts were checked headless on the text functions
 (with the real place data), not by losing a capital in play.
+
+## Gauntlet round 1 — sim-pacing-warfare fixer (2026-10-05)
+
+1. **[major] Absurd force ratios on fronts («82.000 nuestros y 320 enemigos»)**, DESIGN_V2 §4.4b.
+   * **Breakthrough («ruptura»)** in `sim/attacks.ts`: R ≥ 5 : 1 for 1 h breaks the defence of the corridor; the
+     garrison routs (up to 0.6 %/tick, full from 10 : 1, counted as prisoners), the natural terrain's extra time is
+     halved; the 8 km/h cap, the tile cap and logistics stay. Ends below 4 : 1. Events `breakthrough` / `stabilized`,
+     `AttackView.breakthrough/prisoners`. The defender AI sends every spare man to the breach (quiet fronts of that war
+     to *baja*).
+   * **Same km for both sides**: localForces publishes `stretchA/stretchB` (±8 km of line around the nearest point,
+     the defender gathering 80 % of its garrison on the attacking corridors); command mode's chip and notice use them
+     and name the km. Before, the enemy was counted over 16 km and our offensive over the ~90 km window.
+   * **Explained**: alerts for both sides (with ratio, what happens and the remedies), world news for majors,
+     «· ruptura» in the offensive status, Frentes help page, chip/notice wording in command mode.
+   * **Measured.** Headless (`tools/_probe-breakthrough.mjs --enemy 0`, the staged Swiss war): before, R 30 → 72 and
+     the Swiss garrison melted ~1.5K per 6 h; now the breakthrough fires at contact + 1 h, the garrison goes 11.4K →
+     6.1K (12 h) → 1.3K (30 h) with 9,400 prisoners, Switzerland capitulates as before. Browser (`?shot=command-battle`):
+     chip «Lo más duro, a 300 m · ruptura: en estos 16 km quedan unos 1800 enemigos frente a 24.000 nuestros, y se
+     rinden o huyen», notice «Ruptura en el frente contra Suiza…» (`shots/fix-sim-pacing-warfare/command-battle.png`).
+     pace-audit: conquest 16/16, depth 7/7 (T30 8.2/8.2/8.2/7.9 km/h), empire 2/2, attrition 3/3, game seed 11:
+     hegemony at 50,360 (T14 PASS), 15/16 (T33 the known autopilot case).
+   * Still open: the world label «Guarnición del frente · N tropas en la zona» counts the whole ~90 km window (it says
+     «en la zona»), so it is larger than the chip's 16 km figure.
