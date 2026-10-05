@@ -1896,6 +1896,10 @@ SwiftShader, clock at 1x where the item asks for it.
    (`take1x.mjs`) shows `tactical/1` and no tick between the click landing and the march; the E1 «41 ticks» row is
    Playwright's click latency under SwiftShader (2.6 s of 1x before the click reaches the page), not game time.
    E3 (first view) is marginal on the alpine slope: the view ray meets the ground at 150 m, 23° off the hot point.
+   Second run on the final code (shots/fix-app-integration/entry1x-b, load ~14): march 22.7 km in 4 legs to a lowland
+   stretch near Toulouse, play 68 real s after the click, nearest hostile 396 m, battle active; the first view shows
+   hundreds of figures and the line across open ground, with the long notice in sentence case above the fight. E3
+   reads 54° off the hot point there because the tank is still turning on its own 170 m drive to it.
 2. **#29a one front, one set of numbers, at one moment** (`?shot=g1-offensive-swiss`, the critic's war after 120
    ticks at 1x, `node tools/g1-verify.mjs --shot g1-offensive-swiss`, shots/fix-app-integration/g1b): hover «relación
    131,5 : 1 → 234,2 : 1 · ataque de 500 km · ≈ 3,4 km/h · más tropas no aceleran…», dialog «Relación de fuerzas
