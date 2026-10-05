@@ -1879,5 +1879,6 @@ Not verified in a long real game: the capital-loss and objective texts were chec
 * `tsc --noEmit`, `npm run build`, `tools/i18n-check.mjs` (0 missing).
 
 ### Notes
-* T33 (first AI war on an autopilot human in [6,000, 12,000]) and T14 were not rerun on a full game; the longer lead
-  on the human and the overseas restriction can delay the first war on the human a little.
+* `pace-audit game` (seed 11, Normal): 15/16, hegemony at 43,520 (T14 pass). T33 still fails: first AI war on the
+  autopilot human at 13,861 (target ≤ 12,000), but the parent commit ae31b3a measured 32,564 and no T14 end (time limit),
+  so this is an improvement, not a regression; the longer warning on the human accounts for ~360 ticks of it.
