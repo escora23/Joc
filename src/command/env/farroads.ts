@@ -30,7 +30,7 @@ export class FarRoads {
   segments = 0;
 
   constructor() {
-    this.mat = new THREE.MeshBasicMaterial({ color: 0x47423b, fog: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    this.mat = new THREE.MeshBasicMaterial({ color: 0x47423b, fog: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     const uPx = this.uPxAngle;
     this.mat.onBeforeCompile = (sh) => {
       sh.uniforms.uPxAngle = uPx;
@@ -124,7 +124,9 @@ uniform float uPxAngle;`)
         }
         if (q > 0) {
           const p = n + (q - 1) * 2;
-          idx.push(p, p + 2, p + 1, p + 1, p + 2, p + 3);
+          // Counter-clockwise seen from above (the camera always looks down on it): the old order was clockwise, and
+          // the whole layer was back-face culled.
+          idx.push(p, p + 1, p + 2, p + 1, p + 3, p + 2);
           segs++;
         }
       }
