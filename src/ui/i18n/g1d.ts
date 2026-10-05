@@ -1,0 +1,53 @@
+// FRONT ULTRA — texts of the gauntlet round 1 AI and diplomacy fixes: threats from across the sea worded as such, the
+// warning time before a war on the player, strategic strikes with their own reason, and peace texts that state what
+// each side keeps (and why a war ended when the player signed nothing). Spanish is the default; English complete.
+
+export const esG1d: Record<string, string> = {
+  'tension.naval': '{name} observa tus costas: reúne transportes y tropas en sus puertos.',
+  'tension.navalRetaliation': '{name} promete venganza desde el mar y prepara una flota de desembarco.',
+  'war.reason.overseas': 'como gran potencia naval, quiere conquistar una nación más débil al otro lado del mar',
+  'war.reason.overseasRetaliation': 'cruza el mar para vengar un ataque',
+  'alert.tension.leadBody': 'Suele ser el preludio de una guerra, que no te declarará antes de {hours} h: refuerza esa frontera, busca aliados o mejora vuestras relaciones.',
+  'alert.tension.navalBody': 'La amenaza llega por mar: no te declarará la guerra antes de {hours} h, y vendrá en convoyes de desembarco. Guarnece la costa y los puertos, construye buques de guerra o busca aliados.',
+  'settings.autoPause.threat': 'Amenaza de una nación más fuerte',
+  'settings.autoPause.threat.tip': 'La primera vez que una nación con más tropas que tú te amenaza: aún no es la guerra, pero tienes pocas horas para prepararte (recomendado).',
+  'escalation.reason.longWar': 'Tras tres días de guerra sin decidirla en el frente, empieza a golpear ciudades, puertos e industria.',
+  'escalation.reason.stalled': 'Su ofensiva ha fracasado: ahora busca quebrarte golpeando ciudades, puertos e industria.',
+  'news.warEnded.line': '{a} y {b} firman la paz sobre la línea del frente.',
+  'news.warEnded.keeps': '{name} conserva {n} casillas que ocupó.',
+  'news.warEnded.keepsOne': '{name} conserva la casilla que ocupó.',
+  'news.warEnded.capitulatedElsewhere': '{loser} capitula ante {by}, y su guerra con {other} termina.',
+  'news.warEnded.returned': 'Devuelve a {other} las {n} casillas que le había ocupado.',
+  'news.warEnded.returnedOne': 'Devuelve a {other} la casilla que le había ocupado.',
+  'news.warEnded.eliminated': '{gone} ha desaparecido del mapa: su guerra con {other} termina.',
+  'news.warEnded.allyPeace': '{ally} firma la paz con {enemy}, y la guerra de {joiner} a su lado termina con ella.',
+  'alert.peace.why.capitulation': 'No has firmado nada: una nación que capitula pone fin a todas sus guerras.',
+  'alert.peace.why.eliminated': 'No has firmado nada: {gone} ya no existe como nación.',
+  'alert.peace.why.allyPeace': 'No has firmado nada: entraste en esta guerra para ayudar a {ally}, y {ally} ha firmado la paz.',
+  'peace.reason.allyPeace': 'paz del aliado',
+};
+
+export const enG1d: Record<string, string> = {
+  'tension.naval': '{name} is watching your coasts: it is gathering transports and troops in its ports.',
+  'tension.navalRetaliation': '{name} vows revenge from the sea and is preparing a landing fleet.',
+  'war.reason.overseas': 'as a great naval power, it means to conquer a weaker nation across the sea',
+  'war.reason.overseasRetaliation': 'crosses the sea to avenge an attack',
+  'alert.tension.leadBody': 'Usually the prelude to a war, which it will not declare on you for at least {hours} h: reinforce that border, find allies or improve relations.',
+  'alert.tension.navalBody': 'The threat comes by sea: it will not declare war on you for at least {hours} h, and it will come in landing convoys. Garrison the coast and the ports, build warships or find allies.',
+  'settings.autoPause.threat': 'Threat from a stronger nation',
+  'settings.autoPause.threat.tip': 'The first time a nation with more troops than you threatens you: it is not war yet, but you have only a few hours to prepare (recommended).',
+  'escalation.reason.longWar': 'After three days of war with no decision at the front, it starts hitting cities, ports and industry.',
+  'escalation.reason.stalled': 'Its offensive failed: now it tries to break you by hitting cities, ports and industry.',
+  'news.warEnded.line': '{a} and {b} sign peace on the front line.',
+  'news.warEnded.keeps': '{name} keeps the {n} tiles it occupied.',
+  'news.warEnded.keepsOne': '{name} keeps the tile it occupied.',
+  'news.warEnded.capitulatedElsewhere': '{loser} capitulates to {by}, and its war with {other} ends.',
+  'news.warEnded.returned': 'It hands back to {other} the {n} tiles it had occupied.',
+  'news.warEnded.returnedOne': 'It hands back to {other} the tile it had occupied.',
+  'news.warEnded.eliminated': '{gone} has vanished from the map: its war with {other} ends.',
+  'news.warEnded.allyPeace': '{ally} makes peace with {enemy}, and the war {joiner} fought at its side ends with it.',
+  'alert.peace.why.capitulation': 'You signed nothing: a nation that capitulates ends all its wars.',
+  'alert.peace.why.eliminated': 'You signed nothing: {gone} no longer exists as a nation.',
+  'alert.peace.why.allyPeace': 'You signed nothing: you entered this war to help {ally}, and {ally} has made peace.',
+  'peace.reason.allyPeace': 'ally\'s peace',
+};

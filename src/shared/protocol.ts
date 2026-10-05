@@ -178,7 +178,16 @@ export type SimEvent =
   | { type: 'gameOver'; tick: number; winner: number; reason: GameOverReason }
   // --- v2 (W1): war, clock, sieges, unrest, endgame ---
   | { type: 'warDeclared'; tick: number; war: number; aggressor: number; target: number; goal: WarGoal; reasonKey: string; mobilizeUntilTick: number; betrayal: boolean; parentWar: number }
-  | { type: 'warEnded'; tick: number; war: number; a: number; b: number; winner: number; terms: PeaceTerms; reasonKey: string }
+  | {
+    type: 'warEnded'; tick: number; war: number; a: number; b: number; winner: number; terms: PeaceTerms; reasonKey: string;
+    /** Gauntlet round 1: tiles each side (a, b) took from the other in this war and still holds when it ends. */
+    held?: [number, number];
+    /** peace.reason.capitulation of a third party: the nation the loser capitulated to; allyPeace: the ally whose
+     *  war ended; eliminated: the eliminated side. */
+    by?: number;
+    /** Tiles handed back to the other side (the loser's occupied land after its capitulation elsewhere). */
+    returned?: number;
+  }
   | { type: 'tension'; tick: number; from: number; to: number; reasonKey: string; params: Record<string, string | number> }
   | { type: 'escalation'; tick: number; war: number; by: number; against: number; level: number; reasonKey: string }
   | { type: 'siege'; tick: number; owner: number; by: number[]; stage: 'start' | 'end'; tiles: number; x: number; y: number }
@@ -449,6 +458,8 @@ export type SimDebugAction =
   | { type: 'removeUnit'; unitId: number }
   /** v2 (W4, staging): raise `by`'s escalation level in its war with `against` (§5.10). */
   | { type: 'escalate'; by: number; against: number; level: number }
+  /** Staging: `loser` capitulates to `winner` (they must be at war). */
+  | { type: 'capitulate'; loser: number; winner: number }
   /** Owner item 30 (staging): issue a command as another player (an AI's blockade of the human, its merchants' escort). */
   | { type: 'issueAs'; playerId: number; cmd: PlayerCommand }
   // --- v2 (W3): diplomacy staging (shots, playtests, the diplomacy audit) ---

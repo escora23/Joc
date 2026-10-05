@@ -936,7 +936,7 @@ export class Game implements SimGame {
     const sid = this.structAt[tile];
     if (sid !== 0) this.economy.onTileCaptured(sid, prev, newOwner);
     // v2 (W1): war accounting and occupation (§4.13, §4.15).
-    if (prev !== 0 && newOwner !== 0) this.war.onTileTransfer(prev, newOwner);
+    if (prev !== 0 && newOwner !== 0) this.war.onTileTransfer(prev, newOwner, tile);
     this.occupy(tile, pp, np);
     // Capital lost?
     if (pp && pp.capitalTile === tile) this.onCapitalLost(pp, newOwner, tile);
@@ -1237,6 +1237,9 @@ export class Game implements SimGame {
       }
       case 'escalate':
         this.war.raiseEscalation(a.by, a.against, a.level, 'escalation.reason.military');
+        break;
+      case 'capitulate':
+        this.war.capitulate(a.loser, a.winner);
         break;
       case 'issueAs':
         this.issue(a.playerId, a.cmd);

@@ -1830,3 +1830,14 @@ Rules and numbers: DESIGN_V2 §20. Verification: `src/sim/test/naval-audit.mjs` 
 * Travel view: index.ts travel camera (lower-third pitch), fog density by camera height (`visGround` → 70 km, 120 km
   for jets), `src/command/env/farroads.ts` (`FarRoads`: constant-pixel-width road ribbons from `Civil.mapRoads`,
   shown when the camera is > 350 m above the ground).
+
+### Gauntlet round 1 — ai-diplomacy
+* `sim/ai/warplan.ts`: `overseasPower`, `OVERSEAS_MAX_TILES`, `nearness` (geography of war targets); `chooseGoal`
+  sea wording for targets without a land border; `leadFor` (human lead vs `AI_TENSION_LEAD_TICKS`); a pulled-back
+  offensive sets `Brain.failedOffensive`.
+* `sim/ai/military.ts`: escalation L1 → L2 (`L2_AFTER_TICKS`, reasons `longWar` / `answer` / `stalled`).
+* `sim/war.ts`: `taken` per war, `held()`, `warEnded.held/by/returned`, capitulation hands occupied land back,
+  `peace.reason.allyPeace`; debug action `capitulate` (`game.ts`).
+* `ui/hud/news.ts`: peace text with holdings and the reason a war ended unsigned; tension alert with hours and the
+  `threat` auto-pause. Texts in `ui/i18n/g1d.ts`. Shots `g1d-threat`, `g1d-peace` (`ui/shotsG1d.ts`).
+* `src/sim/test/pace-audit.mjs aiwars`: the measurements.

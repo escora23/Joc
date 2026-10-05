@@ -301,7 +301,7 @@ does. A target that measures a time which never happens (e.g. `t_half` of a stal
 |---|---|---|
 | T7 | `survival` (passive human, never plays), spawns Madrid, Paris, Berlin, Kansas, Brasília, seed 21 | (a) no `warDeclared` on the human before its grace ends (§2.4) and no `tension` to it before grace − tension lead; (b) minimum over the 5 spawns of *first tension on the human → elimination*: Easy ≥ **900 ticks**, Normal ≥ **600**, Hard/Insane ≥ **450**; (c) median survival on Normal in **[9,000, 30,000] ticks** (15–50 min at 1x). v1: 22 s minimum |
 | T8 | Eliminations of the human without a war involving the human (a war in which the human is a party, declared by or on it ≥ that aggressor's mobilization earlier) | **0** |
-| T9 | Warning before an AI war on the human: a `tension` or `ultimatum` event from that AI to the human | ≥ the tension lead of §2.4 before `warDeclared`: Easy 480, Normal 240, Hard/Insane 120 ticks |
+| T9 | Warning before an AI war on the human: a `tension` or `ultimatum` event from that AI to the human | ≥ the tension lead of §2.4 before `warDeclared`: Easy 720, Normal 600, Hard/Insane 480 ticks (gauntlet round 1: ≥ 48 h on the human; AI vs AI keeps 480/240/120) |
 | T10 | `warDeclared` (or entry through a call to arms, or a rebellion) → first offensive of **every** aggressor: AI, human, joining ally, rebel | ≥ that aggressor's mobilization of §2.4 |
 | T11 | Naval invasion against the human: `invasionDetected` → landing | ≥ 80 ticks for any crossing ≥ 100 km (embarkation included) |
 | T12 | Nuclear launch at the human: alarm → impact | ≥ 8 real seconds at **1x and at 4x** (crisis time runs at 60 game s per real s whatever the speed) |
@@ -712,7 +712,7 @@ land counts as a nuclear attack on them, `nukedUsOrAlly`, a `retaliation` casus 
 ### 4.16 Protecting the human
 
 * No AI declares war on the human before the grace of §2.4 (Normal 6,000 ticks). Tension messages may start one
-  tension lead (§2.4: Easy 480, Normal 240, Hard/Insane 120 ticks) before it ends.
+  tension lead (§2.4: Easy 720, Normal 600, Hard/Insane 480 ticks on the human) before it ends.
 * After the grace, every AI war on the human needs a tension lead first (T9). Until tick 18,000 at most one AI
   (Easy/Normal) or two (Hard/Insane) may be at war with the human **as aggressors**: the cap counts wars an AI declared
   on the human and AIs joining such a war through a call to arms. **Defensive wars are never capped**: when the human
@@ -973,7 +973,12 @@ current logic, re-timed).
    betrayed), `coalition` (target is the runaway leader), `conquest` (conqueror vs a much weaker neighbour),
    `liberation` (a rebel movement asks for help). The goal gives the reason key of every later message.
 3. **Tension** message (§5.4). Always, at least one tension lead before the declaration (§2.4: Easy 480, Normal 240,
-   Hard/Insane 120 ticks; T9).
+   Hard/Insane 120 ticks between AI nations; on the human Easy 720, Normal 600, Hard/Insane 480, T9). The first tension
+   from a nation with more troops than the human pauses the game (auto-pause «threat», on by default).
+   *Geography (gauntlet round 1)*: candidates are land neighbours, weighted down to a third when met only far from
+   the capital (an exclave). A war across the sea is only for a **naval great power** (≥ 5 % of the land, a port,
+   naval ≥ 0.8, no other war, army ≥ 60 % full) against a much weaker nation within 160 tiles (4,000 km), and never
+   the human before tick 18,000; its tension and reason use the sea wording («observa tus costas»).
 4. **Ultimatum** with probability by personality (turtle 1.0, trader 1.0, nuker 0.8, conqueror 0.7, opportunist 0.6);
    otherwise the declaration follows the tension directly.
 5. **Declaration** (`warDeclared`), then **mobilization** (§2.4): the AI assigns divisions, masses at the border, and may
@@ -1054,7 +1059,7 @@ the victim) with a reason key.
 |---|---|---|---|
 | **L0 Convencional** | Offensives, divisions, naval invasions, warships vs warships and transports | war declared | same |
 | **L1 Ataques militares** | Bombers, drones, fighters' strikes and cruise missiles on **military** targets (divisions, airbases, army bases, naval yards, SAMs, silos, radars, defense posts, warships); shore bombardment | from `mobilizeUntilTick` | same; no prompt |
-| **L2 Ataques estratégicos** | Bombers and cruise missiles on cities, ports, factories and rail | war ≥ 72 h, or the enemy reached L2 first, or goal `conquest` | allowed; the first L2 strike asks for confirmation ("Atacar objetivos civiles: −10 opinión mundial") |
+| **L2 Ataques estratégicos** | Bombers and cruise missiles on cities, ports, factories and rail | war ≥ 72 h, or the enemy reached L2 first, or one of its offensives against this enemy failed (pulled back); never in the same step as L1 (gauntlet round 1: no city strikes on the day the war starts) | allowed; the first L2 strike asks for confirmation ("Atacar objetivos civiles: −10 opinión mundial") |
 | **L3 Nuclear táctico** | Atom bombs | enemy used a nuke on it or an ally in this war (**retaliation**), or **desperation**: lost ≥ 40 % of pre-war land or its capital in this war, war ≥ 120 h, personality `nukes` ≥ 0.4, and the global caps allow it | allowed; confirmation dialog listing the consequences (§5.11) |
 | **L4 Nuclear estratégico** | H-bombs and MIRVs | retaliation for a nuclear strike on its own land by this enemy, or existential (capital lost **and** ≥ 60 % of pre-war land lost) with personality nuker or doomsday ≥ 0.7 | allowed; confirmation dialog |
 
@@ -2199,7 +2204,8 @@ export const DEFENSE_REAR_SHARE = 0.15, DEFENSE_MOBILIZE_TICKS = 60, DEFENSE_RED
 export const FRONT_PRIORITY_WEIGHT = [0.5, 1, 2] as const, ATTACKED_FRONT_WEIGHT = 2;      // §4.4
 export const UNREST_TICKS = 480;                    // §5.12
 export const HUMAN_MOBILIZE_TICKS = [40, 60, 80, 80] as const;       // Easy..Insane, §2.4
-export const TENSION_LEAD_TICKS = [480, 240, 120, 120] as const;     // Easy..Insane, §2.4
+export const TENSION_LEAD_TICKS = [720, 600, 480, 480] as const;     // Easy..Insane, §2.4, on the human (gauntlet round 1)
+export const AI_TENSION_LEAD_TICKS = [480, 240, 120, 120] as const;  // between AI nations
 // economy (W4)
 export const PORT_TRADE_GOLD_PER_HOUR = [0, 150, 300, 450] as const, RAIL_GOLD_PER_HOUR = [0, 60, 120, 180] as const;
 // UnitDef gains: speedKmh (mission speed for aircraft and cruise missiles, §2.1), cruiseKmh (card only), rangeKm

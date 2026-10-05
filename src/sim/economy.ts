@@ -275,7 +275,9 @@ export class EconomySystem {
       const K = g.playerById[by];
       if (K && by !== owner) K.stats.troopsKilled += troops;
     }
-    if (by > 0 && by !== owner && isCivilian(s.type)) g.diplomacy.onCivilianStrike(by, owner, s.id);
+    // Gauntlet round 1: a division's covering fire in an assault on a city is part of the land battle (L0), so it
+    // costs opinion but does not raise the war to strategic strikes; bombs, missiles, ships and razing do.
+    if (by > 0 && by !== owner && isCivilian(s.type)) g.diplomacy.onCivilianStrike(by, owner, s.id, cause !== 'artillery');
     let levelLost = false, destroyed = false;
     if (s.hp <= 0) {
       if (s.level > 1 && s.built >= 1) {

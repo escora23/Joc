@@ -2509,7 +2509,7 @@ export class UnitSystem {
     if (dmg <= 0) return;
     g.emit({ type: 'combat', tick: g.tick, kind: 'artillery', owner: u.owner, fromX: u.x, fromY: u.y, toX: s.x + (this.rnd() - 0.5) * 0.6, toY: s.y + (this.rnd() - 0.5) * 0.6, hit: true });
     const before = s.hp;
-    g.economy.damage(s, dmg, u.owner, 'artillery');
+    g.economy.damage(s, dmg, u.owner, raze ? 'raze' : 'artillery');
     u.missionDealt += Math.max(0, before - Math.max(0, s.hp)) || dmg;
   }
 

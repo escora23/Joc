@@ -63,7 +63,7 @@ export interface Settings {
 
 /** §8.5 defaults: war on you, ultimatum, nuclear launch at you and capital threatened pause the game. */
 export const DEFAULT_AUTO_PAUSE: Record<AutoPauseKind, boolean> = {
-  warOnYou: true, ultimatum: true, nukeAtYou: true, capitalThreat: true, incursion: true,
+  warOnYou: true, threat: true, ultimatum: true, nukeAtYou: true, capitalThreat: true, incursion: true,
   invasion: false, proposal: false, peaceOffer: false, callToArms: false,
 };
 

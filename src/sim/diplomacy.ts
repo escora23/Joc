@@ -488,7 +488,7 @@ export class DiplomacySystem {
    * the victim and its allies hold a casus belli against the striker for 30 game days; the striker's war escalation
    * with the victim rises to L2 (strategic targets).
    */
-  onCivilianStrike(striker: number, victim: number, _structureId: number): void {
+  onCivilianStrike(striker: number, victim: number, _structureId: number, escalate = true): void {
     const g = this.g;
     if (striker <= 0 || victim <= 0 || striker === victim) return;
     const k = dirKey(striker, victim);
@@ -505,7 +505,7 @@ export class DiplomacySystem {
       } else this.addReason(p.id, striker, 'bombedCities', undefined, { player: victim });
     }
     this.casusBelli.set(dirKey(victim, striker), g.tick + CASUS_BELLI_TICKS);
-    if (g.war.atWar(striker, victim) && g.war.escalation(striker, victim) < 2) g.war.raiseEscalation(striker, victim, 2, 'escalation.reason.civilian');
+    if (escalate && g.war.atWar(striker, victim) && g.war.escalation(striker, victim) < 2) g.war.raiseEscalation(striker, victim, 2, 'escalation.reason.civilian');
     this.opinionsDirty = true;
   }
 

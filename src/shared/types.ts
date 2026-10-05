@@ -777,8 +777,8 @@ export interface HumanEconomyView {
   atWar: boolean;
 }
 /** Auto-pause triggers (§8.5). */
-export type AutoPauseKind = 'warOnYou' | 'ultimatum' | 'nukeAtYou' | 'capitalThreat' | 'incursion' | 'invasion' | 'proposal' | 'peaceOffer' | 'callToArms';
-export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'ultimatum', 'nukeAtYou', 'capitalThreat', 'incursion', 'invasion', 'proposal', 'peaceOffer', 'callToArms'];
+export type AutoPauseKind = 'warOnYou' | 'threat' | 'ultimatum' | 'nukeAtYou' | 'capitalThreat' | 'incursion' | 'invasion' | 'proposal' | 'peaceOffer' | 'callToArms';
+export const AUTO_PAUSE_KINDS: readonly AutoPauseKind[] = ['warOnYou', 'threat', 'ultimatum', 'nukeAtYou', 'capitalThreat', 'incursion', 'invasion', 'proposal', 'peaceOffer', 'callToArms'];
 
 // --- v2 (W4): unit orders, modes and production (DESIGN_V2 §6.4, §7, §14.2) ------------------------------------------
 /** Orders a player gives to units (§6.4). The right-click context picks one (§7.3). */

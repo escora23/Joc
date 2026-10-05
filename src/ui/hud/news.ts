@@ -16,7 +16,7 @@ import type { HudShared } from './shared';
 import { isHumanFacingProposal, proposalAlert } from './inboxText';
 import { capitalPhrase, describeApartFrom, describeBeyond, describeTile, describeXY } from '../places';
 import type { AlertInput } from '../../shared/events';
-import { HUMAN_ID, MAP_W, UNIT_DEFS } from '../../shared/constants';
+import { DIFFICULTY_INDEX, HUMAN_ID, MAP_W, TENSION_LEAD_TICKS, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon, tileXYToLatLon } from '../../shared/geo';
 import { countryName, formatCompact, formatNumber, inSentence, t } from '../../shared/i18n';
 import { UnitType, type ProposalView } from '../../shared/types';
@@ -272,29 +272,78 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       alert({ kind: 'allyAttacked', severity: 'warning', icon: 'alliance', actors: [e.aggressor, e.target], lat: ll?.lat, lon: ll?.lon, title: t('alert.allyAttacked.title', { a: name(e.aggressor), b: name(e.target) }), body: t('alert.allyAttacked.body') });
     }
   });
+  // Gauntlet round 1: a peace states what each side keeps (the land it occupied in this war and still holds), and when
+  // a war with the player ends without its signature (the enemy capitulated elsewhere, was wiped out, or the ally it
+  // fought for made peace) the alert says why.
+  const capFirst = (x: string) => (x ? x.charAt(0).toLocaleUpperCase() + x.slice(1) : x);
   bus.on('warEnded', (e) => {
     if (!isMajor(e.a) && !isMajor(e.b)) return;
     if (e.terms.kind === 'capitulation') return; // the capitulation event tells it
+    const human = e.a === HUMAN_ID || e.b === HUMAN_ID;
     const loser = e.winner ? (e.winner === e.a ? e.b : e.a) : 0;
-    const text = t(`news.warEnded.${e.terms.kind}`, { a: name(e.a), b: name(e.b), loser: loser ? name(loser) : '', winner: e.winner ? name(e.winner) : '', tiles: e.terms.tiles ?? 0 });
-    news(text, e.a === HUMAN_ID || e.b === HUMAN_ID ? 'critical' : 'info');
-    if (e.a === HUMAN_ID || e.b === HUMAN_ID) {
+    const held = e.held ?? [0, 0];
+    const parts: string[] = [];
+    let why = '';
+    const keeps = (side: 0 | 1) => {
+      const n = held[side];
+      if (n > 0) parts.push(t(n === 1 ? 'news.warEnded.keepsOne' : 'news.warEnded.keeps', { name: name(side === 0 ? e.a : e.b), n: formatNumber(n) }));
+    };
+    if (e.reasonKey === 'peace.reason.capitulation' && e.by) {
+      // The loser of this war capitulated to a third nation: its war with the other side ends with it.
+      const other = e.winner;
+      parts.push(t('news.warEnded.capitulatedElsewhere', { loser: name(loser), by: name(e.by), other: name(other) }));
+      const back = e.returned ?? 0;
+      if (back > 0) parts.push(t(back === 1 ? 'news.warEnded.returnedOne' : 'news.warEnded.returned', { other: name(other), n: formatNumber(back) }));
+      keeps(other === e.a ? 0 : 1);
+      if (human) why = other === HUMAN_ID ? t('alert.peace.why.capitulation', { loser: name(loser), by: name(e.by) }) : '';
+    } else if (e.reasonKey === 'peace.reason.eliminated' && e.by) {
+      const other = e.by === e.a ? e.b : e.a;
+      parts.push(t('news.warEnded.eliminated', { gone: name(e.by), other: name(other) }));
+      if (human && other === HUMAN_ID) why = t('alert.peace.why.eliminated', { gone: name(e.by) });
+    } else if (e.reasonKey === 'peace.reason.allyPeace' && e.by) {
+      parts.push(t('news.warEnded.allyPeace', { ally: name(e.by), enemy: name(e.b), joiner: name(e.a) }));
+      keeps(0);
+      keeps(1);
+      if (human && e.a === HUMAN_ID) why = t('alert.peace.why.allyPeace', { ally: name(e.by) });
+    } else {
+      const kind = e.terms.kind === 'white' ? (held[0] + held[1] > 0 ? 'line' : 'white') : e.terms.kind;
+      parts.push(t(`news.warEnded.${kind}`, { a: name(e.a), b: name(e.b), loser: loser ? name(loser) : '', winner: e.winner ? name(e.winner) : '', tiles: e.terms.tiles ?? 0 }));
+      keeps(0);
+      keeps(1);
+    }
+    const text = parts.map(capFirst).join(' ');
+    news(text, human ? 'critical' : 'info');
+    if (human) {
       const other = e.a === HUMAN_ID ? e.b : e.a;
       alerts.resolve(`war:${other}`);
-      alert({ kind: 'peace', severity: 'info', icon: 'peace', actors: [other], title: t('toast.peace', { name: name(other) }), body: text });
+      alert({ kind: 'peace', severity: 'info', icon: 'peace', actors: [other], title: t('toast.peace', { name: name(other) }), body: why ? `${text} ${why}` : text });
     }
   });
   bus.on('capitulation', (e) => {
     news(t('news.capitulation', { loser: name(e.loser), winner: name(e.winner), tiles: e.tiles }), e.loser === HUMAN_ID || e.winner === HUMAN_ID ? 'critical' : 'warning');
     if (e.winner === HUMAN_ID) alert({ kind: 'capitulation', severity: 'info', icon: 'flag', actors: [e.loser], title: t('toast.capitulationUs', { name: name(e.loser), tiles: formatNumber(e.tiles) }) });
   });
+  // Gauntlet round 1: the first tension from a nation stronger than us pauses the game (setting «threat», on by
+  // default), and the alert says how long the warning runs and whether the threat comes by land or by sea.
+  const tensionSeen = new Set<number>();
   bus.on('tension', (e) => {
     if (e.to !== HUMAN_ID) return;
-    const p = view().players[e.from];
+    const v = view();
+    const p = v.players[e.from];
+    const me = v.players[HUMAN_ID];
     const ll = p && p.capitalTile >= 0 ? at(p.capitalTile) : null;
+    const first = !tensionSeen.has(e.from);
+    tensionSeen.add(e.from);
+    const stronger = !!p && !!me && p.troops > me.troops;
+    const refused = e.reasonKey === 'tension.demandRefused' || e.reasonKey === 'tension.piracy';
+    const naval = e.reasonKey === 'tension.naval' || e.reasonKey === 'tension.navalRetaliation';
+    const d = DIFFICULTY_INDEX[v.config?.difficulty ?? ctx.settings.get().setup.difficulty] ?? 1;
+    const hours = TENSION_LEAD_TICKS[d] / 10;
     alert({
       kind: 'tension', severity: 'warning', icon: 'megaphone', actors: [e.from], lat: ll?.lat, lon: ll?.lon, groupKey: `tension:${e.from}`, ttlSec: 40,
-      title: t(e.reasonKey, { ...e.params, name: name(e.from) }), body: t(e.reasonKey === 'tension.demandRefused' ? 'alert.tension.refused' : 'alert.tension.body'),
+      autoPause: first && stronger && !refused ? 'threat' : undefined,
+      title: t(e.reasonKey, { ...e.params, name: name(e.from) }),
+      body: t(e.reasonKey === 'tension.demandRefused' ? 'alert.tension.refused' : naval ? 'alert.tension.navalBody' : 'alert.tension.leadBody', { hours }),
     });
   });
   bus.on('siege', (e) => {

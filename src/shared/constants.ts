@@ -136,8 +136,13 @@ export const AI_MOBILIZE_TICKS = [120, 80, 60, 40] as const;
 /** An ally joining through a call to arms, and a rebel movement, mobilize for 6 h. */
 export const JOIN_MOBILIZE_TICKS = 60;
 export const REBEL_MOBILIZE_TICKS = 60;
-/** Warning (tension) that must precede an AI declaration on the human, by difficulty (§2.4). */
-export const TENSION_LEAD_TICKS = [480, 240, 120, 120] as const;
+/**
+ * Warning (tension) that must precede an AI declaration on the human, by difficulty (§2.4). Gauntlet round 1: at least
+ * 48 game hours on every difficulty (72 on Easy, 60 on Normal), time to reinforce, find allies or answer.
+ */
+export const TENSION_LEAD_TICKS = [720, 600, 480, 480] as const;
+/** The same lead between two AI nations (the world keeps its v2 pace). */
+export const AI_TENSION_LEAD_TICKS = [480, 240, 120, 120] as const;
 /** No AI declares war on the human before this tick, by difficulty (§2.4, §4.16). */
 export const HUMAN_GRACE_TICKS = [9_000, 6_000, 3_600, 2_400] as const;
 /** Truce after a peace treaty, occupation window of captured land (§2.4, §4.13). */

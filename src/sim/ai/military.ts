@@ -26,6 +26,8 @@ const SAM_COVER = 70;
 
 const unitTile = (x: number, y: number) => tileAt(Math.floor(x), Math.floor(y));
 /** Strategic (L2) targets: cities, ports, factories (§5.10). */
+/** Strategic strikes (L2) for a long war: 72 game hours after the declaration (§5.10). */
+const L2_AFTER_TICKS = 720;
 const STRATEGIC = new Set<number>([StructureType.City, StructureType.Port, StructureType.Factory]);
 
 export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
@@ -86,8 +88,11 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
 
   // --- operations -----------------------------------------------------------------------------------
   const enemy = atWar ? g.player(enemyId)! : null;
-  // v2 escalation ladder (§5.10): L1 (military targets) from the end of our mobilization, L2 (cities, ports,
-  // factories) after 72 h of war, when the enemy went L2 first, or in a war of conquest.
+  // v2 escalation ladder (§5.10, gauntlet round 1: bombings «con sentido»): L1 (military targets) from the end of our
+  // mobilization; L2 (cities, ports, factories) only for a reason of its own, announced as a separate step: the war has
+  // lasted 72 h without being decided, the enemy struck our cities first, or one of our offensives against it failed
+  // (pulled back). Never in the same pass as L1, and never because the goal is conquest: an army that is advancing
+  // does not need to burn the cities it means to take.
   let level = 0;
   if (enemy) {
     const w = g.war.between(p.id, enemy.id);
@@ -96,12 +101,14 @@ export function thinkMilitary(ctx: AiContext, b: Brain, p: SimPlayer): void {
       if (level < 1) {
         g.war.raiseEscalation(p.id, enemy.id, 1, 'escalation.reason.military');
         level = 1;
-      }
-      const long = g.tick - w.startTick >= 720;
-      const theirs = g.war.escalation(enemy.id, p.id) >= 2;
-      if (level < 2 && (long || theirs || (w.a === p.id && w.goal === 'conquest'))) {
-        g.war.raiseEscalation(p.id, enemy.id, 2, theirs ? 'escalation.reason.answer' : 'escalation.reason.strategic');
-        level = 2;
+      } else if (level < 2) {
+        const theirs = g.war.escalation(enemy.id, p.id) >= 2;
+        const failed = (b.failedOffensive?.get(enemy.id) ?? -1) >= w.startTick;
+        const long = g.tick - w.startTick >= L2_AFTER_TICKS;
+        if (theirs || failed || long) {
+          g.war.raiseEscalation(p.id, enemy.id, 2, theirs ? 'escalation.reason.answer' : failed ? 'escalation.reason.stalled' : 'escalation.reason.longWar');
+          level = 2;
+        }
       }
     }
   }

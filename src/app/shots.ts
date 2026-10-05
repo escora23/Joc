@@ -12,6 +12,7 @@ import '../ui/shotsF2';
 import '../ui/shotsF3';
 import '../ui/shotsNaval';
 import '../ui/shotsG1';
+import '../ui/shotsG1d';
 import '../command/shots';
 import '../sim/ai/shots';
 import { registerShot } from '../shared/shots';

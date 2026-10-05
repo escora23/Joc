@@ -17,6 +17,10 @@
 //   npx tsx src/sim/test/pace-audit.mjs endgame [--duration short]   acceptance 18: hegemony countdown, reset, victory
 //   npx tsx src/sim/test/pace-audit.mjs armor                        W4 6/19: attached divisions, integrity
 //   npx tsx src/sim/test/pace-audit.mjs economy [--no-game]          T38: Port/Factory rates per hour, trader AI share
+//   npx tsx src/sim/test/pace-audit.mjs aiwars [--ticks 24000] [--spawn Madrid]
+//                                                                    gauntlet 1 (ai-diplomacy): who threatens a passive human
+//                                                                    (land neighbours, overseas only for naval powers), the
+//                                                                    tension lead, L2 >= 72 h after the declaration, peace texts
 //
 // Common flags: --seed, --difficulty, --json <file> (machine-readable result), --quiet.
 
@@ -25,7 +29,7 @@ import { loadWorldInit } from './world.mjs';
 import { Game } from '../game.ts';
 import { SaveReader, SaveWriter } from '../save.ts';
 import {
-  DURATION_RULES, HUMAN_ID, OFFENSIVE_CONTACT_TICKS, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick,
+  DURATION_RULES, HUMAN_ID, MAP_W, OFFENSIVE_CONTACT_TICKS, UNIT_DEFS, ballisticFlightTicks, kmhToKmPerTick,
 } from '../../shared/constants.ts';
 import { greatCircleKm, latLonToTile, latLonToTileXY, tileXYToLatLon } from '../../shared/geo.ts';
 import { StructureType, UnitType } from '../../shared/types.ts';
@@ -910,7 +914,7 @@ function survivalRun(name, lat, lon, maxTicks) {
 async function survival() {
   const maxTicks = Number(arg('ticks', 40_000));
   const d = ['easy', 'normal', 'hard', 'insane'].indexOf(DIFF);
-  const grace = [9000, 6000, 3600, 2400][d], lead = [480, 240, 120, 120][d];
+  const grace = [9000, 6000, 3600, 2400][d], lead = [720, 600, 480, 480][d];
   const need = [900, 600, 450, 450][d];
   const runs = [];
   const only = arg('spawn', '');
@@ -1529,9 +1533,104 @@ async function economy() {
 }
 
 // =================================================================================================
+// aiwars (gauntlet round 1, ai-diplomacy): geography of AI wars, warning time, escalation pacing, peace terms
+// =================================================================================================
+function capKm(g, a, b) {
+  const A = g.playerById[a], B = g.playerById[b];
+  if (!A || !B || A.capitalTile < 0 || B.capitalTile < 0) return -1;
+  const ax = A.capitalTile % MAP_W, ay = Math.floor(A.capitalTile / MAP_W), bx = B.capitalTile % MAP_W, by = Math.floor(B.capitalTile / MAP_W);
+  return Math.round(kmBetweenXY(ax, ay, bx, by));
+}
+
+function aiwarsRun(name, lat, lon, maxTicks, seed) {
+  const { g, events, step } = newGame(seed, tileOf(lat, lon), false, true, { worldEvents: true });
+  const emit = g.emit;
+  // Annotate the geography at the moment of the event (land border, capital distance).
+  g.emit = (e) => {
+    if (e.type === 'warDeclared') {
+      e._border = g.sharesBorder(e.aggressor, e.target);
+      e._km = capKm(g, e.aggressor, e.target);
+      e._great = g.playerById[e.aggressor].tiles >= g.landTiles * 0.05;
+    } else if (e.type === 'tension') {
+      e._border = g.sharesBorder(e.from, e.to);
+      e._km = capKm(g, e.from, e.to);
+      e._great = g.playerById[e.from].tiles >= g.landTiles * 0.05;
+    } else if (e.type === 'proposal' && e.proposal.kind === 'demand' && e.proposal.to === HUMAN_ID && e.proposal.status === 'pending') {
+      e._border = g.sharesBorder(e.proposal.from, HUMAN_ID);
+      e._km = capKm(g, e.proposal.from, HUMAN_ID);
+    }
+    emit(e);
+  };
+  while (g.playerById[HUMAN_ID].alive && g.tick < maxTicks && g.phase !== 'ended') step();
+  return { name, g, events };
+}
+
+async function aiwars() {
+  const maxTicks = Number(arg('ticks', 24_000));
+  const seed = Number(arg('seed', 21));
+  const only = arg('spawn', '');
+  const nm = (g, id) => g.playerById[id]?.name ?? id;
+  let farTension = 0, landWords = 0, farHuman = 0, humanWars = 0, shortLead = 0, l2Total = 0, l2Late = 0, l2SameTick = 0, peaceBad = 0, peaceHuman = 0, farAi = 0, aiWars = 0;
+  for (const [name, lat, lon] of SPAWNS) {
+    if (only && only !== name) continue;
+    const { g, events } = aiwarsRun(name, lat, lon, maxTicks, seed);
+    console.log(`\n--- ${name} (to tick ${g.tick}, human ${g.playerById[HUMAN_ID].alive ? `alive, ${g.playerById[HUMAN_ID].tiles} tiles` : 'eliminated'})`);
+    for (const e of events) {
+      if (e.type === 'tension' && e.to === HUMAN_ID) {
+        console.log(`  t${e.tick} tension ${nm(g, e.from)} ${e.reasonKey} border=${e._border} ${e._km} km${e._great ? ' (great power)' : ''}`);
+        if (!e._border && !e._great && e.reasonKey !== 'tension.piracy' && e.reasonKey !== 'tension.demandRefused') farTension++;
+        if (!e._border && (e.reasonKey === 'tension.weak' || e.reasonKey === 'tension.border')) landWords++;
+      }
+      if (e.type === 'proposal' && e._km !== undefined) console.log(`  t${e.tick} ultimatum ${nm(g, e.proposal.from)} border=${e._border} ${e._km} km`);
+      if (e.type === 'warDeclared' && e.target === HUMAN_ID) {
+        const tn = events.filter((x) => x.type === 'tension' && x.to === HUMAN_ID && x.from === e.aggressor && x.tick <= e.tick);
+        const lead = tn.length ? e.tick - tn[tn.length - 1].tick : -1;
+        const firstLead = tn.length ? e.tick - tn[0].tick : -1;
+        console.log(`  t${e.tick} WAR ${nm(g, e.aggressor)} ${e.reasonKey} border=${e._border} ${e._km} km, tension lead ${lead} (first ${firstLead})${e.parentWar ? ' (joined)' : ''}`);
+        if (!e.parentWar) {
+          humanWars++;
+          if (!e._border && !e._great) farHuman++;
+          if (firstLead < 480) shortLead++;
+        }
+      }
+      if (e.type === 'warDeclared' && !e.parentWar && e.target !== HUMAN_ID) {
+        aiWars++;
+        if (!e._border && e._km > 4000) farAi++;
+      }
+      if (e.type === 'escalation' && e.level === 2 && e.reasonKey !== 'escalation.reason.player') {
+        const d = events.find((x) => x.type === 'warDeclared' && x.war === e.war);
+        if (!d) continue;
+        l2Total++;
+        const dt = e.tick - d.tick;
+        if (dt >= 720 || e.reasonKey === 'escalation.reason.answer' || e.reasonKey === 'escalation.reason.stalled') l2Late++;
+        else if (!QUIET) console.log(`  early L2: war ${e.war} by ${nm(g, e.by)} ${dt} ticks after the declaration (${e.reasonKey})`);
+        const l1 = events.find((x) => x.type === 'escalation' && x.war === e.war && x.by === e.by && x.level === 1);
+        if (l1 && l1.tick === e.tick) l2SameTick++;
+        if (e.against === HUMAN_ID) console.log(`  t${e.tick} L2 by ${nm(g, e.by)} ${dt} ticks after the declaration (${e.reasonKey}), L1 at t${l1?.tick}`);
+      }
+      if (e.type === 'warEnded' && (e.a === HUMAN_ID || e.b === HUMAN_ID)) {
+        peaceHuman++;
+        const other = e.a === HUMAN_ID ? e.b : e.a;
+        console.log(`  t${e.tick} PEACE with ${nm(g, other)} ${e.terms.kind} (${e.reasonKey}) held ${JSON.stringify(e.held ?? null)} by ${e.by ?? '-'}`);
+        if (e.terms.kind === 'white' && !e.held) peaceBad++;
+      }
+    }
+  }
+  row('G1-1', 'AI wars on the human by a non-neighbour that is not a great power', `${farHuman} of ${humanWars}`, '0', farHuman === 0);
+  row('G1-1', 'AI threats (tension) on the human from a non-neighbour that is not a great power', farTension, '0', farTension === 0);
+  row('G1-1', 'land wording («tu frontera») for a threat from across the sea', landWords, '0', landWords === 0);
+  row('G1-1', 'AI wars between nations > 4,000 km apart, no land border', `${farAi} of ${aiWars}`, '<= 10 %', farAi <= aiWars * 0.1);
+  row('G1-2', 'AI L2 >= 72 h after the declaration (or an answer / failed offensive)', `${l2Late} of ${l2Total}`, '>= 90 %', l2Total === 0 || l2Late >= l2Total * 0.9);
+  row('G1-2', 'AI L1 and L2 announced on the same tick', l2SameTick, '0', l2SameTick === 0);
+  row('G1-3', 'peace with the human without the holdings stated', `${peaceBad} of ${peaceHuman}`, '0', peaceBad === 0);
+  row('G1-4', 'AI wars on the human with the first tension < 48 h before', `${shortLead} of ${humanWars}`, '0', shortLead === 0);
+  return printTable(`pace-audit aiwars (${DIFF}, seed ${seed})`);
+}
+
+// =================================================================================================
 // dispatch
 // =================================================================================================
-const modes = { armor, economy, endgame, speeds, conquest, depth, attrition, regrowth, empire, warning, nuke, population, occupation, survival, save, game, invariants: () => game({ invariantsOnly: true }) };
+const modes = { armor, economy, endgame, speeds, conquest, depth, attrition, regrowth, empire, warning, nuke, population, occupation, survival, aiwars, save, game, invariants: () => game({ invariantsOnly: true }) };
 if (!modes[mode]) {
   console.error(`unknown mode ${mode}; modes: ${Object.keys(modes).join(', ')}`);
   process.exit(2);

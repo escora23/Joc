@@ -18,11 +18,11 @@
 //      tribute at ≥ 25); a `conquest` goal is met only by capitulation (WarSystem).
 
 import {
-  AI_MOBILIZE_TICKS, DIFFICULTY_INDEX, FRONTAGE_MAX, FRONTAGE_MIN, HUMAN_GRACE_TICKS, HUMAN_ID, MAP_W, TENSION_LEAD_TICKS, TROOPS_PER_FRONT_TILE,
+  AI_MOBILIZE_TICKS, AI_TENSION_LEAD_TICKS, DIFFICULTY_INDEX, FRONTAGE_MAX, FRONTAGE_MIN, HUMAN_GRACE_TICKS, HUMAN_ID, MAP_W, TENSION_LEAD_TICKS, TROOPS_PER_FRONT_TILE,
 } from '../../shared/constants';
 import type { SimPlayer, SimWar } from '../../shared/simapi';
-import { UnitType, type PeaceTerms, type WarGoal } from '../../shared/types';
-import { alive, relation, strength, type AiContext } from './context';
+import { StructureType, UnitType, type PeaceTerms, type WarGoal } from '../../shared/types';
+import { alive, relation, strength, troopFill, type AiContext } from './context';
 import { REFUSAL_WAR_ODDS, ULTIMATUM_ODDS, ultimatumDemand } from './diplomacy';
 import type { Brain } from './state';
 import { scoreTarget } from './war';
@@ -224,6 +224,14 @@ function mayDeclare(ctx: AiContext, b: Brain, p: SimPlayer): boolean {
 /** Goal and reason key of a war of `p` on `q` (§5.7 step 2). */
 function chooseGoal(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): { goal: WarGoal; reasonKey: string; tensionKey: string } {
   const g = ctx.g;
+  // A target across the sea (no land border): the threat is a landing, and the words say so (gauntlet round 1).
+  if (!g.sharesBorder(p.id, q.id)) {
+    const r0 = b.relations.get(q.id);
+    if (r0 && (g.tick - r0.nukedTick < 7200 || r0.betrayedUs || g.tick - r0.attackedTick < 2400)) {
+      return { goal: 'retaliation', reasonKey: 'war.reason.overseasRetaliation', tensionKey: 'tension.navalRetaliation' };
+    }
+    return { goal: 'conquest', reasonKey: 'war.reason.overseas', tensionKey: 'tension.naval' };
+  }
   const r = b.relations.get(q.id);
   if (r && g.tick - r.nukedTick < 7200) return { goal: 'retaliation', reasonKey: 'war.reason.nukedUs', tensionKey: 'tension.retaliation' };
   if (r && r.betrayedUs) return { goal: 'retaliation', reasonKey: 'war.reason.betrayedUs', tensionKey: 'tension.retaliation' };
@@ -250,6 +258,34 @@ function chooseGoal(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): { goa
   return { goal: 'border', reasonKey: 'war.reason.border', tensionKey: 'tension.border' };
 }
 
+/** Farthest capital a war across the sea may aim at (tiles; 160 × 25 km = 4,000 km). */
+export const OVERSEAS_MAX_TILES = 160;
+
+/**
+ * Gauntlet round 1 (owner: «for a real-world simulator his real neighbours are the threat»): a nation fights across the
+ * sea only as a naval great power (≥ 5 % of the world's land) with at least one port, a seafaring temper (naval ≥ 0.8),
+ * no war already on its hands and its army at least 60 % full.
+ */
+export function overseasPower(ctx: AiContext, b: Brain, p: SimPlayer): boolean {
+  const g = ctx.g;
+  if (!greatPower(ctx, b, p) || b.prof.naval < 0.8) return false;
+  if (g.war.enemiesOf(p.id).length > 0 || troopFill(p) < 0.6) return false;
+  return g.structures(p.id, StructureType.Port).length > 0;
+}
+
+/**
+ * Geography of a land target (gauntlet round 1): a neighbour met near home is the natural rival; one met only through a
+ * far exclave (a beachhead across the sea, a corridor 2,000 km from the capital) weighs less, down to a third.
+ */
+function nearness(ctx: AiContext, b: Brain, p: SimPlayer, q: SimPlayer): number {
+  const g = ctx.g;
+  const ours = b.front.ours.get(q.id) ?? -1;
+  const home = p.capitalTile >= 0 ? p.capitalTile : b.homeTile;
+  if (ours < 0 || home < 0) return 1;
+  const d = g.distance(home, ours);
+  return d <= 60 ? 1 : Math.max(0.33, 1 / (1 + (d - 60) / 60));
+}
+
 /** Commit ratio of home troops for an offensive (§5.7 step 6: 0.25–0.6 by personality and efficiency). */
 export function commitRatio(b: Brain): number {
   return clamp(0.25 + 0.3 * (b.prof.aggression - 0.6) / 0.75 + 0.1 * b.diff.efficiency, 0.25, 0.6);
@@ -273,10 +309,13 @@ function aimAt(ctx: AiContext, b: Brain, q: SimPlayer, reach = 60): number {
 export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: { threshold: number; neutral: number; swamped: boolean; fill: number; reserve: number }): void {
   const g = ctx.g;
   const d = DIFFICULTY_INDEX[g.difficulty];
+  // The human gets the longer warning (gauntlet round 1: ≥ 48 h); between AI nations the v2 lead.
+  const leadFor = (target: number) => (target === HUMAN_ID ? TENSION_LEAD_TICKS[d] : AI_TENSION_LEAD_TICKS[d]);
   const lead = TENSION_LEAD_TICKS[d];
   // A pending tension: declare once the lead has run (re-checking everything), or drop it.
   if (b.tension) {
     const t = b.tension;
+    const lead = leadFor(t.target);
     const q = g.player(t.target);
     const waiting = (t.ultimatum ?? 0) > 0;
     const since = t.answeredTick ?? t.tick;
@@ -375,27 +414,33 @@ export function thinkDeclarations(ctx: AiContext, b: Brain, p: SimPlayer, gate: 
     if (neededShare(p, enemyGarrison(ctx, p, q, c), aggressorRatio(ctx, b, p, q), armorPlan(ctx, p)) > MAX_COMMIT) continue;
     let s = scoreTarget(ctx, b, p, q, c, gate.neutral);
     s *= 1 + Math.min(0.5, (-opinion - 30) / 140);
+    s *= nearness(ctx, b, p, q);
     if (s > bestScore) {
       bestScore = s;
       best = q;
       betray = false;
     }
   }
-  // Reachable players across the sea (§5.7 step 1, naval reach): only as prey for a conquest, never for a border quarrel.
-  if (!best && g.tick >= 6000 && b.front.shoreSample.length > 0 && (b.personality === 'conqueror' || b.personality === 'opportunist')) {
-    const reach = reachOf(ctx, b);
+  // Reachable players across the sea (§5.7 step 1, naval reach; gauntlet round 1): a war across the sea is an empire's
+  // undertaking. Only a naval great power with ports, at peace and with spare troops, sails to conquer a much weaker
+  // nation, never farther than OVERSEAS_MAX_TILES, and the nearer the better. Everyone else fights its real neighbours:
+  // a small nation does not cross the Mediterranean to call Spain its «weak neighbour».
+  if (!best && g.tick >= 6000 && b.front.shoreSample.length > 0 && overseasPower(ctx, b, p)) {
+    const reach = Math.min(reachOf(ctx, b), OVERSEAS_MAX_TILES);
     const base = b.homeTile;
     for (const q of g.players()) {
       if (q.id === p.id || !alive(q) || (q.kind !== 'nation' && q.kind !== 'human') || b.front.contact.has(q.id)) continue;
       if (g.isAllied(p.id, q.id) || g.diplomacy.hasTreaty(p.id, q.id, 'nap') || g.war.pairState(p.id, q.id) !== 'peace' || q.capitalTile < 0 || base < 0) continue;
       if (g.diplomacy.noWarUntil(p.id, q.id) > g.tick) continue;
-      if (q.id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < graceEnd - lead) continue;
+      // The human is an empire's overseas prey only after tick 18,000, as for a great power's land wars (§4.16).
+      if (q.id === HUMAN_ID && b.kind !== 'autopilot' && g.tick < Math.max(18_000, graceEnd - lead)) continue;
       if (q.id === HUMAN_ID && g.war.declareError(p.id, q.id) === 'msg.warCap') continue;
-      if (g.distance(base, q.capitalTile) > reach) continue;
+      const d = g.distance(base, q.capitalTile);
+      if (d > reach) continue;
       const weak = strength(q) <= strength(p) * 0.5;
-      const prey = b.personality === 'conqueror' ? weak : weak && g.war.enemiesOf(q.id).length > 0;
+      const prey = weak && (q.tiles * 4 < p.tiles || g.war.enemiesOf(q.id).length > 0);
       if (!prey || opinionOf(ctx, p, q) >= 10) continue;
-      const sc = scoreTarget(ctx, b, p, q, 6, gate.neutral) * 0.6;
+      const sc = scoreTarget(ctx, b, p, q, 6, gate.neutral) * 0.6 / (1 + d / 80);
       if (sc > bestScore) {
         bestScore = sc;
         best = q;
@@ -580,6 +625,8 @@ function runPlan(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar, reserve: num
         } else if (a.state === 'stalled') {
           g.issue(p.id, { type: 'retreat', attackId: a.id });
           b.offCooldown.set(enemyId, g.tick + OFFENSIVE_COOLDOWN);
+          // A failed offensive: the staff may now turn to strategic strikes (§5.10, military.ts).
+          (b.failedOffensive ??= new Map()).set(enemyId, g.tick);
         }
         continue;
       }

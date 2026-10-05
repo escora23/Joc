@@ -129,6 +129,8 @@ export interface Brain {
   allyNukedBy: Map<number, number>;
   /** Enemy -> no new offensive on it before this tick (after a retreat or a broken offensive, §4.9). */
   offCooldown: Map<number, number>;
+  /** Gauntlet round 1: enemy -> last tick one of our offensives against it failed and was pulled back (unlocks L2). */
+  failedOffensive?: Map<number, number>;
   /** Island index -> no settler convoy to it before this tick (unreachable or just tried, T39). */
   settleFail: Map<number, number>;
   /** Settler convoys under way: attack id -> island index. */

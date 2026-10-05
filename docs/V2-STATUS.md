@@ -1834,3 +1834,50 @@ Not verified in a long real game: the capital-loss and objective texts were chec
      hegemony at 50,360 (T14 PASS), 15/16 (T33 the known autopilot case).
    * Still open: the world label «Guarnición del frente · N tropas en la zona» counts the whole ~90 km window (it says
      «en la zona»), so it is larger than the chip's 16 km figure.
+
+## Gauntlet round 1 — ai-diplomacy fixer (2026-10-05)
+
+### What changed
+1. **War targets follow geography** (`sim/ai/warplan.ts`). Land candidates are weighted by `nearness` (a neighbour met
+   only through an exclave far from the capital weighs down to a third). The overseas pass is open only to an
+   `overseasPower`: a naval great power (≥ 5 % of the land, naval ≥ 0.8, ≥ 1 port, no war on its hands, army ≥ 60 %
+   full) against a much weaker nation within `OVERSEAS_MAX_TILES` = 160 (4,000 km), score ÷ (1 + d/80), never the
+   human before tick 18,000. A target with no land border gets the sea wording: `tension.naval` («observa tus
+   costas…»), `war.reason.overseas` (or the retaliation pair). The v1 Bulgaria→Spain and Czechia→Madrid wars and the
+   Qatar/Oman/Kuwait threats on Madrid no longer happen.
+2. **Strategic strikes with a reason, step by step** (`sim/ai/military.ts`). L1 at the end of the mobilization; L2 in a
+   later pass only when the war has lasted 72 h (`escalation.reason.longWar`), the enemy struck our cities first
+   (`answer`), or one of our offensives against it failed and was pulled back (`stalled`, `Brain.failedOffensive`).
+   The `conquest` shortcut is gone. A division's covering fire in an assault on a city (`artillery`) still costs
+   opinion but no longer raises the striker to L2 (`economy.ts`, `diplomacy.onCivilianStrike(…, escalate)`); a raze
+   order's shelling is cause `raze` and does.
+3. **Peace texts say what each side keeps** (`sim/war.ts`, `ui/hud/news.ts`). The war system records, per war, the
+   tiles each side took from the other (`taken`, saved); `warEnded` carries `held`, `by`, `returned`. A treaty reads
+   «X y Y firman la paz sobre la línea del frente. X conserva N casillas que ocupó.» (the old «sin cambios de
+   fronteras» only when nobody holds anything). When a nation **capitulates**, the land it had occupied in its other
+   wars goes back to those nations, and the player's alert says so and why it was not asked: «Reino Unido capitula
+   ante Suiza, y su guerra con tu nación termina. Devuelve a tu nación las 13 casillas que le había ocupado. No has
+   firmado nada: una nación que capitula pone fin a todas sus guerras.» The same for an eliminated enemy and for a
+   joined war that ends with the ally's peace (`peace.reason.allyPeace`). This was the play2 case: Bulgaria
+   capitulated elsewhere and its war with the player ended «white» while it kept 356 Spanish tiles.
+4. **Warning time** (`shared/constants.ts`). `TENSION_LEAD_TICKS` (AI on the human) is now Easy 72 h, Normal 60 h,
+   Hard/Insane 48 h; AI vs AI keeps the v2 lead (`AI_TENSION_LEAD_TICKS`). The first tension from a nation with more
+   troops than the player pauses the game (new auto-pause kind `threat`, on by default, in Ajustes), and the alert
+   states the hours: «…que no te declarará antes de 60 h…» (land) or the naval body (coast, ports, warships).
+
+### Verified
+* `npx tsx src/sim/test/pace-audit.mjs aiwars --ticks 24000` (new mode; five passive-human spawns, seed 21): 8/8.
+  Wars on the human by a non-neighbour that is not a great power 0 of 3 (before: Czechia → Madrid at 1,777 km);
+  tensions from such nations 0 (before: Oman, Kuwait); land wording across the sea 0; AI wars between nations
+  > 4,000 km apart without a land border 0 of 68; AI L2 ≥ 72 h after the declaration or for an answer / failed
+  offensive 100 % (25/25 Paris, 13/13 Madrid; before 5 of 15); L1 and L2 on the same tick 0 (before 10); peace with
+  the human with holdings stated 3/3; first tension ≥ 48 h before every war on the human (876–1,186 ticks).
+* `pace-audit survival` 6/6 (T9 now against the 600-tick lead; min tension → elimination 1,119); `diplomacy-audit`
+  21/21; `tools/scratch/g1d-peace.mjs` (capitulation elsewhere returns 20 occupied tiles, event fields) PASS.
+* Browser (shots `g1d-threat`, `g1d-peace`, `tools/scratch/g1d-shots.mjs`, `shots/fix-ai-diplomacy/`): the threat
+  pauses the game with the banner and the 60 h line; the peace alert reads as quoted above and the 13 tiles return.
+* `tsc --noEmit`, `npm run build`, `tools/i18n-check.mjs` (0 missing).
+
+### Notes
+* T33 (first AI war on an autopilot human in [6,000, 12,000]) and T14 were not rerun on a full game; the longer lead
+  on the human and the overseas restriction can delay the first war on the human a little.

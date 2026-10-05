@@ -93,6 +93,12 @@ export class WarSystem {
   private readonly residual = new Map<number, [number, number]>();
   /** Latest tension emitted by an AI toward the human (pairs), for the tension-lead rule of §2.4 / T9. */
   private readonly tension = new Map<number, number>();
+  /**
+   * Gauntlet round 1 (peace texts): per war, the tiles each side took from the other during it ([side a's, side b's]).
+   * A peace states what each side keeps (only tiles still held count), and a capitulation hands the land the loser
+   * occupied in its other wars back to those nations.
+   */
+  private readonly taken = new Map<number, [Set<number>, Set<number>]>();
   private nextWarId = 1;
   dirty = true;
   trucesDirty = true;
@@ -345,11 +351,27 @@ export class WarSystem {
   // =================================================================================================
   // Accounting hooks (called by Game.setOwner and the attack system)
   // =================================================================================================
-  onTileTransfer(prev: number, next: number): void {
+  onTileTransfer(prev: number, next: number, tile = -1): void {
     const w = this.byPair.get(pairKey(prev, next));
     if (!w) return;
     if (next === w.a) w.net++;
     else w.net--;
+    if (tile < 0) return;
+    let tk = this.taken.get(w.id);
+    if (!tk) this.taken.set(w.id, (tk = [new Set(), new Set()]));
+    const s = next === w.a ? 0 : 1;
+    tk[s].add(tile);
+    tk[1 - s].delete(tile);
+  }
+
+  /** Tiles side `side` of war `w` took from the other side during it and still holds. */
+  private held(w: War, side: 0 | 1): number[] {
+    const tk = this.taken.get(w.id);
+    if (!tk) return [];
+    const holder = side === 0 ? w.a : w.b;
+    const out: number[] = [];
+    for (const t of tk[side]) if (this.g.owner[t] === holder) out.push(t);
+    return out;
   }
 
   onCapitalLost(loser: number, by: number): void {
@@ -402,13 +424,17 @@ export class WarSystem {
     // Allies who joined this war through a call to arms get their own peace with the same terms.
     for (const sub of [...this.wars.values()]) {
       if (sub.parentWar !== w.id) continue;
-      this.endWar(sub, 0, { kind: 'white' }, reasonKey);
+      // The joiner did not sign: its war ends because the war it joined did (the alert says so).
+      const ally = sub.b === w.a ? w.b : w.a;
+      this.endWar(sub, 0, { kind: 'white' }, 'peace.reason.allyPeace', ally);
     }
     return true;
   }
 
-  private endWar(w: War, winner: number, terms: PeaceTerms, reasonKey: string): void {
+  private endWar(w: War, winner: number, terms: PeaceTerms, reasonKey: string, by = 0, returned = 0): void {
     const g = this.g;
+    const held: [number, number] = [this.held(w, 0).length, this.held(w, 1).length];
+    this.taken.delete(w.id);
     this.wars.delete(w.id);
     this.byPair.delete(pairKey(w.a, w.b));
     this.truces.set(pairKey(w.a, w.b), g.tick + TRUCE_TICKS);
@@ -426,7 +452,7 @@ export class WarSystem {
     g.attacks.endBetween(w.a, w.b);
     g.fronts.onWarEnded(w);
     g.diplomacy.onWarEnded(w.a, w.b);
-    g.emit({ type: 'warEnded', tick: g.tick, war: w.id, a: w.a, b: w.b, winner, terms, reasonKey });
+    g.emit({ type: 'warEnded', tick: g.tick, war: w.id, a: w.a, b: w.b, winner, terms, reasonKey, held, by, returned });
   }
 
   /** The loser hands every remaining tile to the winner, as a wave from the winner's border over 20 ticks (§4.13). */
@@ -438,8 +464,15 @@ export class WarSystem {
     const tiles = this.waveOrder(loser, winner, Infinity);
     g.emit({ type: 'capitulation', tick: g.tick, loser, winner, tiles: tiles.length, war: w?.id ?? 0 });
     if (w) this.endWar(w, winner, { kind: 'capitulation', tiles: tiles.length }, 'peace.reason.capitulation');
-    // The loser's other wars end with it (its enemies keep what they took).
-    for (const other of this.warsOf(loser)) this.endWar(other, other.a === loser ? other.b : other.a, { kind: 'white' }, 'peace.reason.capitulation');
+    // The loser's other wars end with it: its enemies keep what they took, and the land it had occupied from them in
+    // those wars goes back to them (an army that surrenders gives up its conquests; gauntlet round 1).
+    for (const other of this.warsOf(loser)) {
+      const side = other.a === loser ? 0 : 1;
+      const back = this.held(other, side);
+      const enemy = side === 0 ? other.b : other.a;
+      this.endWar(other, enemy, { kind: 'white' }, 'peace.reason.capitulation', winner, back.length);
+      if (back.length) g.transferByTreaty(back, enemy);
+    }
     this.transfers.push({ from: loser, to: winner, tiles, next: 0, perTick: Math.max(1, Math.ceil(tiles.length / 20)), reason: 'capitulation' });
     return true;
   }
@@ -505,7 +538,7 @@ export class WarSystem {
 
   /** Cleanup when a player is eliminated: its wars end (the other side wins). */
   dropPlayer(p: number): void {
-    for (const w of this.warsOf(p)) this.endWar(w, w.a === p ? w.b : w.a, { kind: 'white' }, 'peace.reason.eliminated');
+    for (const w of this.warsOf(p)) this.endWar(w, w.a === p ? w.b : w.a, { kind: 'white' }, 'peace.reason.eliminated', p);
     for (let i = this.queued.length - 1; i >= 0; i--) if (this.queued[i].attacker === p || this.queued[i].target === p) this.queued.splice(i, 1);
   }
 
@@ -648,6 +681,7 @@ export class WarSystem {
     w.json({
       wars: [...this.wars.values()], truces: [...this.truces], queued: this.queued, transfers: this.transfers,
       residual: [...this.residual], tension: [...this.tension], nextWarId: this.nextWarId,
+      taken: [...this.taken].map(([id, [x, y]]) => [id, [...x], [...y]]),
     });
   }
 
@@ -656,6 +690,7 @@ export class WarSystem {
     const d = r.json<{
       wars: War[]; truces: [number, number][]; queued: Queued[]; transfers: Transfer[];
       residual: [number, [number, number]][]; tension: [number, number][]; nextWarId: number;
+      taken?: [number, number[], number[]][];
     }>();
     this.wars.clear();
     this.byPair.clear();
@@ -672,6 +707,8 @@ export class WarSystem {
     this.tension.clear();
     for (const [k, v] of d.tension) this.tension.set(k, v);
     this.nextWarId = d.nextWarId;
+    this.taken.clear();
+    for (const [id, x, y] of d.taken ?? []) this.taken.set(id, [new Set(x), new Set(y)]);
     this.dirty = true;
     this.trucesDirty = true;
   }
