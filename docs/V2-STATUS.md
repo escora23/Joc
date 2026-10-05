@@ -1764,3 +1764,50 @@ Shots: `shots/fix-units-icons-structures-models/` (lab before/after, `f32/close-
 
 Not changed: the AT gunner and machine gunner keep their box weapons (they read at 20 m); the low level of detail
 (crowd) keeps tapered boxes for the limbs (cost) with the new proportions and colours.
+
+## Gauntlet round 1 — UI, HUD and diplomacy fixer (2026-10-05)
+
+Shots and readings: `shots/fix-ui-hud-diplomacy/` from `node tools/g1-verify.mjs` (stagers `?shot=g1-offensive` and
+`?shot=g1-war-alerts` in `ui/shotsG1.ts`, which leave what they read on `window.__g1Texts`).
+
+1. **29a — hover, dialog and Guerra panel agree** (`ui/hud/offensiveForecast.ts`, `cursor.ts`, `offensiveDialog.ts`,
+   `fronts.ts`). One `forecastOffensive()` feeds all three (see CODEMAP). The hover counts the running offensive's
+   troops (a click there reinforces it: «CLIC: reforzar nuestra ofensiva con…»), uses the same front (nearest contact
+   line, not nearest centre), the same width (the corridor, capped by the front's length, shown as «ataque de N km de
+   ancho» everywhere; the dialog adds «el frente mide N km») and the speed this ground gives («≈ 4,5 km/h en colinas»,
+   never a plains figure). Past 3 : 1 the dialog says why more troops add nothing («Limitado por el terreno de
+   colinas: máx. ≈ 4,5 km/h. Por encima de 3 : 1 más tropas no aceleran…»), the hover adds «más tropas no aceleran: el
+   ritmo lo marca…» and the panel «(al máximo que permite…)». Enemy losses per day are capped by its troops on that
+   front and the attacker's take the ground's defense. Measured on the staged Pyrenees offensive (894,400 troops, R
+   4.98, 2 divisions): hover «relación 5,7 : 1 · ataque de 400 km · ≈ 4,5 km/h en colinas» (with 121,200 more),
+   dialog «5,7 : 1 · 400 km (el frente mide 400 km) · ahora 4,5 · con este cambio ≈ 4,5 · bajas enemigas ≈ 51.200»
+   (garrison 179,600), panel «relación 5 : 1 · ataque de 400 km · 4,5 km/h (al máximo…)» — one front, one set of
+   numbers (the panel shows the offensive as it is, the hover and dialog with the reinforcement).
+2. **«Hemos perdido Madrid — la capital se traslada a Madrid»** (`ui/hud/news.ts`, `ui/places.ts describeApartFrom`):
+   the new seat is named by its own place when that differs, else by distance and bearing from the lost one: «La
+   capital se traslada a 60 km al N de Madrid» (headless text check).
+3. **HUD clutter and per-unit refusals** (`hud/alerts.ts`, `hud/forcesNews.ts`, `css/w3.css`, sim `units.ts` ack). The
+   refusals of one order are gathered for 250 ms and told once («Orden rechazada para 4 unidades: Las divisiones no
+   navegan…», «2 de 5 unidades no cumplen la orden: …» — the sim's ack now carries the first refusal also when part of
+   the units complied), on the order chip at the cursor while it is shown, else as one grouped entry (×n on repeat).
+   Info entries fold to their title line 6 s after appearing, warnings after 12 s (hover unfolds). The advisor and the
+   ticker step aside while the auto-pause banner is up.
+4. **Leaderboard of nations** (`hud/leaderboard.ts`, `topbar.ts`): independent territories are not ranked; one
+   collapsed line «Independientes (40) · 3,5 % · troops» under the ten nations opens the five largest unranked; the
+   top bar's «Puesto n de m» counts nations only.
+5. **Diplomatic answers in words** (`hud/inboxText.ts reasonText / reasonDetail`): «Tu oro ayuda, pero aún no
+   confiamos lo bastante en ti; un gesto más nos convencería» (graded by the gap to the threshold: close / far / none);
+   the figures («Opinión de ti: 0, +25 por tu oro = 25; para aceptar hace falta 30») are in the alert's tooltip
+   (`AlertInput.detail`) and the inbox history line's tooltip; the nation panel keeps its opinion breakdown. Score and
+   exhaustion parentheses of the war answers moved to the tooltip the same way.
+6. **Objective repeated** (`news.ts` + `places.ts describeBeyond`): «…ha alcanzado su objetivo, cerca de Burdeos, …
+   nuevo objetivo 55 km más al NO, hacia Nantes» (the nearest other place ahead within 250 km, else distance and
+   bearing only).
+7. **Auto-pause banner** (`alerts.ts`, `w3.css`): 760 px wide (or the screen less 32 px), a headline line (kicker +
+   title, one line), one action line (the body, clamped to two lines, full text on hover) and the buttons on their own
+   row: measured 760 × 86 px (was ~150 px of text over 7 lines). The entry the banner tells folds to one line; the feed
+   shows at most 4 entries (most severe, then newest), the rest behind «+n avisos más» (opens the Registro).
+   shots/fix-ui-hud-diplomacy/g1-war-alerts.png.
+
+Not verified in a long real game: the capital-loss and objective texts were checked headless on the text functions
+(with the real place data), not by losing a capital in play.

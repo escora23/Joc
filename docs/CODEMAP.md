@@ -500,6 +500,16 @@ tiles per second, makes wars whiplash.
   `setFrontPriority`, Enviar divisiones (own divisions with ETA → `unitOrder attach`), «Ofensiva…» / «Gestionar…» →
   the offensive dialog, our offensive's line (troops, intensity, ratio, state) with Mantener la línea / Sostenida /
   Asalto total → `offensiveIntensity`, Retirar → `retreat`), Mundo tab. Debug `__fuFronts`.
+* **One offensive forecast** (gauntlet round 1, item 29a) `ui/hud/offensiveForecast.ts` `forecastOffensive(view, enemy,
+  tile, send, intensity?, front?)`: the hover card (`cursor.ts offensiveLine`), the offensive dialog and the Guerra
+  panel's «Tu ofensiva» line read this one result: the front whose contact line is nearest the click (`frontNearTile`,
+  the sim's frontAt rule), our running offensive on it (its troops count; a click there reinforces it), the ratio (the
+  running offensive's own R scaled by the troops added, else troops / that front's garrison + half an enemy offensive
+  there), the corridor `frontageTiles(total, front length)`, the speed (measured km/h through `offensiveOutlook`, else
+  the model's speed × the ground on that stretch, `groundOnFront`: mean 1 / terrain time of the enemy contact tiles in
+  the corridor with `TERRAIN_TIME` now shared in `shared/constants.ts`), `saturated` (R ≥ 3: troops buy width and
+  spare casualties, not speed; the dialog explains it with the limiting ground) and §4.6 casualties per day with the
+  enemy's capped by its troops on that front.
 * **Offensive flow** (owner item #23, fix pass 2) `ui/hud/offensiveDialog.ts`: a click on enemy land at war across a
   border (also the radial's Atacar and the panel's «Ofensiva…») opens the dialog: front and axis place, troops 25-100 %
   of home troops, intensity, and the preview (ratio against that front's garrison, corridor, km/h on plains, time to

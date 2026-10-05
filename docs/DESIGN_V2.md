@@ -446,6 +446,36 @@ For an offensive `a` of attacker A against defender D on front `f`:
   × (0.6 inside a siege, §4.12)`.
 * **Force ratio** `R = Pa / max(1, Pd)`.
 
+### 4.4b Breakthrough (gauntlet round 1, owner-proxy: «400K against 9.8K still crawl»)
+
+A defence outnumbered far beyond the 3 : 1 that caps the speed cannot hold a line at all; v2 used to let 9,800 men
+spread over 450 km (15–20 per km) face 400,000 at 30–70 : 1 for days, and command mode showed «82.000 nuestros y 320
+enemigos en este tramo». Now:
+
+* **Trigger.** An offensive (not against a tribe, not storming a beach, not holding) whose `R ≥ BREAKTHROUGH_RATIO = 5`
+  for `BREAKTHROUGH_TICKS = 10` consecutive ticks (1 h) **breaks through** (`Attack.breakthrough`, `AttackView.
+  breakthrough`, event `offensive` stage `breakthrough`). It ends when `R < BREAKTHROUGH_END_RATIO = 4` (reserves
+  arrive, the attack wears down) or the offensive holds (stage `stabilized`).
+* **Rout.** On top of the §4.6 casualties, the broken garrison surrenders or flees: `BREAKTHROUGH_ROUT = 0.6 %` of the
+  front garrison per tick × `clamp((R − 4) / 6, 0, 1)` (a sixth of it at 5 : 1, all from 10 : 1; at full rate the
+  garrison halves in ~12 h). Counted in the defender's losses and as `prisoners`.
+* **Ground, not men.** While broken, the natural terrain's extra time is halved (`terrain = 1 + (terrain − 1) ×
+  BREAKTHROUGH_TERRAIN_KEEP`, 0.5: mountains 2.6 → 1.8, hills 1.6 → 1.3); cities, the capital district, defense posts,
+  fallout and defending divisions keep their full weight. **The 8 km/h cap, the tiles-per-tick cap and the logistics
+  bucket are untouched** (T30 stays at 8 km/h; T2/T19 stay bound by logistics).
+* **Defender AI.** A nation whose line is broken by an enemy sets that war's quiet fronts to *baja* and the attacked
+  ones to *alta* (§4.4 shares): every man it can spare goes to the breach.
+* **Explained.** Alerts to the attacker («Ruptura cerca de X: la defensa de Y se ha hundido», with the ratio, the rout
+  and what still limits the advance) and the defender («Y ha roto nuestra línea…», with the remedies), worldwide news
+  for majors, «· ruptura» in every offensive status text, the Frentes help page, and command mode's battle chip and
+  notice («Ruptura · la defensa de Suiza se ha hundido: en estos 16 km quedan unos 300 enemigos frente a 14.000
+  nuestros, y se rinden o huyen»).
+* **Same km for both sides.** Command mode's counts come from `LocalFront.stretchA/stretchB` (localForces): the troops
+  of each side on the line within ±`STRETCH_KM / 2` (16 km) of the nearest point. A garrison facing an offensive puts
+  `DEFENSE_GATHER = 80 %` of itself in the attacking corridors (the sim's Pd sets the whole garrison against it), the
+  rest spread along the front; an offensive's troops stand in its corridor. (Before, the enemy was counted over 16 km
+  and our offensive over the whole ~90 km window, which turned 60 : 1 into «82.000 y 320».)
+
 ### 4.5 The advance rule
 
 * Front speed: `v = ADVANCE_MAX_KMH × clamp((R − 1) / (ADVANCE_FULL_RATIO − 1), 0, 1)`, with
