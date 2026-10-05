@@ -660,16 +660,33 @@ async function entry1x() {
     const b = hot ? Math.atan2(hot.x - P.x, hot.z - P.z) : null;
     const camB = Math.atan2(f.x, f.z);
     let dB = b === null ? null : Math.abs(((camB - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-    return { hit, dBdeg: dB === null ? null : Math.round((dB * 180) / Math.PI), pitch: Math.round(Math.asin(f.y) * 573) / 10 };
+    // In the mountains the fight is often up a slope: what matters is that the hottest point is in the frame and in
+    // sight (no ground between the eye and it), not that the ray runs far.
+    let inFrame = null, clear = null;
+    if (hot) {
+      const V = new cam.position.constructor(hot.x, I.ground.heightAt(hot.x, hot.z) + 2, hot.z);
+      const p = V.clone().project(cam);
+      inFrame = Math.abs(p.x) < 0.95 && Math.abs(p.y) < 0.95 && p.z < 1;
+      clear = true;
+      for (let k = 1; k < 60; k++) {
+        const q = k / 60, x = cam.position.x + (V.x - cam.position.x) * q, z = cam.position.z + (V.z - cam.position.z) * q, y = cam.position.y + (V.y - cam.position.y) * q;
+        if (I.ground.heightAt(x, z) > y + 1) { clear = false; break; }
+      }
+    }
+    return { hit, inFrame, clear, dBdeg: dB === null ? null : Math.round((dB * 180) / Math.PI), pitch: Math.round(Math.asin(f.y) * 573) / 10 };
   });
   await snap(page, 'entry1x-1-first-view');
-  row('E3', 'the first view looks toward the fight, over the ground', `view ray meets the ground at ${view.hit < 0 ? 'none (horizon)' : view.hit + ' m'}; ${view.dBdeg === null ? 'no hot point' : `${view.dBdeg}° off the bearing to the hottest point`}; pitch ${view.pitch}°`, (view.hit < 0 || view.hit > 150) && (view.dBdeg === null || view.dBdeg < 50));
+  row('E3', 'the first view looks toward the fight, over the ground', `view ray meets the ground at ${view.hit < 0 ? 'none (horizon)' : view.hit + ' m'}; ${view.dBdeg === null ? 'no hot point' : `${view.dBdeg}° off the bearing to the hottest point, in frame ${view.inFrame}, in sight ${view.clear}`}; pitch ${view.pitch}°`, (view.hit < 0 || view.hit > 150 || (view.inFrame && view.clear)) && (view.dBdeg === null || view.dBdeg < 50));
   // The tactical map there.
   await page.keyboard.press('KeyM');
-  await sleep(3000);
-  const map = await page.evaluate(() => ({ open: [...document.querySelectorAll('.fu-cmdx-map')].some((e) => e.classList.contains('show')), maps: document.querySelectorAll('.fu-cmdx-map').length }));
+  // (Frames are slow under SwiftShader: wait for the key to be read, then close it the same way and make sure it is
+  // closed: an open map holds the clock as a decision, and the drive below would never start.)
+  await until(page, () => ([...document.querySelectorAll('.fu-cmdx-map')].some((e) => e.classList.contains('show')) ? true : null), null, 30000);
+  const map = await page.evaluate(() => ({ open: [...document.querySelectorAll('.fu-cmdx-map')].some((e) => e.classList.contains('show')), maps: document.querySelectorAll('.fu-cmdx-map').length, stats: window.__cmd.mapStats?.() ?? null }));
   await snap(page, 'entry1x-2-tacmap');
   await page.keyboard.press('KeyM');
+  const closed = await until(page, () => (![...document.querySelectorAll('.fu-cmdx-map')].some((e) => e.classList.contains('show')) ? true : null), null, 30000);
+  if (!closed) await page.keyboard.press('Escape');
   row('E4', 'the tactical map opens at the front', JSON.stringify(map), map.open);
   // The tank drives itself to the hottest stretch.
   await small(page, true);

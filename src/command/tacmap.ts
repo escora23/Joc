@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { HUMAN_ID, MAP_H, MAP_W } from '../shared/constants';
 import { formatNumber, getLanguage, t } from '../shared/i18n';
 import { nearestPlace } from '../data/places';
+import { HOLD_BAND_KM, holderAt, publishedDepthAt, publishedLineOffset } from '../shared/localForces';
 import type { GameView } from '../shared/api';
 import { getLocalHeightfield } from '../data/index';
 import type { LocalHeightfield } from '../data/types';
@@ -539,6 +540,11 @@ export class TacMap {
         h = (Math.imul(h, 31) + o * 7 + i + (o > 0 && o !== HUMAN_ID && view.pairState(HUMAN_ID, o) === 'war' ? 101 : 0)) | 0;
       }
     }
+    // The published front lines move inside their tiles: half-kilometre steps of their depth rebuild the land layer.
+    for (const f of view.fronts) {
+      if (!f.line || (f.a !== HUMAN_ID && f.b !== HUMAN_ID)) continue;
+      h = (Math.imul(h, 31) + Math.round(publishedDepthAt(f.line, view.tick) * 2) + f.key) | 0;
+    }
     return String(h);
   }
 
@@ -633,6 +639,13 @@ export class TacMap {
     const own: number[] = [], cov: number[] = [];
     const tp = { x: 0, y: 0 };
     const terr = inp.terrain;
+    const lines = view.fronts.filter((f) => f.line && f.b !== 0 && (f.a === HUMAN_ID || f.b === HUMAN_ID));
+    const hasLines = lines.length > 0;
+    // Within a published line's window and band (where holderAt reads the line, not the tile).
+    const inBand = (x: number, y: number) => lines.some((f) => {
+      const po = publishedLineOffset(f.line!, x, y, view.tick);
+      return Math.abs(po.alongKm) <= f.line!.halfKm && Math.abs(po.offsetKm) <= HOLD_BAND_KM;
+    });
     for (let i = 0; i < M; i++) {
       for (let j = 0; j < M; j++) {
         frame.tileOfScene(this.cx + ((j + 0.5) / M - 0.5) * 2 * half, this.cz + ((i + 0.5) / M - 0.5) * 2 * half, tp);
@@ -669,6 +682,18 @@ export class TacMap {
         const k = i * M + j;
         win[k] = wsum > 0 ? best : -1;
         lead[k] = wsum > 0 ? (bc - second) / wsum : 1;
+        // Near our fronts the ground is held by the side of the published sub-tile line (holderAt, the one source of
+        // truth of the battle, the HUD and local forces), not by the 25 km tile's owner: the map shows the line where
+        // the fighting is, and the land behind it as ours, as the HUD says.
+        if (win[k] > 0 && hasLines) {
+          if (inBand(tp.x, tp.y)) {
+            const h = holderAt(view, tp.x, tp.y, HUMAN_ID);
+            if (h > 0) {
+              win[k] = h;
+              lead[k] = 1;
+            }
+          }
+        }
       }
     }
     const oc = document.createElement('canvas');
