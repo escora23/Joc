@@ -83,6 +83,9 @@ body.fu-cmd-on .fu-alerts, body.fu-cmd-on .fu-bstrip { display: none !important;
   font: 700 0.92rem/1.3 var(--fu-font-cond, sans-serif); letter-spacing: 0.08em; text-transform: uppercase; color: #ffe0a0;
   background: rgba(10,8,4,0.7); border: 1px solid rgba(255,181,61,0.35); border-radius: 3px; opacity: 0; transition: opacity 0.4s; max-width: 46rem; }
 .fu-cmdx-notice.show { opacity: 1; }
+/* A notice of more than a line (a march that ended, a breakthrough) reads as a sentence, not shouted capitals, and sits
+   higher (under the battle chip and the radio), so the fight in the middle of the view stays visible. */
+.fu-cmdx-notice.long { top: 12rem; text-transform: none; letter-spacing: 0.01em; font: 600 0.9rem/1.4 var(--fu-font, sans-serif); text-align: left; max-width: 40rem; }
 .fu-cmdx-dlgopen .fu-cmdx-notice { visibility: hidden; }
 .fu-cmdx-notice.info { color: #bfeaff; border-color: rgba(63,208,255,0.35); background: rgba(4,10,16,0.7); }
 .fu-cmdx-form { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); padding: 0.45rem 0.8rem; display: flex; gap: 0.7rem; align-items: center;
@@ -413,6 +416,7 @@ export class CommandOverlay {
   showNotice(text: string, seconds = 3.5, info = false): void {
     this.notice.textContent = text;
     this.notice.classList.toggle('info', info);
+    this.notice.classList.toggle('long', text.length > 90);
     this.notice.classList.add('show');
     this.noticeT = this.time + seconds;
   }
