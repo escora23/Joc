@@ -658,14 +658,47 @@ async function checkZoom() {
         if (near) { nearN++; nearDE += d; }
       }
     }
+    // The two sides of a border (fix map-globe round 1): owned pixels 8-90 px from land of another owner, averaged per
+    // owner in the lit image; the two largest sides must differ by ΔE >= 10 (who holds which side reads without the line).
+    const idAt = (i) => (cls[i] === 4 ? mask.data[i * 4] + mask.data[i * 4 + 1] * 256 : -1);
+    const sides = new Map();
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
+      const i = y * W + x;
+      const A = idAt(i);
+      if (A < 0 || under(x, y)) continue;
+      let near = false, line = false;
+      for (const [dx, dy] of dirs) {
+        for (let r = 4; r <= 90; r += r < 12 ? 4 : 10) {
+          const xx = x + dx * r, yy = y + dy * r;
+          if (xx < 0 || yy < 0 || xx >= W || yy >= H) break;
+          const B = idAt(yy * W + xx);
+          if (B >= 0 && B !== A) { if (r < 8) line = true; else near = true; break; }
+        }
+        if (line) break;
+      }
+      if (!near || line) continue;
+      const lab = srgbLab(base.data[i * 4], base.data[i * 4 + 1], base.data[i * 4 + 2]);
+      const e = sides.get(A) ?? { n: 0, L: 0, a: 0, b: 0 };
+      e.n++; e.L += lab[0]; e.a += lab[1]; e.b += lab[2];
+      sides.set(A, e);
+    }
+    const top = [...sides.entries()].sort((p, q) => q[1].n - p[1].n).slice(0, 2);
+    let sideDE = null;
+    if (top.length === 2 && top[1][1].n > 300) {
+      const m = (e) => [e.L / e.n, e.a / e.n, e.b / e.n];
+      sideDE = +dE(m(top[0][1]), m(top[1][1])).toFixed(2);
+    }
     const per = periodicity(base, Math.floor(W / 2) - 256, Math.floor(H / 2) - 256, 512);
-    const r = { shot, ownedPx: oN, ownedDE: +(oDE / Math.max(oN, 1)).toFixed(2), waterPx: wN, waterDE: +(wDE / Math.max(wN, 1)).toFixed(2), coastWaterPx: nearN, coastWaterDE: +(nearDE / Math.max(nearN, 1)).toFixed(2), gridPeak: per.peak, gridAt: per.at };
+    const r = { shot, sideOwners: top.map((t) => [t[0], t[1].n]), sideDE, ownedPx: oN, ownedDE: +(oDE / Math.max(oN, 1)).toFixed(2), waterPx: wN, waterDE: +(wDE / Math.max(wN, 1)).toFixed(2), coastWaterPx: nearN, coastWaterDE: +(nearDE / Math.max(nearN, 1)).toFixed(2), gridPeak: per.peak, gridAt: per.at };
     results.push(r);
     console.log('  zoom', JSON.stringify(r));
   }
   save('zoom', results);
   verdict('10 zoom-40/zoom-8: owned land dE >= 8 vs territory=0, the fill stops at the shore (water dE <= 2), no regular grid (autocorrelation peak < 0.3)',
     results.every((r) => r.ownedPx > 1000 && r.ownedDE >= 8 && (r.waterPx < 1000 || (r.waterDE <= 2 && r.coastWaterDE <= 3)) && r.gridPeak < 0.3), results);
+  verdict('10b zoom-40/zoom-8: the two sides of the border differ by dE >= 10 (owned land of each owner within 8-90 px of the other)',
+    results.every((r) => r.sideDE !== null && r.sideDE >= 10), results.map((r) => ({ shot: r.shot, sideOwners: r.sideOwners, sideDE: r.sideDE })));
 }
 
 

@@ -1608,6 +1608,13 @@ Rules and numbers: DESIGN_V2 §18. Verification: `src/sim/test/f3-audit.mjs` (he
   `src/render/battle/common.ts` `battleShadow` fades out 2.5-6 km from the camera and `index.ts` skips the shadow pass
   beyond 7 km; `battle/effects.ts` crater glow only within ~1.5 km; `battle/terrain.ts` noise thresholds widened with
   the pixel footprint (`noiseK`, `edgeW`). Verifier: `node tools/f3-clearmap-verify.mjs` (M1-M4).
+* Globe ground detail (fix map-globe round 1): `src/render/globe/earth.ts` fragment shader, block «relief normal and
+  ground detail» (detail from ~1,500 km, footprint-tied octaves, biome from the albedo, crisp land cover, the battle's
+  `GLSL_FIELDS` farmland below ~40 km, hillshade), `dayBicubic` (magnified albedo), `GLSL_CLOUD_CRISP` (crisp cloud
+  deck and shadows below ~800 km, also used by `layers.ts`), the sun glint by `uAltKm` (narrow lobe, soft cap, open
+  water only), the owner band along borders up close; `glsl.ts territoryFillAmount` (≥ 0.3 up close). Icons and alert
+  pins step off nation labels: `units/icons.ts clearOfLabels`, `ui/hud/alerts.ts clearOfNationLabels`. Verifier:
+  `node tools/w2-verify.mjs --checks zoom` (10, 10b).
 
 ## 28b. Asked before the shot (owner item 31) — where it lives
 

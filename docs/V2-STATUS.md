@@ -1930,3 +1930,38 @@ Not done here: AI geography (an AI nation named after a real country grows over 
 «Suiza» holding Toulouse when France is not in the game) — the nations are placed at their real capitals; making the
 human's real neighbours always play needs the human's capital, which is only known after the spawn phase. Item 32's
 alpine first view of the staged war (scattered figures on 25-30° slopes) belongs to the battle fixer's open note.
+
+## Fix map-globe (gauntlet round 1, 2026-10-05)
+
+Shots in `shots/fix-map-globe/` (a1-a9: progression; `w2b/`: verifier frames). All in `render/globe/earth.ts` unless
+noted.
+
+1. **Close ground (8-40 km) was a flat Voronoi mosaic** (major). The cellular field patchwork is gone. The ground is
+   multi-octave noise from ~20 km wavelengths down to ~3 px (fBm on gentle ground, ridged on rugged ground, eroded),
+   with amplitude driven by the topology's ruggedness and slope; a cartographic hillshade (45° above the sun's azimuth,
+   north-west at a high sun) on top of the real light; a biome read from the albedo (desert/steppe: sand sheets against
+   gravel plains; open and farmed land: woods, copses and lighter open tracts; forest: clearings) with crisp,
+   anti-aliased fractal outlines; rock on steep ground, snow on high crests. Farmland below ~40 km uses the ground
+   battle's own field layout (`battle/fields.ts GLSL_FIELDS`, fixed bearing on the globe, crop colours matched to the
+   local Blue Marble tint), so the near patch and the battlefield look alike. **Ownership up close:** the close fill is
+   never below 0.3 (`glsl.ts territoryFillAmount`: 0.30 at ≤ 10 km, 0.31 at 40, 0.33 at 100, 0.37 at 300) and each side
+   of a border carries a soft owner-colour band ~3 km deep on the ground (at least ~22 px). New verifier criterion
+   `tools/w2-verify.mjs --checks zoom` «10b»: mean Lab of each owner's land 8-90 px from the other owner, the two sides
+   compared: zoom-40 ΔE 47.1, zoom-8 ΔE 66.4 (PASS); criterion 10 still PASS (owned vs bare 44.3 / 46.2, grid peak
+   0.10 / 0.04).
+2. **Mid zoom (200-1,500 km) was a blurry magnified texture** (major). Detail fades in from ~1,500 km (was ~570 km),
+   octaves tied to the pixel footprint; the albedo is sampled as a cubic B-spline once a texel spans > 1.5 px (no
+   diamond-shaped texel blocks on snow lines and coasts) plus a mild unsharp luminance term (4 taps ~1.5 texels out);
+   grain and land cover keep crisp edges at every height. Below ~800 km the cloud deck is rebuilt as crisp procedural
+   cloud (`GLSL_CLOUD_CRISP`, shared by `layers.ts` and the ground's cloud shadows): bicubic cover, octaves of noise
+   ~12 km down to a few hundred metres, a ~2 px billowed edge and self-shading. Limits: on the SwiftShader preset the
+   Blue Marble is downscaled, so at 400 km the colour regions themselves stay soft (the added grain and land cover are
+   procedural, not data).
+3. / 4. **Sun glint disc** (minor ×2). Above ~400 km the lobe is narrowed (roughness 0.12 from ~60 km up), intensity
+   scaled down with altitude, soft-capped (`cap·(1−e^(−spec/cap))`, no flat plateau) at 0.1 of the sunlight from ~300
+   km and 0.06 from orbit, and held to open water: never on land texels (water mask ≥ 0.82), and faded over small-island
+   texels and near land coverage. islands-caribbean, readability-europe and clouds-strategic: no white disc; at 400 km a
+   dim patch of glitter on the swell remains.
+5. **Icons over the player's label** (minor). Structure and unit icons (`units/icons.ts clearOfLabels`) and the alert
+   map markers (`ui/hud/alerts.ts clearOfNationLabels`, the red capital/attack pins that were the culprits in
+   front-orbit) step just above or below a placed nation label's rectangle: front-orbit reads «COMANDANTE 260K» clear.

@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { ATMOSPHERE, GLSL_ATMOSPHERE, GLSL_COLOR, GLSL_CONSTANTS, GLSL_GEO, GLSL_NOISE } from './glsl';
-import { GLSL_CLOUD_THIN, type PlanetUniforms } from './earth';
+import { GLSL_CLOUD_CRISP, GLSL_CLOUD_THIN, type PlanetUniforms } from './earth';
 
 /** Shell geometry radius: room for the artistic halo beyond the physical atmosphere top. */
 const HALO_R = 1.12;
@@ -113,6 +113,7 @@ ${GLSL_GEO}
 ${GLSL_ATMOSPHERE}
 ${GLSL_COLOR}
 ${GLSL_CLOUD_THIN}
+${GLSL_CLOUD_CRISP}
 uniform sampler2D uClouds;
 uniform sampler2D uCloudMask;
 uniform vec4 uCloudK;
@@ -136,10 +137,24 @@ void main() {
   float dist = length(camVec);
   vec3 V = camVec / dist;
   float c = texture2D(uClouds, vUv + uCloudOffset).a;
+  // Below ~800 km the 10 km cloud texels are magnified into soft blobs: the deck is rebuilt as crisp procedural cloud
+  // (fix map-globe round 1). The texture keeps where the weather is and how thick; octaves of noise tied to the pixel
+  // footprint (~12 km down to a few hundred metres) cut it into cells with firm, billowed edges.
+  float pxW = length(fwidth(vWorld));
+  float crispK = smoothstep(0.13, 0.05, dist);
+  float shade = 1.0;
+  if (crispK > 0.0) {
+    c = mix(c, cloudCover(uClouds, vUv + uCloudOffset), crispK);
+    float d, c0 = c;
+    float crisp = cloudCrisp(c, vWorld, pxW, uTime, d);
+    c = mix(c, crisp, crispK);
+    // Self-shading: thinner parts and the hollows between cells darker, so the deck has volume and texture.
+    shade = mix(1.0, 0.62 + 0.5 * clamp(d - 0.2, 0.0, 1.0) + 0.25 * (d - c0 + 0.08), crispK);
+  }
   float closeK = smoothstep(0.08, 0.008, dist);
   if (closeK > 0.0) {
     float n = fbm3(vWorld * 520.0 + vec3(uTime * 0.01, 0.0, 0.0)) * 0.5 + 0.5;
-    c = clamp((c - closeK * 0.45 * (1.0 - n)) / (1.0 - closeK * 0.3), 0.0, 1.0);
+    c = clamp((c - closeK * 0.25 * (1.0 - n)) / (1.0 - closeK * 0.15), 0.0, 1.0);
   }
   c = smoothstep(0.02, 0.85, c);
   // The one extra texture sample: the territory cloud mask at the ground point under this fragment.
@@ -157,7 +172,7 @@ void main() {
   float lit = smoothstep(-0.08, 0.3, muS) * (0.55 + 0.45 * clamp(muS * 2.0, 0.0, 1.0));
   float thick = mix(1.0, 0.72, c);
   float fwd = phaseM(dot(-V, L)) * 0.9;
-  vec3 col = sunT * uSunE * (lit * thick * 0.95 + fwd * (1.0 - c) * smoothstep(-0.05, 0.1, muS));
+  vec3 col = sunT * uSunE * (lit * thick * 0.95 * shade + fwd * (1.0 - c) * smoothstep(-0.05, 0.1, muS));
   col += vec3(0.09, 0.13, 0.22) * smoothstep(-0.2, 0.3, muS) * 0.9 + vec3(0.004, 0.005, 0.009);
   // Sunset tint on cloud tops at the terminator.
   col += vec3(1.0, 0.45, 0.16) * exp(-pow((muS - 0.03) / 0.06, 2.0)) * 0.22 * smoothstep(-0.06, 0.02, muS);

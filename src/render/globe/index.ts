@@ -217,6 +217,7 @@ export function createGlobe(ctx: GameContext): GlobeApi {
       const altKm = (camDist - 1) * EARTH_RADIUS_KM;
       // Zoom level for the readability tables: the rig's distance to its target (what the player dials in).
       const zoomKm = ctx.cameraRig.getState(camState).altitudeKm;
+      planet.uAltKm.value = altKm;
       planet.uNormalBoost.value = 0.65 + 0.45 * smoothstep(150, 7000, altKm);
       // (Command mode draws its own ground and air: the low-air haze is for the strategic camera near the ground.)
       planet.uHaze.value = aerialHazeK(altKm, ctx.app.state !== 'command');

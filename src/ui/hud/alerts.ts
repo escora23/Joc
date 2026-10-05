@@ -30,6 +30,7 @@ import { latLonToVec3, tileToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
 import type { FrontView, GameSpeed } from '../../shared/types';
 import * as THREE from 'three';
+import { labelRects } from '../../render/globe/labels';
 
 export interface Alert {
   id: number;
@@ -527,12 +528,34 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   let acc = 0;
   let lastMs = performance.now();
 
+  /**
+   * A map marker never sits on a nation's name (DESIGN_V2 §10.10: labels keep their place): one that would cover a
+   * placed label (an attack on the capital, under «COMANDANTE 260K») steps just above or below it, whichever is the
+   * shorter move (fix map-globe round 1). Label rectangles are canvas px; markers are window px.
+   */
+  function clearOfNationLabels(x: number, y: number, cr: DOMRect): [number, number] {
+    const r = 15;
+    for (let pass = 0; pass < 2; pass++) {
+      let moved = false;
+      for (const q of labelRects()) {
+        const x0 = q.x0 + cr.left, x1 = q.x1 + cr.left, y0 = q.y0 + cr.top, y1 = q.y1 + cr.top;
+        if (x + r <= x0 || x - r >= x1 || y + r <= y0 || y - r >= y1) continue;
+        const up = y + r - y0 + 2, down = y1 - (y - r) + 2;
+        y = up <= down ? y - up : y + down;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    return [x, y];
+  }
+
   function projectMarkers(): void {
     const cam = ctx.camera;
     cam.updateMatrixWorld();
     camPos.copy(cam.position);
     const W = window.innerWidth, H = window.innerHeight;
     const strategic = ctx.app.state === 'playing' || ctx.app.state === 'spawn';
+    const canvasRect = ctx.canvas.getBoundingClientRect();
     for (const a of all) {
       const i = a.input;
       const want = strategic && !!a.el && !a.acknowledged && i.lat !== undefined && i.lon !== undefined && SEV_ORDER[i.severity] >= 1;
@@ -557,7 +580,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       const onScreen = facing && vc.z < 1 && Math.abs(vc.x) <= 0.96 && Math.abs(vc.y) <= 0.94;
       if (onScreen) {
         a.marker.classList.remove('is-edge');
-        a.marker.style.transform = `translate(${((vc.x + 1) / 2) * W}px, ${((1 - vc.y) / 2) * H}px)`;
+        const [mx, my] = clearOfNationLabels(((vc.x + 1) / 2) * W, ((1 - vc.y) / 2) * H, canvasRect);
+        a.marker.style.transform = `translate(${mx}px, ${my}px)`;
         continue;
       }
       if (SEV_ORDER[i.severity] < 2) {

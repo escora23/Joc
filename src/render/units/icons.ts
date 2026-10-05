@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { HUMAN_ID } from '../../shared/constants';
 import { StructureType, UnitType } from '../../shared/types';
 import type { Relation } from '../relations';
+import { labelRects } from '../globe/labels';
 
 const CELL = 64;
 const ATLAS = 1024;
@@ -908,7 +909,36 @@ export class IconLayer {
     st.drawCalls = (this.structs.n > 0 ? 1 : 0) + (this.units.n > 0 ? 1 : 0);
   }
 
+  /**
+   * Nation labels win their place (DESIGN_V2 §10.10): an icon that would cover a placed label's rectangle (a capital or a
+   * structure under the nation's name and troop count) is drawn just above or below it, whichever is the shorter move,
+   * with its pick area. Fix map-globe round 1 (the human's capital icon hid «COMANDANTE 2?0K» in front-orbit).
+   */
+  private readonly clearPos = { x: 0, y: 0 };
+  private clearOfLabels(x: number, y: number, r: number): { x: number; y: number } {
+    const rects = labelRects();
+    for (let pass = 0; pass < 2; pass++) {
+      let moved = false;
+      for (const q of rects) {
+        if (x + r <= q.x0 || x - r >= q.x1 || y + r <= q.y0 || y - r >= q.y1) continue;
+        const up = y + r - q.y0 + 2, down = q.y1 - (y - r) + 2;
+        y = up <= down ? y - up : y + down;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    this.clearPos.x = x;
+    this.clearPos.y = y;
+    return this.clearPos;
+  }
+
   private drawOne(s: Src, x: number, y: number, count: number, members: number[], sizes: { unitPx: number; smallPx: number; structPx: number; pipPx: number }): void {
+    if (s.size !== 2 || s.structure) {
+      const r = s.structure ? sizes.structPx / 2 : (s.size === 1 ? sizes.smallPx : sizes.unitPx) / 2;
+      const c = this.clearOfLabels(x, y, r + 2);
+      x = c.x;
+      y = c.y;
+    }
     const shape = s.owner === HUMAN_ID ? 0 : s.rel === 'ally' ? 1 : s.rel === 'war' ? 2 : 3;
     const flags = (s.selected ? 1 : 0) | (this.hoverKey === (s.structure ? -s.id - 1 : s.id) ? 2 : 0);
     if (s.structure) {
