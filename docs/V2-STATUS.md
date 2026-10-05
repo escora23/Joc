@@ -1698,3 +1698,34 @@ their colours (orange ours, pink the Swiss). `npx tsc --noEmit`, `npm run build`
 * **Performance on a real GPU is not measured.** Up to 1,900 figures (at most 160 awake per side and weapon), 700 wire
   sections (~420k triangles), 420 shell holes, the far front's bursts; under SwiftShader the scene pace did not drop
   against pass 1. The other command-mode verifiers (f31, naval, f3c, w5) were not re-run in this pass.
+
+## Gauntlet round 1 — battle fixer (2026-10-05)
+
+1. **Item 32, the hot stretch reads as an army** (`command/battle.ts bestStandOff`, `relayoutAround`, `sees`).
+   The vantage is no longer scored from the commander's eye but by what the **default chase camera** sees (14 m behind
+   the tank, ~5 m up, clamped over the ground, as `player/tank.ts` places it): in a ±35° cone around the view along the
+   line, the enemy's forward trench 200-480 m off (×3) and the fight's ground 100-450 m off (our waves, no man's land),
+   each by line of sight. Every stretch within ±1.5 km is ranked by that coarse view plus flatness (a flat valley floor
+   between ridges sees nothing); the best four are searched in full (7 × 4 spots, both look sides, slopes ≤ 22°, then
+   26°, then 32°). A camera pushed up by rising ground behind the tank, or a knoll hiding the tank, is penalised. When
+   nothing within ±1.5 km gives a view (score < 25), stretches out to ±3.6 km are tried (the battle follows the tank).
+   On arrival the fight is laid out where that camera sees it (more tries in steep country), and no boulder stands
+   within 40 m of the vantage (the chase camera had ended inside one). Squads stay in close order (8-12, two ranks,
+   3.2 m files) with squad volleys and ≥ 2 px tracers; V (overview) rises to 72 m for 7 s.
+   **Measured** (`tools/battle-probe.mjs`, `?shot=command-battle`, census re-run at 1600×900 via `__battleCensus`):
+   before (r2): 106 + 40 in sight, 20 + 0 figures ≥ 6 px, enemy line nearest 705 m. After, last four runs:
+   r9 141 + 79 ≥ 6 px (line 342 m), r10 109 + 93 (306 m), r14 339 + 145 (390 m), r15 108 + 77 (288 m); one earlier
+   run of the intermediate code gave 16 + 54 (shots/fix-battle/r13), which led to the wider fallback and the layout
+   tries. **Open:** the staged offensive's contact lies in the high Pyrenees (42.7-42.9° N): the scenery stays alpine
+   and the tank can stand tilted on a 25-30° slope; a lowland front (front-ground-real, Zaragoza) does not have this.
+   `&side=defend` staging fails with «no land of ours next to the contact» (pre-existing, not touched).
+2. **Naval invasion arrows** (`render/battle/overlay.ts`): only real landings (target owned by a nation at war with the
+   convoy's owner, not turning back) that are the player's, aimed at him or an ally, or hovered/selected; the shader's
+   kind-1 branch fades with `uNavalFill` (gone below 400 km) and lets borders through (`borderHere`); shaft capped at
+   `uNavalCap` (~4 px half-width below 1,000 km). Probe on readability-europe (`tools/_probe-naval.mjs`): 40 transports,
+   22 to unclaimed land, 18 peaceful, 0 real landings → **0 arrows drawn** (was 40). shots/fix-battle/navprobe2-3000.png:
+   the one real landing (our convoy on the UK, at war) keeps its arrow.
+3. **Who holds which side on the ground** (`render/battle/terrain.ts`, `index.ts`): each half of the battlefield takes
+   its nation's colour at 0.2 (less with the camera high, where the territory fill takes over), split on the sim's
+   sub-tile contact line, and a two-colour ribbon with a dark hairline marks the line itself, a few pixels wide at any
+   height (gone below ~150 m camera height, where the trenches tell it). shots/fix-battle/final/front-ground-real.png.

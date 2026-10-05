@@ -384,53 +384,68 @@ export class BattleLine {
     // 1b. Flat is not enough in the mountains (a flat valley floor between two ridges sees nothing): every stretch is
     // also tried coarsely, level with it at the stand-off depth, by what the chase camera would see there; the four best
     // by view and flatness are searched in full below.
-    for (const st of stretches) {
-      const ft = this.foeTrench(own, st.s);
-      const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
-      let vb = -40;
-      for (const dd of [D, D + 60]) {
-        this.at(st.s, own.sign * dd, cand);
-        const h = g.heightAt(cand.x, cand.z);
-        if (h < 0.8 || g.normalAt(cand.x, cand.z, n, 10).y < 0.85) continue;
-        for (const side of [1, -1] as const) {
-          mark(st.s + side * 0.7 * (dd + ft), lk);
-          const v = view(st.s, cand.x, h, cand.z, lk);
-          vb = Math.max(vb, v.trench * 3 + v.field - clamp * 4);
+    const search = (list: { s: number; r: number; key: number }[]): void => {
+      for (const st of list) {
+        const ft = this.foeTrench(own, st.s);
+        const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
+        let vb = -40;
+        for (const dd of [D, D + 60]) {
+          this.at(st.s, own.sign * dd, cand);
+          const h = g.heightAt(cand.x, cand.z);
+          if (h < 0.8 || g.normalAt(cand.x, cand.z, n, 10).y < 0.85) continue;
+          for (const side of [1, -1] as const) {
+            mark(st.s + side * 0.7 * (dd + ft), lk);
+            const v = view(st.s, cand.x, h, cand.z, lk);
+            vb = Math.max(vb, v.trench * 3 + v.field - clamp * 4);
+          }
         }
+        st.key = st.r * 0.6 - vb;
       }
-      st.key = st.r * 0.6 - vb;
-    }
-    stretches.sort((p, q) => p.key - q.key);
-    for (let si = 0; si < Math.min(4, stretches.length) && !(found && si >= 2); si++) {
-      const sF = stretches[si].s, rF = stretches[si].r;
-      const ft = this.foeTrench(own, sF);
-      const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
-      // (Steep country — the high Pyrenees — may have no 22° ground at all: then up to ~32°, which a tank still climbs.)
-      for (const minNy of [0.93, 0.9, 0.85]) {
-        if (found && minNy < 0.93) break;
-        for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
-          for (const dd of [D, D - 40, D + 40, D + 90]) {
-            const s = sF + ds;
-            this.at(s, own.sign * dd, cand);
-            const h = g.heightAt(cand.x, cand.z);
-            const ny = g.normalAt(cand.x, cand.z, n, 10).y;
-            if (h < 0.8 || ny < minNy) continue;
-            for (const side of [1, -1] as const) {
-              mark(s + side * 0.7 * (dd + this.foeTrench(own, s)), lk);
-              const v = view(s, cand.x, h, cand.z, lk);
-              const score = v.trench * 3 + v.field + (ny - 0.93) * 60 - Math.abs(ds) * 0.02 - clamp * 4
-                - (v.near < Infinity ? Math.max(0, Math.abs(v.near - 300) - 50) * 0.05 : 15) - rF * 0.6 - (minNy < 0.93 ? 6 : 0) - (minNy < 0.9 ? 6 : 0);
-              if (score > best) {
-                best = score;
-                bestR = rF;
-                out.copy(cand).setY(h);
-                bestLook.copy(lk);
-                found = true;
+      list.sort((p, q) => p.key - q.key);
+      for (let si = 0; si < Math.min(4, list.length) && !(found && best > 25 && si >= 2); si++) {
+        const sF = list[si].s, rF = list[si].r;
+        const ft = this.foeTrench(own, sF);
+        const D = Math.max(130, Math.min(250, VANTAGE_TO_TRENCH - ft));
+        // (Steep country — the high Pyrenees — may have no 22° ground at all: then up to ~32°, which a tank still climbs.)
+        for (const minNy of [0.93, 0.9, 0.85]) {
+          if (found && minNy < 0.93) break;
+          for (const ds of [0, -40, 40, -90, 90, -150, 150]) {
+            for (const dd of [D, D - 40, D + 40, D + 90]) {
+              const s = sF + ds;
+              this.at(s, own.sign * dd, cand);
+              const h = g.heightAt(cand.x, cand.z);
+              const ny = g.normalAt(cand.x, cand.z, n, 10).y;
+              if (h < 0.8 || ny < minNy) continue;
+              for (const side of [1, -1] as const) {
+                mark(s + side * 0.7 * (dd + this.foeTrench(own, s)), lk);
+                const v = view(s, cand.x, h, cand.z, lk);
+                const score = v.trench * 3 + v.field + (ny - 0.93) * 60 - Math.abs(ds) * 0.02 - clamp * 4
+                  - (v.near < Infinity ? Math.max(0, Math.abs(v.near - 300) - 50) * 0.05 : 15) - rF * 0.6 - (minNy < 0.93 ? 6 : 0) - (minNy < 0.9 ? 6 : 0);
+                if (score > best) {
+                  best = score;
+                  bestR = rF;
+                  out.copy(cand).setY(h);
+                  bestLook.copy(lk);
+                  found = true;
+                }
               }
             }
           }
         }
       }
+    };
+    search(stretches);
+    // In steep country nothing within ±1.5 km may give a view of the fight (a valley between two ridges, a slope too
+    // steep to stand on): the stretches out to ±3.6 km along the line are tried too (the battle follows the tank there).
+    if (!found || best < 25) {
+      const far: { s: number; r: number; key: number }[] = [];
+      for (let k = -36; k <= 36; k += 1.5) {
+        if (Math.abs(k) <= 15) continue;
+        const s = s0 + k * 100;
+        if (s < lo || s > hi) continue;
+        far.push({ s, r: this.relief(s, own.sign) + 13 + Math.abs(k) * 0.3, key: 0 });
+      }
+      if (far.length) search(far);
     }
     this.vantageScore = found ? Math.round(best) : null;
     if (!found) {
@@ -1001,8 +1016,9 @@ export class BattleLine {
         const escort = initial && own > 40 && own < WAVE_D1 + 200 && rng.next() < 0.34;
         // Laid out in the view on arriving at the hot stretch (gauntlet round 1): most squads in the picture, ours
         // 150-400 m from the tank, theirs 250-450 m, within ±40° of where the view looks.
-        const framed = !!this.ahead && rng.next() < 0.75;
-        for (let tr = 0; tr < 6; tr++) {
+        const framed = !!this.ahead && rng.next() < 0.8;
+        // (Laying out in the view, more tries: in the mountains most framed spots are too steep or behind a fold.)
+        for (let tr = 0, trN = this.ahead ? 16 : 6; tr < trN; tr++) {
           if (framed && this.framedSpot(player, st.team === 0 ? 150 : 250, st.team === 0 ? 400 : 450, FV)) {
             s = FV.s;
             start = Math.max(-(this.foeTrench(st, s) - HALT_SHORT) + 5, Math.min(WAVE_D1 + 200, FV.d * st.sign));
@@ -1053,7 +1069,7 @@ export class BattleLine {
       // (Laid out in the view on arriving, gauntlet round 1: most of the forward trench's men stand where the view
       // looks along it, 250-450 m off.)
       const framed = !!this.ahead && (initial ? r < 0.55 : r < 0.15) && rng.next() < 0.7;
-      for (let tr = 0; tr < 5; tr++) {
+      for (let tr = 0, trN = this.ahead ? 10 : 5; tr < trN; tr++) {
         s = framed && this.framedSpot(player, 200, 470, FV) ? FV.s : this.spread(rng.next());
         if (initial ? r < 0.55 : r < 0.15) d = this.trenchDepth(st.sign, TRENCH_D, s) + 0.5 + rng.next() * 0.6 + (tr >= 2 ? -60 + rng.next() * 100 : 0);
         else if (initial ? r < 0.8 : r < 0.4) d = this.trenchDepth(st.sign, TRENCH2_D, s) + 0.5 + rng.next() * 0.6 + (tr >= 2 ? -60 + rng.next() * 100 : 0);
