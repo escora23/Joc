@@ -14,7 +14,7 @@ import { buildAa, buildBattery, buildSam, buildTruck } from './models/vehicles';
 import { buildArmorIfv, buildArmorTank } from './models/armor';
 import { buildBombGeometry, buildJet, buildMissileGeometry } from './models/aircraft';
 import { buildDestroyer, buildMerchant, buildPatrolBoat, buildTroopShip } from './models/ships';
-import { addSoldierInstancing, buildSoldierGeometry, fieldUniform, makeSoldierMaterials, POSE, type SoldierMaterials } from './models/soldier';
+import { addSoldierInstancing, buildSoldierGeometry, fieldUniform, makeSoldierMaterials, mutedNation, POSE, type SoldierMaterials } from './models/soldier';
 
 export type EntKind = 'tank' | 'ifv' | 'aa' | 'sam' | 'truck' | 'soldier' | 'at' | 'jet' | 'ship' | 'boat' | 'battery'
   // Owner item 30: merchant shipping (a container ship, a troop transport).
@@ -243,11 +243,11 @@ function distTone(d: number): number {
 }
 /**
  * How much of the nation's colour a figure takes when it is small on screen (`px` tall at life size): none while its
- * uniform and gear can be made out (≥ 15 px), up to 60 % at 6 px and below — a few pixels of man read as his side's
+ * uniform and gear can be made out (≥ 15 px, as drawn), up to 70 % of the muted national colour at 6 px and below — a few pixels of man read as his side's
  * colour against the ground, from the chase camera or from above, and the gunner's sight still shows the uniform.
  */
 function farTint(px: number): number {
-  return Math.max(0, Math.min(1, (15 - px) / 9)) * 0.6;
+  return Math.max(0, Math.min(1, (15 - px) / 9)) * 0.7;
 }
 /** An active soldier at least this tall on screen gets the full figure (capsule limbs, face, gear); smaller, the light one. */
 const SOLDIER_HI_PX = 13;
@@ -257,6 +257,7 @@ const VARIANTS = 3;
 const VTRACE_CAP = 900;
 
 const TMP = new THREE.Vector3();
+const FOOT = { y: 0, tiltP: 0, tiltR: 0 };
 const TMP2 = new THREE.Vector3();
 const TMP3 = new THREE.Vector3();
 const FWD = new THREE.Vector3();
@@ -527,6 +528,12 @@ export class World {
     } else if (d.naval) {
       e.pos.y = 0;
       e.quat.setFromEuler(this.e.set(0, yaw, 0));
+    } else if (d.vehicle && kind !== 'battery') {
+      // Gauntlet round 1: a vehicle stands on the ground under its tracks or wheels from its first frame.
+      this.ground.footprint(x, z, yaw, kind === 'tank' ? 6.6 : 5.6, kind === 'tank' ? 2.84 : 2.2, FOOT);
+      e.pos.y = FOOT.y;
+      e.tiltP = FOOT.tiltP;
+      e.tiltR = FOOT.tiltR;
     } else {
       e.pos.y = this.ground.heightAt(x, z);
     }
@@ -759,19 +766,20 @@ export class World {
         }
         e.pos.y = this.ground.heightAt(e.pos.x, e.pos.z);
         const d = cam.distanceTo(e.pos);
+        const px = (READ_H * ppm1) / Math.max(1, d);
+        const sc = Math.max(1, Math.min(CROWD_MAX_SCALE, CROWD_MIN_PX / Math.max(1e-3, px)));
         if (full) {
-          // Readable far away: beyond ~500 m the uniform takes on more of the nation's colour (as the battle view's
-          // masses do), so a line of men a kilometre off still reads as theirs or ours against the ground.
+          // Readable far away: a man small on screen (as drawn, after the readable scale) takes on the nation's colour
+          // muted to a cloth's (as the battle view's masses do), so a line of men a kilometre off still reads as
+          // theirs or ours against the ground, and nobody is a magenta figure.
           this.uniformOf(e, this.tmpColor);
-          const far = farTint((1.8 * ppm1) / Math.max(1, d));
-          if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
+          const far = farTint(((1.8 * ppm1) / Math.max(1, d)) * sc);
+          if (far > 0 && e.nation) this.tmpColor.lerp(mutedNation(this.nationColor(e.nation), this.tmpColor2), far);
           this.tmpColor.multiplyScalar(distTone(d));
           if (!e.alive) this.tmpColor.multiplyScalar(0.7);
           im.setColorAt(i, this.tmpColor);
           if (im.instanceColor) im.instanceColor.needsUpdate = true;
         }
-        const px = (READ_H * ppm1) / Math.max(1, d);
-        const sc = Math.max(1, Math.min(CROWD_MAX_SCALE, CROWD_MIN_PX / Math.max(1e-3, px)));
         e.drawScale = sc;
         this.e.set(0, e.yaw, 0, 'YXZ');
         this.q.setFromEuler(this.e);
@@ -1736,8 +1744,8 @@ export class World {
           // Far men take on their nation's colour and a darker tone, as the crowd does (two armies read apart).
           const dv = Math.hypot(e.pos.x - this.viewPos.x, e.pos.y - this.viewPos.y, e.pos.z - this.viewPos.z);
           this.tmpColor.copy(uni);
-          const far = farTint(this.pixelsTall(e.pos));
-          if (far > 0 && e.nation) this.tmpColor.lerp(this.tmpColor2.setHex(this.nationColor(e.nation)), far);
+          const far = farTint(this.pixelsTall(e.pos) * e.drawScale);
+          if (far > 0 && e.nation) this.tmpColor.lerp(mutedNation(this.nationColor(e.nation), this.tmpColor2), far);
           m.setColorAt(j, this.tmpColor.multiplyScalar(distTone(dv)));
         }
         (hi ? anim : animLo).setXYZW(j, e.alive ? e.pose : POSE.dead, e.seed, e.fireT, e.poseT);

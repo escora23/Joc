@@ -25,6 +25,7 @@ const VERT = /* glsl */ `
 attribute vec3 aColor;
 attribute vec3 aMask;
 attribute float aH;
+attribute float aFade;
 attribute vec4 iParams;
 #ifdef ANCHORED
 attribute vec4 iAnchor;
@@ -39,6 +40,7 @@ varying vec3 vWorld;
 varying vec3 vUp;
 varying vec4 vParams;
 varying float vH;
+varying float vFade;
 varying vec3 vTeam;
 #ifdef CITY
 varying vec3 vLocal;
@@ -47,6 +49,7 @@ varying float vSeed;
 #endif
 
 void main() {
+  vFade = aFade;
   mat4 im = instanceMatrix;
   vec4 wp = modelMatrix * im * vec4(position, 1.0);
   mat3 m3 = mat3(modelMatrix) * mat3(im);
@@ -93,12 +96,26 @@ varying vec3 vWorld;
 varying vec3 vUp;
 varying vec4 vParams;
 varying float vH;
+varying float vFade;
 varying vec3 vTeam;
 #ifdef CITY
 varying vec3 vLocal;
 varying vec3 vLocalN;
 varying float vSeed;
 #endif
+
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+/** Value noise in world space (unit cells). */
+float vnoise3(vec3 x) {
+  vec3 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -121,6 +138,13 @@ void main() {
   if (uFade < 0.999) {
     float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     if (n >= uFade) discard;
+  }
+  // Gauntlet round 1: a city's outer ground thins out into the terrain along a ragged, fixed (world-space) edge of
+  // ~150 m cells and finer grain, instead of ending on a hard rim.
+  if (vFade > 0.001) {
+    vec3 q = vWorld * 6371.0;
+    float n = vnoise3(q * 6.0) * 0.65 + vnoise3(q * 19.0) * 0.35;
+    if (n < vFade) discard;
   }
   float built = vParams.x;
   float holo = 0.0;

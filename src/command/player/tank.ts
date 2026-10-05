@@ -27,6 +27,7 @@ const T2 = new THREE.Vector3();
 const T3 = new THREE.Vector3();
 const DIR = new THREE.Vector3();
 const N = new THREE.Vector3();
+const FOOT = { y: 0, tiltP: 0, tiltR: 0 };
 const MOUSE = { x: 0, y: 0 };
 const G1 = new THREE.Vector3();
 const G2 = new THREE.Vector3();
@@ -255,11 +256,14 @@ export class TankController implements Controller {
     void blocked;
     this.hud.boundary = false;
     e.vel.copy(DIR).multiplyScalar(e.speed);
-    e.pos.y = c.ground.heightAt(e.pos.x, e.pos.z);
-    // --- Suspension: terrain tilt + spring-damped dynamics ------------------------------------
+    // --- Suspension: the hull on the ground under its tracks + spring-damped dynamics ----------
+    // Gauntlet round 1: height and attitude from the ground under the whole track length (a plane fit), not the
+    // point under the centre, so the tank never stands on a crest with its front half in the air.
+    c.ground.footprint(e.pos.x, e.pos.z, e.yaw, 6.6, 2.84, FOOT);
+    e.pos.y = FOOT.y;
     const cy = Math.cos(e.yaw), sy = Math.sin(e.yaw);
-    const tp = Math.atan2(N.x * -sy + N.z * -cy, N.y);
-    const tr = Math.atan2(N.x * cy + N.z * -sy, N.y);
+    const tp = -FOOT.tiltP;
+    const tr = -FOOT.tiltR;
     const accel = (e.speed - prevSpeed) / dt;
     this.dynPV += (-this.dynP * 55 - this.dynPV * 7 + accel * 0.012) * dt;
     this.dynP += this.dynPV * dt;

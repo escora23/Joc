@@ -4,6 +4,7 @@
 //   structures  every structure type on a developed Spain at dusk (skylines lighting up), close orbit
 //   unit-closeup one unit type up close at 300 / 100 / 30 km (models clearly visible, >= 24 px)
 
+import type * as THREE from 'three';
 import type { CameraState, GameContext } from '../../shared/api';
 import { HUMAN_ID } from '../../shared/constants';
 import { latLonToTile, worldTimeForSubsolarLon } from '../../shared/geo';
@@ -150,11 +151,14 @@ registerShot('unit-closeup', 'units', 'One unit up close (&unit=Warship|Transpor
   // Trains get a long staged line (a short one can be finished, and the train gone, before the pause lands).
   const to: [number, number] = naval ? [38.2, 4.5] : air ? [38.6, 3.5] : type === UnitType.Train ? [40.9, -2.9] : [39.3, -0.6];
   sim.debug({ type: 'spawnUnit', unit: type, owner: HUMAN_ID, tile: at(...from), targetTile: at(...to) });
-  // A moment of motion so the unit is under way (aircraft airborne, ships with a heading), then paused.
-  sim.setSpeed(1);
-  await wait(Number(params.get('run') ?? 600));
+  // A moment of motion so the unit is under way (aircraft airborne, ships with a heading), then paused. Gauntlet round
+  // 1: a fixed number of ticks (fastForward, &run= ticks), not wall-clock time with the clock running — under load the
+  // unit sailed on past the frame read below and the close-up showed an empty sea. The position is read after the
+  // fast-forward's resync has reached the view and the renderer (a few frames), so the camera frames where it is drawn.
   sim.setSpeed(0);
-  await waitFrames(4);
+  await sim.fastForward(Number(params.get('run') ?? 6));
+  await waitFrames(6);
+  void wait;
   let lat = from[0], lon = from[1];
   for (const u of sim.view.units.values()) {
     if (u.owner === HUMAN_ID && u.type === type) {
@@ -162,6 +166,13 @@ registerShot('unit-closeup', 'units', 'One unit up close (&unit=Warship|Transpor
       const mw = w ? w.width : 1600, mh = w ? w.height : 800;
       lon = ((((u.x % mw) + mw) % mw) / mw) * 360 - 180;
       lat = 90 - (u.y / mh) * 180;
+      // Centre on the model as drawn (its interpolated track), where the renderer has it.
+      const tr = (window as unknown as { __units?: { tracks?: Map<number, { hasPos?: boolean; pos: THREE.Vector3 }> } }).__units?.tracks?.get(u.id);
+      if (tr?.hasPos) {
+        const p = tr.pos.clone().normalize();
+        lat = (Math.asin(p.y) * 180) / Math.PI;
+        lon = (Math.atan2(-p.z, p.x) * 180) / Math.PI;
+      }
       (window as unknown as { __closeupUnit?: number }).__closeupUnit = u.id;
       break;
     }

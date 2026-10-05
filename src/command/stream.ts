@@ -572,6 +572,36 @@ export class Ground {
     return Math.max(0, this.heightAt(x, z));
   }
 
+  /**
+   * Gauntlet round 1: how a tracked or wheeled hull of `len` × `width` metres sits on the ground at (x, z) facing
+   * `yaw` (forward = -Z rotated by yaw). Samples five points along each track and fits a plane: `y` is the mean ground
+   * under the tracks (on a crest the hull settles a little into it instead of standing on its centre with its front
+   * half in the air; over a dip it bridges it), `tiltP` / `tiltR` the hull's pitch and roll (the rigs' convention:
+   * tiltP > 0 lifts the nose, tiltR is the body's z rotation).
+   */
+  footprint(x: number, z: number, yaw: number, len: number, width: number, out: { y: number; tiltP: number; tiltR: number }): void {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const fx = -sy, fz = -cy, rx = cy, rz = -sy;
+    let sum = 0, sa = 0, sb = 0, saa = 0, sbb = 0;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 4 - 0.5) * len;
+      for (const side of [-0.5, 0.5]) {
+        const b = side * width;
+        const h = this.heightAt(x + fx * a + rx * b, z + fz * a + rz * b);
+        sum += h;
+        sa += a * h;
+        sb += b * h;
+        saa += a * a;
+        sbb += b * b;
+      }
+    }
+    out.y = sum / 10;
+    // Least-squares slopes along the hull (up toward the front) and across it (up toward the right).
+    const along = sa / saa, across = sb / sbb;
+    out.tiltP = Math.atan(along);
+    out.tiltR = Math.atan(across);
+  }
+
   normalAt(x: number, z: number, out: THREE.Vector3, d = 2): THREE.Vector3 {
     const hl = this.heightAt(x - d, z), hr = this.heightAt(x + d, z);
     const hu = this.heightAt(x, z - d), hd = this.heightAt(x, z + d);

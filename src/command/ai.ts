@@ -15,6 +15,7 @@ const T2 = new THREE.Vector3();
 const T3 = new THREE.Vector3();
 const T4 = new THREE.Vector3();
 const N = new THREE.Vector3();
+const FOOT = { y: 0, tiltP: 0, tiltR: 0 };
 const M4 = new THREE.Matrix4();
 const Q = new THREE.Quaternion();
 const JF = new THREE.Vector3();
@@ -465,20 +466,18 @@ export class Brain {
     if (e.speed > 2.5) w.fx.dust(e.pos.x - T1.x * 3.5, e.pos.y, e.pos.z - T1.z * 3.5, -e.vel.x, -e.vel.z, Math.min(0.8, e.speed * dt * 2.5));
   }
 
-  /** Put a ground vehicle on the terrain with smoothed pitch / roll. */
+  /**
+   * Put a ground vehicle on the terrain with smoothed pitch / roll: the mean ground under its tracks or wheels and the
+   * plane they fit (gauntlet round 1: never perched on a crest by its centre with the nose in the air).
+   */
   settle(e: Ent, dt: number): void {
     const g = this.w.ground;
-    e.pos.y = g.heightAt(e.pos.x, e.pos.z);
-    g.normalAt(e.pos.x, e.pos.z, N, 2.5);
-    // Terrain normal to local pitch / roll
-    const cy = Math.cos(e.yaw), sy = Math.sin(e.yaw);
-    // local forward (-z) and right (+x) in world
-    const fx = -sy, fz = -cy, rx = cy, rz = -sy;
-    const pitch = Math.atan2(N.x * fx + N.z * fz, N.y); // positive when the ground ahead descends
-    const roll = Math.atan2(N.x * rx + N.z * rz, N.y);
+    const len = e.kind === 'tank' ? 6.6 : e.kind === 'truck' ? 6 : 5.6;
+    g.footprint(e.pos.x, e.pos.z, e.yaw, len, e.kind === 'tank' ? 2.84 : 2.2, FOOT);
+    e.pos.y = FOOT.y;
     const k = 1 - Math.exp(-8 * dt);
-    e.tiltP += (-pitch - e.tiltP) * k;
-    e.tiltR += (-roll - e.tiltR) * k;
+    e.tiltP += (FOOT.tiltP - e.tiltP) * k;
+    e.tiltR += (FOOT.tiltR - e.tiltR) * k;
     e.stateT -= dt;
   }
 

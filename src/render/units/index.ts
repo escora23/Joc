@@ -38,7 +38,7 @@ import { RouteManager, type RouteEnv } from './routes';
 import { blockadeApplies } from '../../shared/naval';
 import { relationsFor } from '../relations';
 import {
-  AIRBASE_SLOTS, buildBuilding, buildSpire, buildStructModel, buildUnitModel, levelKey, STRUCT_MODELS, UNIT_MODELS,
+  AIRBASE_SLOTS, buildBuilding, buildSpire, buildStructModel, buildUnitModel, inCityCore, levelKey, snapToCityBlock, STRUCT_MODELS, UNIT_MODELS,
   type StructModelKey, type UnitModelKey,
 } from './models';
 import { Overlays } from './overlays';
@@ -1241,13 +1241,13 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
         for (let tries = 0; tries < 14; tries++) {
           const r = R0 * Math.pow(rnd(), 0.9);
           const a = rnd() * Math.PI * 2;
-          x = Math.cos(a) * r;
-          z = Math.sin(a) * r;
-          let ok = true;
+          // Gauntlet round 1: towers stand on the street grid's blocks of the city ground (models.ts cityBase).
+          [x, z] = snapToCityBlock(Math.cos(a) * r, Math.sin(a) * r, w, rnd(), rnd());
+          let ok = inCityCore(x, z);
           for (let j = 0; j < i; j++) {
             const dx = b[j * 8] - x, dz = b[j * 8 + 1] - z;
             const minD = (b[j * 8 + 2] + w) * 0.62;
-            if (dx * dx + dz * dz < minD * minD) {
+            if (ok && dx * dx + dz * dz < minD * minD) {
               ok = false;
               break;
             }
@@ -1422,9 +1422,13 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
     const right = new THREE.Vector3().copy(R).addScaledVector(up, -R.dot(up)).normalize();
     const back = new THREE.Vector3().crossVectors(right, up).normalize();
     // Base on the plane at the centre, raised by the highest bump; the pad reaches the lowest hollow + 5 % of the range.
-    const lift = Math.max(0, maxE);
+    // Gauntlet round 1: a city spreads over the land: its street grid lies near the fitted plane (a third of the
+    // highest bump), so the ground between its outer blocks meets the terrain instead of standing on a plinth; a
+    // knoll may show between blocks, and every block's own skirt covers the hollows.
+    const city = st.type === StructureType.City;
+    const lift = Math.max(0, maxE) * (city ? 0.3 : 1);
     // + 0.4 % of the footprint of clearance for relief between the 5 x 5 samples (the pad hides the gap below).
-    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U))).addScaledVector(up, 0.004 * S);
+    const anchor = new THREE.Vector3().copy(U).multiplyScalar(1 + a + lift / Math.max(1e-6, up.dot(U))).addScaledVector(up, (city ? 0.001 : 0.004) * S);
     const range = Math.max(0, maxE - minE);
     const pad = range * 1.05 + 0.02 * S;
     g = { key, anchor, up, right, back, pad, S, maxE, minE, devDeg: (Math.acos(Math.min(1, up.dot(gN))) * 180) / Math.PI, tiltDeg: (tilt * 180) / Math.PI };
@@ -1502,11 +1506,13 @@ export function createUnitsRenderer(ctx: GameContext): UnitsApi {
       }
       // Foundation pad under the land part of the footprint (ports and yards keep their piers over the water).
       const coastal = st.type === StructureType.Port || st.type === StructureType.NavalYard;
-      const round = st.type === StructureType.City || st.type === StructureType.DefensePost || st.type === StructureType.SamSite;
+      // A city's ground carries its own foundation skirts under its irregular street grid (no round pad).
+      const round = st.type === StructureType.DefensePost || st.type === StructureType.SamSite;
       tmpColor.setHex(0xffffff);
       // The pad's top sits just under the model's ground plate (0.6 % of the footprint), so the two never z-fight.
       P.copy(anchor).addScaledVector(g.up, -0.006 * S);
-      if (round) put(structMeshes.padRound, P, g.right, g.up, g.back, S * 1.0, g.pad, S * 1.0, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
+      if (st.type === StructureType.City) { /* see cityBase */ }
+      else if (round) put(structMeshes.padRound, P, g.right, g.up, g.back, S * 1.0, g.pad, S * 1.0, tmpColor, st.built, sel, st.hp, seed, anchor, aS);
       else if (coastal) {
         Q.copy(P).addScaledVector(g.back, 0.2 * S);
         put(structMeshes.pad, Q, g.right, g.up, g.back, S * 1.02, g.pad, S * 0.62, tmpColor, st.built, sel, st.hp, seed, anchor, aS);

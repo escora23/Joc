@@ -2,7 +2,7 @@
 // Primitives (box, cylinder, cone, sphere, extruded hulls, custom tris) are placed with a transform stack,
 // painted with a base color and material masks, then merged into ONE non-indexed BufferGeometry per model:
 //   position, normal, aColor (linear albedo), aMask (x = nation tint, y = night lights/windows, z = engine heat),
-//   aH (0..1 normalized model height, drives the "under construction" hologram).
+//   aH (0..1 normalized model height, drives the "under construction" hologram), aFade (0..1 edge dissolve).
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -16,6 +16,11 @@ export interface PaintOpts {
   heat?: number;
   /** Recompute faceted normals (low-poly look). */
   flat?: boolean;
+  /**
+   * 0..1 how much of this surface dissolves into the ground (aFade): a ragged, world-space alpha test, so the outer
+   * edge of a city's ground thins out into the terrain instead of ending on a hard rim (gauntlet round 1).
+   */
+  fade?: number;
 }
 
 const tmpColor = new THREE.Color();
@@ -70,6 +75,7 @@ export class ModelBuilder {
     tmpColor.setHex(color);
     const col = new Float32Array(n * 3);
     const mask = new Float32Array(n * 3);
+    const fade = new Float32Array(n).fill(o.fade ?? 0);
     for (let i = 0; i < n; i++) {
       col[i * 3] = tmpColor.r;
       col[i * 3 + 1] = tmpColor.g;
@@ -80,6 +86,7 @@ export class ModelBuilder {
     }
     g.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
     g.setAttribute('aMask', new THREE.BufferAttribute(mask, 3));
+    g.setAttribute('aFade', new THREE.BufferAttribute(fade, 1));
     this.parts.push(g);
     return this;
   }
@@ -325,7 +332,7 @@ export class ModelBuilder {
    */
   merge(built: THREE.BufferGeometry): this {
     const g = new THREE.BufferGeometry();
-    for (const name of ['position', 'normal', 'aColor', 'aMask']) g.setAttribute(name, built.getAttribute(name).clone());
+    for (const name of ['position', 'normal', 'aColor', 'aMask', 'aFade']) g.setAttribute(name, built.getAttribute(name).clone());
     g.applyMatrix4(this.m);
     this.parts.push(g);
     return this;

@@ -471,32 +471,96 @@ function sam(): THREE.BufferGeometry {
 // Structures
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * A city's ground (gauntlet round 1: no more round dark "coaster" with a ring road under the towers). A street grid of
+ * blocks whose outline follows the grid and wanders with direction (an irregular, organic edge), paved and lit at the
+ * core, then low-rise suburbs (houses with tiled roofs and gardens) thinning outward, the outermost blocks dissolving
+ * into the land (aFade, a ragged world-space alpha test) instead of ending on a rim. Every block carries its own
+ * foundation skirt in an earth tone down to y = -0.25 (sloped relief: nothing floats), so no separate round pad is
+ * drawn. The skyline (towers by level) is drawn on top by updateStructures. Footprint about -0.58..0.58.
+ */
+const CITY_CELL = 0.064;
+const CITY_BLOCK = 0.05;
+/** The edge of the dense core at angle a (footprint units): 0.36-0.47, wandering. */
+function cityCoreR(a: number): number {
+  return 0.415 + 0.035 * Math.sin(a * 2 + 0.7) + 0.022 * Math.sin(a * 5 + 2.1) + 0.012 * Math.sin(a * 9 + 4.0);
+}
 function cityBase(): THREE.BufferGeometry {
   const m = new ModelBuilder();
-  // Urban ground: dark asphalt with a foundation skirt (sits on sloped relief), glowing street grid at night and a
-  // thin nation-colored ring road.
-  m.cyl(0.47, 0.5, 0.1, 0, -0.096, 0, 0x34332f, 28);
-  m.cyl(0.45, 0.45, 0.006, 0, 0, 0, 0x3a3a38, 28, { glow: 0.05 });
-  const ring = new THREE.TorusGeometry(0.455, 0.0035, 3, 40);
-  ring.rotateX(Math.PI / 2);
-  ring.translate(0, 0.006, 0);
-  m.add(ring, C.offWhite, { team: 0.7, glow: 0.3 });
-  const inner = new THREE.TorusGeometry(0.26, 0.004, 3, 28);
-  inner.rotateX(Math.PI / 2);
-  inner.translate(0, 0.007, 0);
-  m.add(inner, 0x55544f, { glow: 0.9 });
-  // Radial avenues and a street grid.
-  for (let i = 0; i < 4; i++) {
-    m.push().rotateY((i * Math.PI) / 4).box(0.88, 0.002, 0.01, 0, 0.007, 0, 0x5b5a55, { glow: 0.55 }).pop();
+  let seed = 4111;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const SKIRT = 0x5b5246;
+  const STREET = 0x45443f;
+  const PAVED = [0x6f6c64, 0x66635c, 0x77736a, 0x5f5d57];
+  const GARDEN = [0x5d6446, 0x66684a, 0x6f6a4e];
+  const ROOF = [0x9a5a3e, 0x8a5440, 0x7e7a74, 0xa8664a, 0x6c6a66];
+  const WALL = [0xd8cfbd, 0xcbc2b0, 0xe2dccd];
+  const N = 9;
+  for (let i = -N; i <= N; i++) {
+    for (let j = -N; j <= N; j++) {
+      const x = i * CITY_CELL, z = j * CITY_CELL;
+      const r = Math.hypot(x, z);
+      const a = Math.atan2(z, x);
+      const core = cityCoreR(a);
+      // Beyond the core the suburbs thin out: fewer blocks, more of each dissolved, to about 0.6.
+      const out = (r - core) / 0.17;
+      if (out > 1) continue;
+      const suburb = out > 0;
+      if (suburb && rnd() < out * 0.8) continue;
+      const fade = suburb ? Math.min(0.85, 0.15 + out * 0.75) : 0;
+      // Street cell with its foundation skirt (earth below, asphalt on top, street lights at night).
+      m.block(CITY_CELL, 0.25, CITY_CELL, x, -0.25, z, SKIRT, { fade: suburb ? fade : 0 });
+      m.block(CITY_CELL, 0.003, CITY_CELL, x, 0, z, suburb ? 0x5a5850 : STREET, { glow: suburb ? 0.15 : 0.4, fade: suburb ? fade : 0 });
+      if (!suburb) {
+        // A paved city block (towers stand on these), a few parks.
+        const park = rnd() < 0.06;
+        m.block(CITY_BLOCK, 0.004, CITY_BLOCK, x, 0.003, z, park ? 0x4b5f37 : PAVED[(rnd() * PAVED.length) | 0]);
+        // Mid-rise fill between the towers: a few low blocks along the block's edges (the skyline stays level-driven).
+        if (!park && r > 0.16) {
+          const k = 1 + ((rnd() * 2) | 0);
+          for (let h = 0; h < k; h++) {
+            const ox = (rnd() - 0.5) * (CITY_BLOCK - 0.018), oz = (rnd() < 0.5 ? -1 : 1) * (CITY_BLOCK / 2 - 0.009);
+            const sw = rnd() < 0.5;
+            m.block(0.016 + rnd() * 0.012, 0.01 + rnd() * 0.012, 0.014, x + (sw ? oz : ox), 0.007, z + (sw ? ox : oz), WALL[(rnd() * WALL.length) | 0], { glow: 0.25 });
+          }
+        }
+      } else {
+        // Suburb: a garden block with detached houses (pitched roofs), fewer toward the edge.
+        m.block(CITY_BLOCK, 0.003, CITY_BLOCK, x, 0.003, z, GARDEN[(rnd() * GARDEN.length) | 0], { fade });
+        const houses = Math.max(1, Math.round((1 - out) * 4 + rnd()));
+        for (let h = 0; h < houses; h++) {
+          const hx = x + (((h % 2) - 0.5) * 0.022) + (rnd() - 0.5) * 0.006;
+          const hz = z + ((((h / 2) | 0) - 0.5) * 0.022) + (rnd() - 0.5) * 0.006;
+          const hw = 0.011 + rnd() * 0.005, hd = 0.009 + rnd() * 0.004, hh = 0.006 + rnd() * 0.003;
+          const rot = rnd() < 0.5 ? 0 : Math.PI / 2;
+          m.push().translate(hx, 0.006, hz).rotateY(rot);
+          m.block(hw, hh, hd, 0, 0, 0, WALL[(rnd() * WALL.length) | 0], { glow: 0.3, fade: fade * 0.6 });
+          // Pitched roof: a prism along the house's length.
+          const roof = new THREE.CylinderGeometry(hd * 0.62, hd * 0.62, hw * 1.04, 3, 1);
+          roof.rotateZ(Math.PI / 2);
+          roof.rotateX(-Math.PI / 2);
+          roof.scale(1, 0.55, 1);
+          roof.translate(0, hh + hd * 0.17, 0);
+          m.add(roof, ROOF[(rnd() * ROOF.length) | 0], { flat: true, team: rnd() < 0.12 ? 0.35 : 0, fade: fade * 0.6 });
+          m.pop();
+        }
+      }
+    }
   }
-  for (let i = -3; i <= 3; i++) {
-    const l = Math.sqrt(Math.max(0, 0.42 * 0.42 - (i * 0.11) ** 2)) * 2;
-    m.box(l, 0.0015, 0.004, 0, 0.0065, i * 0.11, 0x4a4945, { glow: 0.35 });
-    m.box(0.004, 0.0015, l, i * 0.11, 0.0065, 0, 0x4a4945, { glow: 0.35 });
-  }
-  // Park and river-side green.
-  m.cyl(0.06, 0.06, 0.004, 0.18, 0.004, -0.14, 0x3d5a2e, 10);
   return m.build();
+}
+
+/** Snap a point of a city's skyline (footprint units) to its block on the street grid (towers stand on blocks, not
+ *  across streets); `w` is the tower's width. */
+export function snapToCityBlock(x: number, z: number, w: number, jx: number, jz: number): [number, number] {
+  const cx = Math.round(x / CITY_CELL) * CITY_CELL, cz = Math.round(z / CITY_CELL) * CITY_CELL;
+  const room = Math.max(0, (CITY_BLOCK - w) / 2);
+  return [cx + (jx - 0.5) * 2 * room, cz + (jz - 0.5) * 2 * room];
+}
+
+/** Whether a skyline point (footprint units) lies inside the city's dense core (paved blocks). */
+export function inCityCore(x: number, z: number): boolean {
+  return Math.hypot(x, z) < cityCoreR(Math.atan2(z, x)) - CITY_CELL * 0.5;
 }
 
 // Structures by level (DESIGN_V2 §6.5): every level adds visible capacity, so an upgrade shows on the model.
