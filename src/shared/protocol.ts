@@ -182,7 +182,7 @@ export type SimEvent =
   | { type: 'tension'; tick: number; from: number; to: number; reasonKey: string; params: Record<string, string | number> }
   | { type: 'escalation'; tick: number; war: number; by: number; against: number; level: number; reasonKey: string }
   | { type: 'siege'; tick: number; owner: number; by: number[]; stage: 'start' | 'end'; tiles: number; x: number; y: number }
-  | { type: 'offensive'; tick: number; attackId: number; attacker: number; defender: number; stage: 'started' | 'contact' | 'stalled' | 'resumed' | 'consolidating' | 'retreating' | 'ended'; x: number; y: number; ratio: number }
+  | { type: 'offensive'; tick: number; attackId: number; attacker: number; defender: number; stage: 'started' | 'contact' | 'stalled' | 'resumed' | 'consolidating' | 'retreating' | 'ended' | 'breakthrough' | 'stabilized'; x: number; y: number; ratio: number }
   | { type: 'invasionDetected'; tick: number; unitId: number; owner: number; target: number; toTile: number; etaTicks: number; troops: number; by: 'radar' | 'coast' | 'neighbour' }
   | { type: 'clockChanged'; tick: number; mode: ClockMode; rate: number }
   | { type: 'unrest'; tick: number; owner: number; region: number[]; cause: 'occupation' | 'exhaustion' | 'nuclear'; stage: 'start' | 'cancelled' | 'rebellion'; untilTick: number; x: number; y: number }
@@ -202,7 +202,7 @@ export type SimEvent =
    */
   | { type: 'airRaid'; tick: number; owner: number; target: number; unitId: number; unit: UnitType; /** The home airbase's tile when the aircraft has one (fromBase), else where it was when detected. */ fromTile: number; fromBase: boolean; toTile: number; etaTicks: number; by: 'takeoff' | 'radar' | 'observers' }
   /** The sim's answer to a unitOrder of `owner`: how many units took it, the i18n reason when none did. */
-  | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null; errorParams?: Record<string, string | number> }
+  | { type: 'orderAck'; tick: number; owner: number; order: UnitOrderKind; unitIds: number[]; accepted: number[]; tile: number; errorKey: string | null; errorParams?: Record<string, string | number>; refusedKey?: string | null; refusedParams?: Record<string, string | number> }
   /**
    * Feedback 3: a structure took damage (sent when its damage state changes, it loses a level, is destroyed or razed, or
    * a hit of 0.1 hp or more): hp before and after, the damage state (0 intact .. 3 destroyed), civilians and troops killed.

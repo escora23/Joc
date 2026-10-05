@@ -134,7 +134,9 @@ export function offensiveStatus(view: GameView, a: AttackView, kmh: number, gain
   if (kmh < 0.05) return `${arrow ? '‖ ' : ''}${t(a.state === 'consolidating' ? 'fr.adv.consolidating' : 'fr.adv.pressing')}`;
   const g = gaining === 0 ? 1 : gaining;
   const base = `${sym(g)}${t('fr.adv.kmh', { v: kmhText(kmh) })}`;
-  if (a.state === 'consolidating') return `${base} · ${t('fr.adv.consolidating')}`;
+  if (a.state === 'consolidating') return `${base} · ${t('fr.adv.consolidating')}${a.breakthrough ? ` · ${t('fr.adv.breakthrough')}` : ''}`;
+  // §4.4b: the defence of the corridor has collapsed.
+  if (a.breakthrough) return `${base} · ${t('fr.adv.breakthrough')}`;
   return base;
 }
 

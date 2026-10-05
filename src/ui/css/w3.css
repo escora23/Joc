@@ -89,12 +89,47 @@
 /* ---------------------------------------------------------------------------------------------
    Auto-pause banner
    --------------------------------------------------------------------------------------------- */
+/* Gauntlet round 1: a headline, one action line and the buttons on their own row, at least ~760 px wide (centred
+   under the top bar even where the column is narrower), instead of the text squeezed into a 150 px column. */
 .fu-autopause {
-  display: flex; align-items: center; gap: 0.7rem; width: 100%; padding: 0.55rem 0.8rem; background: rgba(40, 28, 6, 0.92);
+  display: flex; flex-direction: column; align-self: center; gap: 0.35rem; width: min(760px, calc(100vw - 32px)); min-width: min(760px, calc(100vw - 32px));
+  padding: 0.55rem 0.8rem 0.6rem; background: rgba(40, 28, 6, 0.92);
   border: 1px solid var(--fu-accent-2); box-shadow: 0 0 1.6rem rgba(255, 181, 61, 0.25); animation: fu-drop 0.35s var(--fu-ease) both;
 }
+.fu-ap-head { display: flex; align-items: baseline; gap: 0.8rem; min-width: 0; }
 .fu-ap-kicker { display: inline-flex; align-items: center; gap: 0.35rem; font: 700 0.72rem var(--fu-font-cond); letter-spacing: 0.2em; text-transform: uppercase; color: var(--fu-accent-2); white-space: nowrap; }
-.fu-ap-text { flex: 1; font-size: 0.86rem; color: var(--fu-text); min-width: 0; }
+.fu-ap-text { flex: 1; min-width: 0; font-size: 0.95rem; font-weight: 700; color: var(--fu-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-ap-action { font-size: 0.82rem; line-height: 1.35; color: #ffe2b0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fu-ap-btns { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; }
+/* While the banner tells the crisis the advisor and the ticker (which repeat it) step aside. */
+body.fu-ap-open .fu-tut, body.fu-ap-open .fu-ticker { display: none !important; }
+
+/* Gauntlet round 1: at most four entries in view; the rest wait behind «+n»; read entries fold to their title. */
+.fu-alerts-list > .fu-alert.is-over { display: none; }
+.fu-alert.is-folded { padding-top: 0.32rem; padding-bottom: 0.36rem; }
+.fu-alert.is-folded .fu-alert-body, .fu-alert.is-folded .fu-alert-meta, .fu-alert.is-folded .fu-alert-flags { display: none; }
+.fu-alert.is-folded .fu-alert-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.8rem; }
+.fu-alert.is-folded .fu-alert-ico .fu-ico { width: 0.95rem; height: 0.95rem; }
+.fu-alert.is-folded:hover .fu-alert-body, .fu-alert.is-folded:hover .fu-alert-meta { display: flex; }
+.fu-alert.is-folded:hover .fu-alert-body { display: block; }
+.fu-alert.is-folded:hover .fu-alert-t { white-space: normal; }
+.fu-alerts-more {
+  align-self: flex-start; padding: 0.2rem 0.55rem; font: 600 0.66rem var(--fu-font-cond); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--fu-text-2); background: var(--fu-glass); border: 1px dashed var(--fu-line-strong); cursor: pointer;
+}
+.fu-alerts-more:hover { color: var(--fu-text); }
+
+/* Leaderboard: the independent territories, one collapsed line under the nations. */
+.fu-lb-tribes { color: var(--fu-text-dim); border-top: 1px solid var(--fu-line); cursor: pointer; }
+.fu-lb-tribes .fu-lb-name { color: var(--fu-text-dim); font-style: italic; }
+.fu-lb-tribes-chev { display: inline-flex; width: 0.8rem; transition: transform 0.2s; }
+.fu-lb-tribes-chev .fu-ico { width: 0.7rem; height: 0.7rem; }
+.fu-lb-tribes.is-open .fu-lb-tribes-chev { transform: rotate(90deg); }
+.fu-lb-row.is-tribe { opacity: 0.75; }
+.fu-lb-row.is-tribe .fu-lb-rank { color: var(--fu-text-faint) !important; }
+
+/* Offensive dialog: why more troops add no speed. */
+.fu-offdlg-row.fu-offdlg-limit { grid-column: 1 / -1; display: block; font-size: 0.78rem; line-height: 1.4; color: #ffe2b0; background: rgba(255, 181, 61, 0.08); border-left: 2px solid var(--fu-accent-2); padding: 0.35rem 0.5rem; margin-top: 0.2rem; }
 
 /* ---------------------------------------------------------------------------------------------
    Crisis component (amber banner → red nuclear alarm)

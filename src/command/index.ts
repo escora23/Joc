@@ -2271,10 +2271,13 @@ export function createCommandMode(ctx: GameContext): CommandApi {
       const hd = Math.hypot(bi.hot.x - P.pos.x, bi.hot.z - P.pos.z);
       const brg = (Math.atan2(bi.hot.x - P.pos.x, -(bi.hot.z - P.pos.z)) * 180 / Math.PI + 360) % 360;
       const dist = hd >= 1000 ? `${formatNumber(hd / 1000, 1)} km` : `${Math.round(hd / 10) * 10} m`;
-      const counts = { ours: formatNumber(roundTroops(ours)), theirs: formatNumber(roundTroops(theirs)), level };
+      // Both counts cover the same km of line (localForces stretch); a broken stretch (§4.4b) says so.
+      const ownSide = bi.sides.find((q) => q.team === 0);
+      const broken = bi.breakthrough ? (ownSide?.role === 'attack' ? 'Broken' : ownSide?.role === 'defend' ? 'BrokenOurs' : '') : '';
+      const counts = { ours: formatNumber(roundTroops(ours)), theirs: formatNumber(roundTroops(theirs)), level, km: formatNumber(Math.max(1, Math.round(bi.stretchKm))), nation: nationName(foe?.owner ?? 0) };
       overlay.setCombat({
         title: t('command.battle.title', { nation: nationName(foe?.owner ?? 0) }),
-        sub: hd > 250 ? t('command.battle.hotSub', { d: dist, ...counts }) : t('command.battle.sub', counts),
+        sub: hd > 250 ? t(`command.battle.hotSub${broken}`, { d: dist, ...counts }) : t(`command.battle.sub${broken}`, counts),
         dist: `${dist} · ${dirWord(brg)}`, contact: !!(h.ent && h.dist < REACH_M[kind]),
         // Far from the hottest stretch (and not already driving there): the chip's button drives there (as G does).
         go: (() => {
@@ -2302,7 +2305,8 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         battleNoticed.add(bi.frontKey);
         const own = bi.sides.find((q) => q.team === 0);
         const role = own?.role === 'attack' ? 'attack' : own?.role === 'defend' ? 'defend' : 'hold';
-        overlay.showNotice(`${t('command.battle.notice', { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(roundTroops(theirs)), ours: formatNumber(roundTroops(ours)), km: formatNumber((HALF_WINDOW_M * 2) / 1000, 1), role: t(`command.battle.role.${role}`) })}${more ? ` ${more}` : ''}`, 9);
+        const nk = broken ? `command.battle.notice${broken}` : 'command.battle.notice';
+        overlay.showNotice(`${t(nk, { nation: nationName(foe?.owner ?? 0), theirs: formatNumber(roundTroops(theirs)), ours: formatNumber(roundTroops(ours)), km: counts.km, role: t(`command.battle.role.${role}`) })}${more ? ` ${more}` : ''}`, 9);
       } else if (more) overlay.showNotice(more, 5, true);
       return;
     }

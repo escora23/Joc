@@ -235,6 +235,8 @@ export interface AlertInput {
    * the alert's place «Prioridad alta» acts on, resolved when the button is painted or pressed.
    */
   frontEnemy?: number;
+  /** Gauntlet round 1: the figures behind the text (a diplomatic answer's opinion and threshold), shown in its tooltip. */
+  detail?: string;
 }
 
 /** The complete main-thread vocabulary: app events + every sim event (keyed by SimEvent.type). */

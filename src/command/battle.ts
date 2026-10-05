@@ -39,7 +39,6 @@ const RECENTRE_M = 300;
 export const SIDE_CAP_HOSTILE = 1000;
 export const SIDE_CAP_FRIENDLY = 900;
 /** The front garrison within this length of line around the player is drawn into the stretch (km). */
-const CONCENTRATION_KM = 16;
 /**
  * The fewest figures a side with troops on this line shows, by role (owner item 32, pass 2: hundreds of men in sight
  * around the player, never "two little guys"; each figure then stands for fewer troops, see `troopsPerFig`).
@@ -97,6 +96,10 @@ export interface BattleInfo {
   frontKey: number;
   /** 0..1: how hot the fighting is (the front's intensity; a quiet front smoulders at ~0.2). */
   heat: number;
+  /** §4.4b: an offensive crossing this stretch has broken through (the defence here has collapsed). */
+  breakthrough: boolean;
+  /** Line length of the stretch the side counts cover (km). */
+  stretchKm: number;
   sides: BattleSideInfo[];
   /** Where the fighting is hottest now in the stretch (scene), and the line point nearest the player. */
   hot: THREE.Vector3 | null;
@@ -166,6 +169,8 @@ export class BattleLine {
   private sides = new Map<number, SideState>();
   private active = false;
   private frontKey = 0;
+  private breakthrough = false;
+  private stretchKm = 0;
   private heat = 0;
   /** Stretch centre (scene) and the resampled line around it: x, z, nx, nz per STEP_M (n points to side b). */
   private centre: THREE.Vector3 | null = null;
@@ -270,7 +275,7 @@ export class BattleLine {
     }
     const now = this.host.world.time;
     return {
-      active: this.active, frontKey: this.frontKey, heat: this.heat, sides, hot: this.hot, hotLive: this.hotLive, near: this.near,
+      active: this.active, frontKey: this.frontKey, heat: this.heat, breakthrough: this.breakthrough, stretchKm: this.stretchKm, sides, hot: this.hot, hotLive: this.hotLive, near: this.near,
       shells10: this.shellTimes.filter((t) => now - t < 10).length, fallen10: this.fallTimes.filter((t) => now - t < 10).length,
     };
   }
@@ -814,6 +819,8 @@ export class BattleLine {
     }
     this.active = true;
     this.frontKey = fr.key;
+    this.breakthrough = fr.breakthrough;
+    this.stretchKm = fr.stretchKm;
     // Sides and roles. An offensive pool makes a side the attacker; a quiet front is two lines holding.
     const sideOf = (owner: number): 1 | -1 => (owner === fr.b || (owner !== fr.a && lf.pairs.some((p) => ((p.a === owner && p.b === fr.b) || (p.b === owner && p.a === fr.b)) && p.alliance)) ? 1 : -1);
     const live = new Set<number>();
@@ -839,9 +846,9 @@ export class BattleLine {
       const perKm = pool / winKm;
       const cap = hostile ? SIDE_CAP_HOSTILE : SIDE_CAP_FRIENDLY;
       const role: SideState['role'] = !attacker ? 'hold' : sd.owner === attacker ? 'attack' : 'defend';
-      // The garrison within ±CONCENTRATION_KM / 2 of the player stands in the stretch (troops gather where the line
-      // is fought over); an offensive's pool is already its corridor's troops, all of it in the fight.
-      const local = sd.pools.front * Math.min(1, CONCENTRATION_KM / winKm) + sd.pools.offensive;
+      // The sim's troops on the stretch of line around the player (±STRETCH_KM / 2, both sides over the same km: the
+      // defender's garrison gathered on the attacking corridor, the offensive's men in it), as localForces counts them.
+      const local = (sd.owner === fr.a ? fr.stretchA : fr.stretchB) / TROOPS_PER_SOLDIER;
       // Drawn at the density of a battle (the role's floor) whenever the side has troops on this line; above the
       // floor, the sim's own numbers (1 figure = 25 troops) up to the cap.
       // (A line held by a handful — under 20 troops in the stretch — shows half the floor.)

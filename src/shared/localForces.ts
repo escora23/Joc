@@ -45,6 +45,10 @@ import { collapsedBlocks, damageState, standingShare, type DamageState } from '.
 export const TROOPS_PER_SOLDIER = 25;
 /** A front's garrison stands within this distance of its line: the front window is the line inside radius + band. */
 export const FRONT_BAND_KM = 8;
+/** The stretch of line a battle is told about (km): the garrison gathered around a fight and the men it meets. */
+export const STRETCH_KM = 16;
+/** Share of a garrison that gathers on the corridors of the offensives it faces (the rest watches the quiet line). */
+export const DEFENSE_GATHER = 0.8;
 /** Defense posts within this distance add their garrison to the owner's pool. */
 export const POST_POOL_KM = 25;
 export const SOLDIERS_PER_POST = 6;
@@ -67,7 +71,7 @@ export type LocalForcesFront = Pick<FrontView,
   | 'momentum' | 'advanceKmh' | 'intensity' | 'quiet' | 'offensiveA' | 'offensiveB'>;
 export type LocalForcesAttack = Pick<AttackView,
   'id' | 'attacker' | 'defender' | 'troops' | 'x' | 'y' | 'originX' | 'originY' | 'frontKey' | 'frontageTiles' | 'state'
-  | 'naval' | 'advanceKmh'> & Partial<Pick<AttackView, 'contactX' | 'contactY'>>;
+  | 'naval' | 'advanceKmh'> & Partial<Pick<AttackView, 'contactX' | 'contactY' | 'breakthrough' | 'prisoners'>>;
 
 export interface LocalForcesView {
   readonly tick: number;
@@ -204,6 +208,15 @@ export interface LocalFront {
   garrisonB: number;
   troopsPerKmA: number;
   troopsPerKmB: number;
+  /**
+   * Gauntlet round 1: the troops of each side on the stretch of line within ±STRETCH_KM / 2 of the nearest point (both
+   * counted over the same km, the defender gathered on the attacking corridors), the stretch's line length, and
+   * whether an offensive crossing it has broken through (§4.4b).
+   */
+  stretchKm: number;
+  stretchA: number;
+  stretchB: number;
+  breakthrough: boolean;
 }
 
 export interface LocalPools {
@@ -589,16 +602,8 @@ export function deriveLocalForces(
       if (Math.hypot(line[v * 2], line[v * 2 + 1]) <= 3 * R + TILE_KM) lineKm.push(line[v * 2], line[v * 2 + 1]);
     }
     const nearestPos = pos(x + bestE / kmX, y - bestN / kmY);
-    localFronts.push({
-      key: f.key, a: f.a, b: f.b, quiet: f.quiet, intensity: f.intensity, momentum: f.momentum, advanceKmh: f.advanceKmh,
-      lengthKm, windowKm, nearest: nearestPos, advanceBearing: bearing(dirE, dirN), lineBearing: bearing(le, ln), anchorSide,
-      lineKm, subTile: !!f.progress || !!lineRec, line: lineRec, garrisonA: f.garrisonA, garrisonB: f.garrisonB,
-      troopsPerKmA: f.garrisonA / lengthKm, troopsPerKmB: f.garrisonB / lengthKm,
-    });
-    if (windowKm <= 0) continue;
-    side(f.a).pools.front += (f.garrisonA * frac) / TROOPS_PER_SOLDIER;
-    side(f.b).pools.front += (f.garrisonB * frac) / TROOPS_PER_SOLDIER;
-    // Offensives on this front: troops × (window inside the corridor / corridor width).
+    // Offensives on this front and their corridors (axis through the live contact, half-width h), in local km.
+    const corrs: { at: LocalForcesAttack; ax: number; an: number; ue: number; un: number; h: number; km: number }[] = [];
     for (const at of attacksByFront.get(f.key) ?? []) {
       if (at.troops <= 0) continue;
       const corridorKm = Math.max(TILE_KM, at.frontageTiles * TILE_KM);
@@ -606,37 +611,73 @@ export function deriveLocalForces(
       // point (fallback: the front's advance direction through the axis point).
       const live = (at.contactX ?? -1) >= 0 && Math.hypot(wdx(at.originX, at.contactX!) * kmX, (at.originY - at.contactY!) * kmY) >= TILE_KM;
       const px = live ? at.contactX! : at.x, py = live ? at.contactY! : at.y;
-      const ax = wdx(x, px) * kmX, an = (y - py) * kmY;
       let ue = wdx(at.originX, px) * kmX, un = (at.originY - py) * kmY;
       if (at.originX < 0 || Math.hypot(ue, un) < 1) {
         ue = at.attacker === f.a ? dirE : -dirE;
         un = at.attacker === f.a ? dirN : -dirN;
       }
       const ul = Math.hypot(ue, un) || 1;
-      ue /= ul;
-      un /= ul;
-      let inCorr = 0;
+      corrs.push({ at, ax: wdx(x, px) * kmX, an: (y - py) * kmY, ue: ue / ul, un: un / ul, h: corridorKm / 2, km: corridorKm });
+    }
+    /** Length of the line inside the circle (cx, cn, r), and of that the part inside corridor c (when given). */
+    const clipLen = (cx: number, cn: number, r: number, c?: (typeof corrs)[number]): number => {
+      let len = 0;
       for (let s = 0; s < segCount; s++) {
-        const e0 = line[s * 2], n0 = line[s * 2 + 1];
-        const e1 = n > 1 ? line[s * 2 + 2] : e0, n1 = n > 1 ? line[s * 2 + 3] : n0;
+        const e0 = line[s * 2] - cx, n0 = line[s * 2 + 1] - cn;
+        const e1 = n > 1 ? line[s * 2 + 2] - cx : e0, n1 = n > 1 ? line[s * 2 + 3] - cn : n0;
         const de = e1 - e0, dn = n1 - n0;
-        const c = clipCircle(e0, n0, de, dn, Rw);
-        if (!c) continue;
-        // Signed distance from the axis line: cross((p - axis), u) is linear in t.
-        const c0 = (e0 - ax) * un - (n0 - an) * ue, c1 = de * un - dn * ue;
-        let t0 = c[0], t1 = c[1];
-        const h = corridorKm / 2;
-        if (Math.abs(c1) < 1e-9) {
-          if (Math.abs(c0) > h) continue;
-        } else {
-          let ta = (-h - c0) / c1, tb = (h - c0) / c1;
-          if (ta > tb) [ta, tb] = [tb, ta];
-          t0 = Math.max(t0, ta);
-          t1 = Math.min(t1, tb);
+        const cc = clipCircle(e0, n0, de, dn, r);
+        if (!cc) continue;
+        let t0 = cc[0], t1 = cc[1];
+        if (c) {
+          // Signed distance from the axis line: cross((p - axis), u) is linear in t.
+          const c0 = (e0 + cx - c.ax) * c.un - (n0 + cn - c.an) * c.ue, c1 = de * c.un - dn * c.ue;
+          if (Math.abs(c1) < 1e-9) {
+            if (Math.abs(c0) > c.h) continue;
+          } else {
+            let ta = (-c.h - c0) / c1, tb = (c.h - c0) / c1;
+            if (ta > tb) [ta, tb] = [tb, ta];
+            t0 = Math.max(t0, ta);
+            t1 = Math.min(t1, tb);
+          }
         }
-        if (t1 > t0) inCorr += (t1 - t0) * Math.hypot(de, dn);
+        if (t1 > t0) len += (t1 - t0) * Math.hypot(de, dn);
       }
-      if (inCorr > 0) side(at.attacker).pools.offensive += (at.troops * Math.min(1, inCorr / corridorKm)) / TROOPS_PER_SOLDIER;
+      return len;
+    };
+    // The stretch around the nearest point (±STRETCH_KM / 2 along the line): who stands there. A side facing an
+    // offensive gathers DEFENSE_GATHER of its garrison inside the attacking corridors (the sim's Pd puts the whole
+    // garrison against the offensive), the rest stays spread over the front; an offensive's troops stand in its own
+    // corridor. Both sides are counted over the same km, so the numbers compare as the sim's force ratio does.
+    const stretchKm = clipLen(bestE, bestN, STRETCH_KM / 2);
+    const stretchOf = (o: number, garrison: number): number => {
+      const facing = corrs.filter((c) => c.at.defender === o);
+      let troops = 0;
+      if (facing.length) {
+        const corrKm = Math.min(lengthKm, facing.reduce((q, c) => q + c.km, 0));
+        let inside = 0;
+        for (const c of facing) inside += clipLen(bestE, bestN, STRETCH_KM / 2, c);
+        inside = Math.min(stretchKm, inside);
+        troops += garrison * DEFENSE_GATHER * (inside / Math.max(TILE_KM, corrKm)) + garrison * (1 - DEFENSE_GATHER) * (stretchKm / lengthKm);
+      } else troops += garrison * Math.min(1, stretchKm / lengthKm);
+      for (const c of corrs) if (c.at.attacker === o) troops += c.at.troops * Math.min(1, clipLen(bestE, bestN, STRETCH_KM / 2, c) / c.km);
+      return troops;
+    };
+    localFronts.push({
+      key: f.key, a: f.a, b: f.b, quiet: f.quiet, intensity: f.intensity, momentum: f.momentum, advanceKmh: f.advanceKmh,
+      lengthKm, windowKm, nearest: nearestPos, advanceBearing: bearing(dirE, dirN), lineBearing: bearing(le, ln), anchorSide,
+      lineKm, subTile: !!f.progress || !!lineRec, line: lineRec, garrisonA: f.garrisonA, garrisonB: f.garrisonB,
+      troopsPerKmA: f.garrisonA / lengthKm, troopsPerKmB: f.garrisonB / lengthKm,
+      stretchKm, stretchA: stretchOf(f.a, f.garrisonA), stretchB: stretchOf(f.b, f.garrisonB),
+      breakthrough: corrs.some((c) => !!c.at.breakthrough && clipLen(bestE, bestN, STRETCH_KM / 2, c) > 0),
+    });
+    if (windowKm <= 0) continue;
+    side(f.a).pools.front += (f.garrisonA * frac) / TROOPS_PER_SOLDIER;
+    side(f.b).pools.front += (f.garrisonB * frac) / TROOPS_PER_SOLDIER;
+    // Offensives on this front: troops × (window inside the corridor / corridor width).
+    for (const c of corrs) {
+      const inCorr = clipLen(0, 0, Rw, c);
+      if (inCorr > 0) side(c.at.attacker).pools.offensive += (c.at.troops * Math.min(1, inCorr / c.km)) / TROOPS_PER_SOLDIER;
     }
   }
   localFronts.sort((p, q) => p.nearest.distKm - q.nearest.distKm || p.key - q.key);

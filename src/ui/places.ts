@@ -67,6 +67,44 @@ export function describePlace(view: GameView, lat: number, lon: number, viewer =
   return { text, name: t('place.area', { where: text }), named: false };
 }
 
+/** Compass point (a translated «N», «NE»…) and the great-circle km from (lat0, lon0) to (lat1, lon1). */
+function bearing(lat0: number, lon0: number, lat1: number, lon1: number): { km: number; dir: string } {
+  const y = Math.sin((lon1 - lon0) * Math.PI / 180) * Math.cos(lat1 * Math.PI / 180);
+  const x = Math.cos(lat0 * Math.PI / 180) * Math.sin(lat1 * Math.PI / 180) - Math.sin(lat0 * Math.PI / 180) * Math.cos(lat1 * Math.PI / 180) * Math.cos((lon1 - lon0) * Math.PI / 180);
+  const brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  return { km: placeKm(lat0, lon0, lat1, lon1), dir: t(`place.dir.${DIRS[Math.round(brg / 45) % 8]}`) };
+}
+
+const roundKm = (km: number): number => (km < 100 ? Math.max(10, Math.round(km / 5) * 5) : Math.round(km / 10) * 10);
+
+/**
+ * Gauntlet round 1: `to` described so it never repeats `fromName`, the place just named for another point (a lost
+ * capital, an objective reached). Its own nearest place when that is a different one; otherwise the distance and
+ * bearing from `fromName`'s point: «a 60 km al N de Madrid».
+ */
+export function describeApartFrom(view: GameView, from: { lat: number; lon: number }, fromName: string, to: { lat: number; lon: number }): PlaceText {
+  const own = describePlace(view, to.lat, to.lon);
+  if (own.name !== fromName) return own;
+  const b = bearing(from.lat, from.lon, to.lat, to.lon);
+  const text = b.km < 15 ? t('place.nearSame', { place: fromName }) : t('place.bearing', { km: formatNumber(roundKm(b.km)), dir: b.dir, from: fromName });
+  return { text, name: text, named: false };
+}
+
+/**
+ * Gauntlet round 1: where a new objective lies past the one just reached, without naming the same town twice: «120 km
+ * más al N, hacia Nantes» (the nearest other place ahead within 250 km of the new point) or «120 km más al N».
+ */
+export function describeBeyond(view: GameView, x0: number, y0: number, x1: number, y1: number): { from: string; to: string } {
+  const a = tileXYToLatLon(x0, y0), b = tileXYToLatLon(x1, y1);
+  const from = describePlace(view, a.lat, a.lon), to = describePlace(view, b.lat, b.lon);
+  if (to.name !== from.name) return { from: from.text, to: to.text };
+  const g = bearing(a.lat, a.lon, b.lat, b.lon);
+  const ahead = nearestPlace(b.lat, b.lon, 250, (p) => placeName(p) === from.name
+    || placeKm(a.lat, a.lon, p.lat, p.lon) <= placeKm(a.lat, a.lon, b.lat, b.lon) * 0.8);
+  const km = formatNumber(roundKm(g.km));
+  return { from: from.text, to: ahead ? t('place.beyondToward', { km, dir: g.dir, place: placeName(ahead) }) : t('place.beyond', { km, dir: g.dir }) };
+}
+
 /**
  * A place to name a front by (W6): the nearest place to its middle within 150 km, else the nearest to any point of its
  * contact line within 150 km, else the nearest place within 450 km of its middle with the compass direction from it

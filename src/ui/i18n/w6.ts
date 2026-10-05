@@ -18,6 +18,7 @@ export const esW6: Record<string, string> = {
   // ---- the measured advance (badge, panel, strip) -----------------------------------------------------
   'fr.adv.kmh': '{v} km/h',
   'fr.adv.consolidating': 'consolidando',
+  'fr.adv.breakthrough': 'ruptura',
   'fr.adv.stalled': 'estancado',
   'fr.adv.contact': 'contacto: las tropas llegan a la línea',
   'fr.adv.mobilizing': 'movilizando',
@@ -201,6 +202,7 @@ export const enW6: Record<string, string> = {
 
   'fr.adv.kmh': '{v} km/h',
   'fr.adv.consolidating': 'consolidating',
+  'fr.adv.breakthrough': 'breakthrough',
   'fr.adv.stalled': 'stalled',
   'fr.adv.contact': 'contact: troops moving up to the line',
   'fr.adv.mobilizing': 'mobilizing',

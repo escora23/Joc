@@ -35,6 +35,7 @@ import {
   AIR_DENIAL_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, BOMBER_GARRISON_SHARE, CAP_RADIUS_TILES, DEFENSE_REDEPLOY_TICKS,
   DRONE_ADVANCE_MUL, FRONT_PRIORITY_WEIGHT, HUMAN_ID, MAP_H, MAP_W, TICKS_PER_GAME_DAY, TILE_KM, UNIT_DEFS,
 } from '../../shared/constants';
+import { forecastOffensive } from './offensiveForecast';
 import { tileXYToLatLon } from '../../shared/geo';
 import { formatNumber, t } from '../../shared/i18n';
 import { orderCheck, tileKm } from '../../shared/orders';
@@ -699,9 +700,14 @@ export function createFrontsPanel(hs: HudShared): FrontsPanel {
         toggleClass(row.ownBox, 'fu-hidden', !mine);
         if (mine) {
           // Feedback 3 (29a): the same status and km/h as the front row, the badge and the strip.
+          // Gauntlet 29a: the forecast the hover and the offensive dialog read (no troops added: the offensive as it is).
+          const cx = mine.contactX >= 0 ? mine.contactX : mine.x, cy = mine.contactY >= 0 ? mine.contactY : mine.y;
+          const fc = forecastOffensive(v, enemy, Math.floor(cy) * MAP_W + Math.floor(cx), 0, undefined, f);
+          let state = offensiveStatus(v, mine, offensiveKmh(v, mine), 1, false);
+          if (fc.saturated && mine.intensity !== 0 && fc.nowKmh > 0.05) state += ` (${t('g1.fr.capped', { limit: t(`g1.limitBy.${fc.ground}`) })})`;
           setText(row.ownLine!, t('fr.own', {
-            troops: troopsText(mine.troops), intensity: t(`off.int.${mine.intensity}`), ratio: formatNumber(mine.ratio, 1),
-            state: offensiveStatus(v, mine, offensiveKmh(v, mine), 1, false),
+            troops: troopsText(mine.troops), intensity: t(`off.int.${mine.intensity}`), ratio: formatNumber(fc.ratio, 1),
+            km: formatNumber(Math.round(fc.corridorKm)), state,
           }) + supportText(mine));
           for (const b of row.intSeg!.querySelectorAll<HTMLButtonElement>('button')) {
             toggleClass(b, 'is-on', Number(b.dataset.int) === mine.intensity);

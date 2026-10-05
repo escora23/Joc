@@ -10,8 +10,9 @@ import { STRUCT_IDS } from './forcesInfo';
 import { chipText, previewOrders, selectedUnitIds, type OrderPreview } from './orderCtl';
 import { structureName, unitName } from './forcesInfo';
 import { describeXY } from '../places';
-import { HUMAN_ID, NUKE_DEFS, OFFENSIVE_CONTACT_TICKS, STRUCTURE_DEFS, UNIT_DEFS } from '../../shared/constants';
+import { HUMAN_ID, NUKE_DEFS, OFFENSIVE_CONTACT_TICKS, STRUCTURE_DEFS, TILE_KM, UNIT_DEFS } from '../../shared/constants';
 import { predictOffensive } from '../../shared/orders';
+import { forecastOffensive } from './offensiveForecast';
 import { viewRules } from '../../sim/rulesView';
 import { hexToCss } from '../../shared/color';
 import { tileToLatLon } from '../../shared/geo';
@@ -125,18 +126,26 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
       return { text: t('tt.naval', { n: formatCompact(send), p: pctS }), cls: 'is-risky' };
     }
     const pr = predictOffensive(r, HUMAN_ID, owner, send, tile);
-    const fr = Math.round(pr.frontageTiles);
-    const km = formatNumber(Math.round(pr.frontageTiles * 25));
     if (owner === 0 || view.players[owner]?.kind === 'tribe' && pr.garrison <= 0) {
+      const fr = Math.round(pr.frontageTiles);
+      const km = formatNumber(Math.round(pr.frontageTiles * TILE_KM));
       emit(true, pr.frontageTiles, 3);
       return { text: t('tt.expandV2', { n: formatCompact(send), p: pctS, f: fr, km, v: formatNumber(pr.advanceKmh, 1) }), cls: 'is-go' };
     }
-    emit(true, pr.frontageTiles, pr.ratio);
+    // Gauntlet 29a: the same forecast as the offensive dialog and the Guerra panel (offensiveForecast.ts): a click here
+    // reinforces our running offensive on that front, so its troops count; the speed is the one this ground allows.
+    const fc = forecastOffensive(view, owner, tile, send);
+    emit(true, fc.corridorTiles, fc.ratio);
     const mob = pr.startsInTicks - OFFENSIVE_CONTACT_TICKS;
-    if (mob > 0) return { text: t('tt.offensiveQueued', { h: formatNumber(Math.max(1, Math.round(mob / 10))), n: formatCompact(send) }), cls: 'is-risky' };
-    const ratio = formatNumber(pr.ratio, 1);
-    const text = t('tt.offensive', { n: formatCompact(send), p: pctS, r: ratio, f: fr, km, v: formatNumber(pr.advanceKmh, 1) }) + (pr.ratio < 1 ? ` · ${t('tt.offensive.stall')}` : '');
-    return { text, cls: pr.ratio >= 2 ? 'is-go' : pr.ratio >= 1 ? 'is-risky' : 'is-bad' };
+    if (mob > 0 && !fc.running) return { text: t('tt.offensiveQueued', { h: formatNumber(Math.max(1, Math.round(mob / 10))), n: formatCompact(send) }), cls: 'is-risky' };
+    const params = {
+      n: formatCompact(send), p: pctS, r: formatNumber(fc.ratio, 1), f: Math.round(fc.corridorTiles), km: formatNumber(Math.round(fc.corridorKm)),
+      v: formatNumber(fc.kmh, 1), ground: t(`g1.ground.${fc.ground}`),
+    };
+    let text = t(fc.running ? 'g1.tt.reinforce' : 'g1.tt.offensive', params);
+    if (fc.ratio < 1) text += ` · ${t('tt.offensive.stall')}`;
+    else if (fc.saturated) text += ` · ${t('g1.tt.capped', { limit: t(`g1.limitBy.${fc.ground}`) })}`;
+    return { text, cls: fc.ratio >= 2 ? 'is-go' : fc.ratio >= 1 ? 'is-risky' : 'is-bad' };
   }
   let offKey = '';
   function clearOffensive(): void {
@@ -315,7 +324,7 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
     if (ids.length && tile >= 0) {
       const hv = hs.hover;
       const forced = m.kind === 'order' ? m.order : undefined;
-      const pk = `o${ids.join(',')}:${tile}:${hv.unitId}:${hv.structureId}:${hv.shift}:${forced ?? ''}:${view.tick}`;
+      const pk = `o${ids.join(',')}:${tile}:${hv.unitId}:${hv.structureId}:${hv.shift}:${forced ?? ''}:${view.tick}:${hs.orderNote && hs.orderNote.until > performance.now() ? hs.orderNote.text : ''}`;
       if (pk !== orderKey) {
         orderKey = pk;
         const pv = previewOrders(hs, ids, tile, hv.unitId, hv.structureId, hv.shift, forced);
@@ -325,6 +334,12 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
           : null;
         if (pv) {
           const txt = chipText(hs, pv);
+          // The refusal of the order just given, folded into one line on the chip for a few seconds.
+          const note = hs.orderNote && hs.orderNote.until > performance.now() ? hs.orderNote : null;
+          if (note) {
+            txt.line = note.text;
+            txt.bad = txt.bad || note.bad;
+          }
           const key = `o${txt.title}|${txt.line}|${txt.bad}`;
           if (key !== chipKey) {
             chipKey = key;

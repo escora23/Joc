@@ -19,7 +19,7 @@ import { tx } from '../tx';
 import type { AlertCenter } from './alerts';
 import { betrayalOf, openDeclareWar } from './declare';
 import { answer, askHelp, donate, focusNation, leaveTreaty, propose, toggleEmbargo, whyNotPropose } from './diplomacy';
-import { bandCentre, deliberationLeft, inboxCountdown, OPEN_STATUS, previewBand, proposalWhat, reasonLine, reasonsQuoted } from './inboxText';
+import { bandCentre, deliberationLeft, inboxCountdown, OPEN_STATUS, previewBand, proposalWhat, reasonLine, reasonsDetail, reasonsQuoted } from './inboxText';
 import type { HudShared } from './shared';
 import { goldField, openDemandDialog, openPeaceDialog } from './wardialogs';
 import { ALLIANCE_NOTICE_TICKS, DELIBERATION_TICKS, HUMAN_ID, NAP_TICKS, TICKS_PER_GAME_DAY, opinionBand } from '../../shared/constants';
@@ -476,7 +476,13 @@ export function createNations(hs: HudShared, alerts: AlertCenter): NationsPanel 
       const sentence = p.from === HUMAN_ID ? t(`proposal.answer.${p.status}`, { name: name(other), what }) : p.status === 'expired' ? t('proposal.expired', { name: name(other), what }) : p.status === 'cancelled' ? t('proposal.cancelled', { name: name(other), what }) : t(p.status === 'accepted' ? 'proposal.youAccepted' : 'proposal.youRefused', { name: name(other), what });
       card.append(h('div', { class: 'fu-ib-text' }, sentence));
       const rq = p.to === HUMAN_ID && (p.status === 'accepted' || p.status === 'rejected') ? '' : reasonsQuoted(hs, p.reasons);
-      if (rq && full) card.append(h('div', { class: 'fu-ib-sub' }, rq));
+      if (rq && full) {
+        const sub = h('div', { class: 'fu-ib-sub' }, rq);
+        // The figures behind the answer (opinion, the gold's weight, the threshold) on hover, never in the sentence.
+        const detail = reasonsDetail(hs, p.reasons);
+        if (detail.length) tip(sub, () => ({ title: t('g1.answer.detail'), text: detail.join(' · ') }));
+        card.append(sub);
+      }
       if (full) card.append(h('div', { class: 'fu-ib-cd fu-mono' }, t('inbox.when', { day: Math.floor((p.resolvedTick || p.createdTick) / 240) + 1, hour: Math.floor(((p.resolvedTick || p.createdTick) % 240) / 10) })));
     }
     head.addEventListener('click', () => {

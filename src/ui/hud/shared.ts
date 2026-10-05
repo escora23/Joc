@@ -43,6 +43,8 @@ export class HudShared {
   hover: HoverInfo = { tile: -1, unitId: -1, structureId: -1, clientX: -1, clientY: -1, shift: false };
   radialOpen = false;
   /** Tutorial bookkeeping. */
+  /** Gauntlet round 1: the folded refusal of the last order, shown on the order chip until `until` (performance.now ms). */
+  orderNote: { text: string; bad: boolean; until: number } | null = null;
   flags = { ratioChanged: false, radialOpened: false, commandEntered: false, proposalSent: false, proposalAnswered: false, nationsOpened: false, speedUnderstood: false, frontAction: false };
   private listeners = new Map<HudSignal, Set<() => void>>();
   /** v2 (W3): open the nations drawer (on a nation's detail) / the inbox; set by the HUD assembly. */

@@ -474,7 +474,7 @@ function km(lat1: number, lon1: number, lat2: number, lon2: number): number {
  * The place nearest to (lat, lon) within `maxKm`, preferring larger places: a capital or a major city a little further
  * away wins over a small town (rank penalty of 30 km per rank step). Null when none is close enough.
  */
-export function nearestPlace(lat: number, lon: number, maxKm = 150): (Place & { km: number }) | null {
+export function nearestPlace(lat: number, lon: number, maxKm = 150, skip?: (p: Place) => boolean): (Place & { km: number }) | null {
   let best: Place | null = null, bestScore = Infinity, bestKm = 0;
   const cosLat = Math.cos(lat * RAD);
   const dDeg = maxKm / 111 + 0.5;
@@ -485,6 +485,7 @@ export function nearestPlace(lat: number, lon: number, maxKm = 150): (Place & { 
     if (dl * Math.max(0.05, cosLat) > dDeg) continue;
     const d = km(lat, lon, p.lat, p.lon);
     if (d > maxKm) continue;
+    if (skip && skip(p)) continue;
     const score = d + (p.rank - 1) * 30;
     if (score < bestScore) {
       bestScore = score;

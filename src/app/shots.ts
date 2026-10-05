@@ -11,6 +11,7 @@ import '../render/battle/shotsFronts';
 import '../ui/shotsF2';
 import '../ui/shotsF3';
 import '../ui/shotsNaval';
+import '../ui/shotsG1';
 import '../command/shots';
 import '../sim/ai/shots';
 import { registerShot } from '../shared/shots';

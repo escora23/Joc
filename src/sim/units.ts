@@ -462,7 +462,9 @@ export class UnitSystem {
     }
     if (p.id === HUMAN_ID) {
       // The UI turns a refusal into a toast with the reason and its parameters (ui/hud/forcesNews.ts).
-      g.emit({ type: 'orderAck', tick: g.tick, owner: p.id, order, unitIds: unitIds.slice(0, 64), accepted, tile, errorKey: accepted.length ? null : firstErr, errorParams: accepted.length ? undefined : firstParams });
+      g.emit({ type: 'orderAck', tick: g.tick, owner: p.id, order, unitIds: unitIds.slice(0, 64), accepted, tile, errorKey: accepted.length ? null : firstErr, errorParams: accepted.length ? undefined : firstParams,
+        // Gauntlet round 1: the first refusal also when part of the units complied (one folded line on the order chip).
+        refusedKey: firstErr ?? null, refusedParams: firstParams });
     }
     return accepted.length > 0;
   }

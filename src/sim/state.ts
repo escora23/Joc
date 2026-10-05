@@ -416,6 +416,14 @@ export class Attack implements SimAttack {
   planKmh = 0;
   /** Tiles ready to fall but held by the war's logistics bucket this tick. */
   consolidating = false;
+  /**
+   * Breakthrough (§4.4b): R has stayed ≥ BREAKTHROUGH_RATIO; the defence of this corridor has collapsed (its garrison
+   * surrenders or flees, the advance only fights the ground). highTicks counts the ticks at or above the ratio;
+   * prisoners are the defender's troops taken out by the rout (part of defenderLosses).
+   */
+  breakthrough = false;
+  highTicks = 0;
+  prisoners = 0;
   /** Retreat: troops are back home at this tick (-1 = not retreating). */
   returnAt = -1;
   ended = false;

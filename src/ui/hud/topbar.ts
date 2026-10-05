@@ -181,7 +181,8 @@ export function createTopBar(hs: HudShared, actions: TopBarActions): TopBar {
     // Rank by territory
     let rank = 1, alive = 0;
     for (const q of view.playerList) {
-      if (!q.alive || q.tiles <= 0) continue;
+      // Gauntlet round 1: ranked among nations, as the leaderboard (independent territories are not states).
+      if (!q.alive || q.tiles <= 0 || q.kind === 'tribe') continue;
       alive++;
       if (q.id !== p.id && q.tiles > p.tiles) rank++;
     }

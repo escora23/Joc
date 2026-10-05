@@ -67,6 +67,26 @@ export const MIN_VISUAL_SAM_SEC = 0.6;
 /** Front depth speed cap (km/h) and the force ratio at which it is reached (§4.5). */
 export const ADVANCE_MAX_KMH = 8;
 export const ADVANCE_FULL_RATIO = 3;
+/**
+ * Breakthrough (§4.4b, gauntlet round 1): a defence outnumbered far past the 3 : 1 that caps the speed cannot hold a
+ * line at all. Once R stays at or above BREAKTHROUGH_RATIO for BREAKTHROUGH_TICKS the front of that offensive breaks
+ * («ruptura»): its garrison surrenders or flees at up to BREAKTHROUGH_ROUT of itself per tick (from R 5 to full at R 10;
+ * ~0.6 %/tick halves it in ~12 h), counted as prisoners, and the advance only fights the ground, not the men on it:
+ * the natural terrain's extra time is halved (mountains 2.6 → 1.8). The speed cap, the tiles-per-tick cap and the
+ * war's logistics bucket still hold. It ends when R falls under BREAKTHROUGH_END_RATIO (reserves arrive, the attack
+ * thins out).
+ */
+export const BREAKTHROUGH_RATIO = 5;
+export const BREAKTHROUGH_END_RATIO = 4;
+export const BREAKTHROUGH_TICKS = 10;
+export const BREAKTHROUGH_ROUT = 0.006;
+export const BREAKTHROUGH_TERRAIN_KEEP = 0.5;
+/**
+ * Terrain time multipliers of the advance (§4.5: a mountain tile takes 2.6× as long; ×1.5 more above 3,000 m and
+ * across a river) and terrain defense for the attacker's casualties (§4.6). Shared by the sim and every forecast.
+ */
+export const TERRAIN_TIME = { plains: 1, hills: 1.6, mountains: 2.6, high: 1.5, river: 1.5 } as const;
+export const TERRAIN_DEF = { plains: 1, hills: 1.2, mountains: 1.5, urban: 1.4 } as const;
 /** Occupation march into unclaimed land (km/h), independent of troops (§4.5). */
 export const NEUTRAL_ADVANCE_KMH = 7.5;
 /** Frontage is bought with troops: corridor width = clamp(committed / TROOPS_PER_FRONT_TILE, 3, 40) tiles (§4.3). */

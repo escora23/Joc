@@ -533,6 +533,12 @@ export interface AttackView {
   planKmh?: number;
   /** Feedback 3 fix 2: share of the pressured tiles with an attacking division near (its ×1.5 push), smoothed. */
   armorCover?: number;
+  /**
+   * Breakthrough (§4.4b): R has held ≥ 5 : 1 and the defence of this corridor has collapsed; its garrison surrenders
+   * or flees (prisoners so far) and the advance is limited by the ground and logistics only.
+   */
+  breakthrough?: boolean;
+  prisoners?: number;
 }
 
 export interface FrontView {

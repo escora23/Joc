@@ -14,7 +14,7 @@ import type { AlertCenter } from './alerts';
 import type { Ticker } from './feed';
 import type { HudShared } from './shared';
 import { isHumanFacingProposal, proposalAlert } from './inboxText';
-import { capitalPhrase, describeTile, describeXY } from '../places';
+import { capitalPhrase, describeApartFrom, describeBeyond, describeTile, describeXY } from '../places';
 import type { AlertInput } from '../../shared/events';
 import { HUMAN_ID, MAP_W, UNIT_DEFS } from '../../shared/constants';
 import { tileToLatLon, tileXYToLatLon } from '../../shared/geo';
@@ -122,6 +122,13 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
       where = atXY(p.x1, p.y1);
     }
     if (typeof p.x0 === 'number' && typeof p.y0 === 'number') p.from = describeXY(view(), p.x0, p.y0).text;
+    // An objective reached and the next one near the same town: the new one by distance and bearing, never «cerca de
+    // Burdeos … nuevo objetivo cerca de Burdeos».
+    if (typeof p.x0 === 'number' && typeof p.y0 === 'number' && typeof p.x1 === 'number' && typeof p.y1 === 'number') {
+      const d = describeBeyond(view(), p.x0, p.y0, p.x1, p.y1);
+      p.from = d.from;
+      p.to = d.to;
+    }
     alert({
       kind: 'message', severity: sev, title: t(e.key, p), groupKey: `msg:${e.key}`, ttlSec: sev === 'info' ? 8 : 12,
       ...(where ? { lat: where.lat, lon: where.lon, icon: 'attack' as const } : {}),
@@ -143,11 +150,14 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     const ll = at(e.tile)!;
     if (e.playerId === HUMAN_ID) {
       const me = view().human;
-      const moved = me && me.capitalTile >= 0 && me.capitalTile !== e.tile ? describeTile(view(), me.capitalTile).name : '';
+      const lost = describeTile(view(), e.tile).name;
+      // The new seat is often near the lost one: never «Hemos perdido Madrid — la capital se traslada a Madrid».
+      const seat = me && me.capitalTile >= 0 && me.capitalTile !== e.tile ? describeApartFrom(view(), ll, lost, tileToLatLon(me.capitalTile)) : null;
       alert({
         kind: 'capitalLost', severity: 'critical', icon: 'flag', lat: ll.lat, lon: ll.lon, actors: [e.by],
-        title: t('alert.capitalLost.title', { place: describeTile(view(), e.tile).name }),
-        body: moved ? t('alert.capitalLost.moved', { place: moved, name: name(e.by) }) : t('alert.capitalLost.body', { name: name(e.by) }),
+        title: t('alert.capitalLost.title', { place: lost }),
+        body: !seat ? t('alert.capitalLost.body', { name: name(e.by) })
+          : t(seat.named ? 'alert.capitalLost.moved' : 'alert.capitalLost.movedBearing', { place: seat.name, where: seat.text, name: name(e.by) }),
       });
     } else if (e.by === HUMAN_ID) {
       alert({ kind: 'capitalTaken', severity: 'info', icon: 'crown', lat: ll.lat, lon: ll.lon, title: t('alert.capitalTaken.title', { name: name(e.playerId) }) });
@@ -305,9 +315,20 @@ export function wireNews(hs: HudShared, ticker: Ticker, alerts: AlertCenter): vo
     if (e.attacker === HUMAN_ID) {
       if (e.stage === 'stalled') {
         alert({ kind: 'offensiveStalled', severity: 'info', icon: 'attack', lat: ll.lat, lon: ll.lon, groupKey: `our:${e.attackId}`, title: t('alert.offensiveStalled.title', { place }), body: t('alert.offensiveStalled.body', { ratio: decimal(e.ratio), name: name(e.defender) }) });
+      } else if (e.stage === 'breakthrough') {
+        alert({ kind: 'offensiveBreakthrough', severity: 'info', icon: 'attack', lat: ll.lat, lon: ll.lon, groupKey: `our:${e.attackId}`, title: t('alert.breakthrough.title', { place, name: name(e.defender) }), body: t('alert.breakthrough.body', { ratio: decimal(e.ratio), name: name(e.defender) }) });
+      } else if (e.stage === 'stabilized') {
+        alert({ kind: 'offensiveStabilized', severity: 'info', icon: 'attack', lat: ll.lat, lon: ll.lon, groupKey: `our:${e.attackId}`, title: t('alert.breakthroughClosed.title', { place }), body: t('alert.breakthroughClosed.body', { ratio: decimal(e.ratio), name: name(e.defender) }) });
       } else if (e.stage === 'retreating' || e.stage === 'ended') {
         alert({ kind: 'offensiveEnded', severity: 'info', icon: 'attack', lat: ll.lat, lon: ll.lon, groupKey: `our:${e.attackId}`, title: t('alert.offensiveEnded.title', { place }), body: t('toast.offensiveEnded', { name: name(e.defender) }) });
       }
+    } else if (e.defender === HUMAN_ID && e.stage === 'breakthrough') {
+      alert({ kind: 'lineBroken', severity: 'danger', icon: 'shield', lat: ll.lat, lon: ll.lon, actors: [e.attacker], groupKey: `broken:${e.attackId}`, title: t('alert.lineBroken.title', { place, name: name(e.attacker) }), body: t('alert.lineBroken.body', { ratio: decimal(e.ratio), name: name(e.attacker) }) });
+    } else if (e.defender === HUMAN_ID && e.stage === 'stabilized') {
+      alerts.resolve(`broken:${e.attackId}`);
+      alert({ kind: 'lineStabilized', severity: 'info', icon: 'shield', lat: ll.lat, lon: ll.lon, title: t('alert.lineStabilized.title', { place }), body: t('alert.lineStabilized.body', { ratio: decimal(e.ratio), name: name(e.attacker) }) });
+    } else if (e.stage === 'breakthrough' && (isMajor(e.attacker) || isMajor(e.defender))) {
+      newsXY(t('news.breakthrough', { a: name(e.attacker), b: name(e.defender), place }), 'warning', e.x, e.y);
     } else if (e.defender === HUMAN_ID && e.stage === 'retreating') {
       alert({ kind: 'offensiveRetreat', severity: 'info', icon: 'shield', lat: ll.lat, lon: ll.lon, title: t('toast.offensiveRetreat', { name: name(e.attacker) }) });
     }

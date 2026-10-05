@@ -27,7 +27,8 @@ import {
   LANDING_COAST_MUL, LANDING_STORM_TICKS, MAP_H, MAP_W, NEUTRAL_ADVANCE_KMH, NEUTRAL_TROOPS_PER_FRONT_TILE,
   OFFENSIVE_BREAK_TICKS, OFFENSIVE_CONTACT_TICKS, OFFENSIVE_RETURN_TICKS, OFFENSIVE_STALL_TICKS, RETREAT_LOSS,
   SIEGE_DEFENSE_MUL, THRESHOLD_JITTER, TILE_COUNT, TILE_KM, TROOPS_PER_FRONT_TILE, BOMBARD_ATTACK_MUL, DRONE_ADVANCE_MUL,
-  DRONE_ENEMY_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, AIR_DENIAL_ADVANCE_MUL, structureLevel,
+  DRONE_ENEMY_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, AIR_DENIAL_ADVANCE_MUL, structureLevel, TERRAIN_TIME, TERRAIN_DEF,
+  BREAKTHROUGH_END_RATIO, BREAKTHROUGH_RATIO, BREAKTHROUGH_ROUT, BREAKTHROUGH_TERRAIN_KEEP, BREAKTHROUGH_TICKS,
 } from '../shared/constants';
 import { StructureType, TerrainClass, TerrainFlag, type AttackView, type OffensiveIntensity } from '../shared/types';
 import { ARMOR_REACH_TILES } from '../shared/orders';
@@ -40,9 +41,6 @@ import { Attack, Mode, type Player, type Unit } from './state';
 
 type EndReason = 'exhausted' | 'retreat' | 'defenderEliminated' | 'cancelled';
 
-/** Terrain time multipliers (§4.5) and terrain defense for casualties (§4.6). */
-const TERRAIN_TIME = { plains: 1, hills: 1.6, mountains: 2.6 };
-const TERRAIN_DEF = { plains: 1, hills: 1.2, mountains: 1.5, urban: 1.4 };
 
 /**
  * The capital district (§4.5): the capital tile and the 8 tiles around it, a city of ~50 km defended street by street.
@@ -115,8 +113,8 @@ export class AttackSystem {
       const tr = g.terrain[t];
       const c = tr & 0x0f;
       let m = c === TerrainClass.Mountains ? TERRAIN_TIME.mountains : c === TerrainClass.Hills ? TERRAIN_TIME.hills : TERRAIN_TIME.plains;
-      if (g.elevation[t] > 3000) m *= 1.5;
-      if (tr & TerrainFlag.River) m *= 1.5;
+      if (g.elevation[t] > 3000) m *= TERRAIN_TIME.high;
+      if (tr & TerrainFlag.River) m *= TERRAIN_TIME.river;
       this.terrainTime[t] = m;
       this.terrainDef[t] = c === TerrainClass.Mountains ? TERRAIN_DEF.mountains : c === TerrainClass.Hills ? TERRAIN_DEF.hills : TERRAIN_DEF.plains;
     }
@@ -750,6 +748,18 @@ export class AttackSystem {
       if (this.dronesDef > 0) v *= DRONE_ENEMY_ADVANCE_MUL;
       if (skyAtk) v *= AIR_SUPERIORITY_ADVANCE_MUL;
       if (skyDef) v *= AIR_DENIAL_ADVANCE_MUL;
+      // Breakthrough (§4.4b): a defence outnumbered 5 : 1 for an hour no longer holds a line; it ends under 4 : 1 or
+      // when the attacker stops pushing. Tribes and beach assaults keep the plain model.
+      if (!tribeDef && !landing) {
+        a.highTicks = R >= BREAKTHROUGH_RATIO ? a.highTicks + 1 : 0;
+        if (!a.breakthrough && a.highTicks >= BREAKTHROUGH_TICKS && a.intensity !== 0) {
+          a.breakthrough = true;
+          g.emit({ type: 'offensive', tick, attackId: a.id, attacker: a.attacker, defender: a.defender, stage: 'breakthrough', x: a.liveX >= 0 ? a.liveX : a.clickX, y: a.liveX >= 0 ? a.liveY : a.clickY, ratio: +R.toFixed(2) });
+        } else if (a.breakthrough && (R < BREAKTHROUGH_END_RATIO || a.intensity === 0)) {
+          a.breakthrough = false;
+          g.emit({ type: 'offensive', tick, attackId: a.id, attacker: a.attacker, defender: a.defender, stage: 'stabilized', x: a.liveX >= 0 ? a.liveX : a.clickX, y: a.liveX >= 0 ? a.liveY : a.clickY, ratio: +R.toFixed(2) });
+        }
+      }
     }
     // Holding the line (#23): the troops stay dug in on the contact, nothing is pushed.
     if (a.intensity === 0) v = 0;
@@ -797,6 +807,8 @@ export class AttackSystem {
         inc = (v / ADVANCE_MAX_KMH) / (LANDING_STORM_TICKS * LANDING_COAST_MUL * post);
       } else {
         let terrain = this.terrainTime[t];
+        // Breakthrough: nobody holds the ridges and river lines any more; the ground still slows the columns.
+        if (a.breakthrough) terrain = 1 + (terrain - 1) * BREAKTHROUGH_TERRAIN_KEEP;
         if (D) {
           if (g.structAt[t] !== 0) terrain *= 2;
           terrain *= post;
@@ -832,7 +844,11 @@ export class AttackSystem {
       const defTroops = garrison + counterTroops;
       const defLoss = (defPowLoss * defTroops) / Pd;
       const toCounter = counter ? defLoss * (counterTroops / Math.max(1, defTroops)) : 0;
-      const toGarrison = Math.min(D.troops, defLoss - toCounter);
+      // Breakthrough rout: the broken garrison surrenders or flees, up to BREAKTHROUGH_ROUT of it per tick (a sixth of
+      // that at 5 : 1, all of it from 10 : 1), counted as prisoners.
+      const rout = a.breakthrough ? BREAKTHROUGH_ROUT * Math.min(1, Math.max(0, (a.ratio - BREAKTHROUGH_END_RATIO) / 6)) * garrison : 0;
+      const toGarrison = Math.min(D.troops, defLoss - toCounter + rout);
+      a.prisoners += Math.min(rout, toGarrison);
       if (counter) counter.troops = Math.max(0, counter.troops - toCounter);
       lostD = toGarrison + toCounter;
       a.troops -= lostA;
@@ -1168,6 +1184,7 @@ export class AttackSystem {
       intensity: a.intensity,
       air: a.air, casAtk: a.casAtk, casDef: a.casDef,
       divAtk: a.divAtk, divDef: a.divDef, navalAtk: a.navalAtk, planKmh: +a.planKmh.toFixed(2), armorCover: +a.armorCover.toFixed(3),
+      breakthrough: a.breakthrough, prisoners: Math.floor(a.prisoners),
     };
   }
 

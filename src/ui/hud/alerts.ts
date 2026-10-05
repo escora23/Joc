@@ -42,6 +42,8 @@ export interface Alert {
   count: number;
   el: HTMLElement | null;
   marker: HTMLElement | null;
+  /** performance.now() when the entry last appeared or changed in the feed (it folds to one line some time after). */
+  shownAt?: number;
 }
 
 export interface AlertCenter {
@@ -63,7 +65,14 @@ export interface AlertCenter {
 
 const SEV_ORDER: Record<AlertSeverity, number> = { info: 0, warning: 1, danger: 2, critical: 3 };
 const SEV_ICON: Record<AlertSeverity, string> = { info: 'info', warning: 'warning', danger: 'attack', critical: 'warning' };
-const FEED_MAX = 5;
+/**
+ * Gauntlet round 1: at most 4 entries visible (the most severe, then the newest), the rest summed up in a «+n» line
+ * that opens the Registro; up to FEED_KEEP stay in the feed (their timers run) to come back when a visible one leaves.
+ */
+const FEED_MAX = 4;
+const FEED_KEEP = 10;
+/** An info entry folds to its title line after this long in the feed, a warning after this × 2 (hover unfolds it). */
+const FOLD_MS = 6000;
 const LOG_MAX = 200;
 const DEFAULT_TTL_MS = 20_000;
 
@@ -73,16 +82,24 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   const list = h('div', { class: 'fu-alerts-list' });
   const logBtn = h('button', { class: 'fu-alerts-log fu-interactive' }, icon('bell'), tx('alerts.log'), h('span', { class: 'fu-alerts-n fu-mono' }));
   tip(logBtn, () => ({ title: t('alerts.log'), text: t('alerts.log.tip') }));
-  const feedEl = h('div', { class: 'fu-alerts' }, list, logBtn);
+  const moreBtn = h('button', { class: 'fu-alerts-more fu-interactive fu-hidden' }, h('span', { class: 'fu-mono' }));
+  tip(moreBtn, () => ({ title: t('alerts.log'), text: t('g1.alerts.more.tip') }));
+  moreBtn.addEventListener('click', () => openLog());
+  const feedEl = h('div', { class: 'fu-alerts' }, list, moreBtn, logBtn);
   const markersEl = h('div', { class: 'fu-markers' });
-  const bannerText = h('span', { class: 'fu-ap-text' });
+  // Gauntlet round 1: the banner reads as a headline and one action line, its buttons on a row of their own.
+  const bannerText = h('div', { class: 'fu-ap-text' });
+  const bannerAction = h('div', { class: 'fu-ap-action' });
+  tip(bannerAction, () => (pausedBy?.alert.input.body ? { title: pausedBy.alert.input.title, text: pausedBy.alert.input.body } : null));
   const bannerView = h('button', { class: 'fu-btn fu-btn--sm' }, icon('eye'), tx('alerts.autoPause.view'));
   const bannerResume = h('button', { class: 'fu-btn fu-btn--sm fu-btn--primary' }, icon('play'), tx('alerts.autoPause.resume'));
   tip(bannerView, () => ({ title: t('alerts.autoPause.view'), text: t('alerts.autoPause.view.tip') }));
   tip(bannerResume, () => ({ title: t('alerts.autoPause.resume'), text: t('alerts.autoPause.resume.tip') }));
   const bannerPrio = h('button', { class: 'fu-btn fu-btn--sm fu-hidden' }, icon('shield'), h('span', null, '')) as HTMLButtonElement;
   const bannerEl = h('div', { class: 'fu-autopause fu-interactive fu-hidden' },
-    h('span', { class: 'fu-ap-kicker' }, icon('pause'), tx('alerts.autoPause.kicker')), bannerText, bannerPrio, bannerView, bannerResume);
+    h('div', { class: 'fu-ap-head' }, h('span', { class: 'fu-ap-kicker' }, icon('pause'), tx('alerts.autoPause.kicker')), bannerText),
+    bannerAction,
+    h('div', { class: 'fu-ap-btns' }, bannerPrio, bannerView, bannerResume));
 
   const all: Alert[] = [];
   const byGroup = new Map<string, Alert>();
@@ -296,7 +313,10 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       close,
       h('i', { class: 'fu-alert-timer' }),
     );
-    tip(el, () => ({ title: i.title, text: i.proposalId ? t('alerts.click.inbox') : i.lat !== undefined ? t('alerts.click.fly') : t('alerts.click.none') }));
+    tip(el, () => ({
+      title: a.input.title, text: a.input.proposalId ? t('alerts.click.inbox') : a.input.lat !== undefined ? t('alerts.click.fly') : t('alerts.click.none'),
+      lines: [a.input.body ?? '', a.input.detail ?? ''].filter((s) => s !== ''),
+    }));
     el.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('.fu-alert-x, .fu-alert-prio')) return;
       activate(a);
@@ -341,11 +361,12 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       a.updatedTick = tick;
       if (sameKind) a.count++;
       a.leftMs = ttl;
+      a.shownAt = performance.now();
       refreshEntry(a);
       if (escalated) place(a);
     } else {
       fresh = true;
-      a = { id: nextId++, input, createdTick: tick, updatedTick: tick, leftMs: ttl, acknowledged: false, count: 1, el: null, marker: null };
+      a = { id: nextId++, input, createdTick: tick, updatedTick: tick, leftMs: ttl, acknowledged: false, count: 1, el: null, marker: null, shownAt: performance.now() };
       all.push(a);
       if (all.length > LOG_MAX) {
         const old = all.shift()!;
@@ -375,12 +396,13 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   }
 
   function trimFeed(): void {
-    // At most 5 visible: drop the oldest non-critical first.
+    arrange();
+    // At most FEED_KEEP kept: drop the oldest non-critical first (all of them stay in the Registro).
     const els = [...list.children] as HTMLElement[];
-    if (els.length <= FEED_MAX) return;
+    if (els.length <= FEED_KEEP) return;
     const live = all.filter((x) => x.el);
     live.sort((x, y) => SEV_ORDER[x.input.severity] - SEV_ORDER[y.input.severity] || x.updatedTick - y.updatedTick);
-    let n = els.length - FEED_MAX;
+    let n = els.length - FEED_KEEP;
     for (const x of live) {
       if (n <= 0) break;
       if (x.input.severity === 'critical') continue;
@@ -392,6 +414,30 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
       }
       n--;
     }
+  }
+
+  /**
+   * Which entries show: the FEED_MAX most severe (newest first among equals), in the feed's order; the others wait
+   * hidden with «+n» under the list. The entry the auto-pause banner already tells is folded to one line. Info and
+   * warning entries fold to their title line once read (FOLD_MS), so a crisis does not cover half the map.
+   */
+  function arrange(): void {
+    const live = all.filter((x) => x.el && !x.acknowledged && x.el.parentElement === list);
+    const rank = live.slice().sort((x, y) => SEV_ORDER[y.input.severity] - SEV_ORDER[x.input.severity] || y.updatedTick - x.updatedTick || y.id - x.id);
+    const shown = new Set(rank.slice(0, FEED_MAX));
+    const now = performance.now();
+    for (const x of live) {
+      const el = x.el!;
+      toggleClass(el, 'is-over', !shown.has(x));
+      const sev = SEV_ORDER[x.input.severity];
+      const age = now - (x.shownAt ?? now);
+      const fold = (pausedBy?.alert === x && !bannerEl.classList.contains('fu-hidden'))
+        || (sev === 0 && age > FOLD_MS) || (sev === 1 && age > FOLD_MS * 2);
+      toggleClass(el, 'is-folded', fold);
+    }
+    const more = live.length - shown.size;
+    toggleClass(moreBtn, 'fu-hidden', more <= 0);
+    if (more > 0) setText(moreBtn.firstElementChild as HTMLElement, t('g1.alerts.more', { n: more }));
   }
 
   function resolve(groupKey: string): void {
@@ -413,11 +459,17 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     const resume = pausedBy ? pausedBy.resume : sp;
     pausedBy = { alert: a, resume };
     if (sp !== 0) ctx.app.setSpeed(0);
-    setText(bannerText, `${a.input.title}${a.input.body ? ` · ${a.input.body}` : ''}`);
+    setText(bannerText, a.input.title);
+    setText(bannerAction, a.input.body ?? '');
+    toggleClass(bannerAction, 'fu-hidden', !a.input.body);
     toggleClass(bannerView, 'fu-hidden', a.input.lat === undefined && !a.input.proposalId);
     paintPriority(bannerPrio, alertFront(a.input));
     bannerEl.classList.remove('fu-hidden');
     bannerEl.dataset.kind = kind;
+    // While the banner tells it, the advisor and the news ticker step aside (hud.css .fu-ap-open) and the matching
+    // entry folds to one line.
+    document.body.classList.add('fu-ap-open');
+    arrange();
     ctx.bus.emit('autoPaused', { kind, text: a.input.title });
   }
   bannerView.addEventListener('click', () => {
@@ -436,6 +488,8 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
   function hideBanner(): void {
     pausedBy = null;
     bannerEl.classList.add('fu-hidden');
+    document.body.classList.remove('fu-ap-open');
+    arrange();
   }
   ctx.bus.on('speedChanged', (e) => {
     if (e.speed !== 0 && pausedBy) hideBanner();
@@ -547,6 +601,7 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     acc += dt;
     if (acc >= 0.1) {
       acc = 0;
+      arrange();
       fitFeed();
       projectMarkers();
       for (const a of all) if (a.el) setText(a.el.querySelector('.fu-alert-age') as HTMLElement, ageText(a));

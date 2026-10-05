@@ -102,6 +102,8 @@ export interface SimAttack {
   /** The live contact point of the offensive (continuous tile coords, -1 = none yet). */
   readonly liveX: number;
   readonly liveY: number;
+  /** Breakthrough (§4.4b): the defence of its corridor has collapsed (R held ≥ 5 : 1). */
+  readonly breakthrough?: boolean;
 }
 
 export interface NewPlayerDef {

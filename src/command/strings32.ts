@@ -4,8 +4,14 @@ import { registerDictionary } from '../shared/i18n';
 
 const es: Record<string, string> = {
   'command.battle.title': 'Batalla en la línea contra {nation}',
-  'command.battle.sub': 'Intensidad {level} · en este tramo, unos {ours} soldados nuestros y {theirs} enemigos',
-  'command.battle.hotSub': 'Lo más duro, a {d} · intensidad {level} · unos {ours} nuestros y {theirs} enemigos en este tramo',
+  'command.battle.sub': 'Intensidad {level} · en estos {km} km de línea, unos {ours} soldados nuestros y {theirs} enemigos',
+  'command.battle.hotSub': 'Lo más duro, a {d} · intensidad {level} · unos {ours} nuestros y {theirs} enemigos en estos {km} km',
+  'command.battle.subBroken': 'Ruptura · la defensa de {nation} se ha hundido: en estos {km} km quedan unos {theirs} enemigos frente a {ours} nuestros, y se rinden o huyen',
+  'command.battle.hotSubBroken': 'Lo más duro, a {d} · ruptura: en estos {km} km quedan unos {theirs} enemigos frente a {ours} nuestros, y se rinden o huyen',
+  'command.battle.subBrokenOurs': 'Nuestra línea se ha roto · en estos {km} km resisten unos {ours} de los nuestros frente a {theirs} enemigos',
+  'command.battle.hotSubBrokenOurs': 'Lo más duro, a {d} · nuestra línea se ha roto: unos {ours} de los nuestros frente a {theirs} enemigos en estos {km} km',
+  'command.battle.noticeBroken': 'Ruptura en el frente contra {nation}: nuestra ofensiva los supera más de 5 a 1 y su defensa se ha hundido. En estos {km} km quedan unos {theirs} soldados enemigos frente a {ours} nuestros; se rinden o se retiran, y el avance ya solo lo frenan el terreno y los suministros.',
+  'command.battle.noticeBrokenOurs': 'Nuestra línea contra {nation} se ha roto: nos superan más de 5 a 1. En estos {km} km quedan unos {ours} de los nuestros frente a {theirs} enemigos. Sin refuerzos (prioridad alta en este frente, divisiones, aliados) este tramo caerá.',
   'command.battle.level.0': 'baja',
   'command.battle.level.1': 'media',
   'command.battle.level.2': 'alta',
@@ -38,8 +44,14 @@ const es: Record<string, string> = {
 
 const en: Record<string, string> = {
   'command.battle.title': 'Battle on the line against {nation}',
-  'command.battle.sub': 'Intensity {level} · in this stretch, about {ours} of our soldiers and {theirs} enemy',
-  'command.battle.hotSub': 'Heaviest fighting {d} away · intensity {level} · about {ours} ours and {theirs} enemy in this stretch',
+  'command.battle.sub': 'Intensity {level} · along these {km} km of line, about {ours} of our soldiers and {theirs} enemy',
+  'command.battle.hotSub': 'Heaviest fighting {d} away · intensity {level} · about {ours} ours and {theirs} enemy along these {km} km',
+  'command.battle.subBroken': 'Breakthrough · the {nation} defence has collapsed: about {theirs} enemy left against {ours} of ours along these {km} km, surrendering or fleeing',
+  'command.battle.hotSubBroken': 'Heaviest fighting {d} away · breakthrough: about {theirs} enemy left against {ours} of ours along these {km} km, surrendering or fleeing',
+  'command.battle.subBrokenOurs': 'Our line is broken · about {ours} of ours hold out against {theirs} enemy along these {km} km',
+  'command.battle.hotSubBrokenOurs': 'Heaviest fighting {d} away · our line is broken: about {ours} of ours against {theirs} enemy along these {km} km',
+  'command.battle.noticeBroken': 'Breakthrough on the front against {nation}: our offensive outnumbers them more than 5 to 1 and their defence has collapsed. About {theirs} enemy soldiers are left against {ours} of ours along these {km} km; they surrender or fall back, and only the ground and supplies slow our advance now.',
+  'command.battle.noticeBrokenOurs': 'Our line against {nation} is broken: they outnumber us more than 5 to 1. About {ours} of ours are left against {theirs} enemy along these {km} km. Without reinforcements (high priority on this front, divisions, allies) this stretch will fall.',
   'command.battle.level.0': 'low',
   'command.battle.level.1': 'medium',
   'command.battle.level.2': 'high',

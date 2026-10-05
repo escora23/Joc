@@ -39,12 +39,33 @@ export function wireForcesNews(hs: HudShared, alerts: AlertCenter): void {
 
   // Captured trade ships: owner item 30's navalNews.ts (shipStopped) reports them with the rest of the war at sea.
 
+  // Gauntlet round 1: the refusals of one order fold into ONE line. A click sends one command per (order, target)
+  // group, and a box of units may answer with several acks in the same tick: they are gathered for 250 ms and told
+  // once («Orden rechazada para 5 unidades: Las divisiones no navegan…»), on the order chip at the cursor while it is
+  // shown (the units are still selected), else as one grouped alert entry that a repeat updates (×n) instead of
+  // stacking a card per unit.
+  let fold: { refused: number; total: number; why: string; timer: number } | null = null;
+  const flush = () => {
+    const f = fold;
+    fold = null;
+    if (!f || f.refused <= 0) return;
+    const text = f.refused === f.total
+      ? (f.total > 1 ? t('g1.order.refusedAll', { n: f.total, why: f.why }) : t('alert.order.refused', { why: f.why }))
+      : t('g1.order.refusedSome', { n: f.refused, m: f.total, why: f.why });
+    hs.orderNote = { text, bad: f.refused === f.total, until: performance.now() + 4500 };
+    const chipShown = !!document.querySelector('.fu-cursor-layer .fu-chip:not(.fu-hidden)');
+    if (chipShown) return;
+    alerts.raise({ kind: 'notice', severity: f.refused === f.total ? 'warning' : 'info', icon: 'warning', groupKey: 'order:refused', ttlSec: 7, title: text });
+  };
   bus.on('orderAck', (e) => {
-    if (e.owner !== HUMAN_ID || e.accepted.length || !e.errorKey) return;
-    const u = view().units.get(e.unitIds[0]);
-    bus.emit('toast', {
-      text: t('alert.order.refused', { why: reasonText(hs, { key: e.errorKey, params: e.errorParams }) }) + (u ? ` (${unitLabel(u.type, u.serial)})` : ''),
-      kind: 'warning', durationMs: 3500,
-    });
+    if (e.owner !== HUMAN_ID) return;
+    const key = e.accepted.length ? e.refusedKey : e.errorKey;
+    const refused = e.unitIds.length - e.accepted.length;
+    if (!fold) fold = { refused: 0, total: 0, why: '', timer: window.setTimeout(flush, 250) };
+    fold.total += e.unitIds.length;
+    if (refused > 0 && key) {
+      fold.refused += refused;
+      if (!fold.why) fold.why = reasonText(hs, { key, params: e.accepted.length ? e.refusedParams : e.errorParams });
+    }
   });
 }

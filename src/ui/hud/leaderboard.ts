@@ -1,5 +1,5 @@
 // FRONT ULTRA — leaderboard (owner: ui): top 10 nations by territory with the player's rank pinned, allies
-// and traitors marked. Rows are pre-built and patched in place (<= 4 Hz); clicking a row selects the nation
+// and traitors marked; the independent territories (stateless militias) apart, in one collapsed line. Rows are pre-built and patched in place (<= 4 Hz); clicking a row selects the nation
 // and flies the camera there.
 
 import { h, setStyle, setText, toggleClass } from '../dom';
@@ -73,6 +73,31 @@ export function createLeaderboard(hs: HudShared): Leaderboard {
   const pinnedSep = h('div', { class: 'fu-lb-gap' }, '···');
   const pinned = mkRow(true);
   body.append(pinnedSep, pinned.el);
+  // Gauntlet round 1: the ranking is of NATIONS. Stateless independent territories (no diplomacy, never attack) are
+  // one collapsed line under it; opened, it lists the largest of them without a rank.
+  const TRIBE_ROWS = 5;
+  let tribesOpen = false;
+  const tribeCount = h('span', { class: 'fu-lb-pct fu-mono' });
+  const tribeChev = h('span', { class: 'fu-lb-tribes-chev' }, icon('chevronRight'));
+  const tribeHead = h('div', { class: 'fu-lb-row fu-lb-tribes' }, h('span', { class: 'fu-lb-rank fu-mono' }, '—'),
+    h('span', { class: 'fu-lb-who' }, tribeChev, h('span', { class: 'fu-lb-name fu-lb-tribes-name' })), tribeCount, h('span', { class: 'fu-lb-troops fu-mono' }));
+  tip(tribeHead, () => ({ title: t('g1.lb.tribes'), text: t('g1.lb.tribes.tip') }));
+  const tribeRows: Row[] = [];
+  const tribeBox = h('div', { class: 'fu-lb-tribebox fu-hidden' });
+  for (let i = 0; i < TRIBE_ROWS; i++) {
+    const r = mkRow(false);
+    r.el.classList.add('is-tribe');
+    tribeRows.push(r);
+    tribeBox.append(r.el);
+  }
+  tribeHead.addEventListener('click', () => {
+    tribesOpen = !tribesOpen;
+    toggleClass(tribeBox, 'fu-hidden', !tribesOpen);
+    toggleClass(tribeHead, 'is-open', tribesOpen);
+    hs.sound('toggle');
+    refresh();
+  });
+  body.append(tribeHead, tribeBox);
 
   let collapsed = false;
   const toggle = () => {
@@ -83,6 +108,7 @@ export function createLeaderboard(hs: HudShared): Leaderboard {
   collapse.addEventListener('click', toggle);
 
   const sorted: PlayerView[] = [];
+  const tribes: PlayerView[] = [];
   function fill(r: Row, p: PlayerView, rank: number, land: number, maxTiles: number): void {
     r.id = p.id;
     r.el.style.display = '';
@@ -112,8 +138,10 @@ export function createLeaderboard(hs: HudShared): Leaderboard {
     const view = ctx.sim.view;
     const land = view.world?.landTiles ?? 1;
     sorted.length = 0;
-    for (const p of view.playerList) if (p.alive && p.tiles > 0) sorted.push(p);
+    tribes.length = 0;
+    for (const p of view.playerList) if (p.alive && p.tiles > 0) (p.kind === 'tribe' ? tribes : sorted).push(p);
     sorted.sort((a, b) => b.tiles - a.tiles);
+    tribes.sort((a, b) => b.tiles - a.tiles);
     const maxTiles = sorted.length ? sorted[0].tiles : 1;
     let meIndex = -1;
     for (let i = 0; i < sorted.length; i++) if (sorted[i].id === HUMAN_ID) meIndex = i;
@@ -129,6 +157,25 @@ export function createLeaderboard(hs: HudShared): Leaderboard {
     pinnedSep.style.display = showPinned ? '' : 'none';
     pinned.el.style.display = showPinned ? '' : 'none';
     if (showPinned) fill(pinned, sorted[meIndex], meIndex + 1, land, maxTiles);
+    tribeHead.style.display = tribes.length ? '' : 'none';
+    let tribeTiles = 0;
+    for (const p of tribes) tribeTiles += p.tiles;
+    const tp = (tribeTiles / land) * 100;
+    setText(tribeCount, `${tp >= 10 ? tp.toFixed(1) : tp.toFixed(2)}%`);
+    let tribeTroops = 0;
+    for (const p of tribes) tribeTroops += p.troops;
+    setText(tribeHead.querySelector('.fu-lb-tribes-name') as HTMLElement, t('g1.lb.tribesN', { n: tribes.length }));
+    setText(tribeHead.querySelector('.fu-lb-troops') as HTMLElement, formatCompact(tribeTroops));
+    for (let i = 0; i < TRIBE_ROWS; i++) {
+      const p = tribesOpen ? tribes[i] : undefined;
+      if (p) {
+        fill(tribeRows[i], p, 0, land, maxTiles);
+        setText(tribeRows[i].rank, '·');
+      } else {
+        tribeRows[i].id = 0;
+        tribeRows[i].el.style.display = 'none';
+      }
+    }
   }
 
   return { el, refresh, toggle };

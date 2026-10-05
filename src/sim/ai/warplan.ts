@@ -504,10 +504,12 @@ function runPlan(ctx: AiContext, b: Brain, p: SimPlayer, w: SimWar, reserve: num
   // Front priorities: alta where the enemy attacks (or masses while it mobilizes), normal elsewhere.
   const fronts = g.fronts.frontsOfPair(p.id, enemyId);
   const enemyMobilizing = w.a === enemyId && g.tick < w.mobilizeUntilTick;
+  // A front broken through (§4.4b): every man that can be spared goes there, the quiet fronts of this war drop to baja.
+  const broken = g.incomingAttacks(p.id).some((a) => a.attacker === enemyId && !!a.breakthrough);
   for (const f of fronts) {
     const s = f.a === p.id ? 0 : 1;
     const hit = f.offensive[s === 0 ? 1 : 0] !== 0 || (enemyMobilizing && f.length >= 4);
-    const want = hit ? 2 : 1;
+    const want = hit ? 2 : broken ? 0 : 1;
     if (f.priority[s] !== want) g.issue(p.id, { type: 'setFrontPriority', frontKey: f.key, priority: want as 0 | 1 | 2 });
   }
   const mobUntil = g.war.mobilizingUntil(p.id, enemyId);

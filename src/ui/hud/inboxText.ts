@@ -10,7 +10,7 @@ import { describeTile } from '../places';
 import type { AlertInput } from '../../shared/events';
 import { DELIBERATION_TICKS, HUMAN_ID, INBOX_MIN_REAL_MS, MAP_W, TILE_COUNT } from '../../shared/constants';
 import { neighbors4, tileToLatLon } from '../../shared/geo';
-import { formatCompact, formatNumber, t } from '../../shared/i18n';
+import { formatCompact, formatNumber, hasKey, t } from '../../shared/i18n';
 import type { ProposalView, ReasonView } from '../../shared/types';
 
 export const OPEN_STATUS = (s: string) => s === 'considering' || s === 'pending';
@@ -24,8 +24,36 @@ function oneDecimal(v: number): string {
   return (Math.round(v * 10) / 10).toString().replace('.', t('num.dec'));
 }
 
-/** A reason as a readable clause, its parameters resolved («Compartimos un enemigo: Alemania»). */
+/**
+ * A reason as a readable clause, its parameters resolved («Compartimos un enemigo: Alemania»). Gauntlet round 1: an
+ * answer spoken by a nation is a sentence, not its arithmetic: «Aún no confiamos lo bastante en ti; un gesto más nos
+ * convencería». The figures behind it (opinion, the gold's weight, the threshold) are in reasonDetail(), shown as the
+ * tooltip of the answer and in the nation panel's opinion breakdown.
+ */
 export function reasonText(hs: HudShared, r: ReasonView): string {
+  if (r.key === 'answer.lowOpinion' || r.key === 'answer.lowOpinionGold') {
+    const score = Number(r.params?.score ?? 0), need = Number(r.params?.need ?? 0);
+    const gap = need - score;
+    const tier = gap <= 10 ? 'close' : gap <= 35 ? 'far' : 'none';
+    return t(`answer.trust.${tier}${r.key === 'answer.lowOpinionGold' ? '.gold' : ''}`);
+  }
+  if (r.key.startsWith('answer.') && hasKey(`${r.key}.say`)) return t(`${r.key}.say`, reasonParams(hs, r));
+  return t(r.key, reasonParams(hs, r));
+}
+
+/** The figures behind an answer («Opinión 0 + 25 por tu oro = 25; hace falta 30»), '' when it has none to show. */
+export function reasonDetail(hs: HudShared, r: ReasonView): string {
+  if (!r.key.startsWith('answer.') || !r.params || !Object.values(r.params).some((v) => typeof v === 'number')) return '';
+  if (r.key !== 'answer.lowOpinion' && r.key !== 'answer.lowOpinionGold' && !hasKey(`${r.key}.say`)) return '';
+  return t(r.key, reasonParams(hs, r));
+}
+
+/** Every answer's figures, one per line (the tooltip of an answer). */
+export function reasonsDetail(hs: HudShared, rs: ReasonView[] | undefined): string[] {
+  return (rs ?? []).map((r) => reasonDetail(hs, r)).filter((s) => s !== '');
+}
+
+function reasonParams(hs: HudShared, r: ReasonView): Record<string, string | number> {
   const params: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(r.params ?? {})) {
     if ((k === 'player' || k === 'enemy' || k === 'ally' || k === 'target') && typeof v === 'number') params[k] = v === HUMAN_ID ? t('news.you') : hs.name(v) || t('news.rebels');
@@ -36,7 +64,7 @@ export function reasonText(hs: HudShared, r: ReasonView): string {
     else if (typeof v === 'number') params[k] = k === 'ratio' || !Number.isInteger(v) ? oneDecimal(v) : formatNumber(v);
     else params[k] = v;
   }
-  return t(r.key, params);
+  return params;
 }
 
 /** «Compartimos un enemigo: Alemania» (+20) — value shown for opinion reasons. */
@@ -170,7 +198,8 @@ export function proposalAlert(hs: HudShared, p: ProposalView): AlertInput | null
     const title = t(`proposal.answer.${p.status}`, { name, what });
     const body = reasonsQuoted(hs, p.reasons) + (p.gold > 0 ? ` · ${t(good ? 'proposal.goldPaid' : 'proposal.goldBack', { gold: formatCompact(p.gold) })}` : '');
     const kind = p.status === 'expired' || p.status === 'cancelled' ? 'proposalExpired' : 'proposalAnswered';
-    return { ...base, kind, severity: sev, icon: good ? 'check' : 'scroll', ttlSec: 45, title, body };
+    const detail = reasonsDetail(hs, p.reasons).join(' · ') || undefined;
+    return { ...base, kind, severity: sev, icon: good ? 'check' : 'scroll', ttlSec: 45, title, body, detail };
   }
   // Addressed to the human.
   if (p.status === 'pending') {

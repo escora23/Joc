@@ -19,94 +19,27 @@ import { openModal, type ModalHandle } from '../modal';
 import { tip } from '../tooltip';
 import { tx } from '../tx';
 import { describeXY } from '../places';
-import { etaText, frontName, outlookOf } from './forcesInfo';
+import { etaText, frontName } from './forcesInfo';
 import { offensiveKmh, offensiveStatus, troopsText } from './frontsInfo';
 import type { HudShared } from './shared';
-import {
-  AIR_DENIAL_ADVANCE_MUL, AIR_SUPERIORITY_ADVANCE_MUL, DRONE_ADVANCE_MUL, DRONE_ENEMY_ADVANCE_MUL, ENGAGEMENT_RATE, HUMAN_ID, MAP_W,
-  TICKS_PER_GAME_DAY, TILE_KM,
-} from '../../shared/constants';
+import { MAP_W, TILE_KM } from '../../shared/constants';
 import { formatNumber, t } from '../../shared/i18n';
-import { advanceKmh as advanceAt, offensiveOutlook, predictOffensive, tileKm } from '../../shared/orders';
+import { tileKm } from '../../shared/orders';
 import type { AttackView, FrontView, OffensiveIntensity } from '../../shared/types';
-import { viewRules } from '../../sim/rulesView';
+import { forecastOffensive, frontNearTile, runningOffensive, type OffensiveForecast } from './offensiveForecast';
 
 const SHARES = [0.25, 0.5, 0.75, 1];
-/** Intensity rules as the sim applies them (sim/attacks.ts): shown in the preview so the numbers agree. */
-const ASSAULT_POWER = 1.25, ASSAULT_OWN_LOSS = 1.6, ASSAULT_ENEMY_LOSS = 1.2, HOLD_ENGAGEMENT = 0.25;
 
 let current: ModalHandle | null = null;
 
 /** The human's front with `enemy` nearest to tile (continuous distance to its contact line), if any. */
 export function frontNear(hs: HudShared, enemy: number, tile: number): FrontView | null {
-  const v = hs.ctx.sim.view;
-  const tx0 = (tile % MAP_W) + 0.5, ty0 = Math.floor(tile / MAP_W) + 0.5;
-  let best: FrontView | null = null, bd = Infinity;
-  for (const f of v.fronts) {
-    if (!((f.a === HUMAN_ID && f.b === enemy) || (f.b === HUMAN_ID && f.a === enemy))) continue;
-    const s = f.samples;
-    for (let i = 0; i < s.length >> 1; i++) {
-      const d = tileKm(tx0, ty0, s[i * 2], s[i * 2 + 1]);
-      if (d < bd) {
-        bd = d;
-        best = f;
-      }
-    }
-  }
-  return best;
+  return frontNearTile(hs.ctx.sim.view, enemy, tile);
 }
 
 /** The human's own running offensive on front `f` (not retreating). */
 export function ownOffensiveOn(hs: HudShared, f: FrontView | null, enemy: number): AttackView | null {
-  const v = hs.ctx.sim.view;
-  return v.attacks.find((a) => a.attacker === HUMAN_ID && a.defender === enemy && a.id > 0 && !a.naval && a.state !== 'retreating'
-    && (f ? a.frontKey === f.key : true)) ?? null;
-}
-
-export interface OffensivePreview {
-  troops: number;
-  garrison: number;
-  ratio: number;
-  kmh: number;
-  corridorKm: number;
-  ownLossDay: number;
-  enemyLossDay: number;
-  verdict: 'advance' | 'grind' | 'stall' | 'hold';
-  startsInTicks: number;
-  /** #25: the sky over that front (1 ours, -1 theirs, 0 contested / none) and the drone swarms supporting each side. */
-  air: number;
-  casOwn: number;
-  casTheir: number;
-}
-
-/** What an offensive (or a reinforcement) of `troops` at `intensity` would do on the front nearest `tile`. */
-export function previewOffensive(hs: HudShared, enemy: number, tile: number, troops: number, intensity: OffensiveIntensity): OffensivePreview {
-  const r = viewRules(hs.ctx.sim.view);
-  const pr = predictOffensive(r, HUMAN_ID, enemy, troops, tile);
-  const G = Math.max(1, pr.garrison);
-  // #25: the aircraft already over that front count as the sim counts them (attacks.ts): the side with more fighters
-  // on patrol owns the sky (+10 % / −10 % speed) and cancels the other side's drones (+15 % power and speed each).
-  const f = frontNear(hs, enemy, tile);
-  const side = f ? (f.a === HUMAN_ID ? 0 : 1) : 0;
-  const airOwn = f ? (side === 0 ? f.airA : f.airB) ?? 0 : 0, airTheir = f ? (side === 0 ? f.airB : f.airA) ?? 0 : 0;
-  const air = airOwn > airTheir ? 1 : airTheir > airOwn ? -1 : 0;
-  const casOwn = f && air >= 0 ? (side === 0 ? f.casA : f.casB) ?? 0 : 0;
-  const casTheir = f && air <= 0 ? (side === 0 ? f.casB : f.casA) ?? 0 : 0;
-  const ratio = (troops / G) * (intensity === 2 ? ASSAULT_POWER : 1) * (casOwn > 0 ? DRONE_ADVANCE_MUL : 1);
-  let kmh = intensity === 0 ? 0 : advanceAt(ratio);
-  if (casOwn > 0) kmh *= DRONE_ADVANCE_MUL;
-  if (casTheir > 0) kmh *= DRONE_ENEMY_ADVANCE_MUL;
-  if (air > 0) kmh *= AIR_SUPERIORITY_ADVANCE_MUL;
-  if (air < 0) kmh *= AIR_DENIAL_ADVANCE_MUL;
-  // Casualties per tick (§4.6), in troops: E = rate × min(Pa, Pd); the attacker loses E·√(Pd/Pa), the defender E·√(Pa/Pd).
-  const Pa = troops * (intensity === 2 ? ASSAULT_POWER : 1), Pd = G;
-  const E = ENGAGEMENT_RATE * Math.min(Pa, Pd) * (intensity === 0 ? HOLD_ENGAGEMENT : 1);
-  const ownPow = E * Math.sqrt(Pd / Math.max(1, Pa)) * (intensity === 2 ? ASSAULT_OWN_LOSS : 1);
-  const enemyPow = E * Math.sqrt(Pa / Pd) * (intensity === 2 ? ASSAULT_ENEMY_LOSS : 1);
-  const ownLossDay = Math.min(troops, (ownPow * troops) / Math.max(1, Pa)) * TICKS_PER_GAME_DAY;
-  const enemyLossDay = enemyPow * TICKS_PER_GAME_DAY;
-  const verdict = intensity === 0 ? 'hold' : ratio >= 1.7 ? 'advance' : ratio >= 1 ? 'grind' : 'stall';
-  return { troops, garrison: pr.garrison, ratio, kmh, corridorKm: pr.frontageTiles * TILE_KM, ownLossDay, enemyLossDay, verdict, startsInTicks: pr.startsInTicks, air, casOwn, casTheir };
+  return runningOffensive(hs.ctx.sim.view, f, enemy);
 }
 
 /**
@@ -179,7 +112,8 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number, 
     const total = (cur ? cur.troops : 0) + send;
     setText(troopsOut, troopsText(send));
     toggleClass(shareSeg.el, 'is-disabled', !addTroops);
-    const p = previewOffensive(hs, enemy, tile, Math.max(1, total), intensity);
+    // Gauntlet 29a: the hover, this dialog and the Guerra panel read one forecast (offensiveForecast.ts).
+    const p = forecastOffensive(v, enemy, tile, send, intensity);
     const fn = f ? frontName(hs, f.key) : '';
     setText(where, t('off.where', { front: fn || t('fr.front'), place }));
     const distKm = f ? minDistKm(f, tx0, ty0) : 0;
@@ -187,12 +121,13 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number, 
       row(t('off.row.troops'), cur ? `${troopsText(cur.troops)} + ${troopsText(send)}` : troopsText(send)),
       row(t('off.row.garrison', { name: hs.name(enemy) }), troopsText(p.garrison)),
       row(t('off.row.ratio'), `${formatNumber(p.ratio, 1)} : 1`, p.ratio >= 1.7 ? 'is-go' : p.ratio >= 1 ? 'is-risky' : 'is-bad'),
-      row(t('off.row.corridor'), `${formatNumber(Math.round(p.corridorKm))} km`),
+      row(t('off.row.corridor'), t('g1.off.corridor', { km: formatNumber(Math.round(p.corridorKm)), front: formatNumber(Math.round(p.frontTiles * TILE_KM)) })),
       ...speedRows(cur, p, send, distKm),
       row(t('off.row.lossOwn'), `≈ ${troopsText(p.ownLossDay)}`),
       row(t('off.row.lossEnemy'), `≈ ${troopsText(p.enemyLossDay)}`),
       row(t('off.row.air'), t(p.air > 0 ? 'off.air.own' : p.air < 0 ? 'off.air.their' : 'off.air.none', { own: p.casOwn, their: p.casTheir }), p.air > 0 ? 'is-go' : p.air < 0 ? 'is-bad' : ''),
     );
+    if (p.saturated && p.verdict !== 'hold') table.append(h('div', { class: 'fu-offdlg-row fu-offdlg-limit' }, h('span', null, limitText(p))));
     if (p.startsInTicks > 10) table.append(row(t('off.row.starts'), etaText(hs, p.startsInTicks, false)));
     setText(verdict, t(`off.verdict.${p.verdict}`, { name: hs.name(enemy) }));
     verdict.className = `fu-offdlg-verdict is-${p.verdict}`;
@@ -203,28 +138,35 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number, 
   }
 
   /**
-   * Feedback 3 (29a): a running offensive shows the km/h the badge and the Guerra panel show (measured, the same
-   * status text) and what the reinforcement / intensity change would make of it (offensiveOutlook, the same scaling the
-   * unit cards and «Unirse a la ofensiva» use); a new offensive shows the plains forecast.
+   * Feedback 3 (29a): a running offensive shows the km/h the badge and the Guerra panel show (measured) and what the
+   * reinforcement / intensity change would make of it; a new offensive shows the forecast on that ground (terrain
+   * included), never a plains figure.
    */
-  function speedRows(cur: AttackView | null, p: OffensivePreview, send: number, distKm: number): HTMLElement[] {
+  function speedRows(cur: AttackView | null, p: OffensiveForecast, send: number, distKm: number): HTMLElement[] {
+    const kmhTxt = (k: number) => (k > 0.05 ? t('g1.off.kmh', { v: formatNumber(k, 1), ground: t(`g1.ground.${p.ground}`) }) : t('off.kmh0'));
     if (!cur) {
       return [
-        row(t('off.row.speed'), p.kmh > 0 ? t('off.kmh', { v: formatNumber(p.kmh, 1) }) : t('off.kmh0')),
+        row(t('off.row.speed'), kmhTxt(p.kmh)),
         row(t('off.row.eta'), p.kmh > 0.2 && distKm > 0 ? etaText(hs, Math.round((distKm / p.kmh) * 10), false) : '—'),
       ];
     }
     const v = ctx.sim.view;
-    const now = offensiveKmh(v, cur);
-    const next = offensiveOutlook(outlookOf(cur, now), { troopsMul: (cur.troops + send) / Math.max(1, cur.troops), intensity });
+    const now = p.nowKmh >= 0 ? p.nowKmh : offensiveKmh(v, cur);
     const out = [
       row(t('off.row.now'), offensiveStatus(v, cur, now, 1, false)),
       row(t('off.row.support'), t('off.support', { d: cur.divAtk ?? 0, c: cur.casAtk ?? 0, n: cur.navalAtk ?? 0 })),
     ];
-    if (send > 0 || intensity !== cur.intensity) out.push(row(t('off.row.next'), next.kmh > 0.05 ? `≈ ${formatNumber(next.kmh, 1)} km/h` : t('off.kmh0'), next.kmh > now ? 'is-go' : ''));
-    const k = send > 0 || intensity !== cur.intensity ? next.kmh : now;
+    const changed = send > 0 || intensity !== cur.intensity;
+    if (changed) out.push(row(t('off.row.next'), p.kmh > 0.05 ? `≈ ${formatNumber(p.kmh, 1)} km/h` : t('off.kmh0'), p.kmh > now + 0.05 ? 'is-go' : ''));
+    const k = changed ? p.kmh : now;
     out.push(row(t('off.row.eta'), k > 0.2 && distKm > 0 ? etaText(hs, Math.round((distKm / k) * 10), false) : '—'));
     return out;
+  }
+
+  /** Why more troops add no speed: the ratio is past 3 : 1 and the ground sets the pace. */
+  function limitText(p: OffensiveForecast): string {
+    const cap = formatNumber(Math.max(0.1, p.capKmh), 1);
+    return t(p.ground === 'plains' ? 'g1.off.limit.plains' : 'g1.off.limit.ground', { limit: t(`g1.limitBy.${p.ground}`), cap });
   }
 
   launch.addEventListener('click', () => {
@@ -276,7 +218,7 @@ export function openOffensiveDialog(hs: HudShared, enemy: number, tile: number, 
     paint();
   });
   // The corridor preview stays drawn on the map while the dialog is open.
-  const p0 = previewOffensive(hs, enemy, tile, Math.max(1, Math.floor((view.human?.troops ?? 0) * share)), intensity);
+  const p0 = forecastOffensive(view, enemy, tile, addTroops ? Math.floor((view.human?.troops ?? 0) * share) : 0, intensity);
   ctx.bus.emit('offensivePreview', { tile, frontageTiles: p0.corridorKm / TILE_KM, ratio: p0.ratio, valid: true });
   return handle;
 }
