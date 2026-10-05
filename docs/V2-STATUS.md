@@ -1897,12 +1897,12 @@ SwiftShader, clock at 1x where the item asks for it.
    Playwright's click latency under SwiftShader (2.6 s of 1x before the click reaches the page), not game time.
    E3 (first view) is marginal on the alpine slope: the view ray meets the ground at 150 m, 23° off the hot point.
 2. **#29a one front, one set of numbers, at one moment** (`?shot=g1-offensive-swiss`, the critic's war after 120
-   ticks at 1x, `node tools/g1-verify.mjs --shot g1-offensive-swiss`): hover «relación 157 : 1 → 280,2 : 1 · ataque de
-   501 → 525 km · ≈ 3,6 km/h», dialog «Relación de fuerzas 157 : 1 → 280,2 : 1 · Anchura 501 → 525 km (el frente mide
-   525 km) · Ahora 3,6 km/h · ruptura · con este cambio ≈ 3,6 · bajas enemigas ≈ 3800» (= the garrison on that front),
-   Guerra panel «relación 157 : 1 · ataque de 501 km · 3,6 km/h · ruptura (al máximo…)». A reinforcement now shows the
-   offensive as it is (the panel's figure) and after the change (`OffensiveForecast.ratioNow / corridorKmNow`,
-   `g1.tt.reinforceNow`, `g1.off.corridorNow`).
+   ticks at 1x, `node tools/g1-verify.mjs --shot g1-offensive-swiss`, shots/fix-app-integration/g1b): hover «relación
+   131,5 : 1 → 234,2 : 1 · ataque de 500 km · ≈ 3,4 km/h · más tropas no aceleran…», dialog «Relación de fuerzas
+   131,5 : 1 → 234,2 : 1 · 500 km (el frente mide 500 km) · Ahora 3,4 km/h · ruptura · con este cambio ≈ 3,4 · bajas
+   enemigas ≈ 4500» (= the garrison on that front), Guerra panel «relación 131,5 : 1 · ataque de 500 km · 3,4 km/h ·
+   ruptura (al máximo…)». A reinforcement shows the offensive as it is (the panel's figure) and after the change
+   (`OffensiveForecast.ratioNow / corridorKmNow`, `g1.off.corridorNow`; the width arrow only when it changes).
 3. **#24 texts.** The piracy question and the stop panel tell a troop convoy from a merchant: own body («ese buque
    lleva tropas, no carga…»), hail («Convoy de tropas, aquí…»), war and peace notes and the opinion figure for turning
    it back (−10, not the −15 of seizing cargo). The command land line reads the holder under the vehicle by the same
