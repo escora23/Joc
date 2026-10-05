@@ -3097,7 +3097,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     const view = ctx.sim.view;
     const ll = frame.latLonOfScene(P.pos.x, P.pos.z, { lat: 0, lon: 0 });
     const place = describePlace(view, ll.lat, ll.lon).text;
-    const o = landOwner;
+    // Who holds the ground under the vehicle now, by the same rule as the border notices (the sub-tile line near a
+    // front): the status line and «Frontera con X a N km» never disagree about which side of the line the unit is on
+    // (landOwner lags behind while a crossing is being asked or was refused).
+    const o = holderOfScene(P.pos.x, P.pos.z);
     const inc = myIncursion();
     const tile = tileIndex(tileOf(P.pos.x, P.pos.z).x, tileOf(P.pos.x, P.pos.z).y);
     const water = ctx.world ? isWaterTerrain(ctx.world.terrain[tile]) : false;

@@ -1882,3 +1882,47 @@ Not verified in a long real game: the capital-loss and objective texts were chec
 * `pace-audit game` (seed 11, Normal): 15/16, hegemony at 43,520 (T14 pass). T33 still fails: first AI war on the
   autopilot human at 13,861 (target ≤ 12,000), but the parent commit ae31b3a measured 32,564 and no T14 end (time limit),
   so this is an improvement, not a regression; the longer warning on the human accounts for ~360 ticks of it.
+
+## Gauntlet round 1 — app-integration fixer (2026-10-05)
+
+Shots and logs: `shots/fix-app-integration/` (entry1x, entry1x-b, g1, w2b, naval). Server: no-HMR dev server, Chromium +
+SwiftShader, clock at 1x where the item asks for it.
+
+1. **#26 take control at 1x (re-measured on the latest code).** `node tools/f32-verify.mjs --only entry1x` on the staged
+   Spain–Switzerland war, «Tomar el control aquí» clicked from the Guerra panel with the clock RUNNING at 1x: the march
+   chains its legs to contact (32.2 km, 3 legs, stop «arrived», 11.2 real s), phase `play` 30 real s after the click
+   (63 s at 640×360 in `tools/scratch/take1x.mjs` under a load of 14), nearest hostile 414 m, battle active (line
+   362 m), no «Pulsa G», no «la línea se mueve más deprisa» (E2 PASS). The world waits from the click: the tick log
+   (`take1x.mjs`) shows `tactical/1` and no tick between the click landing and the march; the E1 «41 ticks» row is
+   Playwright's click latency under SwiftShader (2.6 s of 1x before the click reaches the page), not game time.
+   E3 (first view) is marginal on the alpine slope: the view ray meets the ground at 150 m, 23° off the hot point.
+2. **#29a one front, one set of numbers, at one moment** (`?shot=g1-offensive-swiss`, the critic's war after 120
+   ticks at 1x, `node tools/g1-verify.mjs --shot g1-offensive-swiss`): hover «relación 157 : 1 → 280,2 : 1 · ataque de
+   501 → 525 km · ≈ 3,6 km/h», dialog «Relación de fuerzas 157 : 1 → 280,2 : 1 · Anchura 501 → 525 km (el frente mide
+   525 km) · Ahora 3,6 km/h · ruptura · con este cambio ≈ 3,6 · bajas enemigas ≈ 3800» (= the garrison on that front),
+   Guerra panel «relación 157 : 1 · ataque de 501 km · 3,6 km/h · ruptura (al máximo…)». A reinforcement now shows the
+   offensive as it is (the panel's figure) and after the change (`OffensiveForecast.ratioNow / corridorKmNow`,
+   `g1.tt.reinforceNow`, `g1.off.corridorNow`).
+3. **#24 texts.** The piracy question and the stop panel tell a troop convoy from a merchant: own body («ese buque
+   lleva tropas, no carga…»), hail («Convoy de tropas, aquí…»), war and peace notes and the opinion figure for turning
+   it back (−10, not the −15 of seizing cargo). The command land line reads the holder under the vehicle by the same
+   rule as the border notices (`holderOfScene`), so «X · en paz» and «Frontera con X a 0,2 km» can no longer disagree
+   about which side of the line the unit is on. Long command notices (march ended, breakthrough) are sentence case,
+   left-aligned and sit higher, not four lines of capitals over the fight. (The march's false «más deprisa» reason and
+   «la capital se traslada a Madrid» were fixed by the command and UI fixers; re-checked: neither appears.)
+4. **#10 ownership up close** (`render/globe/earth.ts`, `glsl.ts`): each side of a border carries a band of its owner's
+   colour (10-22 px, fading inward, only below ~300 km) and the close fill is a little stronger (0.13 → 0.17 at ≤ 10 km,
+   min-fill step 0.07 → 0.11). zoom-8: the two sides measure (126,78,41) vs (119,77,95); w2-verify zoom PASS (zoom-40
+   ΔE 36.2, zoom-8 ΔE 32.5, grid peak 0.03). **#22 / #10 naval arrows** re-measured with `tools/_probe-naval.mjs`: 47
+   transports, 0 real landings, **0 arrows drawn** (the battle fixer's rule holds).
+5. **#17 HUD clutter: stale alerts.** An alert older than three game days leaves the feed whatever its real-time timer
+   says (after a fast-forward or a long 4x stretch the feed showed «hace 390 h» war news); the Registro keeps it.
+6. **Spawn phase no longer advances the date** (`sim/game.ts spawnClock`): the tick stays at 0 while the human picks a
+   capital; the spawn deadline and the countdown run on their own counter and are published on the tick scale. Headless
+   (`npx tsx tools/scratch/spawnday.mjs`): 3 minutes of choosing → tick 0, play starts at tick 0 (day 1); a game left
+   unpicked auto-spawns at the deadline and also starts at tick 0. No autosave before day 2.
+
+Not done here: AI geography (an AI nation named after a real country grows over its absent neighbours' land, e.g.
+«Suiza» holding Toulouse when France is not in the game) — the nations are placed at their real capitals; making the
+human's real neighbours always play needs the human's capital, which is only known after the spawn phase. Item 32's
+alpine first view of the staged war (scattered figures on 25-30° slopes) belongs to the battle fixer's open note.
