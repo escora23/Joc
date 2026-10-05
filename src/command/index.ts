@@ -425,7 +425,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     hemi.groundColor.copy(a.groundAmbient);
     hemi.intensity = a.ambientIntensity;
     // Owner item 32: the soldiers' sky fill follows the sky light (a figure against the sun is not a black cut-out).
-    world?.soldierMats.fill.value.copy(a.skyAmbient).multiplyScalar(a.ambientIntensity * 0.3);
+    world?.soldierMats.fill.value.copy(a.skyAmbient).multiplyScalar(a.ambientIntensity * 0.17);
     sun.color.copy(a.lightColor);
     sun.intensity = a.lightIntensity;
     fog.color.copy(a.fog);
@@ -2048,6 +2048,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
   // Travel (×10 and above): the formation marches at the unit's strategic speed
   // -----------------------------------------------------------------------------------------------
   const TR_N = new THREE.Vector3();
+  const TR_FOOT = { y: 0, tiltP: 0, tiltR: 0 };
   function passable(x: number, z: number): boolean {
     const g = ground!;
     const h = g.heightAt(x, z);
@@ -2130,11 +2131,10 @@ export function createCommandMode(ctx: GameContext): CommandApi {
     }
     // Ground clamp, attitude.
     if (kind === 'tank') {
-      P.pos.y = ground.heightAt(P.pos.x, P.pos.z);
-      ground.normalAt(P.pos.x, P.pos.z, TR_N, 3);
-      const cyw = Math.cos(P.yaw), syw = Math.sin(P.yaw);
-      P.tiltP = -Math.atan2(TR_N.x * -syw + TR_N.z * -cyw, TR_N.y);
-      P.tiltR = -Math.atan2(TR_N.x * cyw + TR_N.z * -syw, TR_N.y);
+      ground.footprint(P.pos.x, P.pos.z, P.yaw, 6.6, 2.84, TR_FOOT);
+      P.pos.y = TR_FOOT.y;
+      P.tiltP = TR_FOOT.tiltP;
+      P.tiltR = TR_FOOT.tiltR;
     } else if (kind === 'ship') {
       P.pos.y = 0;
       P.quat.setFromEuler(new THREE.Euler(0, P.yaw, 0, 'YXZ'));
@@ -2160,7 +2160,12 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         m.pos.y = P.pos.y + sl.y;
         m.quat.copy(P.quat);
       } else if (kind === 'ship') m.pos.y = 0;
-      else m.pos.y = ground.heightAt(tx, tz);
+      else {
+        ground.footprint(tx, tz, m.yaw, m.kind === 'tank' ? 6.6 : 5.6, m.kind === 'tank' ? 2.84 : 2.2, TR_FOOT);
+        m.pos.y = TR_FOOT.y;
+        m.tiltP = TR_FOOT.tiltP;
+        m.tiltR = TR_FOOT.tiltR;
+      }
     }
   }
 
@@ -3934,7 +3939,7 @@ export function createCommandMode(ctx: GameContext): CommandApi {
         camera.position.copy(outroPos).lerp(tmp, easeInOutCubic(k) * 0.9);
         tmp.copy(e.pos).addScaledVector(tmp2, kind === 'jet' ? 1400 : 260);
         camera.lookAt(tmp.lerp(outroLook, 1 - easeInOutCubic(k)));
-      } else if (travel && requested >= 300 && P) {
+      } else if (phase === 'play' && requested >= 300 && P) {
         // (By the rate asked, not the throttled one: a terrain-throttle dip on slow hardware no longer drops the view
         // into the chase camera, where a village roof could fill the frame for a second.)
         // High compression: the camera rises to ~1 km behind the column and looks ahead, pitched so the column stands

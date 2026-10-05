@@ -30,7 +30,7 @@ export class FarRoads {
   segments = 0;
 
   constructor() {
-    this.mat = new THREE.MeshBasicMaterial({ color: 0x5a544a, fog: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    this.mat = new THREE.MeshBasicMaterial({ color: 0x47423b, fog: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     const uPx = this.uPxAngle;
     this.mat.onBeforeCompile = (sh) => {
       sh.uniforms.uPxAngle = uPx;
@@ -43,8 +43,15 @@ uniform float uPxAngle;`)
 {
   vec4 wp = modelMatrix * vec4(transformed, 1.0);
   float dist = length(cameraPosition - wp.xyz);
-  float halfW = max(${MIN_HALF_M.toFixed(1)}, dist * uPxAngle * ${(PX / 2).toFixed(2)});
   vec2 n = normalize(vec2(-aDir.y, aDir.x));
+  // Seen from a low angle the ribbon's width is foreshortened by the sine of the view's depression wherever it runs
+  // across the line of sight (a road crossing the view at 10 km from 1 km up drew half a pixel): widen it by the
+  // inverse of that foreshortening so it stays ~PX px wide on screen whatever its heading.
+  vec2 vd = normalize(wp.xz - cameraPosition.xz + vec2(1e-3, 0.0));
+  float sDep = clamp((cameraPosition.y - wp.y) / max(1.0, dist), 0.0, 1.0);
+  float along = dot(n, vd), across = dot(n, vec2(-vd.y, vd.x));
+  float fk = sqrt(across * across + along * along * sDep * sDep);
+  float halfW = max(${MIN_HALF_M.toFixed(1)}, dist * uPxAngle * ${(PX / 2).toFixed(2)} / max(fk, 0.12));
   transformed.xz += n * aSide * halfW;
   // A little more lift far out, where the ground under the ribbon is a coarser level than the one drawn.
   transformed.y += dist * 0.0015;
