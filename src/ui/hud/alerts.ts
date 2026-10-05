@@ -75,6 +75,8 @@ const FEED_KEEP = 10;
 const FOLD_MS = 6000;
 const LOG_MAX = 200;
 const DEFAULT_TTL_MS = 20_000;
+/** Game age (ticks) after which a non-sticky entry leaves the feed even if its real-time timer has not run out. */
+const STALE_TICKS = 720;
 
 export function createAlertCenter(hs: HudShared): AlertCenter {
   const ctx = hs.ctx;
@@ -582,9 +584,13 @@ export function createAlertCenter(hs: HudShared): AlertCenter {
     lastMs = now;
     const paused = (view().speed === 0 && ctx.app.state === 'playing') || holding();
     if (held.length && !holding()) flushHeld();
+    const tickNow = view().tick;
     for (const a of all) {
       if (!a.el || a.acknowledged) continue;
-      if (!paused && Number.isFinite(a.leftMs)) {
+      // An entry is news of a moment: three game days later (a fast-forward, a long 4x stretch) it leaves the feed
+      // whatever its real-time timer says («hace 390 h» on screen is clutter); the Registro keeps it.
+      if (Number.isFinite(a.leftMs) && tickNow - a.updatedTick > STALE_TICKS) a.leftMs = 0;
+      if ((!paused || a.leftMs <= 0) && Number.isFinite(a.leftMs)) {
         a.leftMs -= dMs;
         if (a.leftMs <= 0) {
           const el = a.el;
