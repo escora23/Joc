@@ -143,9 +143,11 @@ export function createCursorLayer(hs: HudShared): CursorLayer {
       v: formatNumber(fc.kmh, 1), ground: t(`g1.ground.${fc.ground}`),
     };
     // A reinforcement reads «now → after» (the Guerra panel shows the offensive as it is now: the same first number).
-    let text = fc.running && fc.ratioNow > 0
-      ? t('g1.tt.reinforceNow', { ...params, r0: formatNumber(fc.ratioNow, 1), km0: formatNumber(Math.round(fc.corridorKmNow)) })
-      : t(fc.running ? 'g1.tt.reinforce' : 'g1.tt.offensive', params);
+    if (fc.running && fc.ratioNow > 0) {
+      params.r = `${formatNumber(fc.ratioNow, 1)} : 1 → ${params.r}`;
+      if (Math.round(fc.corridorKmNow) !== Math.round(fc.corridorKm)) params.km = `${formatNumber(Math.round(fc.corridorKmNow))} → ${params.km}`;
+    }
+    let text = t(fc.running ? 'g1.tt.reinforce' : 'g1.tt.offensive', params);
     if (fc.ratio < 1) text += ` · ${t('tt.offensive.stall')}`;
     else if (fc.saturated) text += ` · ${t('g1.tt.capped', { limit: t(`g1.limitBy.${fc.ground}`) })}`;
     return { text, cls: fc.ratio >= 2 ? 'is-go' : fc.ratio >= 1 ? 'is-risky' : 'is-bad' };
